@@ -5,7 +5,7 @@
 
 export const deskCopy = {
   en: {
-    eyebrow: "From a desk at Otrobonita AI Labs",
+    eyebrow: "Upcoming episodes...",
     title: "How we're building Mark",
     quote: `Instead of stacking rented APIs on top of rented models, we start at Layer 0 — the foundation where knowledge and memory belong. Build that right, and the rest follows. Skip it, and we'll be renting our own brains back from someone else.  Mark's journey begins as a vector layer leaning on today's LLMs, then disconnects from them — anchoring instead to a World Model. Every layer, every decision, every mistake — in the open for everyone to see.`
   }
