@@ -122,7 +122,7 @@ export default function MediaPlayer() {
       {/* Tooltip on hover */}
       {showTooltip && (
         <div className="mini-player-tooltip typewriter">
-          Suno Original Theme • Click to {isPlaying ? 'Pause' : 'Play'}
+          Mark Twain Reappears: Original Theme • Click to {isPlaying ? 'Pause' : 'Play'}
         </div>
       )}
     </div>

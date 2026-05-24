@@ -14,7 +14,7 @@ Our styling resides in [globals.css](file:///e:/development/mark-twain/src/app/g
 | **Muted** | `--muted-foreground`| `rgba(255, 244, 223, 0.45)` | Low contrast text for metadata / timestamps |
 | **Gold / Accent** | `--accent` | `#d9a34a` | Used for buttons, highlight icons, and hover borders |
 | **Charcoal / Base** | `--background` | `#15110d` | Warm black base color |
-| **Card / Glass** | `--card` | `rgba(21, 17, 13, 0.65)` | Semi-transparent background with `backdrop-filter` |
+| **Card / Surface** | `--card` | `#1d1611` | Solid dark wood brown surface color (no glassmorphism) |
 | **Borders** | `--border` | `rgba(255, 244, 223, 0.08)` | Subtle warm white border separator |
 
 ### Fonts
