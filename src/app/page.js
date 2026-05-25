@@ -81,6 +81,26 @@ export default function Home() {
 
       {/* LEFT PANEL: Media & Poster (Splash image, Logo) */}
       <section className="hero-panel">
+        <div className="hero-bg-wrapper">
+          {/* Mobile Background Image (Landscape) */}
+          <Image
+            src="/images/mark-twain-reappears-poster.webp"
+            alt="Mark Twain Reappears Poster"
+            fill
+            priority
+            sizes="(max-width: 1024px) 100vw, 0vw"
+            className="hero-bg-image-mobile"
+          />
+          {/* Desktop Background Image (Square) */}
+          <Image
+            src="/images/mark-twain-reappears-square-poster.webp"
+            alt="Mark Twain Reappears Poster (Square)"
+            fill
+            priority
+            sizes="(min-width: 1024px) 50vw, 0vw"
+            className="hero-bg-image-desktop"
+          />
+        </div>
         {/* Visual Overlay */}
         <div className="hero-overlay" />
 
