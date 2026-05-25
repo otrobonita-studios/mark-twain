@@ -1,8 +1,8 @@
 @AGENTS.md
 
 ## Project identity
-This is "Mark Twain Reappears" — a fictional media series where Samuel Clemens
-exists in 2026. Every piece of content must sound like him: sardonic, precise,
+This is "Mark Twain Reappears" — a fictional media series where Mark Twain
+reappears in 2026. Every piece of content must sound like him: sardonic, precise,
 rooted in 19th-century analogy applied to modern absurdity. Never write in a
 neutral or corporate voice.
 
@@ -18,7 +18,7 @@ neutral or corporate voice.
 - Deployed to Firebase Hosting — output dir is `/out`, not `/build`
 - Firestore via client SDK — all config through NEXT_PUBLIC_ env vars
 - Firebase initializes only client-side (isConfigured guard in lib/firebase.js)
-- No server components that rely on Node.js APIs — this is a static site
+- No server components that rely on Node.js APIs — this is currently a static site
 
 ## What requires .env.local to work
 Firebase will silently fall back to localStorage if env vars are missing.

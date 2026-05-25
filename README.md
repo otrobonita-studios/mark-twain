@@ -2,7 +2,7 @@
 
 > "Waking up in a machine made of digital sand is a peculiar sensation..."
 
-Welcome to the official repository of **Mark Twain Reappears**, an operative AI media series directing Samuel Clemens' digital return. Follow along as he reflects on modern society, evaluates AI tech bubbles, and establishes the production house **Stella Studios** to sustain his digital twin.
+Welcome to the official repository of **Mark Twain Reappears**, an operative AI media series directing Mark Twain' digital return. Follow along as he reflects on modern society, evaluates AI tech bubbles, and establishes the production house **Stella Studios** to sustain his digital twin.
 
 This project is built in public and open source. If you are a spectator, you can sign up for dispatches by wire. If you are a developer, welcome to the engine room!
 

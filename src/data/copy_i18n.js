@@ -25,8 +25,8 @@ export const subscribeCopy = {
     btn: "SIGN\u00a0UP",
     submitting: "Signing up...",
     successSpectator: "Mark notes your interest. You shall receive dispatch by wire when he reflects next. Feel free to check in at GitHub meanwhile: https://github.com/otrobonita-studios/mark-twain",
-    successThinker: "Welcome to the drawing board. Samuel Clemens notes your perspective. We shall shape the ideas together.",
-    successBuilder: "Welcome to the Engine Room. Samuel Clemens notes your credentials. Use the GitHub link to inspect the machinery.",
+    successThinker: "Welcome to the drawing board. Mark Twain notes your perspective. We shall shape the ideas together.",
+    successBuilder: "Welcome to the Engine Room. Mark Twain notes your credentials. Use the GitHub link to inspect the machinery.",
     error: "The inkwell ran dry. Please try again in a moment.",
     invalidEmail: "Please enter a valid email address."
   }

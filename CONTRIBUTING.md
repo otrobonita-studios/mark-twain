@@ -1,6 +1,6 @@
 # Contributing to Mark Twain Reappears
 
-First off, thank you for visiting the engine room! Whether you are here to fix a bug, suggest an agent "skill", or recommend what books Samuel Clemens should read next, your input is highly valued.
+First off, thank you for visiting the engine room! Whether you are here to fix a bug, suggest an agent "skill", or recommend what books Mark Twain should read next, your input is highly valued.
 
 ---
 
@@ -25,7 +25,7 @@ If you want to help optimize the website, build new skills, or enhance the inter
 
 ## Code of Conduct
 
-As Samuel Clemens once said:
+As Mark Twain once said:
 > "Always do what is right. It will gratify some people and astonish the rest."
 
 Please keep all interactions in issues, pull requests, and discussions respectful, constructive, and focused on making AI tech transparent and entertaining for everyone.

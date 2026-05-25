@@ -1,6 +1,6 @@
 # System Architecture - Mark Twain Reappears
 
-This document outlines the software and AI agent system design for **Mark Twain Reappears**, supporting Samuel Clemens' digital twin.
+This document outlines the software and AI agent system design for **Mark Twain Reappears**, supporting Mark Twain's digital twin.
 
 ---
 
@@ -23,11 +23,11 @@ graph TD
 
 ### A. The Front-End (Next.js)
 * **Static Export (`output: 'export'`)**: Compiles to standard HTML/CSS/JS in the `/out` directory. This is hosted on **Firebase Hosting** to ensure zero-cost, high-performance web serving under low-maintenance Spark plans.
-* **Bespoke Theme**: A pure Vanilla CSS layout (configured in [globals.css](file:///E:/development/mark-twain/src/app/globals.css)) adapting visual styles from **Stellar Studios** (charcoal base `#15110d`, gold highlights `#d9a34a`, paper cream). It avoids Tailwind CSS runtime and utility overhead.
+* **Bespoke Theme**: A pure Vanilla CSS layout (configured in [globals.css]) adapting visual styles from **Stellar Studios** (charcoal base `#15110d`, gold highlights `#d9a34a`, paper cream). It avoids Tailwind CSS runtime and utility overhead.
 * **Mini Media Player**: A custom floating widget in [MediaPlayer.js](file:///E:/development/mark-twain/src/components/MediaPlayer.js) playing the Suno-generated theme song (`mark-twain-reappears.mp3`) with an active audio soundwave graphic.
 
 ### B. Database Integration (Firebase Firestore)
-* We use the Firebase Client SDK inside [firebase.js](file:///E:/development/mark-twain/src/lib/firebase.js).
+* We use the Firebase Client SDK inside [firebase.js).
 * **Subscriptions**: Emails are registered in the `subscribers` collection, categorizing entries into `spectator` (followers) and `developer` (builders).
 * **Diary Notes**: In the next phase, the "Notes from 2026" section will pull entries dynamically from a `notes` collection in Firestore.
 

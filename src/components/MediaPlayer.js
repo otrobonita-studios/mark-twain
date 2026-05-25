@@ -73,7 +73,11 @@ export default function MediaPlayer() {
   return (
     <div 
       className="mini-player-pill"
-      onMouseEnter={() => setShowTooltip(true)}
+      onMouseEnter={() => {
+        if (typeof window !== 'undefined' && window.matchMedia('(hover: hover)').matches && window.innerWidth >= 1024) {
+          setShowTooltip(true);
+        }
+      }}
       onMouseLeave={() => setShowTooltip(false)}
       onClick={handlePlayPause}
     >
@@ -93,7 +97,7 @@ export default function MediaPlayer() {
 
       {/* Track info / state text */}
       <span className="mini-player-title typewriter">
-        {isPlaying ? 'Twain Theme' : 'Soundtrack'}
+        {isPlaying ? 'Twain\u00a0Theme' : 'Soundtrack'}
       </span>
 
       {/* Action Controls */}
