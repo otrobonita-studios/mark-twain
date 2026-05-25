@@ -212,7 +212,7 @@ export default function Home() {
             <h2 className="diary-title">
               {diaryT.title}
             </h2>
-            <span className="typewriter text-[10px] text-[var(--primary)] uppercase tracking-wider">
+            <span className="diary-subtitle typewriter text-[10px] text-[var(--primary)] uppercase tracking-wider">
               {diaryT.subtitle}
             </span>
           </div>
@@ -245,7 +245,7 @@ export default function Home() {
 
         {/* Footer */}
         <footer className="desk-footer">
-          <p className="typewriter text-[10px] text-[var(--muted-foreground)]">
+          <p className="footer-text">
             {footerT.trademark}
           </p>
           <div className="footer-links">
@@ -260,13 +260,6 @@ export default function Home() {
                 <path d="M9 18c-4.51 2-5-2-7-2" />
               </svg>
               GitHub
-            </a>
-            <a 
-              href="mailto:ai@otrobonita.com" 
-              className="footer-link"
-            >
-              <Mail size={14} className="footer-link-icon" />
-              ai@otrobonita.com
             </a>
           </div>
         </footer>

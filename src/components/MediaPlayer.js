@@ -121,7 +121,7 @@ export default function MediaPlayer() {
       
       {/* Tooltip on hover */}
       {showTooltip && (
-        <div className="mini-player-tooltip typewriter">
+        <div className="mini-player-tooltip typewriter hidden md:block">
           Mark Twain Reappears: Original Theme • Click to {isPlaying ? 'Pause' : 'Play'}
         </div>
       )}

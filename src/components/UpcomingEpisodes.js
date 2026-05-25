@@ -20,7 +20,7 @@ const EPISODES = [
     id: 'brain',
     title: 'EP01: AGENTIC MEMORY',
     desc: 'Mark\'s digital mind — a vector vault where his books, letters, and arguments are indexed. Not a database the system reads from, but a memory the system thinks with.',
-    image: '/images/carousel/Marks-Brain.jpg',
+    image: '/images/carousel/Marks-Brain.webp',
     Icon: Cpu,
   },
   {
@@ -34,7 +34,7 @@ const EPISODES = [
     id: 'ep2',
     title: 'EP03: SECURE DATA VAULT',
     desc: 'Mark\'s public voice and his private vault are kept apart by design. The agent can reason about secrets without ever speaking them aloud.',
-    image: '/images/carousel/security.jpg',
+    image: '/images/carousel/security.webp',
     Icon: ShoppingBag,
   },
   {
@@ -55,7 +55,7 @@ const EPISODES = [
     id: 'ep5',
     title: 'EP06: API-FIRST',
     desc: 'One brain, many channels. Mark speaks the same way through MCP, CLI, the web, or future tools yet to be invented — from a single source of truth.',
-    image: '/images/carousel/API-First.jpg',
+    image: '/images/carousel/API-First.webp',
     Icon: Workflow,
   },
   {
@@ -150,7 +150,8 @@ export default function UpcomingEpisodes() {
                     style={{ 
                       backgroundImage: `url(${item.image})`,
                       backgroundSize: 'cover',
-                      backgroundPosition: 'center',
+                      backgroundPosition: isActive ? 'center 90%' : 'center 50%',
+                      transition: 'background-position 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
                       position: 'absolute',
                       inset: 0,
                     }}

@@ -1,6 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
+  metadataBase: new URL("https://otrobonita-official.firebaseapp.com"),
   title: "Mark Twain Reappears",
   description: "An operative AI media series following Mark Twain as he navigates modern technology, AI bubbles, and the boardroom of Stella Studios.",
   icons: {
