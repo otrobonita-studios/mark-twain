@@ -70,8 +70,6 @@ const EPISODES = [
 export default function UpcomingEpisodes() {
   const [{ active, prevActive }, setActiveState] = useState({ active: 0, prevActive: 0 });
   const [paused, setPaused] = useState(false);
-  const touchStartX = useRef(0);
-  const touchEndX = useRef(0);
 
   const setActive = (newActive) => {
     setActiveState((prev) => ({ active: newActive, prevActive: prev.active }));
@@ -88,45 +86,11 @@ export default function UpcomingEpisodes() {
     return () => clearInterval(interval);
   }, [paused]);
 
-  const handleTouchStart = (e) => {
-    touchStartX.current = e.targetTouches[0].clientX;
-    touchEndX.current = e.targetTouches[0].clientX; // Initialize to prevent jumps
-  };
-
-  const handleTouchMove = (e) => {
-    touchEndX.current = e.targetTouches[0].clientX;
-  };
-
-  const handleTouchEnd = () => {
-    const start = touchStartX.current;
-    const end = touchEndX.current;
-    if (start === 0 || end === 0) return;
-
-    const diffX = start - end;
-    const minSwipeDistance = 40; // Reduced to 40px for responsive swiping
-
-    if (Math.abs(diffX) > minSwipeDistance) {
-      if (diffX > 0) {
-        // Swiped left -> next card
-        setActive((active + 1) % EPISODES.length);
-      } else {
-        // Swiped right -> previous card
-        setActive((active - 1 + EPISODES.length) % EPISODES.length);
-      }
-    }
-
-    touchStartX.current = 0;
-    touchEndX.current = 0;
-  };
-
   return (
     <div
       className="upcoming-episodes-section"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
     >
       <div className="carousel-viewport" style={{ height: CARD_H + 20 }}>
         {EPISODES.map((item, i) => {
