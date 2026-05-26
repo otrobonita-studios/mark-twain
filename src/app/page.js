@@ -115,7 +115,7 @@ export default function Home() {
             className="logo-img"
           />
           <p className="logo-subtitle">
-            Coming soon to LinkedIn
+            The Open Source AI Project
           </p>
         </div>
       </section>
