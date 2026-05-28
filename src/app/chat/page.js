@@ -158,7 +158,7 @@ export default function ChatPage() {
               className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors"
               style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
             >
-              <Info size={13} fill="var(--primary)" color="var(--background)" />
+              <Info size={18} color="currentColor" />
               The Rebuild Process
             </button>
             {messages.length > 0 && (
