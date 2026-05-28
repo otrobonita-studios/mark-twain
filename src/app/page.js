@@ -10,11 +10,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import { db, isConfigured } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Mail, ShieldAlert, Award, PenTool, X, Music, Play } from 'lucide-react';
+import { Mail, ShieldAlert, Award, PenTool, X } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 import UpcomingEpisodes from '@/components/UpcomingEpisodes';
 import { deskCopy, subscribeCopy, diaryCopy, footerCopy } from '@/data/copy_i18n';
-import soundtrack from '@/data/soundtrack.json';
 
 export default function Home() {
   const [email, setEmail] = useState('');
@@ -23,18 +22,6 @@ export default function Home() {
   const [submitStatus, setSubmitStatus] = useState('idle'); // 'idle' | 'success' | 'error'
   const [submitMessage, setSubmitMessage] = useState('');
   const [selectedEntry, setSelectedEntry] = useState(null);
-  const [expandedLyrics, setExpandedLyrics] = useState({}); // { [trackId]: boolean }
-
-  const toggleLyrics = (trackId) => {
-    setExpandedLyrics(prev => ({
-      ...prev,
-      [trackId]: !prev[trackId]
-    }));
-  };
-
-  const playSong = (index) => {
-    window.dispatchEvent(new CustomEvent('play-track', { detail: { index } }));
-  };
 
   const deskT = deskCopy.en;
   const subscribeT = subscribeCopy.en;
@@ -236,69 +223,6 @@ export default function Home() {
                 </p>
               </div>
             )}
-          </div>
-        </section>
-
-        {/* Soundtrack Section */}
-        <section className="soundtrack-section">
-          <div className="soundtrack-header">
-            <h2 className="soundtrack-title">
-              The Soundtrack of Reappearance
-            </h2>
-            <span className="soundtrack-subtitle typewriter text-[10px] text-[var(--primary)] uppercase tracking-wider">
-              Original compositions & lyrics
-            </span>
-          </div>
-
-          <div className="soundtrack-list">
-            {soundtrack.map((song, index) => (
-              <article key={song.id} className="tactile-card soundtrack-card">
-                <div className="soundtrack-meta">
-                  <span className="typewriter text-[10px] text-[var(--primary)] uppercase tracking-wider">
-                    {song.style}
-                  </span>
-                  <button
-                    onClick={() => playSong(index)}
-                    className="btn-gold play-song-btn"
-                    title="Play track in soundtrack player"
-                  >
-                    <Play size={10} fill="currentColor" />
-                    Listen
-                  </button>
-                </div>
-                <h3 className="soundtrack-entry-title">
-                  {song.title}
-                </h3>
-                <p className="soundtrack-entry-description typewriter">
-                  {song.description}
-                </p>
-                
-                <div className="lyrics-drawer-container">
-                  <button
-                    onClick={() => toggleLyrics(song.id)}
-                    className="lyrics-toggle-btn typewriter"
-                  >
-                    {expandedLyrics[song.id] ? 'Hide Lyrics' : 'View Lyrics & Story'}
-                  </button>
-                  
-                  <AnimatePresence initial={false}>
-                    {expandedLyrics[song.id] && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.25, ease: 'easeInOut' }}
-                        className="lyrics-drawer"
-                      >
-                        <pre className="lyrics-content font-mono">
-                          {song.lyrics}
-                        </pre>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              </article>
-            ))}
           </div>
         </section>
 
