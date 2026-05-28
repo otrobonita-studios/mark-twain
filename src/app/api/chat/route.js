@@ -4,11 +4,43 @@ import path from 'path';
 
 // Helper to compute BGE-M3 embeddings
 async function getEmbedding(text) {
-  // Option 1: Use Hugging Face Inference API if HF_TOKEN is defined
+  // Option 1: Use DeepInfra if DEEPINFRA_API_KEY is defined (highly recommended for BGE-M3 in production)
+  const deepinfraKey = (process.env.DEEPINFRA_API_KEY || "").trim();
+  if (deepinfraKey) {
+    try {
+      const response = await fetch("https://api.deepinfra.com/v1/openai/embeddings", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${deepinfraKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "BAAI/bge-m3",
+          input: [text]
+        }),
+        cache: 'no-store'
+      });
+      if (response.ok) {
+        const result = await response.json();
+        if (result.data && result.data[0] && result.data[0].embedding) {
+          return result.data[0].embedding;
+        }
+        throw new Error("Unexpected DeepInfra response format");
+      } else {
+        const errText = await response.text();
+        throw new Error(`DeepInfra returned ${response.status}: ${errText}`);
+      }
+    } catch (err) {
+      console.error("DeepInfra API error:", err);
+      throw new Error(`DeepInfra Embedding failed: ${err.message}`);
+    }
+  }
+
+  // Option 2: Use Hugging Face Inference API if HF_TOKEN is defined
   const hfToken = (process.env.HF_TOKEN || process.env.HF_API_KEY || "").trim();
   if (hfToken) {
     try {
-      const response = await fetch("https://api-inference.huggingface.co/pipeline/feature-extraction/BAAI/bge-m3", {
+      const response = await fetch("https://router.huggingface.co/hf-inference/pipeline/feature-extraction/BAAI/bge-m3", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${hfToken}`,
