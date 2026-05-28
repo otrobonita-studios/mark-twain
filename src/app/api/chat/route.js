@@ -26,10 +26,15 @@ async function getEmbedding(text) {
         } else if (result.embeddings) {
           return result.embeddings;
         }
+        throw new Error("Unexpected Hugging Face response format");
+      } else {
+        const errText = await response.text();
+        throw new Error(`Hugging Face API returned ${response.status}: ${errText}`);
       }
-      console.warn("Hugging Face API call failed or returned unexpected shape. Falling back to local python...");
     } catch (err) {
       console.error("Hugging Face API error:", err);
+      // If we have an HF token configured, don't silently mask the error and fail on local python in production
+      throw new Error(`HF Embedding failed: ${err.message}`);
     }
   }
 
