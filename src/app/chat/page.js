@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Send, Sparkles, BookOpen, ChevronDown, ChevronUp, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, Send, Sparkles, BookOpen, ChevronDown, ChevronUp, RefreshCw, X, Info } from 'lucide-react';
 
 export default function ChatPage() {
   const [messages, setMessages] = useState([]);
@@ -158,8 +158,8 @@ export default function ChatPage() {
               className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors"
               style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
             >
-              <BookOpen size={10} />
-              The Rebuild of Mark Twain
+              <Info size={10} />
+              The Rebuild Process
             </button>
             {messages.length > 0 && (
               <button 
