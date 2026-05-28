@@ -5,7 +5,7 @@ import path from 'path';
 // Helper to compute BGE-M3 embeddings
 async function getEmbedding(text) {
   // Option 1: Use Hugging Face Inference API if HF_TOKEN is defined
-  const hfToken = process.env.HF_TOKEN || process.env.HF_API_KEY;
+  const hfToken = (process.env.HF_TOKEN || process.env.HF_API_KEY || "").trim();
   if (hfToken) {
     try {
       const response = await fetch("https://api-inference.huggingface.co/models/BAAI/bge-m3", {
@@ -14,7 +14,11 @@ async function getEmbedding(text) {
           "Authorization": `Bearer ${hfToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ inputs: text }),
+        body: JSON.stringify({ 
+          inputs: text,
+          options: { wait_for_model: true }
+        }),
+        cache: 'no-store'
       });
       if (response.ok) {
         const result = await response.json();
@@ -63,7 +67,7 @@ async function getEmbedding(text) {
 // Helper to query Qdrant REST API
 async function searchQdrant(embedding) {
   const qdrantUrl = process.env.QDRANT_URL || "https://08ab60e3-e210-44c0-b662-524102fd37c3.europe-west3-0.gcp.cloud.qdrant.io:6333";
-  const qdrantApiKey = process.env.QDRANT_API_KEY;
+  const qdrantApiKey = (process.env.QDRANT_API_KEY || "").trim();
   const collectionName = "twain_test";
 
   if (!qdrantUrl) {
@@ -103,7 +107,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Message is required and must be a string' }, { status: 400 });
     }
 
-    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const geminiApiKey = (process.env.GEMINI_API_KEY || "").trim();
     if (!geminiApiKey) {
       return NextResponse.json({ error: 'GEMINI_API_KEY is not configured in environment variables' }, { status: 500 });
     }
