@@ -185,6 +185,14 @@ export default function ChatPage() {
                 <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35', fontSize: '2.35rem' }}>
                   I have returned to discover whether mankind has improved.
                 </h2>
+                <Image
+                  src="/images/mark-twain-signature.png"
+                  alt="Mark Twain Signature"
+                  width={250}
+                  height={80}
+                  className="modal-signature-img"
+                  style={{ marginTop: '1.5rem' }}
+                />
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
