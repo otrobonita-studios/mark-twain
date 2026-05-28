@@ -8,7 +8,7 @@ async function getEmbedding(text) {
   const hfToken = (process.env.HF_TOKEN || process.env.HF_API_KEY || "").trim();
   if (hfToken) {
     try {
-      const response = await fetch("https://router.huggingface.co/hf-inference/pipeline/feature-extraction/BAAI/bge-m3", {
+      const response = await fetch("https://api-inference.huggingface.co/pipeline/feature-extraction/BAAI/bge-m3", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${hfToken}`,
