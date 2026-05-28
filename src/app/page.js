@@ -238,7 +238,7 @@ export default function Home() {
           </div>
 
           <div className="diary-list">
-            {diaryT.entries.map((entry) => (
+            {diaryT.entries.filter(entry => entry.id !== 2).map((entry) => (
               <article 
                 key={entry.id} 
                 className="tactile-card diary-card"
