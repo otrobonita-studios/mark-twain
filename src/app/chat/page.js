@@ -159,7 +159,7 @@ export default function ChatPage() {
               style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
             >
               <BookOpen size={10} />
-              Behind the Scenes
+              The Rebuild of Mark Twain
             </button>
             {messages.length > 0 && (
               <button 
@@ -377,7 +377,7 @@ export default function ChatPage() {
                   <X size={18} />
                 </button>
                 <div className="modal-body custom-scrollbar" style={{ marginTop: '1rem' }}>
-                  <h2 className="font-serif text-2xl text-[var(--primary)] mb-1">Building a Mark Twain Corpus — Lecture Notes</h2>
+                  <h2 className="font-serif text-2xl text-[var(--primary)] mb-1">Building a Mark Twain Corpus</h2>
                   <h3 className="typewriter text-xs text-white mb-4 uppercase tracking-widest">RAG: Read And Guess-less</h3>
                   <div className="modal-divider mb-6" />
 
