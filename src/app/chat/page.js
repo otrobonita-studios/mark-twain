@@ -148,14 +148,14 @@ export default function ChatPage() {
         <div className="desk-header-left" style={{ position: 'relative', top: 'auto', left: 'auto', marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Sparkles size={14} className="desk-header-icon" />
-            <span className="typewriter text-xs uppercase tracking-widest">
+            <span className="typewriter text-xs md:text-sm uppercase tracking-widest">
               Conversation with Twain
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <button 
               onClick={() => setShowNotesModal(true)}
-              className="typewriter text-xs uppercase tracking-widest hover:text-[var(--primary)] transition-colors"
+              className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors"
               style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
             >
               <BookOpen size={10} />
@@ -164,7 +164,7 @@ export default function ChatPage() {
             {messages.length > 0 && (
               <button 
                 onClick={clearChat}
-                className="typewriter text-xs uppercase tracking-widest hover:text-[var(--primary)] transition-colors"
+                className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors"
                 style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
               >
                 <RefreshCw size={10} />
@@ -186,7 +186,7 @@ export default function ChatPage() {
                 "It is better to keep your mouth closed and let people think you are a fool than to open it and remove all doubt." 
                 <span style={{ display: 'block', marginTop: '0.5rem', fontStyle: 'italic', color: 'var(--primary)' }}>– Mark Twain</span>
               </p>
-              <p className="typewriter text-xs text-[var(--muted-foreground)] mb-6">
+              <p className="typewriter text-xs md:text-sm text-[var(--muted-foreground)] mb-6">
                 I'm a state of the art machine loaded with every single text that I've wrote and will reason just as I would have a century ago.
               </p>
             </div>
