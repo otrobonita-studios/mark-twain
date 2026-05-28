@@ -179,8 +179,8 @@ export default function ChatPage() {
           <div className="chat-messages-inner">
             {messages.length === 0 ? (
               <div className="empty-chat-state">
-                <p className="empty-chat-text typewriter" style={{ fontSize: '0.95rem' }}>
-                  "It is better to keep your mouth closed and let people think you are a fool than to open it and remove all doubt."
+                <p className="empty-chat-text typewriter" style={{ fontSize: '0.95rem', color: '#e4d9c6' }}>
+                  The reports of my death has been exaggerated
                 </p>
                 <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35', fontSize: '2.35rem' }}>
                   I have returned to discover whether mankind has improved.
