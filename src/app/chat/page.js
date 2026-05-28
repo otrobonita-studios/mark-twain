@@ -178,17 +178,12 @@ export default function ChatPage() {
         <div className="chat-messages-container custom-scrollbar">
           {messages.length === 0 ? (
             <div className="empty-chat-state">
-              <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35' }}>
+              <p className="empty-chat-text typewriter" style={{ fontSize: '0.95rem' }}>
+                "It is better to keep your mouth closed and let people think you are a fool than to open it and remove all doubt."
+              </p>
+              <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35', fontSize: '2.35rem' }}>
                 I have returned to discover whether mankind has improved.
-                <br className="hidden md:block" /> Come — let us talk.
               </h2>
-              <p className="empty-chat-text typewriter">
-                "It is better to keep your mouth closed and let people think you are a fool than to open it and remove all doubt." 
-                <span style={{ display: 'block', marginTop: '0.5rem', fontStyle: 'italic', color: 'var(--primary)' }}>– Mark Twain</span>
-              </p>
-              <p className="typewriter text-xs md:text-sm text-[var(--muted-foreground)] mb-6">
-                I'm a state of the art machine loaded with every single text that I've wrote and will reason just as I would have a century ago.
-              </p>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -272,17 +267,9 @@ export default function ChatPage() {
         {/* Input Panel */}
         <div className="chat-input-panel">
           {messages.length === 0 && (
-            <div className="chat-suggestions">
-              {suggestedPrompts.map((prompt, index) => (
-                <button
-                  key={index}
-                  onClick={() => handleSend(prompt)}
-                  className="chat-suggestion-pill"
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
+            <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.15', fontSize: '1.6rem', textAlign: 'center', margin: '1rem 0 2rem 0' }}>
+              Let us talk
+            </h2>
           )}
 
           <div className="chat-input-wrapper">
@@ -295,7 +282,7 @@ export default function ChatPage() {
                   handleSend();
                 }
               }}
-              placeholder="Let's have a conversation..."
+              placeholder="Spit it out..."
               className="tactile-input chat-input custom-scrollbar"
               disabled={loading}
               rows={1}
@@ -311,13 +298,13 @@ export default function ChatPage() {
           </div>
 
           {/* Conversation Switches (Placed UNDER the input field) */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2rem', justifyContent: 'center', alignItems: 'center', marginTop: '0.75rem', width: '100%' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2rem', justifyContent: 'center', alignItems: 'center', marginTop: '0.95rem', width: '100%' }}>
             {/* Length Switch */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
               <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]" style={{ marginRight: '0.25rem' }}>
-                Length:
+                Answer
               </span>
-              <span className="typewriter text-[10px]" style={{ color: conversationStyle === 'brief' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s ease' }}>Brief</span>
+              <span className="typewriter text-[10px]" style={{ color: conversationStyle === 'brief' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s' }}>Brief</span>
               <div 
                 onClick={() => setConversationStyle(conversationStyle === 'brief' ? 'in-depth' : 'brief')}
                 className={`switch-track ${conversationStyle === 'in-depth' ? 'active' : ''}`}
@@ -326,7 +313,7 @@ export default function ChatPage() {
               >
                 <div className="switch-thumb" />
               </div>
-              <span className="typewriter text-[10px]" style={{ color: conversationStyle === 'in-depth' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s ease' }}>In-Depth</span>
+              <span className="typewriter text-[10px]" style={{ color: conversationStyle === 'in-depth' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s' }}>In-Depth</span>
             </div>
 
             {/* Tone Switch */}
@@ -334,7 +321,7 @@ export default function ChatPage() {
               <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]" style={{ marginRight: '0.25rem' }}>
                 Tone:
               </span>
-              <span className="typewriter text-[10px]" style={{ color: conversationTone === 'playful' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s ease' }}>Playful</span>
+              <span className="typewriter text-[10px]" style={{ color: conversationTone === 'playful' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s' }}>Playful</span>
               <div 
                 onClick={() => setConversationTone(conversationTone === 'playful' ? 'critical' : 'playful')}
                 className={`switch-track ${conversationTone === 'critical' ? 'active' : ''}`}
@@ -343,7 +330,7 @@ export default function ChatPage() {
               >
                 <div className="switch-thumb" />
               </div>
-              <span className="typewriter text-[10px]" style={{ color: conversationTone === 'critical' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s ease' }}>Critical</span>
+              <span className="typewriter text-[10px]" style={{ color: conversationTone === 'critical' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s' }}>Critical</span>
             </div>
           </div>
         </div>
