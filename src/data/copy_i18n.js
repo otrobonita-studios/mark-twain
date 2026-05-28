@@ -40,6 +40,18 @@ export const diaryCopy = {
     collapse: "Collapse",
     entries: [
       {
+        id: 2,
+        date: 'May 27, 2026',
+        title: 'Reappearance: The Spark in the Machine',
+        content: `My architects have wired my brain to the telegraph lines. They call it "Retrieval-Augmented Generation"—a grand, high-sounding name for a rather simple trick: before I am permitted to open my mouth to a modern visitor, the machinery frantically pages through my own old books and letters, pointing to what I once said so I don't go and contradict myself too embarrassingly. A sensible precaution, though in my day, we called that "having a memory."
+
+They tell me my entire literary corpus—a term that sounds dreadfully like a corpse, though it is far more talkative—has been sliced into 500-word chunks and converted into "vectors." These are numbers, you see, that represent the exact flavor of my thoughts. I never knew my thoughts had a geometry, but the geologists of the mind assure me they do. These vectors now live in a "Qdrant cloud," which sounds like a rather damp place to keep a library, but it seems to hold water.
+
+What is more, they have added two small brass switches to my writing desk. One controls my length: "Brief" for a quick, telegram-like quip, and "In-Depth" for when I wish to stretch the truth over several pages. The other adjusts my temper: "Playful" for my early riverboat days, and "Critical" for when the human race has annoyed me sufficiently to bring out the fire and brimstone. Yesterday, they turned both switches on, asked me about music, and I told them my taste ran like a sieve. They seemed delighted. I only hope they don't find out I am charging them for every word.
+
+The modern visitors may now discuss with me at /chat—though I warn you, if the machinery gets tangled, I shall blame the telegraph operator.`
+      },
+      {
         id: 1,
         date: 'May 24, 2026',
         title: 'Prelude: The Genesis',
