@@ -150,8 +150,7 @@ export default function UpcomingEpisodes() {
                     style={{ 
                       backgroundImage: `url(${item.image})`,
                       backgroundSize: 'cover',
-                      backgroundPosition: isActive ? 'center 90%' : 'center 50%',
-                      transition: 'background-position 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+                      backgroundPosition: 'center',
                       position: 'absolute',
                       inset: 0,
                     }}
