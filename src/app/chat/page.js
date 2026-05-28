@@ -176,92 +176,94 @@ export default function ChatPage() {
 
         {/* Messages list */}
         <div className="chat-messages-container custom-scrollbar">
-          {messages.length === 0 ? (
-            <div className="empty-chat-state">
-              <p className="empty-chat-text typewriter" style={{ fontSize: '0.95rem' }}>
-                "It is better to keep your mouth closed and let people think you are a fool than to open it and remove all doubt."
-              </p>
-              <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35', fontSize: '2.35rem' }}>
-                I have returned to discover whether mankind has improved.
-              </h2>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-              {messages.map((msg, idx) => (
-                <motion.div
-                  key={idx}
-                  className={`chat-message-row ${msg.role === 'user' ? 'user' : 'twain'}`}
-                  initial={{ opacity: 0, y: 15 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <div className={`chat-bubble ${msg.role === 'user' ? 'user' : 'twain'}`}>
-                    <span className="chat-bubble-sender">
-                      {msg.role === 'user' ? 'Visitor' : 'Mark Twain'}
-                    </span>
-                    <div className="chat-bubble-text font-serif">
-                      <p>{msg.content}</p>
-                    </div>
-
-                    {/* Sources (for Twain's responses) */}
-                    {msg.role === 'model' && msg.sources && msg.sources.length > 0 && (
-                      <div className="sources-container">
-                        <button
-                          onClick={() => toggleSources(idx)}
-                          className="sources-trigger"
-                        >
-                          <BookOpen size={10} />
-                          <span>Source Materials ({msg.sources.length})</span>
-                          {expandedSources[idx] ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                        </button>
-                        
-                        <AnimatePresence>
-                          {expandedSources[idx] && (
-                            <motion.div
-                              className="sources-list"
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.25 }}
-                              style={{ overflow: 'hidden' }}
-                            >
-                              {msg.sources.map((src, sIdx) => (
-                                <div key={sIdx} className="source-item">
-                                  <div className="source-item-meta">
-                                    <span>Work: {src.filename}</span>
-                                    <span>Match: {Math.round(src.score * 100)}%</span>
-                                  </div>
-                                  <p className="source-item-text">
-                                    "...{src.text}..."
-                                  </p>
-                                </div>
-                              ))}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+          <div className="chat-messages-inner">
+            {messages.length === 0 ? (
+              <div className="empty-chat-state">
+                <p className="empty-chat-text typewriter" style={{ fontSize: '0.95rem' }}>
+                  "It is better to keep your mouth closed and let people think you are a fool than to open it and remove all doubt."
+                </p>
+                <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35', fontSize: '2.35rem' }}>
+                  I have returned to discover whether mankind has improved.
+                </h2>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                {messages.map((msg, idx) => (
+                  <motion.div
+                    key={idx}
+                    className={`chat-message-row ${msg.role === 'user' ? 'user' : 'twain'}`}
+                    initial={{ opacity: 0, y: 15 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <div className={`chat-bubble ${msg.role === 'user' ? 'user' : 'twain'}`}>
+                      <span className="chat-bubble-sender">
+                        {msg.role === 'user' ? 'Visitor' : 'Mark Twain'}
+                      </span>
+                      <div className="chat-bubble-text font-serif">
+                        <p>{msg.content}</p>
                       </div>
-                    )}
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-          )}
 
-          {/* Loading Indicator */}
-          {loading && (
-            <div className="chat-message-row twain">
-              <div className="chat-bubble twain">
-                <span className="chat-bubble-sender">Mark Twain</span>
-                <div className="typing-indicator">
-                  <div className="typing-dot" />
-                  <div className="typing-dot" />
-                  <div className="typing-dot" />
+                      {/* Sources (for Twain's responses) */}
+                      {msg.role === 'model' && msg.sources && msg.sources.length > 0 && (
+                        <div className="sources-container">
+                          <button
+                            onClick={() => toggleSources(idx)}
+                            className="sources-trigger"
+                          >
+                            <BookOpen size={10} />
+                            <span>Source Materials ({msg.sources.length})</span>
+                            {expandedSources[idx] ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                          </button>
+                          
+                          <AnimatePresence>
+                            {expandedSources[idx] && (
+                              <motion.div
+                                className="sources-list"
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                transition={{ duration: 0.25 }}
+                                style={{ overflow: 'hidden' }}
+                              >
+                                {msg.sources.map((src, sIdx) => (
+                                  <div key={sIdx} className="source-item">
+                                    <div className="source-item-meta">
+                                      <span>Work: {src.filename}</span>
+                                      <span>Match: {Math.round(src.score * 100)}%</span>
+                                    </div>
+                                    <p className="source-item-text">
+                                      "...{src.text}..."
+                                    </p>
+                                  </div>
+                                ))}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            )}
+
+            {/* Loading Indicator */}
+            {loading && (
+              <div className="chat-message-row twain">
+                <div className="chat-bubble twain">
+                  <span className="chat-bubble-sender">Mark Twain</span>
+                  <div className="typing-indicator">
+                    <div className="typing-dot" />
+                    <div className="typing-dot" />
+                    <div className="typing-dot" />
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-          
-          <div ref={messagesEndRef} />
+            )}
+            
+            <div ref={messagesEndRef} />
+          </div>
         </div>
 
         {/* Input Panel */}
