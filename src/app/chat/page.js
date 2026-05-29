@@ -180,7 +180,7 @@ export default function ChatPage() {
             {messages.length === 0 ? (
               <div className="empty-chat-state">
                 <p className="empty-chat-text typewriter" style={{ fontSize: '0.95rem', color: '#e4d9c6' }}>
-                  The reports of my death has been exaggerated
+                  The reports of my death have been exaggerated
                 </p>
                 <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35', fontSize: '2.35rem' }}>
                   I have returned to discover whether mankind has improved.
