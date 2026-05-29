@@ -159,16 +159,6 @@ export default function ChatPage() {
               <Info size={18} color="currentColor" />
               The Rebuild Process
             </button>
-            {messages.length > 0 && (
-              <button 
-                onClick={clearChat}
-                className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors"
-                style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
-              >
-                <RefreshCw size={10} />
-                Clear conversation
-              </button>
-            )}
           </div>
         </div>
 
@@ -340,6 +330,18 @@ export default function ChatPage() {
               </div>
               <span className="typewriter text-[10px]" style={{ color: conversationTone === 'critical' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s' }}>Critical</span>
             </div>
+
+            {/* Clear Conversation Button */}
+            {messages.length > 0 && (
+              <button 
+                onClick={clearChat}
+                className="typewriter text-[11px] uppercase tracking-widest hover:text-[var(--primary)] transition-colors"
+                style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: 'var(--muted-foreground)' }}
+              >
+                <RefreshCw size={11} />
+                Clear conversation
+              </button>
+            )}
           </div>
         </div>
       </main>
