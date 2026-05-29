@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Send, Sparkles, BookOpen, ChevronDown, ChevronUp, RefreshCw, X, Info } from 'lucide-react';
+import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info } from 'lucide-react';
 
 export default function ChatPage() {
   const [messages, setMessages] = useState([]);
@@ -146,11 +146,8 @@ export default function ChatPage() {
       <main className="desk-panel chat-container">
         {/* Desk Header / Status bar */}
         <div className="desk-header-left" style={{ position: 'relative', top: 'auto', left: 'auto', marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Sparkles size={14} className="desk-header-icon" />
-            <span className="typewriter text-xs md:text-sm uppercase tracking-widest">
-              Conversation with Twain
-            </span>
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <span className="otrobonita-logo" aria-label="Otrobonita Studios Logo" />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <button 
@@ -183,7 +180,7 @@ export default function ChatPage() {
                   The reports of my death have been exaggerated
                 </p>
                 <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35', fontSize: '2.35rem' }}>
-                  I have returned to discover whether mankind has improved.
+                  I have returned to discover whether mankind has improved
                 </h2>
                 <Image
                   src="/images/mark-twain-signature.png"
