@@ -107,8 +107,8 @@ export default function ChatPage() {
       <Link href="/" className="hero-panel" style={{ display: 'flex', textDecoration: 'none' }}>
         <div className="hero-bg-wrapper">
           <Image
-            src="/images/MarkTwainThinking.jpg"
-            alt="Mark Twain in deep thought"
+            src="/images/MarkTwainWithPen.jpg"
+            alt="Mark Twain holding a pen"
             fill
             priority
             sizes="(max-width: 1024px) 100vw, 50vw"
@@ -116,8 +116,8 @@ export default function ChatPage() {
             style={{ objectPosition: 'center 20%' }}
           />
           <Image
-            src="/images/MarkTwainThinking.jpg"
-            alt="Mark Twain in deep thought (Square)"
+            src="/images/MarkTwainWithPen.jpg"
+            alt="Mark Twain holding a pen (Square)"
             fill
             priority
             sizes="(min-width: 1024px) 50vw, 0vw"
