@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info } from 'lucide-react';
+import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen } from 'lucide-react';
 import OtrobonitaLogo from '@/components/OtrobonitaLogo';
 
 export default function ChatPage() {
