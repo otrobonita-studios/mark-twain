@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info } from 'lucide-react';
+import OtrobonitaLogo from '@/components/OtrobonitaLogo';
 
 export default function ChatPage() {
   const [messages, setMessages] = useState([]);
@@ -147,14 +148,7 @@ export default function ChatPage() {
         {/* Desk Header / Status bar */}
         <div className="desk-header-left" style={{ position: 'relative', top: 'auto', left: 'auto', marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            <Image
-              src="/logotype/otrobonita-light-high.svg"
-              alt="Otrobonita Studios Logo"
-              width={120}
-              height={19}
-              priority
-              className="otrobonita-logo"
-            />
+            <OtrobonitaLogo className="otrobonita-logo" aria-label="Otrobonita Studios Logo" />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <button 
