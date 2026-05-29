@@ -147,7 +147,14 @@ export default function ChatPage() {
         {/* Desk Header / Status bar */}
         <div className="desk-header-left" style={{ position: 'relative', top: 'auto', left: 'auto', marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            <span className="otrobonita-logo" aria-label="Otrobonita Studios Logo" />
+            <Image
+              src="/logotype/otrobonita-light-high.svg"
+              alt="Otrobonita Studios Logo"
+              width={120}
+              height={19}
+              priority
+              className="otrobonita-logo"
+            />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <button 
