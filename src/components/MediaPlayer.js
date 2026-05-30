@@ -20,21 +20,21 @@ const SpotifyIcon = ({ size = 16, className = "" }) => (
 const soundtrack = [
   {
     id: "eves-diary",
-    title: "Eve's Diary Theme",
+    title: "Eve's Diary",
     file: "/sounds/music/mark-twains-eves-diary.mp3",
-    style: "Melancholic acoustic guitar & cello"
+    style: "Album: Mark Twain Reappears"
   },
   {
     id: "original-theme",
     title: "Mark Twain Reappears: Original Theme",
     file: "/sounds/music/mark-twain-reappears.mp3",
-    style: "Saloon piano & cinematic warmth"
+    style: "Album: Mark Twain Reappears"
   },
   {
     id: "telephonic-conversation",
     title: "A Telephonic Conversation",
     file: "/sounds/music/a-telephonic-conversation.mp3",
-    style: "Parlor piano & vintage jazz"
+    style: "Album: Mark Twain Reappears"
   }
 ];
 
