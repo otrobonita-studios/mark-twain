@@ -375,7 +375,7 @@ export default function MediaPlayer() {
             target="_blank" 
             rel="noopener noreferrer" 
             className="mini-cover-link"
-            title="Listen on Spotify"
+            title="Add to your Library"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mini-cover-thumb">
@@ -400,7 +400,7 @@ export default function MediaPlayer() {
               target="_blank" 
               rel="noopener noreferrer" 
               className="mini-control-btn spotify-link-btn" 
-              title="Listen on Spotify"
+              title="Add to your Library"
               onClick={(e) => e.stopPropagation()}
               style={{ display: 'flex', alignItems: 'center' }}
             >
@@ -439,7 +439,7 @@ export default function MediaPlayer() {
             target="_blank" 
             rel="noopener noreferrer" 
             className="player-cover-link"
-            title="Listen on Spotify"
+            title="Add to your Library"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="player-cover-art">
@@ -464,7 +464,7 @@ export default function MediaPlayer() {
               {/* Spotify Icon Overlay on hover */}
               <div className="spotify-hover-overlay">
                 <SpotifyIcon size={32} />
-                <span className="typewriter">LISTEN</span>
+                <span className="typewriter">Add to your Library</span>
               </div>
             </div>
           </a>
@@ -507,7 +507,7 @@ export default function MediaPlayer() {
               target="_blank" 
               rel="noopener noreferrer" 
               className="control-btn spotify-link-btn" 
-              title="Listen on Spotify"
+              title="Add to your Library"
               onClick={(e) => e.stopPropagation()}
               style={{ display: 'flex', alignItems: 'center' }}
             >
