@@ -9,7 +9,8 @@ export default function BookReader({ htmlContent }) {
   const [isMuted, setIsMuted] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   const [audioProgress, setAudioProgress] = useState(0);
-  const [theme, setTheme] = useState('parchment'); // 'parchment' | 'charcoal'
+  const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
+  const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
 
@@ -132,6 +133,31 @@ export default function BookReader({ htmlContent }) {
         </Link>
 
         <div className="book-reader-controls">
+          {/* Font Size Selector */}
+          <div className="font-size-selector">
+            <button 
+              onClick={() => setFontSize('small')}
+              className={`size-btn ${fontSize === 'small' ? 'active' : ''}`}
+              title="Small text size (Standard)"
+            >
+              Small
+            </button>
+            <button 
+              onClick={() => setFontSize('normal')}
+              className={`size-btn ${fontSize === 'normal' ? 'active' : ''}`}
+              title="Normal text size"
+            >
+              Normal
+            </button>
+            <button 
+              onClick={() => setFontSize('large')}
+              className={`size-btn ${fontSize === 'large' ? 'active' : ''}`}
+              title="Large text size"
+            >
+              Large
+            </button>
+          </div>
+
           {/* Theme Selector */}
           <button 
             onClick={() => setTheme(theme === 'parchment' ? 'charcoal' : 'parchment')}
@@ -146,7 +172,7 @@ export default function BookReader({ htmlContent }) {
       {/* Reading Desk */}
       <main className="book-page-desk" ref={readerRef}>
         <article 
-          className="book-page-parchment font-serif"
+          className={`book-page-parchment font-serif size-${fontSize}`}
           dangerouslySetInnerHTML={{ __html: htmlContent }}
         />
       </main>
