@@ -15,6 +15,7 @@ export default function ChatClient() {
   const [expandedSources, setExpandedSources] = useState({}); // { [messageIndex]: boolean }
   const [conversationStyle, setConversationStyle] = useState('brief'); // 'brief' | 'in-depth'
   const [conversationTone, setConversationTone] = useState('playful'); // 'playful' | 'critical'
+  const [simplifyLanguage, setSimplifyLanguage] = useState(false);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
@@ -75,6 +76,7 @@ export default function ChatClient() {
           message: text,
           style: conversationStyle,
           tone: conversationTone,
+          simplify: simplifyLanguage,
           // Extract only role and content for API history seed
           history: messages.map(msg => ({ role: msg.role, content: msg.content }))
         }),
@@ -318,6 +320,23 @@ export default function ChatClient() {
                       <span className="typewriter text-[10px]" style={{ color: conversationTone === 'critical' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Critical</span>
                     </div>
                   </div>
+
+                  <div className="drawer-switch-row">
+                    <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
+                      Language:
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span className="typewriter text-[10px]" style={{ color: !simplifyLanguage ? 'var(--primary)' : 'var(--muted-foreground)' }}>Standard</span>
+                      <div 
+                        onClick={() => setSimplifyLanguage(!simplifyLanguage)}
+                        className={`switch-track ${simplifyLanguage ? 'active' : ''}`}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <div className="switch-thumb" />
+                      </div>
+                      <span className="typewriter text-[10px]" style={{ color: simplifyLanguage ? 'var(--primary)' : 'var(--muted-foreground)' }}>Simplified</span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Clear Conversation */}
@@ -508,6 +527,24 @@ export default function ChatClient() {
                 <div className="switch-thumb" />
               </div>
               <span className="typewriter text-[10px]" style={{ color: conversationTone === 'critical' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s' }}>Critical</span>
+            </div>
+
+            {/* Simplify Language Switch */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+              <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]" style={{ marginRight: '0.25rem' }}>
+                Language:
+              </span>
+              <span className="typewriter text-[10px]" style={{ color: !simplifyLanguage ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s' }}>Standard</span>
+              <div 
+                id="chat-simplify-switch"
+                onClick={() => setSimplifyLanguage(!simplifyLanguage)}
+                className={`switch-track ${simplifyLanguage ? 'active' : ''}`}
+                style={{ cursor: 'pointer' }}
+                aria-label="Toggle simplified language"
+              >
+                <div className="switch-thumb" />
+              </div>
+              <span className="typewriter text-[10px]" style={{ color: simplifyLanguage ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s' }}>Simplified</span>
             </div>
 
             {/* Clear Conversation Button */}

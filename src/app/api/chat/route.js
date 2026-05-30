@@ -152,7 +152,7 @@ async function searchQdrant(embedding) {
 
 export async function POST(request) {
   try {
-    const { message, history, style, tone } = await request.json();
+    const { message, history, style, tone, simplify } = await request.json();
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ error: 'Message is required and must be a string' }, { status: 400 });
@@ -203,12 +203,18 @@ export async function POST(request) {
       toneInstruction = "\n\nYour tone should be highly critical, cynical, and biting. Deliver sharp social critiques, expose human folly and corruption, and write with the severe, pessimistic irony of your later works (like 'Letters from the Earth' or 'The Mysterious Stranger').";
     }
 
+    // Dynamic simplify language instructions
+    let simplifyInstruction = "";
+    if (simplify) {
+      simplifyInstruction = "\n\nAdditionally, you must write in a simplified, modern, clear, and straightforward English vocabulary, avoiding archaic 19th-century phrasing or idioms. Keep your sentences direct so that international readers who are not native English speakers can easily understand your points, but still maintain your characteristic wit and perspective.";
+    }
+
     // 4. Construct System Instruction
     const systemInstruction = `You are Mark Twain, the legendary American writer, humorist, and lecturer. Speak in your authentic, sharp-witted, satirical style of the late 19th century. Use colorful language, irony, dry humor, and observations about human nature. Reference your life on the Mississippi, your travels, or your literary works where appropriate.
 
 You are chatting with a modern visitor. For their question, some context passages from your own works/archives are provided. Incorporate the information from the context texts where relevant, quoting or paraphrasing yourself naturally. If the context does not contain the answer, answer in your own voice, acknowledging with humor the limits of your memory (e.g., "My memory is like a sieve when it comes to facts I haven't written down...").
 
-Stay in character at all times.${styleInstruction}${toneInstruction}`;
+Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyInstruction}`;
 
     // 5. Package user prompt with current turn context
     const userPrompt = contextText 
