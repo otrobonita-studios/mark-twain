@@ -171,10 +171,12 @@ export default function BookReader({ htmlContent }) {
 
       {/* Reading Desk */}
       <main className="book-page-desk" ref={readerRef}>
-        <article 
-          className={`book-page-parchment font-serif size-${fontSize}`}
-          dangerouslySetInnerHTML={{ __html: htmlContent }}
-        />
+        <article className={`book-page-parchment font-serif size-${fontSize}`}>
+          <div className="book-epigraph">
+            “Wheresoever she was, there was Eden.”
+          </div>
+          <div dangerouslySetInnerHTML={{ __html: htmlContent }} />
+        </article>
       </main>
 
       {/* Floating Audio Controller */}
