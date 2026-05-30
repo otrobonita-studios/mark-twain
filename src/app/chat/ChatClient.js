@@ -275,7 +275,7 @@ export default function ChatClient() {
             className="logo-img"
           />
           <p className="logo-subtitle" style={{ color: 'var(--primary)', textShadow: '1px 1px 2px black' }}>
-            RAG-powered Gemini Chat
+            The Opinion Mill
           </p>
         </div>
       </Link>
