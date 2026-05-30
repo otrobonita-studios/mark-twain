@@ -503,7 +503,7 @@ export default function ChatClient() {
                     className="voice-of-mark-btn"
                   >
                     {isVoicePlaying ? <Pause size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" />}
-                    <span>The Voice of Mark</span>
+                    <span>Picture the Voice</span>
                   </button>
                 </div>
               </div>
