@@ -27,8 +27,30 @@ export default function BookReader({ htmlContent }) {
     { id: 'child', label: 'Child Version', description: 'Simplified text with educational hover cards.' }
   ];
 
+  const isLoadedRef = useRef(false);
   const audioRef = useRef(null);
   const readerRef = useRef(null);
+
+  // Load settings from local storage on mount
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('eves-diary-theme');
+    const savedFontSize = localStorage.getItem('eves-diary-font-size');
+    const savedExperience = localStorage.getItem('eves-diary-experience');
+
+    if (savedTheme) setTheme(savedTheme);
+    if (savedFontSize) setFontSize(savedFontSize);
+    if (savedExperience) setExperience(savedExperience);
+
+    isLoadedRef.current = true;
+  }, []);
+
+  // Save settings when they change
+  useEffect(() => {
+    if (!isLoadedRef.current) return;
+    localStorage.setItem('eves-diary-theme', theme);
+    localStorage.setItem('eves-diary-font-size', fontSize);
+    localStorage.setItem('eves-diary-experience', experience);
+  }, [theme, fontSize, experience]);
 
   // Monitor page scroll progress
   useEffect(() => {
