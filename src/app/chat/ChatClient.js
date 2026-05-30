@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu, Volume2, Play, Pause } from 'lucide-react';
+import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu, Volume2, Play, Pause, Globe } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 
 export default function ChatClient() {
@@ -13,6 +13,7 @@ export default function ChatClient() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [expandedSources, setExpandedSources] = useState({}); // { [messageIndex]: boolean }
+  const [expandedTranslations, setExpandedTranslations] = useState({}); // { [messageIndex]: boolean }
   const [conversationStyle, setConversationStyle] = useState('brief'); // 'brief' | 'in-depth'
   const [conversationTone, setConversationTone] = useState('playful'); // 'playful' | 'critical'
   const [simplifyLanguage, setSimplifyLanguage] = useState(false);
@@ -187,7 +188,8 @@ export default function ChatClient() {
           { 
             role: 'model', 
             content: data.response, 
-            sources: data.sources || [] 
+            sources: data.sources || [],
+            translation: data.translation || ""
           }
         ]);
       } else {
@@ -249,6 +251,13 @@ export default function ChatClient() {
 
   const toggleSources = (index) => {
     setExpandedSources(prev => ({
+      ...prev,
+      [index]: !prev[index]
+    }));
+  };
+
+  const toggleTranslation = (index) => {
+    setExpandedTranslations(prev => ({
       ...prev,
       [index]: !prev[index]
     }));
@@ -525,44 +534,85 @@ export default function ChatClient() {
                         <p>{msg.content}</p>
                       </div>
 
-                      {/* Sources (for Twain's responses) */}
-                      {msg.role === 'model' && msg.sources && msg.sources.length > 0 && (
-                        <div className="sources-container">
-                          <button
-                            onClick={() => toggleSources(idx)}
-                            className="sources-trigger"
-                          >
-                            <BookOpen size={10} />
-                            <span>Source Materials ({msg.sources.length})</span>
-                            {expandedSources[idx] ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                          </button>
-                          
-                          <AnimatePresence>
-                            {expandedSources[idx] && (
-                              <motion.div
-                                className="sources-list"
-                                initial={{ opacity: 0, height: 0 }}
-                                animate={{ opacity: 1, height: 'auto' }}
-                                exit={{ opacity: 0, height: 0 }}
-                                transition={{ duration: 0.25 }}
-                                style={{ overflow: 'hidden' }}
+                      {/* Sources and Translations (for Twain's responses) */}
+                      {msg.role === 'model' && (
+                        <div className="message-footer-controls" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.75rem', alignItems: 'center' }}>
+                          {msg.sources && msg.sources.length > 0 && (
+                            <div className="sources-container" style={{ marginTop: 0 }}>
+                              <button
+                                onClick={() => toggleSources(idx)}
+                                className="sources-trigger"
                               >
-                                {msg.sources.map((src, sIdx) => (
-                                  <div key={sIdx} className="source-item">
-                                    <div className="source-item-meta">
-                                      <span>Work: {src.filename}</span>
-                                      <span>Match: {Math.round(src.score * 100)}%</span>
-                                    </div>
-                                    <p className="source-item-text">
-                                      "...{src.text}..."
-                                    </p>
-                                  </div>
-                                ))}
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
+                                <BookOpen size={10} />
+                                <span>Source Materials ({msg.sources.length})</span>
+                                {expandedSources[idx] ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                              </button>
+                            </div>
+                          )}
+
+                          {msg.translation && (
+                            <div className="translation-container">
+                              <button
+                                onClick={() => toggleTranslation(idx)}
+                                className="sources-trigger"
+                              >
+                                <Globe size={10} />
+                                <span>Understand My Language</span>
+                                {expandedTranslations[idx] ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
+
+                      {/* Collapsible Sources List */}
+                      {msg.role === 'model' && msg.sources && msg.sources.length > 0 && (
+                        <AnimatePresence>
+                          {expandedSources[idx] && (
+                            <motion.div
+                              className="sources-list"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.25 }}
+                              style={{ overflow: 'hidden' }}
+                            >
+                              {msg.sources.map((src, sIdx) => (
+                                <div key={sIdx} className="source-item">
+                                  <div className="source-item-meta">
+                                    <span>Work: {src.filename}</span>
+                                    <span>Match: {Math.round(src.score * 100)}%</span>
+                                  </div>
+                                  <p className="source-item-text">
+                                    "...{src.text}..."
+                                  </p>
+                                </div>
+                              ))}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      )}
+
+                      {/* Collapsible Translation Box */}
+                      <AnimatePresence>
+                        {expandedTranslations[idx] && msg.translation && (
+                          <motion.div
+                            className="translation-text-box"
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            transition={{ duration: 0.25 }}
+                            style={{ overflow: 'hidden', marginTop: '0.5rem', padding: '0.75rem', borderLeft: '2px solid var(--primary)', backgroundColor: 'rgba(255, 244, 223, 0.03)', borderRadius: '0 4px 4px 0' }}
+                          >
+                            <span className="typewriter text-[9px] uppercase tracking-widest text-[var(--primary)]" style={{ display: 'block', marginBottom: '0.25rem' }}>
+                              Modern Translation
+                            </span>
+                            <p className="font-sans text-[13px] leading-relaxed" style={{ margin: 0, color: 'var(--foreground)' }}>
+                              {msg.translation}
+                            </p>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                   </motion.div>
                 ))}
@@ -623,9 +673,9 @@ export default function ChatClient() {
           </div>
 
           {/* Conversation Switches (Placed UNDER the input field) */}
-          <div className="desktop-only-control" style={{ gap: '2rem', justifyContent: 'center', alignItems: 'center', marginTop: '0.95rem', width: '100%' }}>
+          <div className="desktop-only-control" style={{ gap: '2rem', justifyContent: 'center', alignItems: 'center', marginTop: '1.75rem', width: '100%', flexWrap: 'wrap' }}>
             {/* Length Switch */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', whiteSpace: 'nowrap' }}>
               <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]" style={{ marginRight: '0.25rem' }}>
                 Answer
               </span>
@@ -643,7 +693,7 @@ export default function ChatClient() {
             </div>
 
             {/* Tone Switch */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', whiteSpace: 'nowrap' }}>
               <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]" style={{ marginRight: '0.25rem' }}>
                 Tone:
               </span>
@@ -661,7 +711,7 @@ export default function ChatClient() {
             </div>
 
             {/* Simplify Language Switch */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', whiteSpace: 'nowrap' }}>
               <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]" style={{ marginRight: '0.25rem' }}>
                 Language:
               </span>
@@ -684,13 +734,14 @@ export default function ChatClient() {
                 id="chat-clear-button"
                 onClick={clearChat}
                 className="typewriter text-[11px] uppercase tracking-widest hover:text-[var(--primary)] transition-colors"
-                style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: 'var(--muted-foreground)' }}
+                style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: 'var(--muted-foreground)', whiteSpace: 'nowrap' }}
               >
                 <RefreshCw size={11} />
                 Clear conversation
               </button>
             )}
           </div>
+
         </div>
       </main>
 

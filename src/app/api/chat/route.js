@@ -251,9 +251,24 @@ Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyIn
       message: userPrompt
     });
 
+    const textResponse = response.text;
+
+    // Generate modern speaking translation for international viewers
+    let translation = "";
+    try {
+      const translationResponse = await ai.models.generateContent({
+        model: modelName,
+        contents: `Translate the following 19th-century vintage text into clear, direct, and simplified modern English for international non-native English speakers. Keep the meaning and general sentiment identical, but remove all archaic slang, idioms, or outdated syntax:\n\n"${textResponse}"`
+      });
+      translation = translationResponse.text;
+    } catch (transErr) {
+      console.error("Translation generation failed:", transErr);
+    }
+
     return NextResponse.json({
-      response: response.text,
-      sources: sources
+      response: textResponse,
+      sources: sources,
+      translation: translation
     });
 
   } catch (error) {

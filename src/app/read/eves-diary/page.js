@@ -18,6 +18,29 @@ export default async function ReadPage() {
   // Clean up empty Project Gutenberg spacing paragraphs (e.g. <p><br><br></p>)
   extractedContent = extractedContent.replace(/<p>\s*(?:<br\s*\/?>\s*)*<\/p>/gi, '');
 
+  // Group the first three figures (cover, frontispiece, title page) into a 3-column layout
+  extractedContent = extractedContent.replace(
+    /<div class="fig"[^>]*>\s*<img[^>]+cover\.jpg[^>]*>\s*(?:<br\s*\/?>)?\s*<\/div>\s*<div class="fig"[^>]*>\s*<img[^>]+front\.jpg[^>]*>\s*(?:<br\s*\/?>)?\s*<\/div>\s*<div class="fig"[^>]*>\s*<img[^>]+title\.jpg[^>]*>\s*(?:<br\s*\/?>)?\s*<\/div>/gi,
+    `<div class="book-cover-trio">
+      <div class="fig-trio-item"><img alt="cover.jpg" src="/images/eves-diary/cover.jpg" /></div>
+      <div class="fig-trio-item"><img alt="front.jpg" src="/images/eves-diary/front.jpg" /></div>
+      <div class="fig-trio-item"><img alt="title.jpg" src="/images/eves-diary/title.jpg" /></div>
+    </div>`
+  );
+
+  // Move inline illustrations into the following paragraph with alternating floats
+  let imgCount = 0;
+  extractedContent = extractedContent.replace(
+    /<div class="fig"[^>]*>\s*<img([^>]+src="([^"]+)"[^>]*)>\s*(?:<br\s*\/?>)?\s*<\/div>\s*(?:<p>\s*(?:<br\s*\/?>\s*)*<\/p>\s*)*<p>/gi,
+    (match, imgAttrs, src) => {
+      const altMatch = imgAttrs.match(/alt="([^"]+)"/i);
+      const alt = altMatch ? altMatch[1] : '';
+      const floatClass = imgCount % 2 === 0 ? 'img-float-right' : 'img-float-left';
+      imgCount++;
+      return `<p><span class="circle-img-wrapper ${floatClass}"><img src="${src}" alt="${alt}" class="in-paragraph-img" /><span class="zoom-hover-overlay"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"></path><path d="M9 21H3v-6"></path><path d="M21 3l-7 7"></path><path d="M3 21l7-7"></path></svg></span></span>`;
+    }
+  );
+
   // Inject "Ask Mark" interactive link next to "Translated from the Original" heading
   extractedContent = extractedContent.replace(
     /<h3>\s*Translated from the Original\s*<\/h3>/gi,

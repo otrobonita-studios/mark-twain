@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ArrowLeft, Sun, Moon, Volume2, Cpu } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 import TechDetect from '@/components/TechDetect';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default function BookReader({ htmlContent }) {
   const [scrollProgress, setScrollProgress] = useState(0);
@@ -13,6 +14,7 @@ export default function BookReader({ htmlContent }) {
   const [experience, setExperience] = useState('traditional'); // 'traditional' | 'app' | 'parallax' | 'voice' | 'drama' | 'chat' | 'split' | 'comments' | 'child'
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
   const [isTechDetectClosed, setIsTechDetectClosed] = useState(false);
+  const [selectedZoomImage, setSelectedZoomImage] = useState(null);
 
   const experiences = [
     { id: 'traditional', label: 'Traditional Read', description: "Original Gutenberg text and illustrations." },
@@ -82,6 +84,17 @@ export default function BookReader({ htmlContent }) {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Handle click on dynamic article elements to capture image zooms
+  const handleArticleClick = (e) => {
+    const wrapper = e.target.closest('.circle-img-wrapper');
+    if (wrapper) {
+      const img = wrapper.querySelector('.in-paragraph-img');
+      if (img) {
+        setSelectedZoomImage(img.getAttribute('src'));
+      }
+    }
+  };
 
   const handleReopenMusic = () => {
     window.dispatchEvent(new CustomEvent('media-player-open'));
@@ -168,7 +181,10 @@ export default function BookReader({ htmlContent }) {
 
       {/* Reading Desk */}
       <main className="book-page-desk" ref={readerRef}>
-        <article className={`book-page-parchment font-serif size-${fontSize}`}>
+        <article 
+          className={`book-page-parchment font-serif size-${fontSize}`}
+          onClick={handleArticleClick}
+        >
           <div className="book-epigraph">
             “Wheresoever she was, there was Eden.”
           </div>
@@ -221,6 +237,29 @@ export default function BookReader({ htmlContent }) {
 
       {/* Persistent Tech Detect Window */}
       <TechDetect />
+
+      {/* Zoom Modal Overlay */}
+      <AnimatePresence>
+        {selectedZoomImage && (
+          <motion.div
+            className="zoom-modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSelectedZoomImage(null)}
+          >
+            <motion.div
+              className="zoom-modal-content"
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+            >
+              <img src={selectedZoomImage} alt="Enlarged Illustration" />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
