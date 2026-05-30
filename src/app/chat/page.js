@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen } from 'lucide-react';
+import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu } from 'lucide-react';
 import OtrobonitaLogo from '@/components/OtrobonitaLogo';
 
 export default function ChatPage() {
@@ -15,6 +15,7 @@ export default function ChatPage() {
   const [conversationStyle, setConversationStyle] = useState('brief'); // 'brief' | 'in-depth'
   const [conversationTone, setConversationTone] = useState('playful'); // 'playful' | 'critical'
   const [showNotesModal, setShowNotesModal] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
   
   const messagesEndRef = useRef(null);
 
@@ -153,24 +154,117 @@ export default function ChatPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <button 
               onClick={() => setShowNotesModal(true)}
-              className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors"
+              className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors desktop-only-control"
               style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
             >
               <Info size={18} color="currentColor" />
               The Rebuild Process
             </button>
+            <button
+              onClick={() => setShowMobileMenu(!showMobileMenu)}
+              className="mobile-only-control"
+              style={{ background: 'none', border: 'none', padding: 0, color: 'var(--muted-foreground)', display: 'flex', alignItems: 'center', cursor: 'pointer' }}
+              aria-label="Toggle menu"
+            >
+              {showMobileMenu ? <X size={22} /> : <Menu size={22} />}
+            </button>
           </div>
         </div>
+
+        {/* Mobile Settings Drawer */}
+        <AnimatePresence>
+          {showMobileMenu && (
+            <motion.div
+              className="mobile-settings-drawer"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.25 }}
+              style={{ overflow: 'hidden' }}
+            >
+              <div className="mobile-settings-drawer-inner">
+                {/* Navigation */}
+                <div className="drawer-section">
+                  <Link 
+                    href="/" 
+                    onClick={() => setShowMobileMenu(false)}
+                    className="drawer-link"
+                  >
+                    <ArrowLeft size={16} />
+                    <span>Go to Writing Desk</span>
+                  </Link>
+                  <button 
+                    onClick={() => { setShowNotesModal(true); setShowMobileMenu(false); }}
+                    className="drawer-btn"
+                  >
+                    <Info size={16} />
+                    <span>The Rebuild Process</span>
+                  </button>
+                </div>
+
+                {/* Settings Switches */}
+                <div className="drawer-section">
+                  <div className="drawer-switch-row">
+                    <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
+                      Answer Size:
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span className="typewriter text-[10px]" style={{ color: conversationStyle === 'brief' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Brief</span>
+                      <div 
+                        onClick={() => setConversationStyle(conversationStyle === 'brief' ? 'in-depth' : 'brief')}
+                        className={`switch-track ${conversationStyle === 'in-depth' ? 'active' : ''}`}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <div className="switch-thumb" />
+                      </div>
+                      <span className="typewriter text-[10px]" style={{ color: conversationStyle === 'in-depth' ? 'var(--primary)' : 'var(--muted-foreground)' }}>In-Depth</span>
+                    </div>
+                  </div>
+
+                  <div className="drawer-switch-row">
+                    <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
+                      Tone:
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span className="typewriter text-[10px]" style={{ color: conversationTone === 'playful' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Playful</span>
+                      <div 
+                        onClick={() => setConversationTone(conversationTone === 'playful' ? 'critical' : 'playful')}
+                        className={`switch-track ${conversationTone === 'critical' ? 'active' : ''}`}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <div className="switch-thumb" />
+                      </div>
+                      <span className="typewriter text-[10px]" style={{ color: conversationTone === 'critical' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Critical</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Clear Conversation */}
+                {messages.length > 0 && (
+                  <div className="drawer-section" style={{ borderBottom: 'none' }}>
+                    <button 
+                      onClick={() => { clearChat(); setShowMobileMenu(false); }}
+                      className="drawer-btn clear-btn"
+                    >
+                      <RefreshCw size={14} />
+                      <span>Clear conversation</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Messages list */}
         <div className="chat-messages-container custom-scrollbar">
           <div className="chat-messages-inner">
             {messages.length === 0 ? (
               <div className="empty-chat-state">
-                <p className="empty-chat-text typewriter" style={{ fontSize: '0.95rem', color: '#e4d9c6' }}>
+                <p className="empty-chat-text typewriter">
                   The reports of my death have been exaggerated
                 </p>
-                <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35', fontSize: '2.35rem' }}>
+                <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35' }}>
                   I have returned to discover whether mankind has improved
                 </h2>
                 <Image
@@ -178,7 +272,7 @@ export default function ChatPage() {
                   alt="Mark Twain Signature"
                   width={250}
                   height={80}
-                  className="modal-signature-img"
+                  className="modal-signature-img empty-state-signature"
                   style={{ marginTop: '1.5rem' }}
                 />
               </div>
@@ -296,7 +390,7 @@ export default function ChatPage() {
           </div>
 
           {/* Conversation Switches (Placed UNDER the input field) */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2rem', justifyContent: 'center', alignItems: 'center', marginTop: '0.95rem', width: '100%' }}>
+          <div className="desktop-only-control" style={{ gap: '2rem', justifyContent: 'center', alignItems: 'center', marginTop: '0.95rem', width: '100%' }}>
             {/* Length Switch */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
               <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]" style={{ marginRight: '0.25rem' }}>
