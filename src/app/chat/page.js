@@ -157,11 +157,19 @@ export default function ChatPage() {
               className="mark-twain-solo-logo"
             />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+            <Link
+              href="/read/eves-diary"
+              className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors desktop-only-control"
+              style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--muted-foreground)' }}
+            >
+              <BookOpen size={18} color="currentColor" />
+              Read Eve's Diary
+            </Link>
             <button 
               onClick={() => setShowNotesModal(true)}
               className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors desktop-only-control"
-              style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
+              style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: 'var(--muted-foreground)' }}
             >
               <Info size={18} color="currentColor" />
               The Rebuild Process
@@ -198,6 +206,14 @@ export default function ChatPage() {
                   >
                     <ArrowLeft size={16} />
                     <span>Go to Writing Desk</span>
+                  </Link>
+                  <Link 
+                    href="/read/eves-diary" 
+                    onClick={() => setShowMobileMenu(false)}
+                    className="drawer-link"
+                  >
+                    <BookOpen size={16} />
+                    <span>Read Eve's Diary</span>
                   </Link>
                   <button 
                     onClick={() => { setShowNotesModal(true); setShowMobileMenu(false); }}

@@ -6,6 +6,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
+import Link from 'next/link';
 import { Play, Pause, RotateCcw, Volume2, VolumeX, ListMusic } from 'lucide-react';
 
 const soundtrack = [
@@ -195,14 +196,26 @@ export default function MediaPlayer() {
         <div className="mini-player-playlist-dropdown tactile-card custom-scrollbar" onClick={(e) => e.stopPropagation()}>
           <div className="playlist-header typewriter">Soundtrack Playlist</div>
           {soundtrack.map((track, idx) => (
-            <button
+            <div
               key={track.id}
               onClick={(e) => selectTrack(idx, e)}
               className={`playlist-item typewriter ${idx === currentTrackIndex ? 'active' : ''}`}
+              style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
             >
-              <div className="playlist-item-title">{track.title}</div>
-              <div className="playlist-item-style">{track.style}</div>
-            </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 }}>
+                <div className="playlist-item-title">{track.title}</div>
+                <div className="playlist-item-style">{track.style}</div>
+              </div>
+              {track.id === 'eves-diary' && (
+                <Link
+                  href="/read/eves-diary"
+                  onClick={(e) => e.stopPropagation()}
+                  className="playlist-read-link"
+                >
+                  Read Book
+                </Link>
+              )}
+            </div>
           ))}
         </div>
       )}
