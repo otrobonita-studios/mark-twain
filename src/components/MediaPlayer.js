@@ -1,13 +1,9 @@
 'use client';
 
-/*
- * Copyright 2026 Otrobonita AI Labs (Jesper Karlsson)
- * Licensed under the Apache License, Version 2.0 (the "License");
- */
-
 import { useState, useRef, useEffect } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
-import { Play, Pause, RotateCcw, Volume2, VolumeX, ListMusic } from 'lucide-react';
+import { Play, Pause, RotateCcw, Volume2, VolumeX, ListMusic, Minimize2, Maximize2, X } from 'lucide-react';
 
 const soundtrack = [
   {
@@ -32,31 +28,171 @@ const soundtrack = [
 
 export default function MediaPlayer() {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [hasPlayed, setHasPlayed] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [showTooltip, setShowTooltip] = useState(false);
   const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
   const [isPlaylistOpen, setIsPlaylistOpen] = useState(false);
   
+  // Custom features
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [isClosed, setIsClosed] = useState(true); // default to closed initially until mounted
+  const [position, setPosition] = useState({ x: -1, y: -1 });
+  const [audioProgress, setAudioProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  
   const audioRef = useRef(null);
+  const playerRef = useRef(null);
+  const dragStart = useRef({ x: 0, y: 0 });
+  const startPos = useRef({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+
   const currentTrack = soundtrack[currentTrackIndex] || soundtrack[0];
 
+  // Initialize from LocalStorage
+  useEffect(() => {
+    const savedClosed = localStorage.getItem('media-player-closed');
+    const savedMinimized = localStorage.getItem('media-player-minimized');
+    const savedPos = localStorage.getItem('media-player-position');
+    const savedTrackIndex = localStorage.getItem('media-player-track-index');
+
+    const closed = savedClosed === 'true';
+    const minimized = savedMinimized === 'true';
+    
+    setIsClosed(savedClosed !== null ? closed : false);
+    setIsMinimized(minimized);
+    
+    if (savedTrackIndex !== null) {
+      setCurrentTrackIndex(parseInt(savedTrackIndex, 10));
+    }
+
+    // Set default track based on pathname
+    if (typeof window !== 'undefined') {
+      if (window.location.pathname.includes('/eves-diary')) {
+        setCurrentTrackIndex(0); // Eve's Diary Theme
+      }
+    }
+
+    // Trigger initial close-change event for headers
+    window.dispatchEvent(new CustomEvent('media-player-close-change', { 
+      detail: { isClosed: savedClosed !== null ? closed : false } 
+    }));
+
+    // Position setup
+    if (savedPos) {
+      try {
+        setPosition(JSON.parse(savedPos));
+      } catch (e) {
+        setDefaultPosition(minimized);
+      }
+    } else {
+      setDefaultPosition(minimized);
+    }
+  }, []);
+
+  const setDefaultPosition = (minimizedState) => {
+    if (typeof window !== 'undefined') {
+      const w = minimizedState ? 240 : 280;
+      const h = minimizedState ? 52 : 390;
+      setPosition({
+        x: window.innerWidth - w - 24,
+        y: window.innerHeight - h - 24
+      });
+    }
+  };
+
+  // Sync isClosed / isMinimized state to localStorage
+  const handleClose = (e) => {
+    if (e) e.stopPropagation();
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+    }
+    setIsPlaying(false);
+    setIsClosed(true);
+    localStorage.setItem('media-player-closed', 'true');
+    window.dispatchEvent(new CustomEvent('media-player-close-change', { detail: { isClosed: true } }));
+  };
+
+  const handleMinimizeToggle = (e) => {
+    e.stopPropagation();
+    const newMinimized = !isMinimized;
+    setIsMinimized(newMinimized);
+    localStorage.setItem('media-player-minimized', String(newMinimized));
+    
+    // Adjust position if it would overflow the window
+    if (typeof window !== 'undefined') {
+      const w = newMinimized ? 240 : 280;
+      const h = newMinimized ? 52 : 390;
+      setPosition(prev => {
+        const nextX = Math.max(10, Math.min(window.innerWidth - w - 10, prev.x));
+        const nextY = Math.max(10, Math.min(window.innerHeight - h - 10, prev.y));
+        const newPos = { x: nextX, y: nextY };
+        localStorage.setItem('media-player-position', JSON.stringify(newPos));
+        return newPos;
+      });
+    }
+  };
+
+  // Listen to open events from other buttons
+  useEffect(() => {
+    const handleOpenEvent = () => {
+      setIsClosed(false);
+      localStorage.setItem('media-player-closed', 'false');
+      window.dispatchEvent(new CustomEvent('media-player-close-change', { detail: { isClosed: false } }));
+      
+      // Try default position if uninitialized
+      if (position.x === -1) {
+        setDefaultPosition(isMinimized);
+      }
+    };
+
+    window.addEventListener('media-player-open', handleOpenEvent);
+    return () => {
+      window.removeEventListener('media-player-open', handleOpenEvent);
+    };
+  }, [position, isMinimized]);
+
+  // Save position when dragging finishes
+  useEffect(() => {
+    if (position.x !== -1) {
+      localStorage.setItem('media-player-position', JSON.stringify(position));
+    }
+  }, [position]);
+
+  // Audio elements listeners
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
     const handleEnded = () => {
-      // Auto-advance to next track or stop
       if (currentTrackIndex < soundtrack.length - 1) {
-        setCurrentTrackIndex(prev => prev + 1);
+        const nextIdx = currentTrackIndex + 1;
+        setCurrentTrackIndex(nextIdx);
+        localStorage.setItem('media-player-track-index', String(nextIdx));
       } else {
         setIsPlaying(false);
       }
     };
 
+    const updateAudioProgress = () => {
+      setCurrentTime(audio.currentTime);
+      if (audio.duration) {
+        setAudioProgress((audio.currentTime / audio.duration) * 100);
+      }
+    };
+
+    const handleLoadedMetadata = () => {
+      setDuration(audio.duration);
+    };
+
     audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('timeupdate', updateAudioProgress);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+
     return () => {
       audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('timeupdate', updateAudioProgress);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
     };
   }, [currentTrackIndex]);
 
@@ -66,14 +202,13 @@ export default function MediaPlayer() {
     if (!audio) return;
 
     audio.load();
-    if (hasPlayed && isPlaying) {
-      audio.play().catch((err) => {
-        console.error('Audio source switch play failed:', err);
-      });
+    if (isPlaying) {
+      audio.play().catch((err) => console.log('Audio autoplay blocked:', err));
     }
   }, [currentTrackIndex]);
 
-  const handlePlayPause = () => {
+  const handlePlayPause = (e) => {
+    if (e) e.stopPropagation();
     const audio = audioRef.current;
     if (!audio) return;
 
@@ -81,10 +216,7 @@ export default function MediaPlayer() {
       audio.pause();
       setIsPlaying(false);
     } else {
-      setHasPlayed(true);
-      audio.play().catch((err) => {
-        console.error('Audio play failed:', err);
-      });
+      audio.play().catch((err) => console.error('Audio play failed:', err));
       setIsPlaying(true);
     }
   };
@@ -92,8 +224,8 @@ export default function MediaPlayer() {
   const selectTrack = (index, e) => {
     e.stopPropagation();
     setCurrentTrackIndex(index);
+    localStorage.setItem('media-player-track-index', String(index));
     setIsPlaying(true);
-    setHasPlayed(true);
     setIsPlaylistOpen(false);
   };
 
@@ -105,7 +237,6 @@ export default function MediaPlayer() {
     if (!isPlaying) {
       audio.play().catch((err) => console.error(err));
       setIsPlaying(true);
-      setHasPlayed(true);
     }
   };
 
@@ -117,23 +248,106 @@ export default function MediaPlayer() {
     setIsMuted(!isMuted);
   };
 
-  const togglePlaylist = (e) => {
-    e.stopPropagation();
-    setIsPlaylistOpen(prev => !prev);
+  const handleAudioProgressChange = (e) => {
+    const audio = audioRef.current;
+    if (!audio || !duration) return;
+    const newTime = (parseFloat(e.target.value) / 100) * duration;
+    audio.currentTime = newTime;
+    setCurrentTime(newTime);
+    setAudioProgress(e.target.value);
   };
 
-  const isSoundwaveActive = !hasPlayed || isPlaying;
+  // Dragging event handlers
+  const handleMouseDown = (e) => {
+    if (e.button !== 0 || e.target.closest('button') || e.target.closest('input') || e.target.closest('.playlist-item')) return;
+    
+    setIsDragging(true);
+    dragStart.current = { x: e.clientX, y: e.clientY };
+    startPos.current = { ...position };
+    
+    e.preventDefault();
+  };
+
+  const handleTouchStart = (e) => {
+    if (e.target.closest('button') || e.target.closest('input') || e.target.closest('.playlist-item')) return;
+    const touch = e.touches[0];
+    
+    setIsDragging(true);
+    dragStart.current = { x: touch.clientX, y: touch.clientY };
+    startPos.current = { ...position };
+  };
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e) => {
+      const dx = e.clientX - dragStart.current.x;
+      const dy = e.clientY - dragStart.current.y;
+      updateDragPosition(dx, dy);
+    };
+
+    const handleTouchMove = (e) => {
+      const touch = e.touches[0];
+      const dx = touch.clientX - dragStart.current.x;
+      const dy = touch.clientY - dragStart.current.y;
+      updateDragPosition(dx, dy);
+    };
+
+    const updateDragPosition = (dx, dy) => {
+      let newX = startPos.current.x + dx;
+      let newY = startPos.current.y + dy;
+      
+      const padding = 10;
+      const w = isMinimized ? 240 : 280;
+      const h = isMinimized ? 52 : 390;
+      
+      if (typeof window !== 'undefined') {
+        newX = Math.max(padding, Math.min(window.innerWidth - w - padding, newX));
+        newY = Math.max(padding, Math.min(window.innerHeight - h - padding, newY));
+      }
+      setPosition({ x: newX, y: newY });
+    };
+
+    const handleDragEnd = () => {
+      setIsDragging(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleDragEnd);
+    window.addEventListener('touchmove', handleTouchMove);
+    window.addEventListener('touchend', handleDragEnd);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleDragEnd);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleDragEnd);
+    };
+  }, [isDragging, isMinimized]);
+
+  const formatTime = (time) => {
+    if (isNaN(time)) return '0:00';
+    const mins = Math.floor(time / 60);
+    const secs = Math.floor(time % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  if (isClosed || position.x === -1) return null;
+
+  const cardStyle = {
+    position: 'fixed',
+    left: `${position.x}px`,
+    top: `${position.y}px`,
+    zIndex: 9999,
+  };
 
   return (
     <div 
-      className="mini-player-pill"
-      onMouseEnter={() => {
-        if (typeof window !== 'undefined' && window.matchMedia('(hover: hover)').matches && window.innerWidth >= 1024) {
-          setShowTooltip(true);
-        }
-      }}
-      onMouseLeave={() => setShowTooltip(false)}
-      onClick={handlePlayPause}
+      ref={playerRef}
+      className={`media-player-card ${isMinimized ? 'minimized' : 'expanded'} ${isDragging ? 'dragging' : ''}`}
+      style={cardStyle}
+      onMouseDown={handleMouseDown}
+      onTouchStart={handleTouchStart}
     >
       <audio
         ref={audioRef}
@@ -141,82 +355,138 @@ export default function MediaPlayer() {
         preload="auto"
       />
 
-      {/* Tiny soundwave graphic */}
-      <div className={`mini-soundwave ${isSoundwaveActive ? 'active' : 'paused'}`}>
-        <div className="mini-soundwave-bar"></div>
-        <div className="mini-soundwave-bar"></div>
-        <div className="mini-soundwave-bar"></div>
-        <div className="mini-soundwave-bar"></div>
-      </div>
+      {isMinimized ? (
+        // MINIMIZED MODE (Pill structure)
+        <div className="mini-player-pill-content">
+          <div className="mini-cover-thumb">
+            <Image 
+              src="/images/MarkTwainReappearsCover.webp" 
+              alt="Cover Thumbnail" 
+              width={36} 
+              height={36}
+              priority
+              className="mini-thumb-img"
+            />
+          </div>
 
-      {/* Track info / state text */}
-      <span className="mini-player-title typewriter">
-        {isPlaying ? currentTrack.title.replace("Mark Twain Reappears: ", "").replace(" Theme", "") : 'Soundtrack'}
-      </span>
+          <div className="mini-text-info">
+            <div className="mini-title typewriter">{currentTrack.title.replace("Mark Twain Reappears: ", "").replace(" Theme", "")}</div>
+          </div>
 
-      {/* Action Controls */}
-      <div className="mini-player-controls">
-        <button 
-          onClick={togglePlaylist}
-          className={`mini-control-btn ${isPlaylistOpen ? 'active' : ''}`}
-          title="Soundtrack Playlist"
-        >
-          <ListMusic size={12} />
-        </button>
-        <button 
-          onClick={handleMuteToggle}
-          className="mini-control-btn"
-          title={isMuted ? 'Unmute' : 'Mute'}
-        >
-          {isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
-        </button>
-        <button 
-          onClick={handleReset}
-          className="mini-control-btn"
-          title="Restart Track"
-        >
-          <RotateCcw size={12} />
-        </button>
-      </div>
-
-      {/* Animated Play/Pause indicator circle */}
-      <div className="mini-play-indicator">
-        {isPlaying ? <Pause size={10} fill="currentColor" /> : <Play size={10} fill="currentColor" style={{ marginLeft: '1px' }} />}
-      </div>
-      
-      {/* Tooltip on hover */}
-      {showTooltip && !isPlaylistOpen && (
-        <div className="mini-player-tooltip typewriter hidden md:block">
-          {currentTrack.title} • Click to {isPlaying ? 'Pause' : 'Play'}
+          <div className="mini-action-controls">
+            <button onClick={handlePlayPause} className="mini-control-btn play-btn" aria-label={isPlaying ? 'Pause' : 'Play'}>
+              {isPlaying ? <Pause size={10} fill="currentColor" /> : <Play size={10} fill="currentColor" />}
+            </button>
+            <button onClick={handleMinimizeToggle} className="mini-control-btn" title="Expand Player">
+              <Maximize2 size={10} />
+            </button>
+            <button onClick={handleClose} className="mini-control-btn close-btn" title="Close Player">
+              <X size={10} />
+            </button>
+          </div>
         </div>
-      )}
-
-      {/* Playlist Drop-Up Menu */}
-      {isPlaylistOpen && (
-        <div className="mini-player-playlist-dropdown tactile-card custom-scrollbar" onClick={(e) => e.stopPropagation()}>
-          <div className="playlist-header typewriter">Soundtrack Playlist</div>
-          {soundtrack.map((track, idx) => (
-            <div
-              key={track.id}
-              onClick={(e) => selectTrack(idx, e)}
-              className={`playlist-item typewriter ${idx === currentTrackIndex ? 'active' : ''}`}
-              style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
-            >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 }}>
-                <div className="playlist-item-title">{track.title}</div>
-                <div className="playlist-item-style">{track.style}</div>
-              </div>
-              {track.id === 'eves-diary' && (
-                <Link
-                  href="/read/eves-diary"
-                  onClick={(e) => e.stopPropagation()}
-                  className="playlist-read-link"
-                >
-                  Read Book
-                </Link>
-              )}
+      ) : (
+        // EXPANDED MODE (Full player card)
+        <div className="expanded-player-content">
+          {/* Header Bar */}
+          <div className="player-header">
+            <span className="player-header-title typewriter">Twain Audio Desk</span>
+            <div className="player-header-actions">
+              <button onClick={handleMinimizeToggle} className="header-action-btn" title="Minimize Player">
+                <Minimize2 size={10} />
+              </button>
+              <button onClick={handleClose} className="header-action-btn close-btn" title="Close Player">
+                <X size={10} />
+              </button>
             </div>
-          ))}
+          </div>
+
+          {/* Album Cover Art */}
+          <div className="player-cover-art">
+            <Image 
+              src="/images/MarkTwainReappearsCover.webp" 
+              alt="Mark Twain Reappears Cover" 
+              width={264} 
+              height={140}
+              priority
+              className="cover-img"
+            />
+            {isPlaying && (
+              <div className="soundwave active">
+                <div className="soundwave-bar"></div>
+                <div className="soundwave-bar"></div>
+                <div className="soundwave-bar"></div>
+                <div className="soundwave-bar"></div>
+                <div className="soundwave-bar"></div>
+                <div className="soundwave-bar"></div>
+              </div>
+            )}
+          </div>
+
+          {/* Track Metadata */}
+          <div className="player-metadata">
+            <h4 className="track-title typewriter">{currentTrack.title}</h4>
+            <span className="track-style">{currentTrack.style}</span>
+          </div>
+
+          {/* Progress Slider */}
+          <div className="player-timeline">
+            <input 
+              type="range"
+              min="0"
+              max="100"
+              value={audioProgress}
+              onChange={handleAudioProgressChange}
+              className="player-audio-slider"
+            />
+            <div className="time-display typewriter">
+              <span>{formatTime(currentTime)}</span>
+              <span>{formatTime(duration)}</span>
+            </div>
+          </div>
+
+          {/* Controls Bar */}
+          <div className="player-controls">
+            <button onClick={(e) => setIsPlaylistOpen(!isPlaylistOpen)} className={`control-btn ${isPlaylistOpen ? 'active' : ''}`} title="Playlist">
+              <ListMusic size={14} />
+            </button>
+            <button onClick={handleReset} className="control-btn" title="Restart">
+              <RotateCcw size={14} />
+            </button>
+            <button onClick={handleMuteToggle} className="control-btn" title={isMuted ? 'Unmute' : 'Mute'}>
+              {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+            </button>
+            <button onClick={handlePlayPause} className="play-pause-btn" aria-label={isPlaying ? 'Pause' : 'Play'}>
+              {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" style={{ marginLeft: '1.5px' }} />}
+            </button>
+          </div>
+
+          {/* Playlist Dropdown */}
+          {isPlaylistOpen && (
+            <div className="player-playlist-dropdown custom-scrollbar">
+              {soundtrack.map((track, idx) => (
+                <div
+                  key={track.id}
+                  onClick={(e) => selectTrack(idx, e)}
+                  className={`playlist-item ${idx === currentTrackIndex ? 'active' : ''}`}
+                >
+                  <div className="playlist-item-meta">
+                    <span className="playlist-item-title typewriter">{track.title}</span>
+                    <span className="playlist-item-style">{track.style}</span>
+                  </div>
+                  {track.id === 'eves-diary' && (
+                    <Link
+                      href="/read/eves-diary"
+                      onClick={(e) => e.stopPropagation()}
+                      className="playlist-read-link"
+                    >
+                      Read
+                    </Link>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

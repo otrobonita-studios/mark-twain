@@ -5,12 +5,12 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import { db, isConfigured } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Mail, ShieldAlert, Award, PenTool, X } from 'lucide-react';
+import { Mail, ShieldAlert, Award, PenTool, X, Volume2 } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 import UpcomingEpisodes from '@/components/UpcomingEpisodes';
 import { deskCopy, subscribeCopy, diaryCopy, footerCopy } from '@/data/copy_i18n';
@@ -22,6 +22,25 @@ export default function Home() {
   const [submitStatus, setSubmitStatus] = useState('idle'); // 'idle' | 'success' | 'error'
   const [submitMessage, setSubmitMessage] = useState('');
   const [selectedEntry, setSelectedEntry] = useState(null);
+  const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
+
+  useEffect(() => {
+    const savedClosed = localStorage.getItem('media-player-closed');
+    setIsMusicPlayerClosed(savedClosed === 'true');
+
+    const handleCloseChange = (e) => {
+      setIsMusicPlayerClosed(e.detail.isClosed);
+    };
+
+    window.addEventListener('media-player-close-change', handleCloseChange);
+    return () => {
+      window.removeEventListener('media-player-close-change', handleCloseChange);
+    };
+  }, []);
+
+  const handleReopenMusic = () => {
+    window.dispatchEvent(new CustomEvent('media-player-open'));
+  };
 
   const deskT = deskCopy.en;
   const subscribeT = subscribeCopy.en;
@@ -125,9 +144,19 @@ export default function Home() {
         {/* Top Left Header */}
         <div className="desk-header-left">
           <PenTool size={14} className="desk-header-icon" />
-          <span className="typewriter text-xs uppercase tracking-widest">
+          <span className="typewriter text-xs uppercase tracking-widest" style={{ marginRight: isMusicPlayerClosed ? '0.75rem' : '0' }}>
             {deskT.eyebrow}
           </span>
+          {isMusicPlayerClosed && (
+            <button 
+              onClick={handleReopenMusic} 
+              className="mini-reopen-music-btn" 
+              title="Open Music Player"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}
+            >
+              <Volume2 size={14} />
+            </button>
+          )}
         </div>
 
         {/* Upcoming Episodes Carousel */}

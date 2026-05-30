@@ -2,18 +2,15 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Play, Pause, Volume2, VolumeX, RotateCcw, Sun, Moon } from 'lucide-react';
+import { ArrowLeft, Sun, Moon, Volume2 } from 'lucide-react';
+import MediaPlayer from '@/components/MediaPlayer';
 
 export default function BookReader({ htmlContent }) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
-  const [audioProgress, setAudioProgress] = useState(0);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [experience, setExperience] = useState('traditional'); // 'traditional' | 'app' | 'parallax' | 'voice' | 'drama' | 'chat' | 'split' | 'comments' | 'child'
-  const [duration, setDuration] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
+  const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
 
   const experiences = [
     { id: 'traditional', label: 'Traditional Read', description: "Original Gutenberg text and illustrations." },
@@ -28,7 +25,6 @@ export default function BookReader({ htmlContent }) {
   ];
 
   const isLoadedRef = useRef(false);
-  const audioRef = useRef(null);
   const readerRef = useRef(null);
 
   // Load settings from local storage on mount
@@ -36,12 +32,24 @@ export default function BookReader({ htmlContent }) {
     const savedTheme = localStorage.getItem('eves-diary-theme');
     const savedFontSize = localStorage.getItem('eves-diary-font-size');
     const savedExperience = localStorage.getItem('eves-diary-experience');
+    const savedClosed = localStorage.getItem('media-player-closed');
 
     if (savedTheme) setTheme(savedTheme);
     if (savedFontSize) setFontSize(savedFontSize);
     if (savedExperience) setExperience(savedExperience);
+    setIsMusicPlayerClosed(savedClosed === 'true');
 
     isLoadedRef.current = true;
+
+    // Listen to media player close-change events
+    const handleCloseChange = (e) => {
+      setIsMusicPlayerClosed(e.detail.isClosed);
+    };
+
+    window.addEventListener('media-player-close-change', handleCloseChange);
+    return () => {
+      window.removeEventListener('media-player-close-change', handleCloseChange);
+    };
   }, []);
 
   // Save settings when they change
@@ -66,83 +74,8 @@ export default function BookReader({ htmlContent }) {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Monitor audio updates
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const updateAudioProgress = () => {
-      setCurrentTime(audio.currentTime);
-      if (audio.duration) {
-        setAudioProgress((audio.currentTime / audio.duration) * 100);
-      }
-    };
-
-    const handleLoadedMetadata = () => {
-      setDuration(audio.duration);
-    };
-
-    const handleEnded = () => {
-      setIsPlaying(false);
-      setAudioProgress(0);
-      setCurrentTime(0);
-    };
-
-    audio.addEventListener('timeupdate', updateAudioProgress);
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
-    audio.addEventListener('ended', handleEnded);
-
-    return () => {
-      audio.removeEventListener('timeupdate', updateAudioProgress);
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      audio.removeEventListener('ended', handleEnded);
-    };
-  }, []);
-
-  const handlePlayPause = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    if (isPlaying) {
-      audio.pause();
-      setIsPlaying(false);
-    } else {
-      audio.play().catch((err) => console.error('Audio play failed:', err));
-      setIsPlaying(true);
-    }
-  };
-
-  const handleMuteToggle = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.muted = !isMuted;
-    setIsMuted(!isMuted);
-  };
-
-  const handleRestart = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = 0;
-    if (!isPlaying) {
-      audio.play().catch((err) => console.error(err));
-      setIsPlaying(true);
-    }
-  };
-
-  const handleAudioProgressChange = (e) => {
-    const audio = audioRef.current;
-    if (!audio || !duration) return;
-    const newTime = (parseFloat(e.target.value) / 100) * duration;
-    audio.currentTime = newTime;
-    setCurrentTime(newTime);
-    setAudioProgress(e.target.value);
-  };
-
-  const formatTime = (time) => {
-    if (isNaN(time)) return '0:00';
-    const mins = Math.floor(time / 60);
-    const secs = Math.floor(time % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  const handleReopenMusic = () => {
+    window.dispatchEvent(new CustomEvent('media-player-open'));
   };
 
   return (
@@ -151,13 +84,6 @@ export default function BookReader({ htmlContent }) {
       <div 
         className="reading-progress-bar" 
         style={{ width: `${scrollProgress}%` }}
-      />
-
-      <audio 
-        ref={audioRef}
-        src="/sounds/music/mark-twains-eves-diary.mp3"
-        loop
-        preload="auto"
       />
 
       {/* Top Header Deck */}
@@ -192,6 +118,17 @@ export default function BookReader({ htmlContent }) {
               Large
             </button>
           </div>
+
+          {/* Reopen Music Icon (only if closed) */}
+          {isMusicPlayerClosed && (
+            <button 
+              onClick={handleReopenMusic} 
+              className="book-control-btn reopen-music-btn" 
+              title="Open Music Player"
+            >
+              <Volume2 size={16} />
+            </button>
+          )}
 
           {/* Theme Selector */}
           <button 
@@ -255,36 +192,8 @@ export default function BookReader({ htmlContent }) {
         </article>
       </main>
 
-      {/* Floating Audio Controller */}
-      <div className={`floating-audio-deck ${isPlaying ? 'active' : ''}`}>
-        <div className="deck-track-info">
-          <span className="deck-track-title typewriter">Eve's Diary Theme</span>
-          <span className="deck-track-duration typewriter">{formatTime(currentTime)} / {formatTime(duration)}</span>
-        </div>
-
-        <div className="deck-slider-wrapper">
-          <input 
-            type="range"
-            min="0"
-            max="100"
-            value={audioProgress}
-            onChange={handleAudioProgressChange}
-            className="deck-audio-slider"
-          />
-        </div>
-
-        <div className="deck-controls">
-          <button onClick={handlePlayPause} className="deck-play-btn" aria-label={isPlaying ? 'Pause' : 'Play'}>
-            {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" style={{ marginLeft: '1px' }} />}
-          </button>
-          <button onClick={handleMuteToggle} className="deck-btn" title={isMuted ? 'Unmute' : 'Mute'}>
-            {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-          </button>
-          <button onClick={handleRestart} className="deck-btn" title="Restart Music">
-            <RotateCcw size={14} />
-          </button>
-        </div>
-      </div>
+      {/* Persistent Audio Player */}
+      <MediaPlayer />
     </div>
   );
 }

@@ -4,7 +4,8 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu } from 'lucide-react';
+import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu, Volume2 } from 'lucide-react';
+import MediaPlayer from '@/components/MediaPlayer';
 
 export default function ChatPage() {
   const [messages, setMessages] = useState([]);
@@ -15,6 +16,25 @@ export default function ChatPage() {
   const [conversationTone, setConversationTone] = useState('playful'); // 'playful' | 'critical'
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
+
+  useEffect(() => {
+    const savedClosed = localStorage.getItem('media-player-closed');
+    setIsMusicPlayerClosed(savedClosed === 'true');
+
+    const handleCloseChange = (e) => {
+      setIsMusicPlayerClosed(e.detail.isClosed);
+    };
+
+    window.addEventListener('media-player-close-change', handleCloseChange);
+    return () => {
+      window.removeEventListener('media-player-close-change', handleCloseChange);
+    };
+  }, []);
+
+  const handleReopenMusic = () => {
+    window.dispatchEvent(new CustomEvent('media-player-open'));
+  };
   
   const messagesEndRef = useRef(null);
 
@@ -174,6 +194,17 @@ export default function ChatPage() {
               <Info size={18} color="currentColor" />
               The Rebuild Process
             </button>
+            {isMusicPlayerClosed && (
+              <button 
+                onClick={handleReopenMusic}
+                className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors desktop-only-control"
+                style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: 'var(--primary)' }}
+                title="Open Music Player"
+              >
+                <Volume2 size={18} color="currentColor" />
+                Listen
+              </button>
+            )}
             <button
               onClick={() => setShowMobileMenu(!showMobileMenu)}
               className="mobile-only-control"
@@ -222,6 +253,16 @@ export default function ChatPage() {
                     <Info size={16} />
                     <span>The Rebuild Process</span>
                   </button>
+                  {isMusicPlayerClosed && (
+                    <button 
+                      onClick={() => { handleReopenMusic(); setShowMobileMenu(false); }}
+                      className="drawer-btn"
+                      style={{ color: 'var(--primary)' }}
+                    >
+                      <Volume2 size={16} />
+                      <span>Open Music Player</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Settings Switches */}
@@ -589,6 +630,7 @@ export default function ChatPage() {
           </div>
         )}
       </AnimatePresence>
+      <MediaPlayer />
     </div>
   );
 }
