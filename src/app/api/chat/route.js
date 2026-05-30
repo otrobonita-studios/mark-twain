@@ -74,7 +74,26 @@ async function getEmbedding(text) {
     }
   }
 
-  // Option 2: Fall back to local Python script (ideal for local development)
+  // Option 3: Query local background embedding server if running (extremely fast local option)
+  try {
+    const response = await fetch("http://127.0.0.1:5002", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(500)
+    });
+    if (response.ok) {
+      const embedding = await response.json();
+      if (Array.isArray(embedding)) {
+        return embedding;
+      }
+    }
+  } catch (err) {
+    // If not running or timeout, silently continue to local python script option
+  }
+
+  // Option 4: Fall back to local Python script (ideal for local development)
   try {
     const { execFileSync } = await import('child_process');
     const pythonPath = path.resolve('rag/data-collection/.venv/Scripts/python.exe');
