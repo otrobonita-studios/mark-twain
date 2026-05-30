@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu } from 'lucide-react';
-import OtrobonitaLogo from '@/components/OtrobonitaLogo';
 
 export default function ChatPage() {
   const [messages, setMessages] = useState([]);
@@ -149,7 +148,14 @@ export default function ChatPage() {
         {/* Desk Header / Status bar */}
         <div className="desk-header-left" style={{ position: 'relative', top: 'auto', left: 'auto', marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            <OtrobonitaLogo className="otrobonita-logo" aria-label="Otrobonita Studios Logo" />
+            <Image
+              src="/images/MarkTwainSoloLogo.webp"
+              alt="Mark Twain Logo"
+              width={98}
+              height={35}
+              priority
+              className="mark-twain-solo-logo"
+            />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <button 
