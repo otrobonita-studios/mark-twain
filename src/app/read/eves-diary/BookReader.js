@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Sun, Moon, Volume2 } from 'lucide-react';
+import { ArrowLeft, Sun, Moon, Volume2, Cpu } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 
 export default function BookReader({ htmlContent }) {
@@ -11,6 +11,61 @@ export default function BookReader({ htmlContent }) {
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [experience, setExperience] = useState('traditional'); // 'traditional' | 'app' | 'parallax' | 'voice' | 'drama' | 'chat' | 'split' | 'comments' | 'child'
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
+  const [techDetails, setTechDetails] = useState(null);
+
+  useEffect(() => {
+    const updateTechDetails = () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const screenWidth = window.screen.width;
+      const screenHeight = window.screen.height;
+      const ratio = window.devicePixelRatio;
+      const maxTouch = navigator.maxTouchPoints || 0;
+      const isTouch = maxTouch > 0;
+      const cores = navigator.hardwareConcurrency || 'Unknown';
+      
+      const ua = navigator.userAgent;
+      let browserName = "Other";
+      if (ua.indexOf("Firefox") > -1) browserName = "Firefox";
+      else if (ua.indexOf("SamsungBrowser") > -1) browserName = "Samsung";
+      else if (ua.indexOf("Opera") > -1 || ua.indexOf("OPR") > -1) browserName = "Opera";
+      else if (ua.indexOf("Edge") > -1 || ua.indexOf("Edg") > -1) browserName = "Edge";
+      else if (ua.indexOf("Chrome") > -1) browserName = "Chrome";
+      else if (ua.indexOf("Safari") > -1) browserName = "Safari";
+
+      let platform = "Unknown";
+      if (navigator.platform) {
+        platform = navigator.platform;
+      }
+      if (navigator.userAgentData?.platform) {
+        platform = navigator.userAgentData.platform;
+      }
+
+      let layoutType = "Mobile Portrait";
+      if (width >= 1200) {
+        layoutType = "Two-Page Landscape (Desktop)";
+      } else if (width >= 768) {
+        layoutType = "Single-Page Book (Tablet/Desktop)";
+      } else {
+        layoutType = "Single-Page Portrait (Mobile)";
+      }
+
+      setTechDetails({
+        viewport: `${width} × ${height}`,
+        screen: `${screenWidth} × ${screenHeight}`,
+        dpr: ratio.toFixed(1),
+        touch: isTouch ? `Yes (${maxTouch} pts)` : "No",
+        cores: String(cores),
+        browser: browserName,
+        platform: platform,
+        layout: layoutType
+      });
+    };
+
+    updateTechDetails();
+    window.addEventListener('resize', updateTechDetails);
+    return () => window.removeEventListener('resize', updateTechDetails);
+  }, []);
 
   const experiences = [
     { id: 'traditional', label: 'Traditional Read', description: "Original Gutenberg text and illustrations." },
@@ -164,6 +219,53 @@ export default function BookReader({ htmlContent }) {
               ))}
             </div>
           </div>
+
+          {/* Tech Detect Panel */}
+          {techDetails && (
+            <div className="tech-detect-panel">
+              <div className="tech-detect-header">
+                <Cpu size={14} />
+                <span>Tech Detect</span>
+              </div>
+              <div className="tech-detect-grid">
+                <div className="tech-detect-item">
+                  <span className="tech-detect-label">Platform</span>
+                  <span className="tech-detect-value">{techDetails.platform}</span>
+                </div>
+                <div className="tech-detect-item">
+                  <span className="tech-detect-label">Browser</span>
+                  <span className="tech-detect-value">{techDetails.browser}</span>
+                </div>
+                <div className="tech-detect-item">
+                  <span className="tech-detect-label">Viewport</span>
+                  <span className="tech-detect-value">{techDetails.viewport}</span>
+                </div>
+                <div className="tech-detect-item">
+                  <span className="tech-detect-label">Screen Size</span>
+                  <span className="tech-detect-value">{techDetails.screen}</span>
+                </div>
+                <div className="tech-detect-item">
+                  <span className="tech-detect-label">Device Pixel Ratio</span>
+                  <span className="tech-detect-value">{techDetails.dpr}</span>
+                </div>
+                <div className="tech-detect-item">
+                  <span className="tech-detect-label">Touch Support</span>
+                  <span className="tech-detect-value">{techDetails.touch}</span>
+                </div>
+                <div className="tech-detect-item">
+                  <span className="tech-detect-label">CPU Cores</span>
+                  <span className="tech-detect-value">{techDetails.cores}</span>
+                </div>
+                <div className="tech-detect-item">
+                  <span className="tech-detect-label">Active Layout</span>
+                  <span className="tech-detect-value">{techDetails.layout}</span>
+                </div>
+              </div>
+              <div className="tech-detect-message typewriter">
+                The user experience has been adjusted to your technical platform.
+              </div>
+            </div>
+          )}
 
           {experience === 'traditional' ? (
             <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
