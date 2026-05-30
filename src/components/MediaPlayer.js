@@ -5,6 +5,18 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { Play, Pause, RotateCcw, Volume2, VolumeX, ListMusic, Minimize2, Maximize2, X } from 'lucide-react';
 
+const SpotifyIcon = ({ size = 16, className = "" }) => (
+  <svg 
+    viewBox="0 0 24 24" 
+    width={size} 
+    height={size} 
+    className={className} 
+    fill="currentColor"
+  >
+    <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424c-.18.295-.563.387-.857.207-2.377-1.454-5.37-1.783-8.892-1.007-.336.074-.67-.14-.744-.476-.074-.336.14-.67.476-.744 3.856-.88 7.15-.506 9.81 1.127.295.18.387.563.207.857c-.001-.001-.001-.001 0 0zm1.225-2.72c-.226.367-.707.487-1.074.26-2.722-1.672-6.87-2.157-10.082-1.182-.413.125-.847-.107-.972-.52-.125-.413.107-.847.52-.972 3.676-1.116 8.243-.574 11.348 1.33.367.227.487.708.26 1.074v.01zm.106-2.833c-.273.447-.858.594-1.306.32-3.178-1.89-8.412-2.083-11.454-1.16-.503.152-1.037-.134-1.189-.637-.152-.502.135-1.036.637-1.188 3.633-1.102 9.404-.888 13.084 1.3 448.272.274.595.858.32 1.306v-.002z"/>
+  </svg>
+);
+
 const soundtrack = [
   {
     id: "eves-diary",
@@ -358,22 +370,42 @@ export default function MediaPlayer() {
       {isMinimized ? (
         // MINIMIZED MODE (Pill structure)
         <div className="mini-player-pill-content">
-          <div className="mini-cover-thumb">
-            <Image 
-              src="/images/MarkTwainReappearsCover.webp" 
-              alt="Cover Thumbnail" 
-              width={36} 
-              height={36}
-              priority
-              className="mini-thumb-img"
-            />
-          </div>
+          <a 
+            href="https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S" 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="mini-cover-link"
+            title="Listen on Spotify"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mini-cover-thumb">
+              <Image 
+                src="/images/MarkTwainSpotifyCover.png" 
+                alt="Cover Thumbnail" 
+                width={36} 
+                height={36}
+                priority
+                className="mini-thumb-img"
+              />
+            </div>
+          </a>
 
           <div className="mini-text-info">
             <div className="mini-title typewriter">{currentTrack.title.replace("Mark Twain Reappears: ", "").replace(" Theme", "")}</div>
           </div>
 
           <div className="mini-action-controls">
+            <a 
+              href="https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="mini-control-btn spotify-link-btn" 
+              title="Listen on Spotify"
+              onClick={(e) => e.stopPropagation()}
+              style={{ display: 'flex', alignItems: 'center' }}
+            >
+              <SpotifyIcon size={11} />
+            </a>
             <button onClick={handlePlayPause} className="mini-control-btn play-btn" aria-label={isPlaying ? 'Pause' : 'Play'}>
               {isPlaying ? <Pause size={10} fill="currentColor" /> : <Play size={10} fill="currentColor" />}
             </button>
@@ -402,26 +434,40 @@ export default function MediaPlayer() {
           </div>
 
           {/* Album Cover Art */}
-          <div className="player-cover-art">
-            <Image 
-              src="/images/MarkTwainReappearsCover.webp" 
-              alt="Mark Twain Reappears Cover" 
-              width={264} 
-              height={264}
-              priority
-              className="cover-img"
-            />
-            {isPlaying && (
-              <div className="soundwave active">
-                <div className="soundwave-bar"></div>
-                <div className="soundwave-bar"></div>
-                <div className="soundwave-bar"></div>
-                <div className="soundwave-bar"></div>
-                <div className="soundwave-bar"></div>
-                <div className="soundwave-bar"></div>
+          <a 
+            href="https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S" 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="player-cover-link"
+            title="Listen on Spotify"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="player-cover-art">
+              <Image 
+                src="/images/MarkTwainSpotifyCover.png" 
+                alt="Mark Twain Spotify Cover" 
+                width={264} 
+                height={264}
+                priority
+                className="cover-img"
+              />
+              {isPlaying && (
+                <div className="soundwave active">
+                  <div className="soundwave-bar"></div>
+                  <div className="soundwave-bar"></div>
+                  <div className="soundwave-bar"></div>
+                  <div className="soundwave-bar"></div>
+                  <div className="soundwave-bar"></div>
+                  <div className="soundwave-bar"></div>
+                </div>
+              )}
+              {/* Spotify Icon Overlay on hover */}
+              <div className="spotify-hover-overlay">
+                <SpotifyIcon size={32} />
+                <span className="typewriter">LISTEN</span>
               </div>
-            )}
-          </div>
+            </div>
+          </a>
 
           {/* Track Metadata */}
           <div className="player-metadata">
@@ -456,6 +502,17 @@ export default function MediaPlayer() {
             <button onClick={handleMuteToggle} className="control-btn" title={isMuted ? 'Unmute' : 'Mute'}>
               {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
             </button>
+            <a 
+              href="https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S" 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="control-btn spotify-link-btn" 
+              title="Listen on Spotify"
+              onClick={(e) => e.stopPropagation()}
+              style={{ display: 'flex', alignItems: 'center' }}
+            >
+              <SpotifyIcon size={14} />
+            </a>
             <button onClick={handlePlayPause} className="play-pause-btn" aria-label={isPlaying ? 'Pause' : 'Play'}>
               {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" style={{ marginLeft: '1.5px' }} />}
             </button>
