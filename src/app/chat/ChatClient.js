@@ -22,6 +22,9 @@ export default function ChatClient() {
   const [isVoicePlaying, setIsVoicePlaying] = useState(false);
 
   const voiceAudioRef = useRef(null);
+  const chatInputRef = useRef(null);
+  const abortControllerRef = useRef(null);
+
 
 
   const searchParams = useSearchParams();
@@ -117,12 +120,28 @@ export default function ChatClient() {
     const text = textToSend || input;
     if (!text.trim()) return;
 
+    // If there's an ongoing request, abort it!
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
     setInput('');
+
+    // Create a new AbortController for this request
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     // Append user message
     const updatedMessages = [...messages, { role: 'user', content: text }];
     setMessages(updatedMessages);
     setLoading(true);
+
+    // Focus input immediately after sending query (on desktop)
+    const isMobile = window.matchMedia('(pointer: coarse)').matches;
+    if (!isMobile && chatInputRef.current) {
+      chatInputRef.current.focus();
+    }
 
     try {
       const response = await fetch('/api/chat', {
@@ -130,6 +149,7 @@ export default function ChatClient() {
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
         body: JSON.stringify({
           message: text,
           style: conversationStyle,
@@ -161,6 +181,11 @@ export default function ChatClient() {
         ]);
       }
     } catch (error) {
+      if (error.name === 'AbortError') {
+        console.log('Request aborted by user.');
+        return; // Gracefully do nothing on manual interruption
+      }
+      
       console.error("Chat page error:", error);
       setMessages(prev => [
         ...prev,
@@ -170,9 +195,28 @@ export default function ChatClient() {
         }
       ]);
     } finally {
-      setLoading(false);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+        setLoading(false);
+
+        // Focus input when responding finishes (on desktop)
+        const isMobile = window.matchMedia('(pointer: coarse)').matches;
+        if (!isMobile) {
+          requestAnimationFrame(() => {
+            chatInputRef.current?.focus();
+          });
+        }
+      }
     }
   };
+
+  // Auto-focus input on page load on desktop
+  useEffect(() => {
+    const isMobile = window.matchMedia('(pointer: coarse)').matches;
+    if (!isMobile && chatInputRef.current) {
+      chatInputRef.current.focus();
+    }
+  }, []);
 
   useEffect(() => {
     if (initialQueryProcessed.current) return;
@@ -533,6 +577,7 @@ export default function ChatClient() {
 
           <div className="chat-input-wrapper">
             <textarea
+              ref={chatInputRef}
               id="chat-input-textarea"
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -544,13 +589,12 @@ export default function ChatClient() {
               }}
               placeholder="Spit it out..."
               className="tactile-input chat-input custom-scrollbar"
-              disabled={loading}
               rows={1}
             />
             <button
               id="chat-send-button"
               onClick={() => handleSend()}
-              disabled={loading || !input.trim()}
+              disabled={!input.trim()}
               className="btn-gold chat-send-btn"
               aria-label="Skicka meddelande"
             >
