@@ -11,8 +11,21 @@ export default function BookReader({ htmlContent }) {
   const [audioProgress, setAudioProgress] = useState(0);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
+  const [experience, setExperience] = useState('traditional'); // 'traditional' | 'app' | 'parallax' | 'voice' | 'drama' | 'chat' | 'split' | 'comments' | 'child'
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
+
+  const experiences = [
+    { id: 'traditional', label: 'Traditional Read', description: "Original Gutenberg text and illustrations." },
+    { id: 'app', label: 'Downloadable APK', description: 'Standalone Android mobile application format.' },
+    { id: 'parallax', label: 'Parallax Illustrated', description: 'Depth illustrations shifting with mouse movement.' },
+    { id: 'voice', label: 'Voice-First Edition', description: 'Voice-command navigation and speech narration.' },
+    { id: 'drama', label: 'Short Audio Drama', description: 'Immersive soundscapes and actor dramatization.' },
+    { id: 'chat', label: 'Chat-Native Edition', description: 'Interact with Eve directly in instant message format.' },
+    { id: 'split', label: 'Parallel Diary', description: "Eve's and Adam's entries split side-by-side." },
+    { id: 'comments', label: 'Editor Notes Only', description: 'Annotated sections and board observations.' },
+    { id: 'child', label: 'Child Version', description: 'Simplified text with educational hover cards.' }
+  ];
 
   const audioRef = useRef(null);
   const readerRef = useRef(null);
@@ -175,7 +188,48 @@ export default function BookReader({ htmlContent }) {
           <div className="book-epigraph">
             “Wheresoever she was, there was Eden.”
           </div>
-          <div dangerouslySetInnerHTML={{ __html: htmlContent }} />
+
+          {/* Reading Experience Selector */}
+          <div className="reading-experience-selector">
+            <h4 className="experience-heading">Reading Experience</h4>
+            <div className="experience-grid">
+              {experiences.map((exp) => (
+                <button
+                  key={exp.id}
+                  onClick={() => setExperience(exp.id)}
+                  className={`experience-card ${experience === exp.id ? 'active' : ''}`}
+                >
+                  <span className="experience-card-label">{exp.label}</span>
+                  <span className="experience-card-desc">{exp.description}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {experience === 'traditional' ? (
+            <div dangerouslySetInnerHTML={{ __html: htmlContent }} />
+          ) : (
+            <div className="experience-design-preview">
+              <div className="preview-stamp">DESIGN PHASE</div>
+              <h3>{experiences.find(e => e.id === experience).label}</h3>
+              <p className="preview-status">
+                This reading room configuration is currently in layout design.
+              </p>
+              <div className="preview-concept">
+                {experience === 'app' && "Concept: We can compile a standalone Next.js/Cordova or React Native Android app using the local Android SDK tools to package the diary as an offline-capable mobile application."}
+                {experience === 'parallax' && "Concept: Utilizing Framer Motion and mouse/gyroscope coordinates to shift Lester Ralph's illustrations relative to the text, creating depth layers."}
+                {experience === 'voice' && "Concept: An Android APK integrating speech-to-text recognition to navigate the diary entries and play corresponding audio segments."}
+                {experience === 'drama' && "Concept: A multi-track audio player syncing background ambient tracks with segmented character dialogues for Adam and Eve."}
+                {experience === 'chat' && "Concept: Transforming the static text entries into a sequential messaging interface where you unlock Eve's thoughts chronologically."}
+                {experience === 'split' && "Concept: A two-column responsive desktop layout displaying Eve's Diary on the left and Adam's Diary on the right, aligned by date."}
+                {experience === 'comments' && "Concept: Filtering the corpus to only show diary entries that include contemporary annotations, board discussions, and AI observations."}
+                {experience === 'child' && "Concept: An educational format with larger typography, simplified words, and hover definition popups for 19th-century terminology."}
+              </div>
+              <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">
+                Return to Traditional Read
+              </button>
+            </div>
+          )}
         </article>
       </main>
 
