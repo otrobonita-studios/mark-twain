@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -17,6 +18,9 @@ export default function ChatClient() {
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
+
+  const searchParams = useSearchParams();
+  const initialQueryProcessed = useRef(false);
 
   useEffect(() => {
     const savedClosed = localStorage.getItem('media-player-closed');
@@ -54,7 +58,7 @@ export default function ChatClient() {
     const text = textToSend || input;
     if (!text.trim()) return;
 
-    if (!textToSend) setInput('');
+    setInput('');
 
     // Append user message
     const updatedMessages = [...messages, { role: 'user', content: text }];
@@ -109,6 +113,15 @@ export default function ChatClient() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (initialQueryProcessed.current) return;
+    const query = searchParams.get('query');
+    if (query) {
+      initialQueryProcessed.current = true;
+      handleSend(query);
+    }
+  }, [searchParams]);
 
   const toggleSources = (index) => {
     setExpandedSources(prev => ({

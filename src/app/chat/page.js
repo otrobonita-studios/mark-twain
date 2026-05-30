@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import ChatClient from './ChatClient';
 
 export const metadata = {
@@ -6,5 +7,9 @@ export const metadata = {
 };
 
 export default function ChatPage() {
-  return <ChatClient />;
+  return (
+    <Suspense fallback={<div className="app-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', fontFamily: 'var(--font-mono)' }}>Loading...</div>}>
+      <ChatClient />
+    </Suspense>
+  );
 }
