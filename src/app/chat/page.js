@@ -288,7 +288,7 @@ export default function ChatPage() {
                   >
                     <div className={`chat-bubble ${msg.role === 'user' ? 'user' : 'twain'}`}>
                       <span className="chat-bubble-sender">
-                        {msg.role === 'user' ? 'Visitor' : 'Mark Twain'}
+                        {msg.role === 'user' ? 'You' : 'Mark Twain'}
                       </span>
                       <div className="chat-bubble-text font-serif">
                         <p>{msg.content}</p>
