@@ -22,7 +22,7 @@ export default async function ReadPage() {
   extractedContent = extractedContent.replace(
     /<h3>\s*Translated from the Original\s*<\/h3>/gi,
     `<h3>
-      Translated from the Original <small style="margin-left: 10px; font-size: 0.65em; font-family: var(--font-mono), monospace;"><a href="/chat?query=Eve's Diary was 'Translated from the Original'. What original language did you translate Eve's Diary from, and is it a joke?" style="color: #d9a34a; text-decoration: none; cursor: pointer;">Ask Mark</a></small>
+      Translated from the Original <small style="margin-left: 10px; font-size: 0.65em; font-family: var(--font-mono), monospace;"><a href="/chat?query=Can you explain 'Translated from the Original' in the context of Eve's Diary?" style="color: #d9a34a; text-decoration: none; cursor: pointer;">Ask Mark</a></small>
     </h3>`
   );
 
