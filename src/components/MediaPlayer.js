@@ -208,6 +208,30 @@ export default function MediaPlayer() {
     };
   }, [currentTrackIndex]);
 
+  // External control listener (e.g. from Voice of Mark play)
+  useEffect(() => {
+    const handlePauseEvent = () => {
+      const audio = audioRef.current;
+      if (audio && isPlaying) {
+        audio.pause();
+        setIsPlaying(false);
+      }
+    };
+
+    window.addEventListener('media-player-pause', handlePauseEvent);
+    return () => {
+      window.removeEventListener('media-player-pause', handlePauseEvent);
+    };
+  }, [isPlaying]);
+
+  // Dispatch play event to external listeners (e.g. Voice of Mark) when music starts playing
+  useEffect(() => {
+    if (isPlaying) {
+      window.dispatchEvent(new CustomEvent('media-player-play'));
+    }
+  }, [isPlaying]);
+
+
   // Handle track source switching
   useEffect(() => {
     const audio = audioRef.current;

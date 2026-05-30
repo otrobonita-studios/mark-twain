@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu, Volume2 } from 'lucide-react';
+import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu, Volume2, Play, Pause } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 
 export default function ChatClient() {
@@ -19,6 +19,10 @@ export default function ChatClient() {
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
+  const [isVoicePlaying, setIsVoicePlaying] = useState(false);
+
+  const voiceAudioRef = useRef(null);
+
 
   const searchParams = useSearchParams();
   const initialQueryProcessed = useRef(false);
@@ -54,6 +58,60 @@ export default function ChatClient() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+  // Voice of Mark audio synchronization
+  useEffect(() => {
+    const handleMainPlayerPlay = () => {
+      const audio = voiceAudioRef.current;
+      if (audio && !audio.paused) {
+        audio.pause();
+        setIsVoicePlaying(false);
+      }
+    };
+
+    window.addEventListener('media-player-play', handleMainPlayerPlay);
+
+    const audio = voiceAudioRef.current;
+    const handleAudioEndedOrPaused = () => {
+      setIsVoicePlaying(false);
+    };
+
+    if (audio) {
+      audio.addEventListener('ended', handleAudioEndedOrPaused);
+      audio.addEventListener('pause', handleAudioEndedOrPaused);
+    }
+
+    return () => {
+      window.removeEventListener('media-player-play', handleMainPlayerPlay);
+      if (audio) {
+        audio.removeEventListener('ended', handleAudioEndedOrPaused);
+        audio.removeEventListener('pause', handleAudioEndedOrPaused);
+        audio.pause();
+      }
+    };
+  }, []);
+
+  const handlePlayVoiceOfMark = () => {
+    const audio = voiceAudioRef.current;
+    if (!audio) return;
+
+    if (isVoicePlaying) {
+      audio.pause();
+      setIsVoicePlaying(false);
+    } else {
+      // Pause background music in the main media player first
+      window.dispatchEvent(new CustomEvent('media-player-pause'));
+      
+      audio.play()
+        .then(() => {
+          setIsVoicePlaying(true);
+        })
+        .catch((err) => {
+          console.error("Failed to play Mark's voice audio:", err);
+        });
+    }
+  };
+
 
   const handleSend = async (textToSend) => {
     const text = textToSend || input;
@@ -375,6 +433,15 @@ export default function ChatClient() {
                   className="modal-signature-img empty-state-signature"
                   style={{ marginTop: '1.5rem' }}
                 />
+                <div className="voice-of-mark-container">
+                  <button
+                    onClick={handlePlayVoiceOfMark}
+                    className="voice-of-mark-btn"
+                  >
+                    {isVoicePlaying ? <Pause size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" />}
+                    <span>The Voice of Mark</span>
+                  </button>
+                </div>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -690,6 +757,11 @@ export default function ChatClient() {
           </div>
         )}
       </AnimatePresence>
+      <audio
+        ref={voiceAudioRef}
+        src="/sounds/music/the-awakening.mp3"
+        preload="auto"
+      />
       <MediaPlayer />
     </div>
   );
