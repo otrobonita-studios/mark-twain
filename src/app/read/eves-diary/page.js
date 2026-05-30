@@ -13,7 +13,10 @@ export default async function ReadPage() {
 
   // Extract from line 96 to 1329 (0-indexed line numbers 95 to 1328)
   const lines = htmlContent.split('\n');
-  const extractedContent = lines.slice(95, 1329).join('\n');
+  let extractedContent = lines.slice(95, 1329).join('\n');
+
+  // Clean up empty Project Gutenberg spacing paragraphs (e.g. <p><br><br></p>)
+  extractedContent = extractedContent.replace(/<p>\s*(?:<br\s*\/?>\s*)*<\/p>/gi, '');
 
   return <BookReader htmlContent={extractedContent} />;
 }
