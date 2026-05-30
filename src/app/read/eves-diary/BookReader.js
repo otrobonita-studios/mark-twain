@@ -229,7 +229,7 @@ export default function BookReader({ htmlContent }) {
           </div>
 
           {experience === 'traditional' ? (
-            <div dangerouslySetInnerHTML={{ __html: htmlContent }} />
+            <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
           ) : (
             <div className="experience-design-preview">
               <div className="preview-stamp">DESIGN PHASE</div>
