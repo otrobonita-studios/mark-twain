@@ -407,7 +407,7 @@ export default function MediaPlayer() {
               src="/images/MarkTwainReappearsCover.webp" 
               alt="Mark Twain Reappears Cover" 
               width={264} 
-              height={140}
+              height={264}
               priority
               className="cover-img"
             />
