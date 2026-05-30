@@ -137,11 +137,7 @@ export default function ChatClient() {
     setMessages(updatedMessages);
     setLoading(true);
 
-    // Focus input immediately after sending query (on desktop)
-    const isMobile = window.matchMedia('(pointer: coarse)').matches;
-    if (!isMobile && chatInputRef.current) {
-      chatInputRef.current.focus();
-    }
+
 
     try {
       const response = await fetch('/api/chat', {
@@ -199,24 +195,21 @@ export default function ChatClient() {
         abortControllerRef.current = null;
         setLoading(false);
 
-        // Focus input when responding finishes (on desktop)
-        const isMobile = window.matchMedia('(pointer: coarse)').matches;
-        if (!isMobile) {
-          requestAnimationFrame(() => {
-            chatInputRef.current?.focus();
-          });
-        }
+
       }
     }
   };
 
-  // Auto-focus input on page load on desktop
+  // Keyboard-first focus retention: focus textarea whenever messages or loading state changes
   useEffect(() => {
     const isMobile = window.matchMedia('(pointer: coarse)').matches;
-    if (!isMobile && chatInputRef.current) {
-      chatInputRef.current.focus();
+    if (!isMobile) {
+      const timer = setTimeout(() => {
+        chatInputRef.current?.focus();
+      }, 50);
+      return () => clearTimeout(timer);
     }
-  }, []);
+  }, [messages.length, loading]);
 
   useEffect(() => {
     if (initialQueryProcessed.current) return;
