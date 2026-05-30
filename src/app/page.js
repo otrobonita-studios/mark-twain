@@ -187,6 +187,7 @@ export default function Home() {
               {/* Role Selection */}
               <div className="role-toggle-group">
                 <button
+                  id="role-btn-spectator"
                   type="button"
                   onClick={() => setRole('spectator')}
                   className={`role-btn ${role === 'spectator' ? 'active' : ''}`}
@@ -196,6 +197,7 @@ export default function Home() {
                 </button>
 
                 <button
+                  id="role-btn-thinker"
                   type="button"
                   onClick={() => setRole('thinker')}
                   className={`role-btn ${role === 'thinker' ? 'active' : ''}`}
@@ -205,6 +207,7 @@ export default function Home() {
                 </button>
 
                 <button
+                  id="role-btn-builder"
                   type="button"
                   onClick={() => setRole('builder')}
                   className={`role-btn ${role === 'builder' ? 'active' : ''}`}
@@ -217,6 +220,7 @@ export default function Home() {
               {/* Email & Submit */}
               <div className="form-row">
                 <input
+                  id="subscribe-email-input"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -225,6 +229,7 @@ export default function Home() {
                   className="tactile-input email-input"
                 />
                 <button
+                  id="subscribe-submit-button"
                   type="submit"
                   disabled={isSubmitting}
                   className="btn-gold submit-btn"
