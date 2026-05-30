@@ -24,6 +24,7 @@ export default function ChatClient() {
   const voiceAudioRef = useRef(null);
   const chatInputRef = useRef(null);
   const abortControllerRef = useRef(null);
+  const voiceFocusTimeoutRef = useRef(null);
 
 
 
@@ -91,6 +92,9 @@ export default function ChatClient() {
         audio.removeEventListener('pause', handleAudioEndedOrPaused);
         audio.pause();
       }
+      if (voiceFocusTimeoutRef.current) {
+        clearTimeout(voiceFocusTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -101,13 +105,32 @@ export default function ChatClient() {
     if (isVoicePlaying) {
       audio.pause();
       setIsVoicePlaying(false);
+      if (voiceFocusTimeoutRef.current) {
+        clearTimeout(voiceFocusTimeoutRef.current);
+        voiceFocusTimeoutRef.current = null;
+      }
     } else {
       // Pause background music in the main media player first
       window.dispatchEvent(new CustomEvent('media-player-pause'));
       
+      if (voiceFocusTimeoutRef.current) {
+        clearTimeout(voiceFocusTimeoutRef.current);
+      }
+
       audio.play()
         .then(() => {
           setIsVoicePlaying(true);
+
+          // Focus input after 5 seconds of playing (on desktop)
+          const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+          if (!isMobile) {
+            voiceFocusTimeoutRef.current = setTimeout(() => {
+              if (voiceAudioRef.current && !voiceAudioRef.current.paused && document.activeElement !== chatInputRef.current) {
+                chatInputRef.current?.focus();
+              }
+              voiceFocusTimeoutRef.current = null;
+            }, 5000);
+          }
         })
         .catch((err) => {
           console.error("Failed to play Mark's voice audio:", err);
@@ -213,7 +236,7 @@ export default function ChatClient() {
       }, 50);
       return () => clearTimeout(timer);
     }
-  }, [messages.length, loading]);
+  }, [messages.length, loading, conversationStyle, conversationTone, simplifyLanguage]);
 
   useEffect(() => {
     if (initialQueryProcessed.current) return;
