@@ -127,7 +127,12 @@ export default async function ReadPage() {
           displayText = `${dayText} (the second)`;
         }
       }
-      return `${pStart}<span id="${id}" class="diary-day-anchor">${displayText}</span>${delimiter}`;
+      
+      const hasDot = delimiter.startsWith('.');
+      const finalDayText = hasDot ? `${displayText}. ` : `${displayText} `;
+      const finalDelimiter = ' — ';
+
+      return `${pStart}<span id="${id}" class="diary-day-anchor">${finalDayText}</span>${finalDelimiter}`;
     }
   );
 
@@ -137,7 +142,10 @@ export default async function ReadPage() {
   let m;
   while ((m = idRegex.exec(extractedContent)) !== null) {
     const id = m[1];
-    const text = m[2].replace(/<[^>]+>/g, '').trim().replace(/\s+/g, ' ');
+    let text = m[2].replace(/<[^>]+>/g, '').trim().replace(/\s+/g, ' ');
+    if (text.endsWith('.')) {
+      text = text.slice(0, -1).trim();
+    }
     if (text === 'By Mark Twain' || text.includes('Illustrated by') || text.includes('Translated from the Original')) continue;
 
     let label = text;
