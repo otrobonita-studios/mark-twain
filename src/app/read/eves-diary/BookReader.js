@@ -2,12 +2,12 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Sun, Moon, Volume2, Cpu } from 'lucide-react';
+import { ArrowLeft, Sun, Moon, Volume2, Cpu, BookOpen, X } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 import TechDetect from '@/components/TechDetect';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function BookReader({ htmlContent }) {
+export default function BookReader({ htmlContent, tocItems = [] }) {
   const [scrollProgress, setScrollProgress] = useState(0);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
@@ -15,14 +15,16 @@ export default function BookReader({ htmlContent }) {
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
   const [isTechDetectClosed, setIsTechDetectClosed] = useState(false);
   const [selectedZoomImage, setSelectedZoomImage] = useState(null);
+  const [isTocOpen, setIsTocOpen] = useState(false);
+  const [activeId, setActiveId] = useState(null);
 
   const experiences = [
+    { id: 'drama', label: 'Index', description: 'Navigate the story by Index.' },
     { id: 'traditional', label: 'Traditional Read', description: "Original Gutenberg text and illustrations." },
     { id: 'voice', label: 'Voice-First Edition', description: 'Voice-command navigation and speech narration.' },
-    { id: 'drama', label: 'Short Audio Drama', description: 'Immersive soundscapes and actor dramatization.' },
     { id: 'chat', label: 'Chat-Native Edition', description: 'Interact with Eve directly in instant message format.' },
-    { id: 'split', label: 'Parallel Diary', description: "Eve's and Adam's entries split side-by-side." },
-    { id: 'child', label: 'Child Version', description: 'Simplified text with educational hover cards.' }
+    { id: 'split', label: 'Sung Edition', description: 'Hear the diary set to music.' },
+    { id: 'child', label: 'Young Readers', description: 'Simplified text and glossary for young minds.' }
   ];
 
   const isLoadedRef = useRef(false);
@@ -38,8 +40,14 @@ export default function BookReader({ htmlContent }) {
 
     if (savedTheme) setTheme(savedTheme);
     if (savedFontSize) setFontSize(savedFontSize);
-    if (savedExperience) setExperience(savedExperience);
-    setIsMusicPlayerClosed(savedClosed === 'true');
+    if (savedExperience) {
+      if (savedExperience === 'drama') {
+        setExperience('traditional');
+      } else {
+        setExperience(savedExperience);
+      }
+    }
+    setIsMusicPlayerClosed(savedClosed !== null ? savedClosed === 'true' : true);
     setIsTechDetectClosed(savedTechClosed === 'true');
 
     isLoadedRef.current = true;
@@ -92,6 +100,73 @@ export default function BookReader({ htmlContent }) {
       const img = wrapper.querySelector('.in-paragraph-img');
       if (img) {
         setSelectedZoomImage(img.getAttribute('src'));
+        return;
+      }
+    }
+
+    const clickedImg = e.target.closest('img');
+    if (clickedImg) {
+      const isBookImage = clickedImg.closest('.book-text-content') || 
+                          clickedImg.closest('.book-cover-trio') || 
+                          clickedImg.closest('.book-epigraph') || 
+                          clickedImg.closest('.paragraph-with-image') ||
+                          clickedImg.closest('.fig') ||
+                          clickedImg.closest('.fig-trio-item');
+      if (isBookImage) {
+        setSelectedZoomImage(clickedImg.getAttribute('src'));
+      }
+    }
+  };
+
+  // Scroll tracking to update the active Table of Contents item
+  useEffect(() => {
+    if (tocItems.length === 0) return;
+
+    const handleScrollActiveItem = () => {
+      const elements = tocItems.map(item => document.getElementById(item.id)).filter(Boolean);
+      let currentActiveId = null;
+      
+      for (const el of elements) {
+        const rect = el.getBoundingClientRect();
+        // If the element's top boundary is above or near the top viewport threshold (e.g. 160px)
+        if (rect.top <= 160) {
+          currentActiveId = el.id;
+        } else {
+          break; // Headings are ordered, so stop once we find one below the threshold
+        }
+      }
+      
+      if (currentActiveId) {
+        setActiveId(currentActiveId);
+      } else {
+        setActiveId(tocItems[0].id);
+      }
+    };
+
+    window.addEventListener('scroll', handleScrollActiveItem);
+    handleScrollActiveItem(); // Initial call
+
+    return () => window.removeEventListener('scroll', handleScrollActiveItem);
+  }, [tocItems]);
+
+  // Smooth scroll helper that offsets for the sticky header
+  const scrollToId = (id) => {
+    const element = document.getElementById(id);
+    if (element) {
+      const offset = 80;
+      const bodyRect = document.body.getBoundingClientRect().top;
+      const elementRect = element.getBoundingClientRect().top;
+      const elementPosition = elementRect - bodyRect;
+      const offsetPosition = elementPosition - offset;
+
+      window.scrollTo({
+        top: offsetPosition,
+        behavior: 'smooth'
+      });
+
+      // Automatically close drawer on mobile
+      if (window.innerWidth < 768) {
+        setIsTocOpen(false);
       }
     }
   };
@@ -105,7 +180,7 @@ export default function BookReader({ htmlContent }) {
   };
 
   return (
-    <div className={`book-reader-container theme-${theme}`}>
+    <div className={`book-reader-container theme-${theme} ${isTocOpen ? 'toc-sidebar-open' : ''}`}>
       {/* Scroll Progress Bar */}
       <div 
         className="reading-progress-bar" 
@@ -191,18 +266,37 @@ export default function BookReader({ htmlContent }) {
 
           {/* Reading Experience Selector */}
           <div className="reading-experience-selector">
-            <h4 className="experience-heading">Reading Experience</h4>
+            <h4 className="experience-heading">WAYS TO EXPERIENCE</h4>
             <div className="experience-grid">
-              {experiences.map((exp) => (
-                <button
-                  key={exp.id}
-                  onClick={() => setExperience(exp.id)}
-                  className={`experience-card ${experience === exp.id ? 'active' : ''}`}
-                >
-                  <span className="experience-card-label">{exp.label}</span>
-                  <span className="experience-card-desc">{exp.description}</span>
-                </button>
-              ))}
+              {experiences.map((exp) => {
+                const isActive = exp.id === 'drama' ? isTocOpen : experience === exp.id;
+                return (
+                  <button
+                    key={exp.id}
+                    onClick={() => {
+                      if (exp.id === 'drama') {
+                        if (!isTocOpen) {
+                          setIsTocOpen(true);
+                          setExperience('traditional');
+                        } else if (experience !== 'traditional') {
+                          setExperience('traditional');
+                        } else {
+                          setIsTocOpen(false);
+                        }
+                      } else {
+                        setExperience(exp.id);
+                        if (exp.id === 'split') {
+                          window.dispatchEvent(new CustomEvent('media-player-open'));
+                        }
+                      }
+                    }}
+                    className={`experience-card ${isActive ? 'active' : ''}`}
+                  >
+                    <span className="experience-card-label">{exp.label}</span>
+                    <span className="experience-card-desc">{exp.description}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -210,6 +304,31 @@ export default function BookReader({ htmlContent }) {
 
           {experience === 'traditional' ? (
             <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
+          ) : experience === 'child' ? (
+            <div className="experience-younger-readers">
+              <h3>For Younger Readers</h3>
+              <div className="preview-concept">
+                Two doors into the Garden. Choose the one that fits.
+              </div>
+              <div className="edition-choice">
+                <div className="edition-card">
+                  <h4>Young Readers</h4>
+                  <p className="edition-ages">Ages 7–9</p>
+                  <p className="edition-description">
+                    Eve's first days in the Garden — her arrival, her discoveries, her invention of fire, and the moment Adam finally sees her. Twain's voice with a gentle hand on the harder words. Hover any underlined word for a kind definition.
+                  </p>
+                  <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">Start Reading</button>
+                </div>
+                <div className="edition-card">
+                  <h4>Middle Grade</h4>
+                  <p className="edition-ages">Ages 10–14</p>
+                  <p className="edition-description">
+                    The complete diary, from Eve's first day in the Garden to Adam's words at her grave. Twain's prose untouched, with a glossary for the harder words. Paired with <em>Extracts from Adam's Diary</em> — the same story from the other side.
+                  </p>
+                  <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">Start Reading</button>
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="experience-design-preview">
               <div className="preview-stamp">DESIGN PHASE</div>
@@ -218,11 +337,10 @@ export default function BookReader({ htmlContent }) {
                 This reading room configuration is currently in layout design.
               </p>
               <div className="preview-concept">
-                {experience === 'voice' && "Concept: An Android APK integrating speech-to-text recognition to navigate the diary entries and play corresponding audio segments."}
+                {experience === 'voice' && "Coming to an appstore on your mobile device."}
                 {experience === 'drama' && "Concept: A multi-track audio player syncing background ambient tracks with segmented character dialogues for Adam and Eve."}
                 {experience === 'chat' && "Concept: Transforming the static text entries into a sequential messaging interface where you unlock Eve's thoughts chronologically."}
-                {experience === 'split' && "Concept: A two-column responsive desktop layout displaying Eve's Diary on the left and Adam's Diary on the right, aligned by date."}
-                {experience === 'child' && "Concept: An educational format with larger typography, simplified words, and hover definition popups for 19th-century terminology."}
+                {experience === 'split' && "Concept: A musical edition setting Eve's diary entries to original compositions and vocal performances."}
               </div>
               <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">
                 Return to Traditional Read
@@ -237,6 +355,53 @@ export default function BookReader({ htmlContent }) {
 
       {/* Persistent Tech Detect Window */}
       <TechDetect />
+
+
+
+      {/* Table of Contents Drawer */}
+      <AnimatePresence>
+        {isTocOpen && (
+          <>
+            {/* Backdrop for closing */}
+            <motion.div
+              className="toc-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsTocOpen(false)}
+            />
+
+            {/* Sidebar drawer panel */}
+            <motion.div
+              className="toc-drawer"
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'tween', duration: 0.3 }}
+            >
+              <div className="toc-drawer-header">
+                <h3>Diary Index</h3>
+                <button onClick={() => setIsTocOpen(false)} className="toc-close-btn">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <nav className="toc-drawer-list">
+                {tocItems.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => scrollToId(item.id)}
+                    className={`toc-item type-${item.type} ${activeId === item.id ? 'active' : ''}`}
+                  >
+                    {item.type === 'day' && <span className="toc-bullet">•</span>}
+                    <span className="toc-label">{item.label}</span>
+                  </button>
+                ))}
+              </nav>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* Zoom Modal Overlay */}
       <AnimatePresence>

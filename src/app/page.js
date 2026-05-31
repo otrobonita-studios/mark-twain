@@ -26,7 +26,7 @@ export default function Home() {
 
   useEffect(() => {
     const savedClosed = localStorage.getItem('media-player-closed');
-    setIsMusicPlayerClosed(savedClosed === 'true');
+    setIsMusicPlayerClosed(savedClosed !== null ? savedClosed === 'true' : true);
 
     const handleCloseChange = (e) => {
       setIsMusicPlayerClosed(e.detail.isClosed);

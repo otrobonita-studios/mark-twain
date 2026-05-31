@@ -67,10 +67,10 @@ export default function MediaPlayer() {
     const savedPos = localStorage.getItem('media-player-position');
     const savedTrackIndex = localStorage.getItem('media-player-track-index');
 
-    const closed = savedClosed === 'true';
+    const closed = savedClosed !== null ? (savedClosed === 'true') : true;
     const minimized = savedMinimized === 'true';
     
-    setIsClosed(savedClosed !== null ? closed : false);
+    setIsClosed(closed);
     setIsMinimized(minimized);
     
     if (savedTrackIndex !== null) {
@@ -86,7 +86,7 @@ export default function MediaPlayer() {
 
     // Trigger initial close-change event for headers
     window.dispatchEvent(new CustomEvent('media-player-close-change', { 
-      detail: { isClosed: savedClosed !== null ? closed : false } 
+      detail: { isClosed: closed } 
     }));
 
     // Position setup

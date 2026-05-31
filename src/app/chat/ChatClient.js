@@ -34,7 +34,7 @@ export default function ChatClient() {
 
   useEffect(() => {
     const savedClosed = localStorage.getItem('media-player-closed');
-    setIsMusicPlayerClosed(savedClosed === 'true');
+    setIsMusicPlayerClosed(savedClosed !== null ? savedClosed === 'true' : true);
 
     const handleCloseChange = (e) => {
       setIsMusicPlayerClosed(e.detail.isClosed);
@@ -303,8 +303,8 @@ export default function ChatClient() {
             priority
             className="logo-img"
           />
-          <p className="logo-subtitle" style={{ color: 'var(--primary)', textShadow: '1px 1px 2px black' }}>
-            The Opinion Mill
+          <p className="logo-subtitle" style={{ color: '#573122' }}>
+            Brought back, facing forward
           </p>
         </div>
       </Link>
