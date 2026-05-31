@@ -22,7 +22,7 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
     { id: 'drama', label: 'Index', description: 'Navigate the story by Index.' },
     { id: 'traditional', label: 'Traditional Read', description: "Original Gutenberg text and illustrations." },
     { id: 'voice', label: 'Voice-First Edition', description: 'Voice-command navigation and speech narration.' },
-    { id: 'chat', label: 'Chat-Native Edition', description: 'Interact with Eve directly in instant message format.' },
+    { id: 'chat', label: 'Dramatized Excerpt', description: 'Audio drama script for Eve and Adam.' },
     { id: 'split', label: 'Sung Edition', description: 'Hear the diary set to music.' },
     { id: 'child', label: 'Young Readers', description: 'Simplified text and glossary for young minds.' }
   ];
@@ -329,6 +329,155 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
                 </div>
               </div>
             </div>
+          ) : experience === 'chat' ? (
+            <div className="experience-dramatized-excerpt">
+              <div className="preview-stamp">DESIGN PHASE</div>
+              <h3 className="excerpt-main-title">EVE'S DIARY &mdash; DRAMATIZED EXCERPT</h3>
+              <h4 className="excerpt-sub-title">&ldquo;The Reptile, and the First Sorrow&rdquo;</h4>
+              <p className="excerpt-running-time">Running time: approximately 4 minutes</p>
+              
+              <p className="preview-status">
+                This configuration is currently in layout design.
+              </p>
+
+              <div className="script-cast-section">
+                <h5 className="script-cast-header">Cast:</h5>
+                <ul className="script-cast-list">
+                  <li><strong>EVE</strong> &mdash; young woman, alto, curious, unguarded. Speaks as though thinking aloud.</li>
+                  <li><strong>ADAM</strong> &mdash; older man, baritone, slightly weary, observational. Voice of a man writing in a notebook, not performing.</li>
+                  <li><strong>NARRATOR</strong> &mdash; neutral voice for date stamps. Can be folded into Eve if preferred.</li>
+                </ul>
+              </div>
+
+              <div className="script-content-wrapper">
+                <div className="script-sound-cue">[SOUND: Birdsong. Distant water. A small rustle of pages.]</div>
+                
+                <div className="script-entry">
+                  <span className="script-speaker">NARRATOR:</span>
+                  <div className="script-speech">
+                    <p>Saturday.</p>
+                  </div>
+                </div>
+
+                <div className="script-entry">
+                  <span className="script-speaker">EVE:</span>
+                  <div className="script-speech">
+                    <p>I followed the other Experiment around, yesterday afternoon, at a distance, to see what it might be for, if I could.</p>
+                    <p>But I was not able to make it out.</p>
+                    <p>I think it is a man. I had never seen a man, but it looked like one, and I feel sure that that is what it is.</p>
+                    <p className="script-direction">(slight pause, a private observation)</p>
+                    <p>I realize that I feel more curiosity about it than about any of the other reptiles.</p>
+                    <p>If it is a reptile &mdash; and I suppose it is &mdash; for it has frowzy hair and blue eyes, and looks like a reptile.</p>
+                    <p>It has no hips. It tapers like a carrot. When it stands, it spreads itself apart like a derrick.</p>
+                    <p>So I think it is a reptile.</p>
+                    <p className="script-direction">(beat)</p>
+                    <p>Though it may be architecture.</p>
+                  </div>
+                </div>
+
+                <div className="script-sound-cue">[SOUND: A small rustle. A bird call.]</div>
+
+                <div className="script-entry">
+                  <span className="script-speaker">EVE:</span>
+                  <div className="script-speech">
+                    <p>I was afraid of it at first, and started to run every time it turned around, for I thought it was going to chase me.</p>
+                    <p>But by and by I found it was only trying to get away.</p>
+                    <p>So after that, I was not timid any more, but tracked it along, several hours, about twenty yards behind &mdash; which made it nervous and unhappy.</p>
+                    <p>At last it was a good deal worried, and climbed a tree.</p>
+                    <p>I waited a good while, then gave it up and went home.</p>
+                  </div>
+                </div>
+
+                <div className="script-sound-cue">[BEAT. SOUND: Wind in leaves.]</div>
+
+                <div className="script-entry">
+                  <span className="script-speaker">NARRATOR:</span>
+                  <div className="script-speech">
+                    <p>Sunday.</p>
+                  </div>
+                </div>
+
+                <div className="script-entry">
+                  <span className="script-speaker">EVE:</span>
+                  <div className="script-speech">
+                    <p>It is up there yet.</p>
+                    <p>Resting, apparently.</p>
+                    <p>But that is a subterfuge. Sunday isn't the day of rest. Saturday is appointed for that.</p>
+                    <p>It looks to me like a creature that is more interested in resting than in anything else.</p>
+                    <p>It would tire me to rest so much.</p>
+                    <p className="script-direction">(a small laugh, almost to herself)</p>
+                    <p>It tires me just to sit around and watch the tree.</p>
+                    <p>I do wonder what it is for. I never see it do anything.</p>
+                  </div>
+                </div>
+
+                <div className="script-sound-cue">[SOUND: Water. A pause. The mood shifts &mdash; slightly closer mic on Eve.]</div>
+
+                <div className="script-entry">
+                  <span className="script-speaker">NARRATOR:</span>
+                  <div className="script-speech">
+                    <p>Thursday.</p>
+                  </div>
+                </div>
+
+                <div className="script-entry">
+                  <span className="script-speaker">EVE:</span>
+                  <div className="script-speech">
+                    <p className="script-direction">(quieter, more inward)</p>
+                    <p>My first sorrow.</p>
+                    <p>Yesterday he avoided me, and seemed to wish I would not talk to him. I could not believe it, and thought there was some mistake &mdash; for I loved to be with him, and loved to hear him talk.</p>
+                    <p>And so how could it be that he could feel unkind toward me, when I had not done anything?</p>
+                    <p>But at last it seemed true.</p>
+                    <p>So I went away, and sat lonely in the place where I first saw him &mdash; the morning that we were made &mdash; and I did not know what he was, and was indifferent about him.</p>
+                    <p>But now it was a mournful place. And every little thing spoke of him. And my heart was very sore.</p>
+                    <p>I did not know why, very clearly. For it was a new feeling. I had not experienced it before. And it was all a mystery. And I could not make it out.</p>
+                  </div>
+                </div>
+
+                <div className="script-sound-cue">[SOUND: Rain begins. Soft, sustained.]</div>
+
+                <div className="script-entry">
+                  <span className="script-speaker">EVE:</span>
+                  <div className="script-speech">
+                    <p>But when night came, I could not bear the lonesomeness, and went to the new shelter which he has built &mdash; to ask him what I had done that was wrong, and how I could mend it, and get back his kindness again.</p>
+                    <p>But he put me out in the rain.</p>
+                    <p className="script-direction">(quiet)</p>
+                    <p>And it was my first sorrow.</p>
+                  </div>
+                </div>
+
+                <div className="script-sound-cue">[BEAT. RAIN CONTINUES. THEN, A SHIFT &mdash; DIFFERENT ROOM TONE. ADAM, OFF-MIC AT FIRST, AS THOUGH READING ALOUD FROM A JOURNAL.]</div>
+
+                <div className="script-entry">
+                  <span className="script-speaker">ADAM:</span>
+                  <div className="script-speech">
+                    <p className="script-direction">(unhurried, dry)</p>
+                    <p>Perhaps I ought to remember that she is very young &mdash; a mere girl &mdash; and make allowances.</p>
+                    <p>She is all interest, eagerness, vivacity. The world is to her a charm, a wonder, a mystery, a joy.</p>
+                    <p>She can't speak for delight when she finds a new flower. She must pet it, and caress it, and smell it, and talk to it, and pour out endearing names upon it.</p>
+                    <p className="script-direction">(a small breath, almost a smile)</p>
+                    <p>And she is color-mad.</p>
+                    <p>Brown rocks, yellow sand, gray moss, green foliage, blue sky. The pearl of the dawn, the purple shadows on the mountains, the golden islands floating in crimson seas at sunset, the pallid moon sailing through the shredded cloud-rack, the star-jewels glittering in the wastes of space &mdash;</p>
+                    <p>&mdash; none of them is of any practical value, so far as I can see.</p>
+                    <p>But because they have color and majesty, that is enough for her. And she loses her mind over them.</p>
+                    <p className="script-direction">(a pause, the voice softening)</p>
+                    <p>If she could quiet down and keep still a couple minutes at a time, it would be a reposeful spectacle. In that case I think I could enjoy looking at her.</p>
+                    <p>Indeed, I am sure I could.</p>
+                    <p>For I am coming to realize that she is a quite remarkably comely creature. Lithe. Slender. Trim. Rounded. Shapely. Nimble. Graceful.</p>
+                    <p className="script-direction">(beat)</p>
+                    <p>And once, when she was standing marble-white and sun-drenched on a boulder, with her young head tilted back and her hand shading her eyes, watching the flight of a bird in the sky &mdash;</p>
+                    <p>&mdash; I recognized that she was beautiful.</p>
+                  </div>
+                </div>
+
+                <div className="script-sound-cue">[SILENCE. A SINGLE BIRD CALL. FADE.]</div>
+                <div className="script-sound-cue">[END EXCERPT]</div>
+              </div>
+
+              <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">
+                Return to Traditional Read
+              </button>
+            </div>
           ) : (
             <div className="experience-design-preview">
               <div className="preview-stamp">DESIGN PHASE</div>
@@ -339,7 +488,6 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
               <div className="preview-concept">
                 {experience === 'voice' && "Coming to an appstore on your mobile device."}
                 {experience === 'drama' && "Concept: A multi-track audio player syncing background ambient tracks with segmented character dialogues for Adam and Eve."}
-                {experience === 'chat' && "Concept: Transforming the static text entries into a sequential messaging interface where you unlock Eve's thoughts chronologically."}
                 {experience === 'split' && "Concept: A musical edition setting Eve's diary entries to original compositions and vocal performances."}
               </div>
               <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">
