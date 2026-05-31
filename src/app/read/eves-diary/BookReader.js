@@ -309,13 +309,6 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
             <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
           ) : (experience === 'child' && subExperience === 'young') ? (
             <div className="book-text-content young-readers-reading-view">
-              <button 
-                onClick={() => setSubExperience(null)} 
-                className="btn-gold return-traditional-btn back-to-choice-btn"
-                style={{ marginBottom: '2.5rem', display: 'flex', alignItems: 'center', gap: '8px' }}
-              >
-                <ArrowLeft size={14} /> Back to Editions
-              </button>
               
               {youngReadersParagraphs.map((item, idx) => {
                 if (item.type === 'title') {
