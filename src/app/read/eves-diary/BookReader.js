@@ -332,10 +332,17 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
                 }
                 if (item.type === 'paragraph') {
                   // Parse brackets [word] into glossary term spans
-                  const html = item.text.replace(/\[(.*?)\]/g, (match, word) => {
+                  let html = item.text.replace(/\[(.*?)\]/g, (match, word) => {
                     const cleanWord = word.toLowerCase();
                     const def = youngReadersGlossary[cleanWord] || "";
                     return `<span class="glossary-term" data-definition="${def}">${word}</span>`;
+                  });
+                  // Parse weekdays like SATURDAY, SUNDAY, FRIDAY into diary-day-anchor style
+                  html = html.replace(/^(SATURDAY|SUNDAY|NEXT WEEK SUNDAY|WEDNESDAY|THURSDAY|MONDAY|TUESDAY|FRIDAY)(\.&mdash;|&mdash;|—)/gi, (match, dayText, delimiter) => {
+                    const hasDot = delimiter.startsWith('.');
+                    const finalDayText = hasDot ? `${dayText}. ` : `${dayText} `;
+                    const finalDelimiter = ' — ';
+                    return `<span class="diary-day-anchor">${finalDayText}</span>${finalDelimiter}`;
                   });
                   return <p key={idx} dangerouslySetInnerHTML={{ __html: html }} />;
                 }
