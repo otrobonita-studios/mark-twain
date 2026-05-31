@@ -305,7 +305,7 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
 
 
 
-          {experience === 'traditional' ? (
+          {experience === 'traditional' || experience === 'split' ? (
             <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
           ) : (experience === 'child' && subExperience === 'young') ? (
             <div className="book-text-content young-readers-reading-view">
@@ -550,7 +550,6 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
               <div className="preview-concept">
                 {experience === 'voice' && "Coming to an appstore on your mobile device."}
                 {experience === 'drama' && "Concept: A multi-track audio player syncing background ambient tracks with segmented character dialogues for Adam and Eve."}
-                {experience === 'split' && "Concept: A musical edition setting Eve's diary entries to original compositions and vocal performances."}
               </div>
               <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">
                 Return to Traditional Read
