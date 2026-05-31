@@ -2,18 +2,19 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, Sun, Moon, Volume2, Cpu, BookOpen, X } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 import TechDetect from '@/components/TechDetect';
 import { motion, AnimatePresence } from 'framer-motion';
 import { youngReadersParagraphs, youngReadersGlossary, youngReadersNotes } from './YoungReadersText';
 
-export default function BookReader({ htmlContent, tocItems = [] }) {
+export default function BookReader({ htmlContent, tocItems = [], initialExperience = 'traditional' }) {
+  const router = useRouter();
   const [scrollProgress, setScrollProgress] = useState(0);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
-  const [experience, setExperience] = useState('traditional'); // 'traditional' | 'app' | 'parallax' | 'voice' | 'drama' | 'chat' | 'split' | 'comments' | 'child'
-  const [subExperience, setSubExperience] = useState(null); // null | 'young'
+  const [experience, setExperience] = useState(initialExperience); // 'traditional' | 'app' | 'parallax' | 'voice' | 'drama' | 'chat' | 'split' | 'comments' | 'child'
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
   const [isTechDetectClosed, setIsTechDetectClosed] = useState(false);
   const [selectedZoomImage, setSelectedZoomImage] = useState(null);
@@ -44,10 +45,12 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
     if (savedFontSize) setFontSize(savedFontSize);
     if (savedExperience) {
       if (savedExperience === 'drama') {
-        setExperience('traditional');
+        setExperience(initialExperience === 'child' ? 'child' : 'traditional');
       } else {
-        setExperience(savedExperience);
+        setExperience(initialExperience === 'child' ? 'child' : savedExperience);
       }
+    } else if (initialExperience) {
+      setExperience(initialExperience);
     }
     setIsMusicPlayerClosed(savedClosed !== null ? savedClosed === 'true' : true);
     setIsTechDetectClosed(savedTechClosed === 'true');
@@ -276,18 +279,33 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
                   <button
                     key={exp.id}
                     onClick={() => {
-                      setSubExperience(null);
                       if (exp.id === 'drama') {
                         if (!isTocOpen) {
                           setIsTocOpen(true);
-                          setExperience('traditional');
+                          if (experience === 'child') {
+                            router.push('/read/eves-diary');
+                          } else {
+                            setExperience('traditional');
+                          }
                         } else if (experience !== 'traditional') {
-                          setExperience('traditional');
+                          if (experience === 'child') {
+                            router.push('/read/eves-diary');
+                          } else {
+                            setExperience('traditional');
+                          }
                         } else {
                           setIsTocOpen(false);
                         }
+                      } else if (exp.id === 'child') {
+                        router.push('/read/eves-diary/young-readers');
                       } else {
-                        setExperience(exp.id);
+                        if (experience === 'child') {
+                          router.push('/read/eves-diary');
+                          // Save chosen experience for when we land on /read/eves-diary
+                          localStorage.setItem('eves-diary-experience', exp.id);
+                        } else {
+                          setExperience(exp.id);
+                        }
                         if (exp.id === 'split') {
                           window.dispatchEvent(new CustomEvent('media-player-open'));
                         }
@@ -307,7 +325,7 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
 
           {experience === 'traditional' || experience === 'split' ? (
             <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
-          ) : (experience === 'child' && subExperience === 'young') ? (
+          ) : experience === 'child' ? (
             <div className="book-text-content young-readers-reading-view">
               
               {youngReadersParagraphs.map((item, idx) => {
@@ -357,39 +375,13 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
 
               <button 
                 onClick={() => {
-                  setSubExperience(null);
-                  setExperience('traditional');
+                  router.push('/read/eves-diary');
                 }} 
                 className="btn-gold return-traditional-btn"
                 style={{ marginTop: '3rem' }}
               >
                 Return to Traditional Read
               </button>
-            </div>
-          ) : experience === 'child' ? (
-            <div className="experience-younger-readers">
-              <h3>For Younger Readers</h3>
-              <div className="preview-concept">
-                Two doors into the Garden. Choose the one that fits.
-              </div>
-              <div className="edition-choice">
-                <div className="edition-card">
-                  <h4>Young Readers</h4>
-                  <p className="edition-ages">Ages 7–9</p>
-                  <p className="edition-description">
-                    Eve's first days in the Garden — her arrival, her discoveries, her invention of fire, and the moment Adam finally sees her. Twain's voice with a gentle hand on the harder words. Hover any underlined word for a kind definition.
-                  </p>
-                  <button onClick={() => setSubExperience('young')} className="btn-gold return-traditional-btn">Start Reading</button>
-                </div>
-                <div className="edition-card">
-                  <h4>Middle Grade</h4>
-                  <p className="edition-ages">Ages 10–14</p>
-                  <p className="edition-description">
-                    The complete diary, from Eve's first day in the Garden to Adam's words at her grave. Twain's prose untouched, with a glossary for the harder words. Paired with <em>Extracts from Adam's Diary</em> — the same story from the other side.
-                  </p>
-                  <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">Start Reading</button>
-                </div>
-              </div>
             </div>
           ) : experience === 'chat' ? (
             <div className="experience-dramatized-excerpt">
