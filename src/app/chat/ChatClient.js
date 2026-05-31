@@ -538,7 +538,6 @@ export default function ChatClient() {
                       {msg.role === 'model' && (
                         <div className="message-footer-controls" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.75rem', alignItems: 'center' }}>
                           {msg.sources && msg.sources.length > 0 && (
-                            <div className="sources-container" style={{ marginTop: 0 }}>
                               <button
                                 onClick={() => toggleSources(idx)}
                                 className="sources-trigger"
@@ -547,11 +546,9 @@ export default function ChatClient() {
                                 <span>Source Materials ({msg.sources.length})</span>
                                 {expandedSources[idx] ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
                               </button>
-                            </div>
                           )}
-
+ 
                           {msg.translation && (
-                            <div className="translation-container">
                               <button
                                 onClick={() => toggleTranslation(idx)}
                                 className="sources-trigger"
@@ -560,7 +557,6 @@ export default function ChatClient() {
                                 <span>Understand My Language</span>
                                 {expandedTranslations[idx] ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
                               </button>
-                            </div>
                           )}
                         </div>
                       )}

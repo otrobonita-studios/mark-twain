@@ -6,12 +6,14 @@ import { ArrowLeft, Sun, Moon, Volume2, Cpu, BookOpen, X } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 import TechDetect from '@/components/TechDetect';
 import { motion, AnimatePresence } from 'framer-motion';
+import { youngReadersParagraphs, youngReadersGlossary, youngReadersNotes } from './YoungReadersText';
 
 export default function BookReader({ htmlContent, tocItems = [] }) {
   const [scrollProgress, setScrollProgress] = useState(0);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [experience, setExperience] = useState('traditional'); // 'traditional' | 'app' | 'parallax' | 'voice' | 'drama' | 'chat' | 'split' | 'comments' | 'child'
+  const [subExperience, setSubExperience] = useState(null); // null | 'young'
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
   const [isTechDetectClosed, setIsTechDetectClosed] = useState(false);
   const [selectedZoomImage, setSelectedZoomImage] = useState(null);
@@ -274,6 +276,7 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
                   <button
                     key={exp.id}
                     onClick={() => {
+                      setSubExperience(null);
                       if (exp.id === 'drama') {
                         if (!isTocOpen) {
                           setIsTocOpen(true);
@@ -304,6 +307,65 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
 
           {experience === 'traditional' ? (
             <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
+          ) : (experience === 'child' && subExperience === 'young') ? (
+            <div className="book-text-content young-readers-reading-view">
+              <button 
+                onClick={() => setSubExperience(null)} 
+                className="btn-gold return-traditional-btn back-to-choice-btn"
+                style={{ marginBottom: '2.5rem', display: 'flex', alignItems: 'center', gap: '8px' }}
+              >
+                <ArrowLeft size={14} /> Back to Editions
+              </button>
+              
+              {youngReadersParagraphs.map((item, idx) => {
+                if (item.type === 'title') {
+                  return <h1 key={idx} className="young-readers-title">{item.text}</h1>;
+                }
+                if (item.type === 'subtitle') {
+                  return <h2 key={idx} className="young-readers-subtitle">{item.text}</h2>;
+                }
+                if (item.type === 'section') {
+                  return <h2 key={idx} className="young-readers-section-header">{item.text}</h2>;
+                }
+                if (item.type === 'illustrator') {
+                  return <h3 key={idx} className="young-readers-illustrator">{item.text}</h3>;
+                }
+                if (item.type === 'paragraph') {
+                  // Parse brackets [word] into glossary term spans
+                  const html = item.text.replace(/\[(.*?)\]/g, (match, word) => {
+                    const cleanWord = word.toLowerCase();
+                    const def = youngReadersGlossary[cleanWord] || "";
+                    return `<span class="glossary-term" data-definition="${def}">${word}</span>`;
+                  });
+                  return <p key={idx} dangerouslySetInnerHTML={{ __html: html }} />;
+                }
+                return null;
+              })}
+
+              {/* Adult Note Card */}
+              <div className="adult-note-card">
+                <h4>{youngReadersNotes.title}</h4>
+                <p className="adult-note-intro">{youngReadersNotes.intro}</p>
+                <ul className="adult-note-list">
+                  {youngReadersNotes.items.map((note, noteIdx) => (
+                    <li key={noteIdx}>
+                      <strong>{note.term}</strong> {note.desc}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <button 
+                onClick={() => {
+                  setSubExperience(null);
+                  setExperience('traditional');
+                }} 
+                className="btn-gold return-traditional-btn"
+                style={{ marginTop: '3rem' }}
+              >
+                Return to Traditional Read
+              </button>
+            </div>
           ) : experience === 'child' ? (
             <div className="experience-younger-readers">
               <h3>For Younger Readers</h3>
@@ -317,7 +379,7 @@ export default function BookReader({ htmlContent, tocItems = [] }) {
                   <p className="edition-description">
                     Eve's first days in the Garden — her arrival, her discoveries, her invention of fire, and the moment Adam finally sees her. Twain's voice with a gentle hand on the harder words. Hover any underlined word for a kind definition.
                   </p>
-                  <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">Start Reading</button>
+                  <button onClick={() => setSubExperience('young')} className="btn-gold return-traditional-btn">Start Reading</button>
                 </div>
                 <div className="edition-card">
                   <h4>Middle Grade</h4>
