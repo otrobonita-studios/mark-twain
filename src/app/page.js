@@ -10,7 +10,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import { db, isConfigured } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Mail, ShieldAlert, Award, PenTool, X, Volume2 } from 'lucide-react';
+import { Mail, ShieldAlert, Award, PenTool, X } from 'lucide-react';
 import UpcomingEpisodes from '@/components/UpcomingEpisodes';
 import { deskCopy, subscribeCopy, diaryCopy, footerCopy } from '@/data/copy_i18n';
 
@@ -145,19 +145,9 @@ export default function Home() {
         {/* Top Left Header */}
         <div className="desk-header-left">
           <PenTool size={14} className="desk-header-icon" />
-          <span className="typewriter text-xs uppercase tracking-widest" style={{ marginRight: isMusicPlayerClosed ? '0.75rem' : '0' }}>
+          <span className="typewriter text-xs uppercase tracking-widest">
             {deskT.eyebrow}
           </span>
-          {isMusicPlayerClosed && (
-            <button 
-              onClick={handleReopenMusic} 
-              className="mini-reopen-music-btn" 
-              title="Open Music Player"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 0, display: 'flex', alignItems: 'center' }}
-            >
-              <Volume2 size={14} />
-            </button>
-          )}
         </div>
 
         {/* Upcoming Episodes Carousel */}

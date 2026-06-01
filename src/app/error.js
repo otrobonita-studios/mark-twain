@@ -10,8 +10,8 @@ export default function Error({ error, reset }) {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-[#15110d] text-[#fff4df] text-center font-sans">
-      <div className="max-w-md w-full border border-[rgba(217,163,74,0.15)] bg-[#1d1611] p-8 rounded-xl shadow-2xl">
-        <h2 className="text-[2rem] font-bold text-[var(--primary)] mb-4">Great Scott!</h2>
+      <div className="max-w-md w-full border border-[rgba(217,163,74,0.15)] bg-[#1d1611] p-8 rounded-xl shadow-2xl" style={{ padding: '30px' }}>
+        <h2 className="text-[2rem] font-bold text-[var(--primary)] mb-4">An Interruption Occurred</h2>
         <p className="text-sm opacity-80 leading-relaxed mb-6 font-sans">
           The machinery has suffered a slight interruption. We have sent our best telegraph operators to investigate.
         </p>
@@ -25,7 +25,7 @@ export default function Error({ error, reset }) {
           <Link
             href="/"
             className="cursor-pointer border border-[rgba(255,244,223,0.12)] hover:border-[var(--primary)] px-4 py-2 text-xs typewriter uppercase tracking-wider text-[var(--primary)] hover:text-white transition-colors"
-            style={{ textDecoration: 'none', display: 'flex', alignItems: 'center' }}
+            style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', padding: '8px 16px' }}
           >
             Go Home
           </Link>

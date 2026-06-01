@@ -1,61 +1,42 @@
-import fs from 'fs';
-import path from 'path';
+'use client';
+
+import { useState, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import TxtReaderClient from '../../../components/TxtReaderClient';
 
-export const metadata = {
-  title: "Document Viewer — Mark Twain Reappears",
-  description: "View text manuscripts in classic document editors.",
-};
+function TxtViewerContent() {
+  const searchParams = useSearchParams();
+  const file = searchParams.get('file') || '';
 
-// Helper function to search for the file in expected corpus directories
-function findFilePath(filename) {
-  const baseDir = process.cwd();
-  
-  // 1. Direct check in project gutenberg Works directory
-  const gutenbergPath = path.join(baseDir, 'rag', 'data-collection', 'TwainCorpus', 'project-gutenberg', 'Works', filename);
-  if (fs.existsSync(gutenbergPath)) {
-    return gutenbergPath;
-  }
-  
-  // 2. Direct check in rag/data-collection/ folder
-  const dataCollectionPath = path.join(baseDir, 'rag', 'data-collection', filename);
-  if (fs.existsSync(dataCollectionPath)) {
-    return dataCollectionPath;
-  }
-  
-  // 3. Recursive fallback under the 'rag' directory
-  const ragDir = path.join(baseDir, 'rag');
-  if (fs.existsSync(ragDir)) {
-    const recursivePath = searchRecursively(ragDir, filename);
-    if (recursivePath) {
-      return recursivePath;
+  const [content, setContent] = useState('');
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!file) {
+      setError('Error: No file specified.');
+      setLoading(false);
+      return;
     }
-  }
 
-  // 4. Default fallback to current working directory
-  return path.join(baseDir, filename);
-}
-
-function searchRecursively(dir, filename) {
-  const files = fs.readdirSync(dir);
-  for (const file of files) {
-    const fullPath = path.join(dir, file);
-    if (fs.statSync(fullPath).isDirectory()) {
-      if (file !== 'node_modules' && file !== '.next' && file !== '.venv') {
-        const found = searchRecursively(fullPath, filename);
-        if (found) return found;
+    async function loadFile() {
+      try {
+        const res = await fetch(`/api/txt?file=${encodeURIComponent(file)}`);
+        const data = await res.json();
+        if (res.ok && data.success) {
+          setContent(data.content);
+        } else {
+          setError(data.error || 'Failed to load text file.');
+        }
+      } catch (err) {
+        setError(err.message || 'An error occurred while loading the file.');
+      } finally {
+        setLoading(false);
       }
-    } else if (file.toLowerCase() === filename.toLowerCase()) {
-      return fullPath;
     }
-  }
-  return null;
-}
 
-export default async function TxtViewerPage(props) {
-  // Support both page components async parameters in Next.js 15+
-  const searchParams = await props.searchParams;
-  const file = searchParams?.file || '';
+    loadFile();
+  }, [file]);
 
   if (!file) {
     return (
@@ -65,24 +46,34 @@ export default async function TxtViewerPage(props) {
     );
   }
 
-  // Prevent directory traversal attacks
-  const safeFilename = path.basename(file);
-  const filePath = findFilePath(safeFilename);
-
-  let content = '';
-  let error = null;
-
-  try {
-    content = fs.readFileSync(filePath, 'utf8');
-  } catch (err) {
-    error = `File not found: ${safeFilename}`;
+  if (loading) {
+    return (
+      <div className="w-full min-h-screen bg-[#15110d] text-[#fff4df] flex items-center justify-center font-mono">
+        <div className="flex flex-col items-center gap-4">
+          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-[var(--primary)] border-b-2"></div>
+          <div>Loading manuscript: {file}...</div>
+        </div>
+      </div>
+    );
   }
 
   return (
     <TxtReaderClient 
-      filename={safeFilename} 
+      filename={file} 
       initialContent={content} 
       initialError={error} 
     />
+  );
+}
+
+export default function TxtViewerPage() {
+  return (
+    <Suspense fallback={
+      <div className="w-full min-h-screen bg-[#15110d] text-[#fff4df] flex items-center justify-center font-mono">
+        <div>Initializing Reader...</div>
+      </div>
+    }>
+      <TxtViewerContent />
+    </Suspense>
   );
 }

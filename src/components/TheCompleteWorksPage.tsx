@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Moon, Sun, Sparkles, Mic, Map, BookOpen } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Moon, Sun, Sparkles, Mic, Map, BookOpen, ChevronLeft, ChevronRight } from 'lucide-react';
+import { motion } from 'framer-motion';
 import TxtReaderClient from './TxtReaderClient';
 
 const books = [
@@ -160,6 +162,7 @@ const books = [
 ];
 
 export default function TheCompleteWorksPage() {
+  const router = useRouter();
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [scrollProgress, setScrollProgress] = useState(0);
@@ -211,51 +214,8 @@ export default function TheCompleteWorksPage() {
     }
   };
 
+  const [active, setActive] = useState(0);
 
-
-  const [displayedIndices, setDisplayedIndices] = useState([0, 1, 2, 3]);
-  const [fadingSlot, setFadingSlot] = useState<number | null>(null);
-
-  // Rotation effect using a ref to prevent stale closures and resetting interval on state changes
-  const displayedIndicesRef = useRef(displayedIndices);
-  useEffect(() => {
-    displayedIndicesRef.current = displayedIndices;
-  }, [displayedIndices]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Pick a random slot to rotate (0, 1, 2, or 3)
-      const slotToChange = Math.floor(Math.random() * 4);
-      const currentIndices = displayedIndicesRef.current;
-      
-      // Get list of indices not currently displayed
-      const inactiveIndices = books
-        .map((_, idx) => idx)
-        .filter(idx => !currentIndices.includes(idx));
-        
-      if (inactiveIndices.length === 0) return;
-      
-      // Pick a random inactive book
-      const nextIndex = inactiveIndices[Math.floor(Math.random() * inactiveIndices.length)];
-      
-      // Trigger fade out
-      setFadingSlot(slotToChange);
-      
-      setTimeout(() => {
-        setDisplayedIndices(prev => {
-          const next = [...prev];
-          next[slotToChange] = nextIndex;
-          return next;
-        });
-        // Trigger fade in
-        setFadingSlot(null);
-      }, 500); // 500ms match transition fade-out duration
-    }, 6000); // Change a cover every 6 seconds
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Monitor page scroll progress
   useEffect(() => {
     const handleScroll = () => {
       const totalHeight = document.documentElement.scrollHeight - window.innerHeight;
@@ -286,102 +246,188 @@ export default function TheCompleteWorksPage() {
   return (
     <div className={`book-reader-container theme-${theme}`}>
       {/* Scroll Progress Bar */}
-      <div 
-        className="reading-progress-bar" 
+      <div
+        className="reading-progress-bar"
         style={{ width: `${scrollProgress}%` }}
       />
+
+      {/* Top Left Logo (Back to Home Link) */}
+      <div className="book-logo-container" style={{ position: 'absolute', top: '2rem', left: '2rem', zIndex: 10 }}>
+        <Link href="/">
+          <img 
+            alt="Mark Twain Logo" 
+            width="98" 
+            height="35" 
+            className="mark-twain-solo-logo" 
+            src="/images/MarkTwainSoloLogo.webp" 
+            style={{ color: 'transparent' }} 
+          />
+        </Link>
+      </div>
 
       {/* Reading Desk */}
       <main className="book-page-desk" onClick={handleContainerClick}>
         <article className={`book-page-parchment font-serif size-${fontSize}`}>
           {/* Theme Selector (Floating inside parchment card) */}
-          <button 
+          <button
             onClick={() => setTheme(theme === 'parchment' ? 'charcoal' : 'parchment')}
             className="book-control-btn theme-toggle parchment-theme-toggle"
             title={`Switch to ${theme === 'parchment' ? 'Charcoal' : 'Parchment'} theme`}
           >
             {theme === 'parchment' ? <Moon size={16} /> : <Sun size={16} />}
           </button>
-          
-          <h1 className="text-text-100 text-[2rem] font-bold" style={{ marginBottom: '4.5rem' }}>Mark Twain's Complete Works</h1>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6" style={{ marginBottom: '6rem' }}>
-            {displayedIndices.map((bookIdx, slotIdx) => {
-              const book = books[bookIdx];
-              const isFading = fadingSlot === slotIdx;
-              
-              const CardContent = book.cover ? (
-                <div className="w-full h-full overflow-hidden relative">
-                  {/* Subtle gold glow card overlay */}
-                  <div className="absolute -right-8 -top-8 w-24 h-24 bg-[var(--primary)] opacity-5 rounded-full blur-xl group-hover:opacity-10 transition-opacity duration-300 pointer-events-none" />
-                  <img 
-                    src={book.cover} 
-                    alt={book.title} 
-                    className="w-full h-full object-cover" 
-                  />
-                </div>
-              ) : (
-                <div className={`w-full h-full bg-gradient-to-br ${book.color} flex flex-col justify-between p-6 relative shadow-inner overflow-hidden`}>
-                  {/* Subtle gold glow card overlay */}
-                  <div className="absolute -right-8 -top-8 w-24 h-24 bg-[var(--primary)] opacity-5 rounded-full blur-xl group-hover:opacity-10 transition-opacity duration-300 pointer-events-none" />
-                  {/* Elegant cover lines */}
-                  <div className="absolute inset-3 border border-[rgba(217,163,74,0.12)] pointer-events-none rounded" />
-                  
-                  <div className="text-[10px] font-mono text-[rgba(255,244,223,0.35)] uppercase tracking-widest text-center mt-2 select-none">
-                    Mark Twain
-                  </div>
-                  
-                  <div className="my-auto px-2 flex flex-col items-center">
-                    <BookOpen className="w-7 h-7 text-[rgba(217,163,74,0.25)] mb-4" />
-                    <span className="font-serif text-sm font-semibold tracking-wide text-[rgba(255,244,223,0.85)] text-center leading-relaxed line-clamp-4 max-w-[90%]">
-                      {book.title}
-                    </span>
-                  </div>
-                  
-                  <div className="text-[9px] font-mono text-[rgba(217,163,74,0.45)] text-center mb-2 uppercase tracking-wider select-none">
-                    {book.genre}
-                  </div>
-                </div>
-              );
 
-              const cardClass = `relative overflow-hidden rounded-xl border border-[rgba(255,244,223,0.08)] bg-[rgba(255,244,223,0.02)] transition-all duration-500 ease-in-out hover:border-[rgba(217,163,74,0.3)] hover:bg-[rgba(255,244,223,0.04)] shadow-lg hover:shadow-2xl hover:-translate-y-1.5 group text-left flex flex-col aspect-[3/4] w-full ${
-                isFading ? 'opacity-0 scale-95 translate-y-1 blur-[2px]' : 'opacity-100 scale-100 translate-y-0 blur-none'
-              }`;
+          <h1 className="text-text-100 text-[2rem] font-bold text-center" style={{ marginBottom: '4.5rem' }}>
+            Complete Works
+          </h1>
 
-              if (book.href) {
-                return (
-                  <Link 
-                    key={slotIdx}
-                    href={book.href}
-                    className={cardClass}
-                  >
-                    {CardContent}
-                  </Link>
-                );
-              }
+          <div className="relative w-full px-10 mb-8 mt-2 flex flex-col items-center select-none">
+            {/* Viewport */}
+            <div className="w-full overflow-hidden py-4" style={{ minHeight: 250 }}>
+              <motion.div
+                className="flex"
+                style={{ gap: '16px', width: 'max-content' }}
+                animate={{ x: -active * (170 + 16) }}
+                transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                drag="x"
+                dragConstraints={{ left: -(books.length - 1) * (170 + 16), right: 0 }}
+                dragElastic={0.2}
+                onDragEnd={(event, info) => {
+                  const swipeThreshold = 50;
+                  if (info.offset.x < -swipeThreshold) {
+                    setActive(Math.min(books.length - 1, active + 1));
+                  } else if (info.offset.x > swipeThreshold) {
+                    setActive(Math.max(0, active - 1));
+                  }
+                }}
+              >
+                {books.map((book, i) => {
+                  const isActive = i === active;
+                  const isParchment = theme === 'parchment';
+                  
+                  const cardBorderClass = isParchment 
+                    ? (isActive ? 'border-[var(--primary)]' : 'border-[rgba(44,31,17,0.12)]')
+                    : (isActive ? 'border-[var(--primary)]' : 'border-[rgba(255,244,223,0.08)]');
 
-              return (
-                <div 
-                  key={slotIdx}
-                  onClick={() => !isFading && book.filename && handleOpenTxtFile(book.filename)}
-                  className={cardClass + " cursor-pointer"}
-                >
-                  {CardContent}
-                </div>
-              );
-            })}
+                  const CardContent = book.cover ? (
+                    <div className="w-full h-full overflow-hidden relative rounded-lg">
+                      <div className="absolute -right-8 -top-8 w-24 h-24 bg-[var(--primary)] opacity-5 rounded-full blur-xl group-hover:opacity-10 transition-opacity duration-300 pointer-events-none" />
+                      <img 
+                        src={book.cover} 
+                        alt={book.title} 
+                        className="w-full h-full object-cover" 
+                        draggable={false}
+                      />
+                    </div>
+                  ) : (
+                    <div className={`w-full h-full bg-gradient-to-br ${book.color} flex flex-col justify-between p-4 relative shadow-inner overflow-hidden rounded-lg`}>
+                      <div className="absolute -right-8 -top-8 w-24 h-24 bg-[var(--primary)] opacity-5 rounded-full blur-xl group-hover:opacity-10 transition-opacity duration-300 pointer-events-none" />
+                      <div className="absolute inset-2 border border-[rgba(217,163,74,0.12)] pointer-events-none rounded" />
+                      
+                      <div className="text-[9px] font-mono text-[rgba(255,244,223,0.35)] uppercase tracking-widest text-center mt-1 select-none">
+                        Mark Twain
+                      </div>
+                      
+                      <div className="my-auto px-1 flex flex-col items-center">
+                        <BookOpen className="w-6 h-6 text-[rgba(217,163,74,0.25)] mb-3" />
+                        <span className="font-serif text-xs font-semibold tracking-wide text-[rgba(255,244,223,0.85)] text-center leading-relaxed line-clamp-4 max-w-[90%]">
+                          {book.title}
+                        </span>
+                      </div>
+                      
+                      <div className="text-[8px] font-mono text-[rgba(217,163,74,0.45)] text-center mb-1 uppercase tracking-wider select-none">
+                        {book.genre}
+                      </div>
+                    </div>
+                  );
+
+                  return (
+                    <motion.div
+                      key={book.title}
+                      style={{
+                        width: 170,
+                        height: 227,
+                        flexShrink: 0,
+                      }}
+                      animate={{
+                        scale: isActive ? 1.02 : 0.94,
+                        opacity: isActive ? 1 : 0.6,
+                      }}
+                      transition={{ duration: 0.25 }}
+                      className={`relative rounded-lg border ${cardBorderClass} bg-[rgba(255,244,223,0.02)] shadow-md transition-all duration-300 group text-left flex flex-col cursor-pointer`}
+                      onClick={() => {
+                        if (isActive) {
+                          if (book.href) {
+                            router.push(book.href);
+                          } else if (book.filename) {
+                            handleOpenTxtFile(book.filename);
+                          }
+                        } else {
+                          setActive(i);
+                        }
+                      }}
+                    >
+                      {CardContent}
+                      {isActive && (book.href || book.filename) && (
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-center gap-2 rounded-lg pointer-events-none">
+                          <BookOpen className="w-8 h-8 text-[var(--primary)]" />
+                          <span className="text-[10px] font-mono uppercase tracking-widest text-[#fff4df] font-semibold">
+                            {book.href ? 'Read' : 'Open'}
+                          </span>
+                        </div>
+                      )}
+                    </motion.div>
+                  );
+                })}
+              </motion.div>
+            </div>
+
+            {/* Chevron buttons */}
+            <button 
+              className="carousel-control-btn prev"
+              style={{ left: '-12px' }}
+              onClick={() => setActive(Math.max(0, active - 1))}
+              disabled={active === 0}
+              aria-label="Previous book"
+              type="button"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            <button 
+              className="carousel-control-btn next"
+              style={{ right: '-12px' }}
+              onClick={() => setActive(Math.min(books.length - 1, active + 1))}
+              disabled={active === books.length - 1}
+              aria-label="Next book"
+              type="button"
+            >
+              <ChevronRight size={20} />
+            </button>
+
+            {/* Dots */}
+            <div className="carousel-dots" style={{ marginTop: '1.25rem', marginBottom: '2.5rem' }}>
+              {books.map((_, idx) => (
+                <button
+                  key={idx}
+                  className={`carousel-dot ${idx === active ? 'active' : ''}`}
+                  onClick={() => setActive(idx)}
+                  aria-label={`Go to book ${idx + 1}`}
+                  type="button"
+                />
+              ))}
+            </div>
           </div>
 
           {/* Detailed grid content */}
           <div className="standard-markdown grid-cols-1 grid [&>_*]:min-w-0 gap-3 font-claude-response text-left">
-            <h1 className="text-text-100 mt-5 -mb-1 text-[2rem] font-bold text-center">In the Remake</h1>
+            <h1 className="text-text-100 -mb-1 text-[2rem] font-bold text-center">In the Remake</h1>
             <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg text-center" style={{ marginBottom: '0.5rem' }}>
               All 101 works. Digitized. Voiced. Interactive. Coming to classrooms and bed tables before you know it.
             </p>
             <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg text-center" style={{ marginBottom: '2.5rem' }}>
               Already out: <Link href="/read/eves-diary" className="text-[var(--primary)] hover:underline font-semibold">Eve's Diary</Link>. Give it a go, it's excellent.
             </p>
-            
+
             <h2 className="text-text-100 mt-3 -mb-1 text-[1.5rem] font-bold">Books (16 full-length novels &amp; story collections)</h2>
             <div className="overflow-x-auto w-full mb-[3.5rem]">
               <table className="min-w-full border-collapse text-sm leading-[1.7] whitespace-normal">
@@ -413,7 +459,7 @@ export default function TheCompleteWorksPage() {
                 </tbody>
               </table>
             </div>
-            
+
 
             <h2 className="text-text-100 mt-3 -mb-1 text-[1.3rem] font-bold">Letters (1)</h2>
             <div className="overflow-x-auto w-full mb-[3.5rem]">

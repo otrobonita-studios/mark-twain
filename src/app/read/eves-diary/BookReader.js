@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Sun, Moon, BookOpen, X, Sparkles, Download, Clipboard, Check, Loader2, Play, Pause, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { youngReadersParagraphs, youngReadersGlossary, youngReadersNotes } from './YoungReadersText';
@@ -214,6 +215,20 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
         style={{ width: `${scrollProgress}%` }}
       />
 
+      {/* Top Left Logo (Back to Home Link) */}
+      <div className="book-logo-container" style={{ position: 'absolute', top: '2rem', left: '2rem', zIndex: 10 }}>
+        <Link href="/">
+          <img 
+            alt="Mark Twain Logo" 
+            width={98} 
+            height={35} 
+            className="mark-twain-solo-logo" 
+            src="/images/MarkTwainSoloLogo.webp" 
+            style={{ color: 'transparent' }} 
+          />
+        </Link>
+      </div>
+
       {/* Reading Desk */}
       <main className="book-page-desk" ref={readerRef}>
         <article 
@@ -228,6 +243,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
           >
             {theme === 'parchment' ? <Moon size={16} /> : <Sun size={16} />}
           </button>
+
           <div className="book-epigraph">
             “Wheresoever she was, there was Eden.”
           </div>
@@ -534,7 +550,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
               {/* Compilation Panel Section */}
               <div className="script-cast-section" style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2.5rem 1.5rem' }}>
                 <h5 className="script-cast-header" style={{ textAlign: 'center !important', alignSelf: 'center', marginBottom: '1.25rem' }}>EPUB Synthesizer</h5>
-                <p className="font-serif text-sm leading-relaxed max-w-md mx-auto mb-6" style={{ color: 'rgba(255, 244, 223, 0.7)' }}>
+                <p className="font-serif text-sm leading-relaxed max-w-md mx-auto mb-6" style={{ color: theme === 'parchment' ? 'rgba(44, 31, 17, 0.75)' : 'rgba(255, 244, 223, 0.7)' }}>
                   Compile Eve's Diary into a standardized, DRM-free `.epub` file optimized for Kindle, Kobo, and modern e-paper screens.
                 </p>
 
@@ -567,7 +583,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                     
                     <div>
                       <h4 className="font-serif text-emerald-400 text-lg font-semibold" style={{ margin: 0 }}>Compilation Successful!</h4>
-                      <p className="text-xs text-[rgba(255,244,223,0.45)] mt-1 font-mono" style={{ margin: 0 }}>eves-diary.epub ready for download</p>
+                      <p className={`text-xs mt-1 font-mono ${theme === 'parchment' ? 'text-[rgba(44,31,17,0.5)]' : 'text-[rgba(255,244,223,0.45)]'}`} style={{ margin: 0 }}>eves-diary.epub ready for download</p>
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', width: '100%', maxWidth: '300px', margin: '0 auto' }}>
@@ -584,7 +600,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                       <button 
                         onClick={handleCopyLink}
                         className="sources-trigger"
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', width: '100%', border: '1px solid rgba(255, 244, 223, 0.15)', padding: '0.65rem 1.5rem', borderRadius: '4px', background: 'transparent' }}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', width: '100%', border: theme === 'parchment' ? '1px solid rgba(44, 31, 17, 0.15)' : '1px solid rgba(255, 244, 223, 0.15)', padding: '0.65rem 1.5rem', borderRadius: '4px', background: 'transparent' }}
                       >
                         {copyFeedback ? <Check size={16} className="text-emerald-400" /> : <Clipboard size={16} />}
                         <span>{copyFeedback ? 'Copied Link!' : 'Copy Download Link'}</span>

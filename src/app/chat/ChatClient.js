@@ -213,7 +213,7 @@ export default function ChatClient() {
         ...prev,
         { 
           role: 'model', 
-          content: "Great Scott! My telegraph wires seem to have tangled up. Please check your connection and try again."
+          content: "My telegraph wires seem to have tangled up. Please check your connection and try again."
         }
       ]);
     } finally {
@@ -344,7 +344,6 @@ export default function ChatClient() {
             style={{ objectPosition: 'center 20%' }}
           />
         </div>
-        <div className="hero-overlay hero-overlay-visible" />
       </Link>
 
       {/* RIGHT PANEL: The Writing Desk / Chat Feed */}
@@ -383,17 +382,6 @@ export default function ChatClient() {
               <Info size={18} color="currentColor" />
               The Rebuild Process
             </button>
-            {isMusicPlayerClosed && (
-              <button 
-                onClick={handleReopenMusic}
-                className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors desktop-only-control"
-                style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: 'var(--primary)' }}
-                title="Open Music Player"
-              >
-                <Volume2 size={18} color="currentColor" />
-                Listen
-              </button>
-            )}
             <button
               onClick={() => setShowMobileMenu(!showMobileMenu)}
               className="mobile-only-control"
@@ -442,16 +430,6 @@ export default function ChatClient() {
                     <Info size={16} />
                     <span>The Rebuild Process</span>
                   </button>
-                  {isMusicPlayerClosed && (
-                    <button 
-                      onClick={() => { handleReopenMusic(); setShowMobileMenu(false); }}
-                      className="drawer-btn"
-                      style={{ color: 'var(--primary)' }}
-                    >
-                      <Volume2 size={16} />
-                      <span>Open Music Player</span>
-                    </button>
-                  )}
                 </div>
 
                 {/* Settings Switches */}

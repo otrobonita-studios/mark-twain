@@ -76,7 +76,7 @@ export default function UpcomingEpisodes() {
 
   return (
     <div className="upcoming-episodes-section">
-      <div className="carousel-container-relative" style={{ position: 'relative', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <div className="carousel-container-relative" style={{ position: 'relative', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '30px' }}>
         <button 
           className="carousel-control-btn prev"
           onClick={() => setActive((active - 1 + EPISODES.length) % EPISODES.length)}
