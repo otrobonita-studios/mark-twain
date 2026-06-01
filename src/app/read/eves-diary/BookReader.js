@@ -354,7 +354,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
           ) : experience === 'chat' ? (
             <div className="experience-dramatized-excerpt">
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', width: '100%' }}>
-                <div className="preview-stamp">DESIGN PHASE</div>
                 <h3 className="excerpt-main-title" style={{ marginTop: '0.5rem' }}>EVE'S DIARY &mdash; DRAMATIZED EXCERPT</h3>
                 <h4 className="excerpt-sub-title">&ldquo;The Reptile, and the First Sorrow&rdquo;</h4>
                 <p className="excerpt-running-time">Running time: approximately 4 minutes</p>
@@ -524,9 +523,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
             <div className="experience-dramatized-excerpt">
               {/* Header block (inheriting design from the dramatized excerpt) */}
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', width: '100%' }}>
-                <div className="preview-stamp">DESIGN PHASE</div>
                 <h3 className="excerpt-main-title" style={{ marginTop: '0.5rem' }}>E-INK &amp; KINDLE EDITION</h3>
-                <h4 className="excerpt-sub-title">&ldquo;DRM-Free Standard EPUB Compiler&rdquo;</h4>
                 <p className="excerpt-running-time">Optimal formatting for Kindle and e-paper screens</p>
                 
                 <p className="preview-status" style={{ textAlign: 'center', fontFamily: 'var(--font-mono), monospace', fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '2rem', textIndent: 0 }}>
@@ -616,7 +613,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
 
           ) : (
             <div className="experience-design-preview">
-              <div className="preview-stamp">DESIGN PHASE</div>
               <h3>{experiences.find(e => e.id === experience).label}</h3>
               <p className="preview-status">
                 This reading room configuration is currently in public test mode. Feel free to try it out.
