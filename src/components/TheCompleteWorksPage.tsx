@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Volume2, Moon, Sun, Sparkles, Mic, Map, BookOpen } from 'lucide-react';
+import { Moon, Sun, Sparkles, Mic, Map, BookOpen } from 'lucide-react';
 import TxtReaderClient from './TxtReaderClient';
 
 export default function TheCompleteWorksPage() {
@@ -193,7 +193,7 @@ export default function TheCompleteWorksPage() {
     {
       title: "Tom Sawyer, Detective",
       filename: "Tom-Sawyer-Detective.txt",
-      cover: null,
+      cover: "/images/book-covers/Book-cover-Tom-Sawyer-Detective.png",
       desc: "Tom Sawyer turns detective to solve a mysterious murder and gem theft in the backwoods of Arkansas.",
       status: "Planning",
       genre: "Mystery",
@@ -271,7 +271,7 @@ export default function TheCompleteWorksPage() {
   useEffect(() => {
     const savedTheme = localStorage.getItem('eves-diary-theme');
     const savedFontSize = localStorage.getItem('eves-diary-font-size');
-    const savedClosed = localStorage.getItem('media-player-closed');
+    const savedClosed = sessionStorage.getItem('media-player-closed');
 
     if (savedTheme) setTheme(savedTheme);
     if (savedFontSize) setFontSize(savedFontSize);
@@ -306,66 +306,17 @@ export default function TheCompleteWorksPage() {
         style={{ width: `${scrollProgress}%` }}
       />
 
-      {/* Top Header Deck */}
-      <header className="book-reader-header">
-        <Link href="/" className="book-back-link">
-          <ArrowLeft size={16} />
-          <span>Writing Desk</span>
-        </Link>
-
-        <div className="book-reader-controls">
-          {/* Font Size Selector */}
-          <div className="font-size-selector">
-            <button 
-              onClick={() => setFontSize('small')}
-              className={`size-btn ${fontSize === 'small' ? 'active' : ''}`}
-              title="Small text size (Standard)"
-            >
-              Small
-            </button>
-            <button 
-              onClick={() => setFontSize('normal')}
-              className={`size-btn ${fontSize === 'normal' ? 'active' : ''}`}
-              title="Normal text size"
-            >
-              Normal
-            </button>
-            <button 
-              onClick={() => setFontSize('large')}
-              className={`size-btn ${fontSize === 'large' ? 'active' : ''}`}
-              title="Large text size"
-            >
-              Large
-            </button>
-          </div>
-
-
-
-          {/* Reopen Music Icon (only if closed) */}
-          {isMusicPlayerClosed && (
-            <button 
-              onClick={handleReopenMusic} 
-              className="book-control-btn reopen-music-btn" 
-              title="Open Music Player"
-            >
-              <Volume2 size={16} />
-            </button>
-          )}
-
-          {/* Theme Selector */}
+      {/* Reading Desk */}
+      <main className="book-page-desk" onClick={handleContainerClick}>
+        <article className={`book-page-parchment font-serif size-${fontSize}`}>
+          {/* Theme Selector (Floating inside parchment card) */}
           <button 
             onClick={() => setTheme(theme === 'parchment' ? 'charcoal' : 'parchment')}
-            className="book-control-btn theme-toggle"
+            className="book-control-btn theme-toggle parchment-theme-toggle"
             title={`Switch to ${theme === 'parchment' ? 'Charcoal' : 'Parchment'} theme`}
           >
             {theme === 'parchment' ? <Moon size={16} /> : <Sun size={16} />}
           </button>
-        </div>
-      </header>
-
-      {/* Reading Desk */}
-      <main className="book-page-desk" onClick={handleContainerClick}>
-        <article className={`book-page-parchment font-serif size-${fontSize}`}>
           
           <h1 className="text-text-100 text-[2rem] font-bold" style={{ marginBottom: '4.5rem' }}>Mark Twain's Complete Works</h1>
           
@@ -519,7 +470,6 @@ export default function TheCompleteWorksPage() {
 
 
             <h2 className="text-text-100 mt-3 -mb-1 text-[1.3rem] font-bold">Recent Interviews &amp; Analysis (Generated)</h2>
-            <p className="font-claude-response-body break-words whitespace-normal leading-[1.7]">New material created by Mark through conversation and social media engagement.</p>
             <div className="overflow-x-auto w-full mb-[3.5rem]">
               <table className="min-w-full border-collapse text-sm leading-[1.7] whitespace-normal">
                 <thead className="text-left">

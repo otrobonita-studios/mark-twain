@@ -60,16 +60,17 @@ export default function MediaPlayer() {
   const [isDragging, setIsDragging] = useState(false);
 
   const currentTrack = soundtrack[currentTrackIndex] || soundtrack[0];
+  const prevTrackRef = useRef(currentTrack.file);
   const spotifyHref = currentTrack.id === 'eves-diary'
-    ? 'https://open.spotify.com/album/4TA8m9s8x1rq127gt8Nj5n?si=LBE2Sli2RQePEWFg7TdsUw'
+    ? 'https://open.spotify.com/album/4TA8m9s8x1rq127gt8Nj5n'
     : 'https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S';
 
-  // Initialize from LocalStorage
+  // Initialize from sessionStorage (isolated per tab)
   useEffect(() => {
-    const savedClosed = localStorage.getItem('media-player-closed');
-    const savedMinimized = localStorage.getItem('media-player-minimized');
-    const savedPos = localStorage.getItem('media-player-position');
-    const savedTrackIndex = localStorage.getItem('media-player-track-index');
+    const savedClosed = sessionStorage.getItem('media-player-closed');
+    const savedMinimized = sessionStorage.getItem('media-player-minimized');
+    const savedPos = sessionStorage.getItem('media-player-position');
+    const savedTrackIndex = sessionStorage.getItem('media-player-track-index');
 
     const closed = savedClosed !== null ? (savedClosed === 'true') : true;
     const minimized = savedMinimized === 'true';
@@ -119,7 +120,7 @@ export default function MediaPlayer() {
     }
   };
 
-  // Sync isClosed / isMinimized state to localStorage
+  // Sync isClosed / isMinimized state to sessionStorage
   const handleClose = (e) => {
     if (e) e.stopPropagation();
     const audio = audioRef.current;
@@ -128,7 +129,7 @@ export default function MediaPlayer() {
     }
     setIsPlaying(false);
     setIsClosed(true);
-    localStorage.setItem('media-player-closed', 'true');
+    sessionStorage.setItem('media-player-closed', 'true');
     window.dispatchEvent(new CustomEvent('media-player-close-change', { detail: { isClosed: true } }));
   };
 
@@ -136,7 +137,7 @@ export default function MediaPlayer() {
     e.stopPropagation();
     const newMinimized = !isMinimized;
     setIsMinimized(newMinimized);
-    localStorage.setItem('media-player-minimized', String(newMinimized));
+    sessionStorage.setItem('media-player-minimized', String(newMinimized));
     
     // Adjust position if it would overflow the window
     if (typeof window !== 'undefined') {
@@ -146,7 +147,7 @@ export default function MediaPlayer() {
         const nextX = Math.max(10, Math.min(window.innerWidth - w - 10, prev.x));
         const nextY = Math.max(10, Math.min(window.innerHeight - h - 10, prev.y));
         const newPos = { x: nextX, y: nextY };
-        localStorage.setItem('media-player-position', JSON.stringify(newPos));
+        sessionStorage.setItem('media-player-position', JSON.stringify(newPos));
         return newPos;
       });
     }
@@ -156,7 +157,7 @@ export default function MediaPlayer() {
   useEffect(() => {
     const handleOpenEvent = () => {
       setIsClosed(false);
-      localStorage.setItem('media-player-closed', 'false');
+      sessionStorage.setItem('media-player-closed', 'false');
       window.dispatchEvent(new CustomEvent('media-player-close-change', { detail: { isClosed: false } }));
       
       // Try default position if uninitialized
@@ -174,48 +175,50 @@ export default function MediaPlayer() {
   // Save position when dragging finishes
   useEffect(() => {
     if (position.x !== -1) {
-      localStorage.setItem('media-player-position', JSON.stringify(position));
+      sessionStorage.setItem('media-player-position', JSON.stringify(position));
     }
   }, [position]);
 
-  // Audio elements listeners
+  const handleEnded = () => {
+    if (currentTrackIndex < soundtrack.length - 1) {
+      const nextIdx = currentTrackIndex + 1;
+      setCurrentTrackIndex(nextIdx);
+      sessionStorage.setItem('media-player-track-index', String(nextIdx));
+    } else {
+      setIsPlaying(false);
+    }
+  };
+
+  const updateAudioProgress = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setCurrentTime(audio.currentTime);
+    if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+      setDuration(audio.duration);
+      setAudioProgress((audio.currentTime / audio.duration) * 100);
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+      setDuration(audio.duration);
+      setAudioProgress((audio.currentTime / audio.duration) * 100);
+    }
+  };
+
+  // Sync state if audio already loaded metadata
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-
-    const handleEnded = () => {
-      if (currentTrackIndex < soundtrack.length - 1) {
-        const nextIdx = currentTrackIndex + 1;
-        setCurrentTrackIndex(nextIdx);
-        localStorage.setItem('media-player-track-index', String(nextIdx));
-      } else {
-        setIsPlaying(false);
-      }
-    };
-
-    const updateAudioProgress = () => {
-      setCurrentTime(audio.currentTime);
-    };
-
-    const handleLoadedMetadata = () => {
+    if (audio.readyState >= 1 && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
       setDuration(audio.duration);
-    };
-
-    audio.addEventListener('ended', handleEnded);
-    audio.addEventListener('timeupdate', updateAudioProgress);
-    audio.addEventListener('loadedmetadata', () => {
-      handleLoadedMetadata();
-      // Reset progress when new track loads
-      setAudioProgress(0);
-      setCurrentTime(0);
-    });
-
-    return () => {
-      audio.removeEventListener('ended', handleEnded);
-      audio.removeEventListener('timeupdate', updateAudioProgress);
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-    };
+      setCurrentTime(audio.currentTime);
+      setAudioProgress((audio.currentTime / audio.duration) * 100);
+    }
   }, [currentTrackIndex]);
+
 
   // External control listener (e.g. from Voice of Mark play)
   useEffect(() => {
@@ -275,8 +278,14 @@ export default function MediaPlayer() {
     const handlePlayRequest = () => {
       const audio = audioRef.current;
       if (audio && !isPlaying) {
-        audio.play().catch(err => console.error(err));
-        setIsPlaying(true);
+        audio.play()
+          .then(() => {
+            setIsPlaying(true);
+          })
+          .catch(err => {
+            console.error('Play request failed:', err);
+            setIsPlaying(false);
+          });
       }
     };
 
@@ -298,12 +307,27 @@ export default function MediaPlayer() {
 
     const handleSelectTrackRequest = (e) => {
       if (e.detail && typeof e.detail.index === 'number') {
-        setCurrentTrackIndex(e.detail.index);
-        localStorage.setItem('media-player-track-index', String(e.detail.index));
-        setIsPlaying(true);
+        const nextIdx = e.detail.index;
+        setCurrentTrackIndex(nextIdx);
+        sessionStorage.setItem('media-player-track-index', String(nextIdx));
         setIsClosed(false);
-        localStorage.setItem('media-player-closed', 'false');
+        sessionStorage.setItem('media-player-closed', 'false');
         window.dispatchEvent(new CustomEvent('media-player-close-change', { detail: { isClosed: false } }));
+        
+        // If the track is already the selected one, manually play audio if paused
+        const audio = audioRef.current;
+        if (audio && currentTrackIndex === nextIdx && audio.paused) {
+          audio.play()
+            .then(() => {
+              setIsPlaying(true);
+            })
+            .catch(err => {
+              console.error('Select track play failed:', err);
+              setIsPlaying(false);
+            });
+        } else {
+          setIsPlaying(true);
+        }
       }
     };
 
@@ -318,19 +342,40 @@ export default function MediaPlayer() {
       window.removeEventListener('media-player-seek-request', handleSeekRequest);
       window.removeEventListener('media-player-select-track-request', handleSelectTrackRequest);
     };
-  }, [isPlaying]);
+  }, [currentTrackIndex, isPlaying]);
 
 
-  // Handle track source switching
+  // Handle track source switching and play/pause synchronization
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    audio.load();
-    if (isPlaying) {
-      audio.play().catch((err) => console.log('Audio autoplay blocked:', err));
+    const trackFile = currentTrack.file;
+    const isTrackChanged = prevTrackRef.current !== trackFile;
+
+    if (isTrackChanged) {
+      prevTrackRef.current = trackFile;
+      audio.load();
+      // Reset progress states on load
+      setAudioProgress(0);
+      setCurrentTime(0);
+      setDuration(0);
     }
-  }, [currentTrackIndex]);
+
+    if (isPlaying) {
+      if (isTrackChanged || audio.paused) {
+        audio.play().catch((err) => {
+          console.log('Audio play blocked/failed:', err);
+          setIsPlaying(false);
+        });
+      }
+    } else {
+      if (!audio.paused) {
+        audio.pause();
+      }
+    }
+  }, [currentTrackIndex, isPlaying]);
+
 
   const handlePlayPause = (e) => {
     if (e) e.stopPropagation();
@@ -341,17 +386,32 @@ export default function MediaPlayer() {
       audio.pause();
       setIsPlaying(false);
     } else {
-      audio.play().catch((err) => console.error('Audio play failed:', err));
-      setIsPlaying(true);
+      audio.play()
+        .then(() => {
+          setIsPlaying(true);
+        })
+        .catch((err) => {
+          console.error('Audio play failed:', err);
+          setIsPlaying(false);
+        });
     }
   };
 
   const selectTrack = (index, e) => {
     e.stopPropagation();
     setCurrentTrackIndex(index);
-    localStorage.setItem('media-player-track-index', String(index));
+    sessionStorage.setItem('media-player-track-index', String(index));
     setIsPlaying(true);
     setIsPlaylistOpen(false);
+    
+    // If the track is already the selected one, manually play audio if paused
+    const audio = audioRef.current;
+    if (audio && currentTrackIndex === index && audio.paused) {
+      audio.play().catch(err => {
+        console.error('Playlist play failed:', err);
+        setIsPlaying(false);
+      });
+    }
   };
 
   const handleReset = (e) => {
@@ -360,8 +420,14 @@ export default function MediaPlayer() {
     if (!audio) return;
     audio.currentTime = 0;
     if (!isPlaying) {
-      audio.play().catch((err) => console.error(err));
-      setIsPlaying(true);
+      audio.play()
+        .then(() => {
+          setIsPlaying(true);
+        })
+        .catch((err) => {
+          console.error('Reset play failed:', err);
+          setIsPlaying(false);
+        });
     }
   };
 
@@ -478,6 +544,11 @@ export default function MediaPlayer() {
         ref={audioRef}
         src={currentTrack.file}
         preload="auto"
+        onEnded={handleEnded}
+        onTimeUpdate={updateAudioProgress}
+        onLoadedMetadata={handleLoadedMetadata}
+        onDurationChange={updateAudioProgress}
+        onCanPlay={updateAudioProgress}
       />
 
       {isMinimized ? (
@@ -622,7 +693,7 @@ export default function MediaPlayer() {
               {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
             </button>
             <a 
-              href="https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S" 
+              href={spotifyHref} 
               target="_blank" 
               rel="noopener noreferrer" 
               className="control-btn spotify-link-btn" 

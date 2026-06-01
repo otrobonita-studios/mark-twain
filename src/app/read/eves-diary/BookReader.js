@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Sun, Moon, Volume2, BookOpen, X, Sparkles, Download, Clipboard, Check, Loader2, Play, Pause, RotateCcw } from 'lucide-react';
+import { Sun, Moon, BookOpen, X, Sparkles, Download, Clipboard, Check, Loader2, Play, Pause, RotateCcw } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 import { motion, AnimatePresence } from 'framer-motion';
 import { youngReadersParagraphs, youngReadersGlossary, youngReadersNotes } from './YoungReadersText';
@@ -12,7 +11,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
   const router = useRouter();
   const [scrollProgress, setScrollProgress] = useState(0);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
-  const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [experience, setExperience] = useState(initialExperience); // 'traditional' | 'app' | 'parallax' | 'voice' | 'drama' | 'chat' | 'split' | 'comments' | 'child'
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
   const [selectedZoomImage, setSelectedZoomImage] = useState(null);
@@ -25,66 +23,14 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
   const [epubError, setEpubError] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(false);
 
-  // Local audio player states for Sung Edition (split) linked to global MediaPlayer
-  const [songPlaying, setSongPlaying] = useState(false);
-  const [songTime, setSongTime] = useState(0);
-  const [songDuration, setSongDuration] = useState(0);
-  const [songTrackIndex, setSongTrackIndex] = useState(0);
-
-  // Synchronize state with global MediaPlayer events
-  useEffect(() => {
-    const handleStateUpdate = (e) => {
-      if (e.detail) {
-        const { isPlaying, currentTime, duration, currentTrackIndex } = e.detail;
-        setSongTrackIndex(currentTrackIndex);
-        setSongPlaying(isPlaying && currentTrackIndex === 0);
-        setSongTime(currentTime);
-        setSongDuration(duration);
-      }
-    };
-
-    window.addEventListener('media-player-state-update', handleStateUpdate);
-
-    // Request initial state synchronization
-    window.dispatchEvent(new CustomEvent('media-player-request-state-sync'));
-
-    return () => {
-      window.removeEventListener('media-player-state-update', handleStateUpdate);
-    };
-  }, []);
-
-  // Open the global media player panel and switch to track 0 (Eve's Diary) when entering split experience
+  // Open the global media player panel and switch to track 0 (Eve's Diary) when entering split experience (Sung Edition)
   useEffect(() => {
     if (experience === 'split') {
       window.dispatchEvent(new CustomEvent('media-player-open'));
-      if (songTrackIndex !== 0) {
-        window.dispatchEvent(new CustomEvent('media-player-select-track-request', { detail: { index: 0 } }));
-      }
-    }
-  }, [experience, songTrackIndex]);
-
-  const handleLocalSongPlayPause = () => {
-    if (songTrackIndex !== 0) {
       window.dispatchEvent(new CustomEvent('media-player-select-track-request', { detail: { index: 0 } }));
-    } else if (songPlaying) {
-      window.dispatchEvent(new CustomEvent('media-player-pause-request'));
-    } else {
       window.dispatchEvent(new CustomEvent('media-player-play-request'));
     }
-  };
-
-  const handleSongSliderChange = (e) => {
-    const newTime = parseFloat(e.target.value);
-    setSongTime(newTime); // Optimistic update
-    window.dispatchEvent(new CustomEvent('media-player-seek-request', { detail: { time: newTime } }));
-  };
-
-  const formatTime = (time) => {
-    if (isNaN(time)) return '0:00';
-    const mins = Math.floor(time / 60);
-    const secs = Math.floor(time % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
+  }, [experience]);
 
   const handleGenerateEpub = async () => {
     setEpubStatus('generating');
@@ -124,15 +70,13 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
   const isLoadedRef = useRef(false);
   const readerRef = useRef(null);
 
-  // Load settings from local storage on mount
+  // Load settings from storage on mount
   useEffect(() => {
     const savedTheme = localStorage.getItem('eves-diary-theme');
-    const savedFontSize = localStorage.getItem('eves-diary-font-size');
-    const savedExperience = localStorage.getItem('eves-diary-experience');
-    const savedClosed = localStorage.getItem('media-player-closed');
+    const savedExperience = sessionStorage.getItem('eves-diary-experience');
+    const savedClosed = sessionStorage.getItem('media-player-closed');
 
     if (savedTheme) setTheme(savedTheme);
-    if (savedFontSize) setFontSize(savedFontSize);
     if (savedExperience) {
       if (savedExperience === 'drama') {
         setExperience(initialExperience === 'child' ? 'child' : 'traditional');
@@ -162,9 +106,8 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
   useEffect(() => {
     if (!isLoadedRef.current) return;
     localStorage.setItem('eves-diary-theme', theme);
-    localStorage.setItem('eves-diary-font-size', fontSize);
-    localStorage.setItem('eves-diary-experience', experience);
-  }, [theme, fontSize, experience]);
+    sessionStorage.setItem('eves-diary-experience', experience);
+  }, [theme, experience]);
 
   // Monitor page scroll progress
   useEffect(() => {
@@ -186,7 +129,8 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
     if (wrapper) {
       const img = wrapper.querySelector('.in-paragraph-img');
       if (img) {
-        setSelectedZoomImage(img.getAttribute('src'));
+        const zoomSrc = img.getAttribute('data-zoom-src') || img.getAttribute('src');
+        setSelectedZoomImage(zoomSrc);
         return;
       }
     }
@@ -200,7 +144,8 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                           clickedImg.closest('.fig') ||
                           clickedImg.closest('.fig-trio-item');
       if (isBookImage) {
-        setSelectedZoomImage(clickedImg.getAttribute('src'));
+        const zoomSrc = clickedImg.getAttribute('data-zoom-src') || clickedImg.getAttribute('src');
+        setSelectedZoomImage(zoomSrc);
       }
     }
   };
@@ -270,71 +215,25 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
         style={{ width: `${scrollProgress}%` }}
       />
 
-      {/* Top Header Deck */}
-      <header className="book-reader-header">
-        <Link href="/" className="book-back-link">
-          <ArrowLeft size={16} />
-          <span>Writing Desk</span>
-        </Link>
-
-        <div className="book-reader-controls">
-          {/* Font Size Selector */}
-          <div className="font-size-selector">
-            <button 
-              onClick={() => setFontSize('small')}
-              className={`size-btn ${fontSize === 'small' ? 'active' : ''}`}
-              title="Small text size (Standard)"
-            >
-              Small
-            </button>
-            <button 
-              onClick={() => setFontSize('normal')}
-              className={`size-btn ${fontSize === 'normal' ? 'active' : ''}`}
-              title="Normal text size"
-            >
-              Normal
-            </button>
-            <button 
-              onClick={() => setFontSize('large')}
-              className={`size-btn ${fontSize === 'large' ? 'active' : ''}`}
-              title="Large text size"
-            >
-              Large
-            </button>
-          </div>
-
-
-
-          {/* Reopen Music Icon (only if closed) */}
-          {isMusicPlayerClosed && (
-            <button 
-              onClick={handleReopenMusic} 
-              className="book-control-btn reopen-music-btn" 
-              title="Open Music Player"
-            >
-              <Volume2 size={16} />
-            </button>
-          )}
-
-          {/* Theme Selector */}
+      {/* Reading Desk */}
+      <main className="book-page-desk" ref={readerRef}>
+        <article 
+          className="book-page-parchment font-serif size-small"
+          onClick={handleArticleClick}
+        >
+          {/* Theme Selector (Floating inside parchment card) */}
           <button 
             onClick={() => setTheme(theme === 'parchment' ? 'charcoal' : 'parchment')}
-            className="book-control-btn theme-toggle"
+            className="book-control-btn theme-toggle parchment-theme-toggle"
             title={`Switch to ${theme === 'parchment' ? 'Charcoal' : 'Parchment'} theme`}
           >
             {theme === 'parchment' ? <Moon size={16} /> : <Sun size={16} />}
           </button>
-        </div>
-      </header>
-
-      {/* Reading Desk */}
-      <main className="book-page-desk" ref={readerRef}>
-        <article 
-          className={`book-page-parchment font-serif size-${fontSize}`}
-          onClick={handleArticleClick}
-        >
           <div className="book-epigraph">
             “Wheresoever she was, there was Eden.”
+          </div>
+          <div className="book-epigraph-subtitle">
+            This book is the first reworked version of many to come.
           </div>
 
           {/* Reading Experience Selector */}
@@ -351,12 +250,14 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                         if (!isTocOpen) {
                           setIsTocOpen(true);
                           if (experience === 'child') {
+                            sessionStorage.setItem('eves-diary-experience', 'traditional');
                             router.push('/read/eves-diary');
                           } else {
                             setExperience('traditional');
                           }
                         } else if (experience !== 'traditional') {
                           if (experience === 'child') {
+                            sessionStorage.setItem('eves-diary-experience', 'traditional');
                             router.push('/read/eves-diary');
                           } else {
                             setExperience('traditional');
@@ -368,9 +269,9 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                         router.push('/read/eves-diary/young-readers');
                       } else {
                         if (experience === 'child') {
-                          router.push('/read/eves-diary');
                           // Save chosen experience for when we land on /read/eves-diary
-                          localStorage.setItem('eves-diary-experience', exp.id);
+                          sessionStorage.setItem('eves-diary-experience', exp.id);
+                          router.push('/read/eves-diary');
                         } else {
                           setExperience(exp.id);
                         }
@@ -391,7 +292,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
 
 
 
-          {experience === 'traditional' ? (
+          {experience === 'traditional' || experience === 'split' ? (
             <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
           ) : experience === 'child' ? (
             <div className="book-text-content young-readers-reading-view">
@@ -711,161 +612,9 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                   </div>
                 )}
               </div>
+
             </div>
-          ) : experience === 'split' ? (
-            <div className="experience-dramatized-excerpt">
-              {/* Header block (inheriting design from the dramatized excerpt) */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', width: '100%' }}>
-                <div className="preview-stamp">DESIGN PHASE</div>
-                <h3 className="excerpt-main-title" style={{ marginTop: '0.5rem' }}>EVE'S DIARY &mdash; SUNG EDITION</h3>
-                <h4 className="excerpt-sub-title">&ldquo;Hear the diary set to music&rdquo;</h4>
-                <p className="excerpt-running-time">Running time: approximately 4 minutes</p>
-                
-                <p className="preview-status" style={{ textAlign: 'center', fontFamily: 'var(--font-mono), monospace', fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '2rem', textIndent: 0 }}>
-                  This configuration is currently in public test mode. Feel free to try it out.
-                </p>
-              </div>
 
-              {/* Centered, beautiful premium player card */}
-              <div className="sung-player-card" style={{
-                margin: '2rem auto',
-                maxWidth: '480px',
-                background: theme === 'parchment' ? 'rgba(217, 163, 74, 0.04)' : 'rgba(255, 244, 223, 0.015)',
-                border: '1px solid var(--border)',
-                borderRadius: '12px',
-                padding: '2.5rem 2rem',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '1.5rem',
-                boxShadow: '0 8px 30px rgba(0, 0, 0, 0.15)',
-                backdropFilter: 'blur(8px)',
-              }}>
-                
-                {/* Album Cover Art */}
-                <div style={{
-                  position: 'relative',
-                  width: '200px',
-                  height: '200px',
-                  borderRadius: '8px',
-                  overflow: 'hidden',
-                  border: '1px solid rgba(255, 244, 223, 0.1)',
-                  boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
-                  backgroundColor: '#15110d'
-                }}>
-                  <img 
-                    src="/images/eves-diary-the-scratched-experience-cover.jpg" 
-                    alt="Eve's Diary Cover" 
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      objectFit: 'cover'
-                    }}
-                  />
-                  {songPlaying && (
-                    <div className="soundwave active" style={{
-                      position: 'absolute',
-                      bottom: '8px',
-                      right: '8px',
-                      backgroundColor: 'rgba(21, 17, 13, 0.8)',
-                      padding: '4px 6px',
-                      borderRadius: '4px',
-                      height: '16px',
-                      display: 'flex',
-                      gap: '2px',
-                      alignItems: 'flex-end'
-                    }}>
-                      <div className="soundwave-bar" style={{ width: '2px', height: '100%', backgroundColor: 'var(--primary)' }}></div>
-                      <div className="soundwave-bar" style={{ width: '2px', height: '70%', backgroundColor: 'var(--primary)' }}></div>
-                      <div className="soundwave-bar" style={{ width: '2px', height: '40%', backgroundColor: 'var(--primary)' }}></div>
-                      <div className="soundwave-bar" style={{ width: '2px', height: '80%', backgroundColor: 'var(--primary)' }}></div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Metadata */}
-                <div style={{ textAlign: 'center', width: '100%' }}>
-                  <h4 className="typewriter" style={{ margin: 0, fontSize: '1.1rem', color: 'var(--primary)', fontWeight: '600', letterSpacing: '0.05em' }}>
-                    Eve's Diary
-                  </h4>
-                  <p style={{ margin: '4px 0 0', fontSize: '0.75rem', color: 'var(--muted-foreground)', fontFamily: 'var(--font-sans), sans-serif' }}>
-                    Album: Mark Twain Reappears
-                  </p>
-                </div>
-
-                {/* Timeline & Slider */}
-                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <input 
-                    type="range"
-                    min="0"
-                    max={songDuration || 100}
-                    step="0.1"
-                    value={songTime}
-                    onChange={handleSongSliderChange}
-                    className="player-audio-slider"
-                    style={{
-                      width: '100%',
-                      height: '4px',
-                      borderRadius: '2px',
-                      outline: 'none',
-                      background: 'rgba(255, 244, 223, 0.1)',
-                      accentColor: 'var(--primary)',
-                      cursor: 'pointer'
-                    }}
-                  />
-                  <div className="typewriter" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--muted-foreground)' }}>
-                    <span>{formatTime(songTime)}</span>
-                    <span>{formatTime(songDuration)}</span>
-                  </div>
-                </div>
-
-                {/* Controls */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-                  <button 
-                    onClick={() => {
-                      if (songTrackIndex !== 0) {
-                        window.dispatchEvent(new CustomEvent('media-player-select-track-request', { detail: { index: 0 } }));
-                      } else {
-                        window.dispatchEvent(new CustomEvent('media-player-seek-request', { detail: { time: 0 } }));
-                        if (!songPlaying) {
-                          window.dispatchEvent(new CustomEvent('media-player-play-request'));
-                        }
-                      }
-                    }} 
-                    className="control-btn" 
-                    title="Restart"
-                    style={{ padding: '8px', cursor: 'pointer', background: 'transparent', border: 'none', color: 'var(--muted-foreground)' }}
-                  >
-                    <RotateCcw size={16} />
-                  </button>
-
-                  <button 
-                    onClick={handleLocalSongPlayPause} 
-                    style={{
-                      width: '48px',
-                      height: '48px',
-                      borderRadius: '50%',
-                      backgroundColor: 'var(--primary)',
-                      color: '#15110d',
-                      border: 'none',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      boxShadow: '0 4px 15px rgba(217, 163, 74, 0.3)',
-                      transition: 'transform 0.1s ease, background-color 0.2s'
-                    }}
-                    className="play-pause-btn-main"
-                    aria-label={songPlaying ? 'Pause' : 'Play'}
-                  >
-                    {songPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" style={{ marginLeft: '2px' }} />}
-                  </button>
-                </div>
-              </div>
-
-              {/* Bottom centered return button container (empty for short page) */}
-              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '3rem', width: '100%' }}></div>
-            </div>
           ) : (
             <div className="experience-design-preview">
               <div className="preview-stamp">DESIGN PHASE</div>

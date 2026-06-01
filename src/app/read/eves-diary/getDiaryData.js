@@ -160,5 +160,54 @@ export function getDiaryData() {
     tocItems.push({ id, label, type: id.startsWith('day-') ? 'day' : 'section' });
   }
 
+  // Look for cropped files and custom name mappings in the eves-diary folder.
+  const croppedMappings = {
+    '067.jpg': ["extract-from-adams", "extract_from_adams", "extract from adam", "extractfromadams"],
+    '093.jpg': ["after-the-fall", "after_the_fall", "after the fall", "afterthefall"],
+    '105.jpg': ["forty-years-later", "forty_years_later", "forty years later", "fortyyearslater"],
+    '109.jpg': ["atthegrave", "at-the-grave", "at_the_grave", "at eve's grave", "attevesgrave"]
+  };
+
+  const evesDiaryDir = path.join(process.cwd(), 'public/images/eves-diary');
+  try {
+    if (fs.existsSync(evesDiaryDir)) {
+      const files = fs.readdirSync(evesDiaryDir);
+      
+      // 1. Map explicit custom prefixes
+      Object.entries(croppedMappings).forEach(([original, prefixes]) => {
+        const croppedFile = files.find(f => {
+          const normalisedFile = f.toLowerCase().replace(/\.[^/.]+$/, ""); // strip extension
+          return prefixes.some(p => normalisedFile.startsWith(p.toLowerCase()) || p.toLowerCase().startsWith(normalisedFile));
+        });
+        if (croppedFile) {
+          const originalEscaped = original.replace(/\./g, '\\.');
+          const regex = new RegExp(`src="\\/images\\/eves-diary\\/${originalEscaped}"`, 'g');
+          extractedContent = extractedContent.replace(
+            regex,
+            `src="/images/eves-diary/${croppedFile}" data-zoom-src="/images/eves-diary/${original}"`
+          );
+        }
+      });
+
+      // 2. Map automatic "XXX-cropped.ext" or "XXX_cropped.ext" patterns
+      const croppedPatternRegex = /^(\d{3})[-_]cropped\.(jpg|jpeg|png|webp|gif)$/i;
+      files.forEach(file => {
+        const match = file.match(croppedPatternRegex);
+        if (match) {
+          const originalNum = match[1];
+          const original = `${originalNum}.jpg`;
+          const regex = new RegExp(`src="\\/images\\/eves-diary\\/${originalNum}\\.jpg"`, 'g');
+          extractedContent = extractedContent.replace(
+            regex,
+            `src="/images/eves-diary/${file}" data-zoom-src="/images/eves-diary/${original}"`
+          );
+        }
+      });
+    }
+  } catch (e) {
+    console.error("Error mapping cropped images in getDiaryData.js:", e);
+  }
+
   return { htmlContent: extractedContent, tocItems };
 }
+

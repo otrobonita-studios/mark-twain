@@ -34,7 +34,7 @@ export default function ChatClient() {
   const initialQueryProcessed = useRef(false);
 
   useEffect(() => {
-    const savedClosed = localStorage.getItem('media-player-closed');
+    const savedClosed = sessionStorage.getItem('media-player-closed');
     setIsMusicPlayerClosed(savedClosed !== null ? savedClosed === 'true' : true);
 
     const handleCloseChange = (e) => {
@@ -426,7 +426,7 @@ export default function ChatClient() {
                     className="drawer-link"
                   >
                     <ArrowLeft size={16} />
-                    <span>Go to Writing Desk</span>
+                    <span>Go to Home</span>
                   </Link>
                   <Link 
                     href="/read/eves-diary" 
