@@ -25,71 +25,58 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
   const [epubError, setEpubError] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(false);
 
-  // Local audio player states for Sung Edition (split)
+  // Local audio player states for Sung Edition (split) linked to global MediaPlayer
   const [songPlaying, setSongPlaying] = useState(false);
   const [songTime, setSongTime] = useState(0);
   const [songDuration, setSongDuration] = useState(0);
-  const songAudioRef = useRef(null);
+  const [songTrackIndex, setSongTrackIndex] = useState(0);
 
-  // Pause local audio if switching away from split experience
+  // Synchronize state with global MediaPlayer events
   useEffect(() => {
-    if (experience !== 'split') {
-      if (songAudioRef.current) {
-        songAudioRef.current.pause();
-        setSongPlaying(false);
-      }
-    } else {
-      // Pause global media player when entering split experience
-      window.dispatchEvent(new CustomEvent('media-player-pause'));
-    }
-  }, [experience]);
-
-  // Sync local audio playing state with global media player events
-  useEffect(() => {
-    const handleGlobalPlay = () => {
-      if (songAudioRef.current && songPlaying) {
-        songAudioRef.current.pause();
-        setSongPlaying(false);
+    const handleStateUpdate = (e) => {
+      if (e.detail) {
+        const { isPlaying, currentTime, duration, currentTrackIndex } = e.detail;
+        setSongTrackIndex(currentTrackIndex);
+        setSongPlaying(isPlaying && currentTrackIndex === 0);
+        setSongTime(currentTime);
+        setSongDuration(duration);
       }
     };
-    window.addEventListener('media-player-play', handleGlobalPlay);
+
+    window.addEventListener('media-player-state-update', handleStateUpdate);
+
+    // Request initial state synchronization
+    window.dispatchEvent(new CustomEvent('media-player-request-state-sync'));
+
     return () => {
-      window.removeEventListener('media-player-play', handleGlobalPlay);
+      window.removeEventListener('media-player-state-update', handleStateUpdate);
     };
-  }, [songPlaying]);
+  }, []);
+
+  // Open the global media player panel and switch to track 0 (Eve's Diary) when entering split experience
+  useEffect(() => {
+    if (experience === 'split') {
+      window.dispatchEvent(new CustomEvent('media-player-open'));
+      if (songTrackIndex !== 0) {
+        window.dispatchEvent(new CustomEvent('media-player-select-track-request', { detail: { index: 0 } }));
+      }
+    }
+  }, [experience, songTrackIndex]);
 
   const handleLocalSongPlayPause = () => {
-    const audio = songAudioRef.current;
-    if (!audio) return;
-    if (songPlaying) {
-      audio.pause();
-      setSongPlaying(false);
+    if (songTrackIndex !== 0) {
+      window.dispatchEvent(new CustomEvent('media-player-select-track-request', { detail: { index: 0 } }));
+    } else if (songPlaying) {
+      window.dispatchEvent(new CustomEvent('media-player-pause-request'));
     } else {
-      // Pause global media player before playing local
-      window.dispatchEvent(new CustomEvent('media-player-pause'));
-      audio.play().catch(err => console.error("Local song play failed:", err));
-      setSongPlaying(true);
-    }
-  };
-
-  const handleSongTimeUpdate = () => {
-    if (songAudioRef.current) {
-      setSongTime(songAudioRef.current.currentTime);
-    }
-  };
-
-  const handleSongLoadedMetadata = () => {
-    if (songAudioRef.current) {
-      setSongDuration(songAudioRef.current.duration);
+      window.dispatchEvent(new CustomEvent('media-player-play-request'));
     }
   };
 
   const handleSongSliderChange = (e) => {
     const newTime = parseFloat(e.target.value);
-    if (songAudioRef.current) {
-      songAudioRef.current.currentTime = newTime;
-      setSongTime(newTime);
-    }
+    setSongTime(newTime); // Optimistic update
+    window.dispatchEvent(new CustomEvent('media-player-seek-request', { detail: { time: newTime } }));
   };
 
   const formatTime = (time) => {
@@ -473,7 +460,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                 <p className="excerpt-running-time">Running time: approximately 4 minutes</p>
                 
                 <p className="preview-status" style={{ textAlign: 'center', fontFamily: 'var(--font-mono), monospace', fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '2rem', textIndent: 0 }}>
-                  This configuration is currently in layout design.
+                  This configuration is currently in public test mode. Feel free to try it out.
                 </p>
               </div>
 
@@ -643,7 +630,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                 <p className="excerpt-running-time">Optimal formatting for Kindle and e-paper screens</p>
                 
                 <p className="preview-status" style={{ textAlign: 'center', fontFamily: 'var(--font-mono), monospace', fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '2rem', textIndent: 0 }}>
-                  This configuration is currently in layout design.
+                  This configuration is currently in public test mode. Feel free to try it out.
                 </p>
               </div>
 
@@ -694,7 +681,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', width: '100%', padding: '0.75rem 1.5rem' }}
                       >
                         <Download size={16} />
-                        <span>Download EPUB</span>
+                        <span>Download EPUB Edition</span>
                       </a>
                       
                       <button 
@@ -758,7 +745,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                 <p className="excerpt-running-time">Running time: approximately 4 minutes</p>
                 
                 <p className="preview-status" style={{ textAlign: 'center', fontFamily: 'var(--font-mono), monospace', fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '2rem', textIndent: 0 }}>
-                  This configuration is currently in layout design.
+                  This configuration is currently in public test mode. Feel free to try it out.
                 </p>
               </div>
 
@@ -859,12 +846,12 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
                   <button 
                     onClick={() => {
-                      if (songAudioRef.current) {
-                        songAudioRef.current.currentTime = 0;
-                        setSongTime(0);
+                      if (songTrackIndex !== 0) {
+                        window.dispatchEvent(new CustomEvent('media-player-select-track-request', { detail: { index: 0 } }));
+                      } else {
+                        window.dispatchEvent(new CustomEvent('media-player-seek-request', { detail: { time: 0 } }));
                         if (!songPlaying) {
-                          songAudioRef.current.play().catch(err => console.error(err));
-                          setSongPlaying(true);
+                          window.dispatchEvent(new CustomEvent('media-player-play-request'));
                         }
                       }
                     }} 
@@ -897,15 +884,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                     {songPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" style={{ marginLeft: '2px' }} />}
                   </button>
                 </div>
-
-                <audio
-                  ref={songAudioRef}
-                  src="/sounds/music/eves-diary-by-eve.mp3"
-                  preload="auto"
-                  onTimeUpdate={handleSongTimeUpdate}
-                  onLoadedMetadata={handleSongLoadedMetadata}
-                  onEnded={() => setSongPlaying(false)}
-                />
               </div>
 
               {/* Bottom centered return button */}
@@ -936,7 +914,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
               <div className="preview-stamp">DESIGN PHASE</div>
               <h3>{experiences.find(e => e.id === experience).label}</h3>
               <p className="preview-status">
-                This reading room configuration is currently in layout design.
+                This reading room configuration is currently in public test mode. Feel free to try it out.
               </p>
               <div className="preview-concept">
                 {experience === 'drama' && "Concept: A multi-track audio player syncing background ambient tracks with segmented character dialogues for Adam and Eve."}

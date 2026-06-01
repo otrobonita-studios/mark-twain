@@ -240,6 +240,86 @@ export default function MediaPlayer() {
     }
   }, [isPlaying]);
 
+  // Dispatch state updates for other components (e.g. BookReader's Sung Edition)
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('media-player-state-update', {
+      detail: {
+        isPlaying,
+        currentTime,
+        duration,
+        currentTrackIndex
+      }
+    }));
+  }, [isPlaying, currentTime, duration, currentTrackIndex]);
+
+  // Handle state sync requests
+  useEffect(() => {
+    const handleSyncRequest = () => {
+      window.dispatchEvent(new CustomEvent('media-player-state-update', {
+        detail: {
+          isPlaying,
+          currentTime,
+          duration,
+          currentTrackIndex
+        }
+      }));
+    };
+    window.addEventListener('media-player-request-state-sync', handleSyncRequest);
+    return () => {
+      window.removeEventListener('media-player-request-state-sync', handleSyncRequest);
+    };
+  }, [isPlaying, currentTime, duration, currentTrackIndex]);
+
+  // Handle external control requests
+  useEffect(() => {
+    const handlePlayRequest = () => {
+      const audio = audioRef.current;
+      if (audio && !isPlaying) {
+        audio.play().catch(err => console.error(err));
+        setIsPlaying(true);
+      }
+    };
+
+    const handlePauseRequest = () => {
+      const audio = audioRef.current;
+      if (audio && isPlaying) {
+        audio.pause();
+        setIsPlaying(false);
+      }
+    };
+
+    const handleSeekRequest = (e) => {
+      const audio = audioRef.current;
+      if (audio && e.detail && typeof e.detail.time === 'number') {
+        audio.currentTime = e.detail.time;
+        setCurrentTime(e.detail.time);
+      }
+    };
+
+    const handleSelectTrackRequest = (e) => {
+      if (e.detail && typeof e.detail.index === 'number') {
+        setCurrentTrackIndex(e.detail.index);
+        localStorage.setItem('media-player-track-index', String(e.detail.index));
+        setIsPlaying(true);
+        setIsClosed(false);
+        localStorage.setItem('media-player-closed', 'false');
+        window.dispatchEvent(new CustomEvent('media-player-close-change', { detail: { isClosed: false } }));
+      }
+    };
+
+    window.addEventListener('media-player-play-request', handlePlayRequest);
+    window.addEventListener('media-player-pause-request', handlePauseRequest);
+    window.addEventListener('media-player-seek-request', handleSeekRequest);
+    window.addEventListener('media-player-select-track-request', handleSelectTrackRequest);
+
+    return () => {
+      window.removeEventListener('media-player-play-request', handlePlayRequest);
+      window.removeEventListener('media-player-pause-request', handlePauseRequest);
+      window.removeEventListener('media-player-seek-request', handleSeekRequest);
+      window.removeEventListener('media-player-select-track-request', handleSelectTrackRequest);
+    };
+  }, [isPlaying]);
+
 
   // Handle track source switching
   useEffect(() => {
