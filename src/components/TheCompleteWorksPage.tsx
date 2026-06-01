@@ -546,8 +546,8 @@ export default function TheCompleteWorksPage() {
               <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Modernized</strong> — Texts cleaned of 1800s ephemera, readable on any device. Ask questions, get responses informed by the full work.</li>
               <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Youth Edition</strong> — Adapted for classroom reading (vocabulary, pacing, focus)</li>
               <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Sung Version</strong> — AI-generated musical interpretation featuring Mark's voice</li>
-              <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Voice</strong> — Text-to-speech narration in Mark's custom voice (coming autumn 2026)</li>
-              <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Audio-Text Sync</strong> — Read along with highlighted text as the audio plays (coming autumn 2026, for grandparents and bedtime readers)</li>
+              <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>E-Ink and Kindle</strong> — DRM-Free EPUB files optimized for e-paper and Kindle screens</li>
+              <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Audio-Text Sync</strong> — Read along with highlighted text as the audio plays (for grandparents and bedtime readers)</li>
             </ul>
           </div>
 
