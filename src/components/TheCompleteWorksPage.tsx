@@ -367,9 +367,9 @@ export default function TheCompleteWorksPage() {
       <main className="book-page-desk" onClick={handleContainerClick}>
         <article className={`book-page-parchment font-serif size-${fontSize}`}>
           
-          <h2 className="text-2xl font-semibold mb-6">Featured Editions & Manuscripts</h2>
+          <h1 className="text-text-100 text-[2rem] font-bold" style={{ marginBottom: '4.5rem' }}>Mark Twain's Complete Works</h1>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6" style={{ marginBottom: '6rem' }}>
             {displayedIndices.map((bookIdx, slotIdx) => {
               const book = books[bookIdx];
               const isFading = fadingSlot === slotIdx;
@@ -438,7 +438,7 @@ export default function TheCompleteWorksPage() {
 
           {/* Detailed grid content */}
           <div className="standard-markdown grid-cols-1 grid [&>_*]:min-w-0 gap-3 font-claude-response text-left">
-            <h1 className="text-text-100 mt-5 -mb-1 text-[2rem] font-bold">Mark Twain's Complete Works</h1>
+            <h1 className="text-text-100 mt-5 -mb-1 text-[2rem] font-bold">In the Remake</h1>
             <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg mb-[2rem]">All 101 works. Digitized. Voiced. Interactive. Coming to classrooms and bed tables autumn 2026.</p>
             
             <h2 className="text-text-100 mt-3 -mb-1 text-[1.5rem] font-bold">Books (16 full-length novels &amp; story collections)</h2>
