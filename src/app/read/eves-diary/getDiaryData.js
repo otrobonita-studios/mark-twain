@@ -23,7 +23,7 @@ export function getDiaryData() {
     /<h1>\s*EVE'S DIARY\s*<\/h1>\s*<h2>\s*By Mark Twain\s*<\/h2>\s*<h3>\s*Illustrated by Lester Ralph\s*<\/h3>/gi,
     `<h1>EVE'S DIARY</h1>
     <h2>
-      &ldquo;Translated from the Original&rdquo;<span class="ask-mark-tooltip-container" title="Ask Mark"><a href="/chat?query=Can you explain 'Translated from the Original' in the context of Eve's Diary?&amp;excerpt=Translated from the Original" style="color: inherit; text-decoration: none;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ask-mark-icon"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a></span>
+      &ldquo;Translated from the Original&rdquo;<span class="ask-mark-tooltip-container" title="Ask Mark"><a href="/chat?query=When the title page says 'Translated from the Original', what do you actually mean by that?&amp;excerpt=Translated from the Original" style="color: inherit; text-decoration: none;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ask-mark-icon"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a></span>
     </h2>
     <h2>By Mark Twain</h2>
     <h3>Illustrated by Lester Ralph</h3>`
@@ -73,17 +73,17 @@ export function getDiaryData() {
 
   extractedContent = extractedContent.replace(
     /FIRE!/g,
-    `FIRE!<span class="ask-mark-tooltip-container" title="Ask Mark"><a href="/chat?query=Why does Eve recognize fire without ever having seen it?&amp;excerpt=FIRE!" style="color: inherit; text-decoration: none;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ask-mark-icon"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a></span>`
+    `FIRE!<span class="ask-mark-tooltip-container" title="Ask Mark"><a href="/chat?query=When Eve exclaims 'FIRE!', why does she recognize fire without ever having seen it?&amp;excerpt=FIRE!" style="color: inherit; text-decoration: none;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ask-mark-icon"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a></span>`
   );
 
   extractedContent = extractedContent.replace(
     /my first sorrow/i,
-    (match) => `${match}<span class="ask-mark-tooltip-container" title="Ask Mark"><a href="/chat?query=What was happening in your life when you wrote this?&amp;excerpt=my first sorrow" style="color: inherit; text-decoration: none;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ask-mark-icon"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a></span>`
+    (match) => `${match}<span class="ask-mark-tooltip-container" title="Ask Mark"><a href="/chat?query=When you write 'my first sorrow', what was happening in your life when you wrote this?&amp;excerpt=my first sorrow" style="color: inherit; text-decoration: none;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ask-mark-icon"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a></span>`
   );
 
   extractedContent = extractedContent.replace(
-    /Wheresoever she was, THERE was Eden/gi,
-    `Wheresoever she was, THERE was Eden<span class="ask-mark-tooltip-container" title="Ask Mark"><a href="/chat?query=Is this about Eve, or about Livy?&amp;excerpt=Wheresoever she was, THERE was Eden" style="color: inherit; text-decoration: none;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ask-mark-icon"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a></span>`
+    /ADAM:\s*Wheresoever she was, THERE was Eden/gi,
+    `ADAM: Wheresoever she was, THERE was Eden<span class="ask-mark-tooltip-container" title="Ask Mark"><a href="/chat?query=When you write 'ADAM: Wheresoever she was, THERE was Eden' what do you actually mean?&amp;excerpt=ADAM: Wheresoever she was, THERE was Eden" style="color: inherit; text-decoration: none;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ask-mark-icon"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a></span>`
   );
 
   // Clean up transcription conventions and typos

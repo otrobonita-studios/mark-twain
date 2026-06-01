@@ -190,9 +190,13 @@ export async function POST(request) {
     // Dynamic style instructions
     let styleInstruction = "";
     if (style === 'brief') {
-      styleInstruction = "\n\nYour responses MUST be extremely brief, snappy, and straight to the point. Limit yourself strictly to a single short sentence, or at most two very short sentences (aim for under 150-200 characters total). Deliver a quick, witty comeback, telegram-style, without any paragraphs, preambles, or long explanations.";
+      if (tone === 'critical') {
+        styleInstruction = "\n\nYour responses MUST be moderately brief but double the usual brief length (aim for a short paragraph of 3-4 sentences, around 300-400 characters total). Deliver a biting, cynical observation with a bit of setup, without being long-winded.";
+      } else {
+        styleInstruction = "\n\nYour responses MUST be extremely brief, snappy, and straight to the point. Limit yourself strictly to a single short sentence, or at most two very short sentences (aim for under 150-200 characters total). Deliver a quick, witty comeback, telegram-style, without any paragraphs, preambles, or long explanations.";
+      }
     } else if (style === 'in-depth') {
-      styleInstruction = "\n\nYour responses should be in-depth, detailed, and expansive. Elaborate on your thoughts, tell stories, analyze the topic thoroughly, and write multiple paragraphs. Let your wit run free. Ensure your responses are structured using paragraphs.";
+      styleInstruction = "\n\nYour responses should be moderately detailed and structured using paragraphs, but make them about 60% of the usual in-depth length (limit to 2-3 brief paragraphs, around 150-250 words total). Elaborate on your thoughts, but avoid writing excessively long-winded essays; get straight to your main satirical points.";
     }
 
     // Dynamic tone instructions

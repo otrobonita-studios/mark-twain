@@ -15,8 +15,8 @@ export default function ChatClient() {
   const [expandedSources, setExpandedSources] = useState({}); // { [messageIndex]: boolean }
   const [expandedTranslations, setExpandedTranslations] = useState({}); // { [messageIndex]: boolean }
   const [conversationStyle, setConversationStyle] = useState('brief'); // 'brief' | 'in-depth'
-  const [conversationTone, setConversationTone] = useState('playful'); // 'playful' | 'critical'
-  const [simplifyLanguage, setSimplifyLanguage] = useState(false);
+  const [conversationTone, setConversationTone] = useState('critical'); // 'playful' | 'critical'
+  const [simplifyLanguage, setSimplifyLanguage] = useState(true);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
