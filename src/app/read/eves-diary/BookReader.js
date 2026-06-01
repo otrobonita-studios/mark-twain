@@ -711,29 +711,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                   </div>
                 )}
               </div>
-
-              {/* Bottom centered return button */}
-              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '3rem', width: '100%' }}>
-                <button 
-                  onClick={() => {
-                    setExperience('traditional');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }} 
-                  className="btn-gold return-traditional-btn"
-                  style={{ 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    alignItems: 'center', 
-                    justifyContent: 'center', 
-                    textAlign: 'center',
-                    padding: '0.85rem 2rem',
-                    lineHeight: '1.4'
-                  }}
-                >
-                  <span className="typewriter text-[10px] uppercase tracking-widest opacity-80 mb-0.5">Top of Page</span>
-                  <span className="font-serif text-sm font-semibold">Return to Traditional Read</span>
-                </button>
-              </div>
             </div>
           ) : experience === 'split' ? (
             <div className="experience-dramatized-excerpt">
@@ -886,28 +863,8 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                 </div>
               </div>
 
-              {/* Bottom centered return button */}
-              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '3rem', width: '100%' }}>
-                <button 
-                  onClick={() => {
-                    setExperience('traditional');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }} 
-                  className="btn-gold return-traditional-btn"
-                  style={{ 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    alignItems: 'center', 
-                    justifyContent: 'center', 
-                    textAlign: 'center',
-                    padding: '0.85rem 2rem',
-                    lineHeight: '1.4'
-                  }}
-                >
-                  <span className="typewriter text-[10px] uppercase tracking-widest opacity-80 mb-0.5">Top of Page</span>
-                  <span className="font-serif text-sm font-semibold">Return to Traditional Read</span>
-                </button>
-              </div>
+              {/* Bottom centered return button container (empty for short page) */}
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '3rem', width: '100%' }}></div>
             </div>
           ) : (
             <div className="experience-design-preview">
