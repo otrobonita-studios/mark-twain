@@ -214,7 +214,7 @@ export function getDiaryData() {
     if (fs.existsSync(evesDiaryDir)) {
       const files = fs.readdirSync(evesDiaryDir);
       
-      // 1. Map explicit custom prefixes
+      // 1. Map explicit custom prefixes and adjust size to 25% and max-height 250px for square images
       Object.entries(croppedMappings).forEach(([original, prefixes]) => {
         const croppedFile = files.find(f => {
           const normalisedFile = f.toLowerCase().replace(/\.[^/.]+$/, ""); // strip extension
@@ -222,11 +222,26 @@ export function getDiaryData() {
         });
         if (croppedFile) {
           const originalEscaped = original.replace(/\./g, '\\.');
-          const regex = new RegExp(`src="\\/images\\/eves-diary\\/${originalEscaped}"`, 'g');
-          extractedContent = extractedContent.replace(
-            regex,
-            `src="/images/eves-diary/${croppedFile}" data-zoom-src="/images/eves-diary/${original}"`
+          // Match the wrapping div.fig and the img child to change width and max-height
+          const divRegex = new RegExp(
+            `(<div class="fig" style="width:)40%(;">\\s*<img[^>]*src="\\/images\\/eves-diary\\/${originalEscaped}"[^>]*>)`,
+            'g'
           );
+          
+          if (divRegex.test(extractedContent)) {
+            divRegex.lastIndex = 0; // reset regex
+            extractedContent = extractedContent.replace(
+              divRegex,
+              `<div class="fig fig-square" style="width:25%;"><img class="square-img" src="/images/eves-diary/${croppedFile}" data-zoom-src="/images/eves-diary/${original}" style="width:100%; max-height:250px; object-fit:cover;" />`
+            );
+          } else {
+            // Fallback for simple image swap if structure differs
+            const fallbackRegex = new RegExp(`src="\\/images\\/eves-diary\\/${originalEscaped}"`, 'g');
+            extractedContent = extractedContent.replace(
+              fallbackRegex,
+              `src="/images/eves-diary/${croppedFile}" data-zoom-src="/images/eves-diary/${original}"`
+            );
+          }
         }
       });
 
