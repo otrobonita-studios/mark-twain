@@ -71,6 +71,28 @@ export function getDiaryData() {
     }
   );
 
+  // Merge the vocabulary text paragraph with the following image-text paragraph to float them together
+  extractedContent = extractedContent.replace(
+    /<p>\s*Although he talks so little[\s\S]*?<\/p>\s*(?:<p>\s*(?:<br\s*\/?>\s*)*<\/p>\s*)*<div class="paragraph-with-image layout-(\w+)">\s*<div class="circle-img-wrapper">([\s\S]*?)<\/div>\s*<p class="image-paragraph-text">\s*Where did he get that word\? I do not think I have ever used it\.\s*<\/p>\s*<\/div>/i,
+    (match, layout, wrapperContent) => {
+      return `<div class="paragraph-with-image layout-${layout}">
+        <div class="circle-img-wrapper">
+          ${wrapperContent.trim()}
+        </div>
+        <p class="image-paragraph-text">
+          Although he talks so little, he has quite a considerable vocabulary. This
+          morning he used a surprisingly good word. He evidently recognized,
+          himself, that it was a good one, for he worked it in twice afterward,
+          casually. It was good casual art, still it showed that he possesses a
+          certain quality of perception. Without a doubt that seed can be made to
+          grow, if cultivated.
+          <br /><br />
+          Where did he get that word? I do not think I have ever used it.
+        </p>
+      </div>`;
+    }
+  );
+
   extractedContent = extractedContent.replace(
     /FIRE!/g,
     `FIRE!<span class="ask-mark-tooltip-container" title="Ask Mark"><a href="/chat?query=When Eve exclaims 'FIRE!', why does she recognize fire without ever having seen it?&amp;excerpt=FIRE!" style="color: inherit; text-decoration: none;"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ask-mark-icon"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></a></span>`
