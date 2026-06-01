@@ -438,8 +438,13 @@ export default function TheCompleteWorksPage() {
 
           {/* Detailed grid content */}
           <div className="standard-markdown grid-cols-1 grid [&>_*]:min-w-0 gap-3 font-claude-response text-left">
-            <h1 className="text-text-100 mt-5 -mb-1 text-[2rem] font-bold">In the Remake</h1>
-            <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg mb-[2rem]">All 101 works. Digitized. Voiced. Interactive. Coming to classrooms and bed tables autumn 2026.</p>
+            <h1 className="text-text-100 mt-5 -mb-1 text-[2rem] font-bold text-center">In the Remake</h1>
+            <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg text-center" style={{ marginBottom: '0.5rem' }}>
+              All 101 works. Digitized. Voiced. Interactive. Coming to classrooms and bed tables before you know it.
+            </p>
+            <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg text-center" style={{ marginBottom: '2.5rem' }}>
+              Already out: <Link href="/read/eves-diary" className="text-[var(--primary)] hover:underline font-semibold">Eve's Diary</Link>. Give it a go, it's excellent.
+            </p>
             
             <h2 className="text-text-100 mt-3 -mb-1 text-[1.5rem] font-bold">Books (16 full-length novels &amp; story collections)</h2>
             <div className="overflow-x-auto w-full mb-[3.5rem]">
