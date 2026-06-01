@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Sun, Moon, Volume2, BookOpen, X, Sparkles, Download, Clipboard, Check, Loader2 } from 'lucide-react';
+import { ArrowLeft, Sun, Moon, Volume2, BookOpen, X, Sparkles, Download, Clipboard, Check, Loader2, Play, Pause, RotateCcw } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 import { motion, AnimatePresence } from 'framer-motion';
 import { youngReadersParagraphs, youngReadersGlossary, youngReadersNotes } from './YoungReadersText';
@@ -24,6 +24,80 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
   const [epubUrl, setEpubUrl] = useState('');
   const [epubError, setEpubError] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(false);
+
+  // Local audio player states for Sung Edition (split)
+  const [songPlaying, setSongPlaying] = useState(false);
+  const [songTime, setSongTime] = useState(0);
+  const [songDuration, setSongDuration] = useState(0);
+  const songAudioRef = useRef(null);
+
+  // Pause local audio if switching away from split experience
+  useEffect(() => {
+    if (experience !== 'split') {
+      if (songAudioRef.current) {
+        songAudioRef.current.pause();
+        setSongPlaying(false);
+      }
+    } else {
+      // Pause global media player when entering split experience
+      window.dispatchEvent(new CustomEvent('media-player-pause'));
+    }
+  }, [experience]);
+
+  // Sync local audio playing state with global media player events
+  useEffect(() => {
+    const handleGlobalPlay = () => {
+      if (songAudioRef.current && songPlaying) {
+        songAudioRef.current.pause();
+        setSongPlaying(false);
+      }
+    };
+    window.addEventListener('media-player-play', handleGlobalPlay);
+    return () => {
+      window.removeEventListener('media-player-play', handleGlobalPlay);
+    };
+  }, [songPlaying]);
+
+  const handleLocalSongPlayPause = () => {
+    const audio = songAudioRef.current;
+    if (!audio) return;
+    if (songPlaying) {
+      audio.pause();
+      setSongPlaying(false);
+    } else {
+      // Pause global media player before playing local
+      window.dispatchEvent(new CustomEvent('media-player-pause'));
+      audio.play().catch(err => console.error("Local song play failed:", err));
+      setSongPlaying(true);
+    }
+  };
+
+  const handleSongTimeUpdate = () => {
+    if (songAudioRef.current) {
+      setSongTime(songAudioRef.current.currentTime);
+    }
+  };
+
+  const handleSongLoadedMetadata = () => {
+    if (songAudioRef.current) {
+      setSongDuration(songAudioRef.current.duration);
+    }
+  };
+
+  const handleSongSliderChange = (e) => {
+    const newTime = parseFloat(e.target.value);
+    if (songAudioRef.current) {
+      songAudioRef.current.currentTime = newTime;
+      setSongTime(newTime);
+    }
+  };
+
+  const formatTime = (time) => {
+    if (isNaN(time)) return '0:00';
+    const mins = Math.floor(time / 60);
+    const secs = Math.floor(time % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
 
   const handleGenerateEpub = async () => {
     setEpubStatus('generating');
@@ -330,7 +404,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
 
 
 
-          {experience === 'traditional' || experience === 'split' ? (
+          {experience === 'traditional' ? (
             <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
           ) : experience === 'child' ? (
             <div className="book-text-content young-readers-reading-view">
@@ -537,98 +611,323 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                 <div className="script-sound-cue">[END EXCERPT]</div>
               </div>
 
-              <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">
-                Return to Traditional Read
-              </button>
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '3rem', width: '100%' }}>
+                <button 
+                  onClick={() => {
+                    setExperience('traditional');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }} 
+                  className="btn-gold return-traditional-btn"
+                  style={{ 
+                    display: 'flex', 
+                    flexDirection: 'column', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    textAlign: 'center',
+                    padding: '0.85rem 2rem',
+                    lineHeight: '1.4'
+                  }}
+                >
+                  <span className="typewriter text-[10px] uppercase tracking-widest opacity-80 mb-0.5">Top of Page</span>
+                  <span className="font-serif text-sm font-semibold">Return to Traditional Read</span>
+                </button>
+              </div>
             </div>
           ) : experience === 'voice' ? (
-            <div className="experience-voice-eink max-w-2xl mx-auto py-10 px-6 bg-[rgba(255,244,223,0.02)] border border-[rgba(255,244,223,0.08)] rounded-2xl shadow-xl text-center relative overflow-hidden my-8">
-              {/* Glassmorphic decorative circles */}
-              <div className="absolute -left-16 -top-16 w-36 h-36 bg-[var(--primary)] opacity-5 rounded-full blur-2xl" />
-              <div className="absolute -right-16 -bottom-16 w-36 h-36 bg-[var(--primary)] opacity-5 rounded-full blur-2xl" />
-              
-              <div className="w-16 h-16 mx-auto rounded-full bg-[rgba(217,163,74,0.08)] flex items-center justify-center text-[var(--primary)] mb-6">
-                <Sparkles className="w-8 h-8 animate-pulse" />
+            <div className="experience-dramatized-excerpt">
+              {/* Header block (inheriting design from the dramatized excerpt) */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', width: '100%' }}>
+                <div className="preview-stamp">DESIGN PHASE</div>
+                <h3 className="excerpt-main-title" style={{ marginTop: '0.5rem' }}>E-INK &amp; KINDLE EDITION</h3>
+                <h4 className="excerpt-sub-title">&ldquo;DRM-Free Standard EPUB Compiler&rdquo;</h4>
+                <p className="excerpt-running-time">Optimal formatting for Kindle and e-paper screens</p>
+                
+                <p className="preview-status" style={{ textAlign: 'center', fontFamily: 'var(--font-mono), monospace', fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '2rem', textIndent: 0 }}>
+                  This configuration is currently in layout design.
+                </p>
               </div>
 
-              <h3 className="text-2xl font-semibold text-[rgba(255,244,223,0.95)] mb-3">E-Ink &amp; Kindle Edition Compiler</h3>
-              <p className="text-sm text-[rgba(255,244,223,0.65)] leading-relaxed max-w-md mx-auto mb-8">
-                Compile Eve's Diary into a standardized, DRM-free `.epub` file optimized for Kindle, Kobo, and modern e-paper screens.
-              </p>
+              {/* Compilation Panel Section */}
+              <div className="script-cast-section" style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2.5rem 1.5rem' }}>
+                <h5 className="script-cast-header" style={{ textAlign: 'center !important', alignSelf: 'center', marginBottom: '1.25rem' }}>EPUB Synthesizer</h5>
+                <p className="font-serif text-sm leading-relaxed max-w-md mx-auto mb-6" style={{ color: 'rgba(255, 244, 223, 0.7)' }}>
+                  Compile Eve's Diary into a standardized, DRM-free `.epub` file optimized for Kindle, Kobo, and modern e-paper screens.
+                </p>
 
-              {epubStatus === 'idle' && (
-                <div className="space-y-4">
-                  <button 
-                    onClick={handleGenerateEpub}
-                    className="px-6 py-3 bg-[var(--primary)] text-black rounded-lg font-medium hover:bg-[var(--primary-hover)] transition-all transform hover:-translate-y-0.5 active:translate-y-0 shadow-lg inline-flex items-center gap-2"
-                  >
-                    <span>Compile E-Ink Edition</span>
-                  </button>
-                </div>
-              )}
-
-              {epubStatus === 'generating' && (
-                <div className="flex flex-col items-center justify-center py-6 space-y-4">
-                  <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin" />
-                  <p className="text-sm font-mono text-[var(--primary)] animate-pulse">
-                    Synthesizing chapters, parsing XHTML, packing ZIP...
-                  </p>
-                </div>
-              )}
-
-              {epubStatus === 'success' && (
-                <div className="space-y-6 py-4 animate-fadeIn">
-                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-400 mb-2 border border-emerald-500/20">
-                    <Check className="w-6 h-6" />
-                  </div>
-                  
-                  <div>
-                    <h4 className="text-lg font-medium text-emerald-400">Compilation Successful!</h4>
-                    <p className="text-xs text-[rgba(255,244,223,0.45)] mt-1 font-mono">eves-diary.epub ready for download</p>
-                  </div>
-
-                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3 max-w-sm mx-auto">
-                    <a 
-                      href={epubUrl}
-                      download="eves-diary.epub"
-                      className="w-full px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-all inline-flex items-center justify-center gap-2 decoration-none"
-                    >
-                      <Download size={16} />
-                      <span>Download EPUB</span>
-                    </a>
-                    
+                {epubStatus === 'idle' && (
+                  <div style={{ marginTop: '1rem' }}>
                     <button 
-                      onClick={handleCopyLink}
-                      className="w-full px-5 py-2.5 bg-[rgba(255,244,223,0.05)] border border-[rgba(255,244,223,0.15)] hover:bg-[rgba(255,244,223,0.1)] text-[rgba(255,244,223,0.9)] rounded-lg text-sm font-medium transition-all inline-flex items-center justify-center gap-2"
+                      onClick={handleGenerateEpub}
+                      className="btn-gold"
+                      style={{ padding: '0.75rem 2rem' }}
                     >
-                      {copyFeedback ? <Check size={16} className="text-emerald-400" /> : <Clipboard size={16} />}
-                      <span>{copyFeedback ? 'Copied Link!' : 'Copy Download Link'}</span>
+                      <span>Compile E-Ink Edition</span>
                     </button>
                   </div>
-                </div>
-              )}
+                )}
 
-              {epubStatus === 'error' && (
-                <div className="space-y-4 py-4">
-                  <div className="text-red-400 text-sm">
-                    Failed to compile book: {epubError}
+                {epubStatus === 'generating' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '1rem 0' }}>
+                    <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin" />
+                    <p className="text-xs font-mono text-[var(--primary)] animate-pulse" style={{ margin: 0 }}>
+                      Synthesizing chapters, parsing XHTML, packing ZIP...
+                    </p>
                   </div>
+                )}
+
+                {epubStatus === 'success' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1.25rem', padding: '1rem 0', width: '100%' }}>
+                    <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                      <Check className="w-6 h-6" />
+                    </div>
+                    
+                    <div>
+                      <h4 className="font-serif text-emerald-400 text-lg font-semibold" style={{ margin: 0 }}>Compilation Successful!</h4>
+                      <p className="text-xs text-[rgba(255,244,223,0.45)] mt-1 font-mono" style={{ margin: 0 }}>eves-diary.epub ready for download</p>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', width: '100%', maxWidth: '300px', margin: '0 auto' }}>
+                      <a 
+                        href={epubUrl}
+                        download="eves-diary.epub"
+                        className="btn-gold decoration-none"
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', width: '100%', padding: '0.75rem 1.5rem' }}
+                      >
+                        <Download size={16} />
+                        <span>Download EPUB</span>
+                      </a>
+                      
+                      <button 
+                        onClick={handleCopyLink}
+                        className="sources-trigger"
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', width: '100%', border: '1px solid rgba(255, 244, 223, 0.15)', padding: '0.65rem 1.5rem', borderRadius: '4px', background: 'transparent' }}
+                      >
+                        {copyFeedback ? <Check size={16} className="text-emerald-400" /> : <Clipboard size={16} />}
+                        <span>{copyFeedback ? 'Copied Link!' : 'Copy Download Link'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {epubStatus === 'error' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '1rem 0' }}>
+                    <p className="text-red-400 text-sm font-sans" style={{ margin: 0 }}>
+                      Failed to compile book: {epubError}
+                    </p>
+                    <button 
+                      onClick={handleGenerateEpub}
+                      className="btn-gold"
+                      style={{ padding: '0.5rem 1.5rem', fontSize: '0.75rem' }}
+                    >
+                      Retry Compilation
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Bottom centered return button */}
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '3rem', width: '100%' }}>
+                <button 
+                  onClick={() => {
+                    setExperience('traditional');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }} 
+                  className="btn-gold return-traditional-btn"
+                  style={{ 
+                    display: 'flex', 
+                    flexDirection: 'column', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    textAlign: 'center',
+                    padding: '0.85rem 2rem',
+                    lineHeight: '1.4'
+                  }}
+                >
+                  <span className="typewriter text-[10px] uppercase tracking-widest opacity-80 mb-0.5">Top of Page</span>
+                  <span className="font-serif text-sm font-semibold">Return to Traditional Read</span>
+                </button>
+              </div>
+            </div>
+          ) : experience === 'split' ? (
+            <div className="experience-dramatized-excerpt">
+              {/* Header block (inheriting design from the dramatized excerpt) */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', width: '100%' }}>
+                <div className="preview-stamp">DESIGN PHASE</div>
+                <h3 className="excerpt-main-title" style={{ marginTop: '0.5rem' }}>EVE'S DIARY &mdash; SUNG EDITION</h3>
+                <h4 className="excerpt-sub-title">&ldquo;Hear the diary set to music&rdquo;</h4>
+                <p className="excerpt-running-time">Running time: approximately 4 minutes</p>
+                
+                <p className="preview-status" style={{ textAlign: 'center', fontFamily: 'var(--font-mono), monospace', fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '2rem', textIndent: 0 }}>
+                  This configuration is currently in layout design.
+                </p>
+              </div>
+
+              {/* Centered, beautiful premium player card */}
+              <div className="sung-player-card" style={{
+                margin: '2rem auto',
+                maxWidth: '480px',
+                background: theme === 'parchment' ? 'rgba(217, 163, 74, 0.04)' : 'rgba(255, 244, 223, 0.015)',
+                border: '1px solid var(--border)',
+                borderRadius: '12px',
+                padding: '2.5rem 2rem',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '1.5rem',
+                boxShadow: '0 8px 30px rgba(0, 0, 0, 0.15)',
+                backdropFilter: 'blur(8px)',
+              }}>
+                
+                {/* Album Cover Art */}
+                <div style={{
+                  position: 'relative',
+                  width: '200px',
+                  height: '200px',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  border: '1px solid rgba(255, 244, 223, 0.1)',
+                  boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+                  backgroundColor: '#15110d'
+                }}>
+                  <img 
+                    src="/images/eves-diary-the-scratched-experience-cover.jpg" 
+                    alt="Eve's Diary Cover" 
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover'
+                    }}
+                  />
+                  {songPlaying && (
+                    <div className="soundwave active" style={{
+                      position: 'absolute',
+                      bottom: '8px',
+                      right: '8px',
+                      backgroundColor: 'rgba(21, 17, 13, 0.8)',
+                      padding: '4px 6px',
+                      borderRadius: '4px',
+                      height: '16px',
+                      display: 'flex',
+                      gap: '2px',
+                      alignItems: 'flex-end'
+                    }}>
+                      <div className="soundwave-bar" style={{ width: '2px', height: '100%', backgroundColor: 'var(--primary)' }}></div>
+                      <div className="soundwave-bar" style={{ width: '2px', height: '70%', backgroundColor: 'var(--primary)' }}></div>
+                      <div className="soundwave-bar" style={{ width: '2px', height: '40%', backgroundColor: 'var(--primary)' }}></div>
+                      <div className="soundwave-bar" style={{ width: '2px', height: '80%', backgroundColor: 'var(--primary)' }}></div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Metadata */}
+                <div style={{ textAlign: 'center', width: '100%' }}>
+                  <h4 className="typewriter" style={{ margin: 0, fontSize: '1.1rem', color: 'var(--primary)', fontWeight: '600', letterSpacing: '0.05em' }}>
+                    Eve's Diary
+                  </h4>
+                  <p style={{ margin: '4px 0 0', fontSize: '0.75rem', color: 'var(--muted-foreground)', fontFamily: 'var(--font-sans), sans-serif' }}>
+                    Album: Mark Twain Reappears
+                  </p>
+                </div>
+
+                {/* Timeline & Slider */}
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <input 
+                    type="range"
+                    min="0"
+                    max={songDuration || 100}
+                    step="0.1"
+                    value={songTime}
+                    onChange={handleSongSliderChange}
+                    className="player-audio-slider"
+                    style={{
+                      width: '100%',
+                      height: '4px',
+                      borderRadius: '2px',
+                      outline: 'none',
+                      background: 'rgba(255, 244, 223, 0.1)',
+                      accentColor: 'var(--primary)',
+                      cursor: 'pointer'
+                    }}
+                  />
+                  <div className="typewriter" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--muted-foreground)' }}>
+                    <span>{formatTime(songTime)}</span>
+                    <span>{formatTime(songDuration)}</span>
+                  </div>
+                </div>
+
+                {/* Controls */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
                   <button 
-                    onClick={handleGenerateEpub}
-                    className="px-4 py-2 bg-red-950/40 border border-red-500/30 text-red-300 rounded-lg text-xs font-medium hover:bg-red-950/60 transition-all"
+                    onClick={() => {
+                      if (songAudioRef.current) {
+                        songAudioRef.current.currentTime = 0;
+                        setSongTime(0);
+                        if (!songPlaying) {
+                          songAudioRef.current.play().catch(err => console.error(err));
+                          setSongPlaying(true);
+                        }
+                      }
+                    }} 
+                    className="control-btn" 
+                    title="Restart"
+                    style={{ padding: '8px', cursor: 'pointer', background: 'transparent', border: 'none', color: 'var(--muted-foreground)' }}
                   >
-                    Retry Compilation
+                    <RotateCcw size={16} />
+                  </button>
+
+                  <button 
+                    onClick={handleLocalSongPlayPause} 
+                    style={{
+                      width: '48px',
+                      height: '48px',
+                      borderRadius: '50%',
+                      backgroundColor: 'var(--primary)',
+                      color: '#15110d',
+                      border: 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: '0 4px 15px rgba(217, 163, 74, 0.3)',
+                      transition: 'transform 0.1s ease, background-color 0.2s'
+                    }}
+                    className="play-pause-btn-main"
+                    aria-label={songPlaying ? 'Pause' : 'Play'}
+                  >
+                    {songPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" style={{ marginLeft: '2px' }} />}
                   </button>
                 </div>
-              )}
 
-              <div className="border-t border-[rgba(255,244,223,0.06)] mt-8 pt-6 flex justify-between items-center text-xs text-[rgba(255,244,223,0.4)]">
-                <span>Optimized layout: Reflowable Text</span>
+                <audio
+                  ref={songAudioRef}
+                  src="/sounds/music/eves-diary-by-eve.mp3"
+                  preload="auto"
+                  onTimeUpdate={handleSongTimeUpdate}
+                  onLoadedMetadata={handleSongLoadedMetadata}
+                  onEnded={() => setSongPlaying(false)}
+                />
+              </div>
+
+              {/* Bottom centered return button */}
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '3rem', width: '100%' }}>
                 <button 
-                  onClick={() => setExperience('traditional')}
-                  className="hover:text-[var(--primary)] transition-colors bg-transparent border-none p-0 cursor-pointer"
+                  onClick={() => {
+                    setExperience('traditional');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }} 
+                  className="btn-gold return-traditional-btn"
+                  style={{ 
+                    display: 'flex', 
+                    flexDirection: 'column', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    textAlign: 'center',
+                    padding: '0.85rem 2rem',
+                    lineHeight: '1.4'
+                  }}
                 >
-                  Back to Traditional Read
+                  <span className="typewriter text-[10px] uppercase tracking-widest opacity-80 mb-0.5">Top of Page</span>
+                  <span className="font-serif text-sm font-semibold">Return to Traditional Read</span>
                 </button>
               </div>
             </div>
