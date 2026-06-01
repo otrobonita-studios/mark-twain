@@ -350,13 +350,13 @@ export default function Home() {
                   <span className="typewriter modal-date">
                     {selectedEntry.date}
                   </span>
-                  <h2 className="modal-title font-serif">
+                  <h2 className="modal-title font-sans">
                     {selectedEntry.title}
                   </h2>
                   <div className="modal-divider" />
                 </div>
                 <div className="modal-body custom-scrollbar">
-                  <p className="modal-text font-serif">
+                  <p className="modal-text font-sans">
                     {selectedEntry.content}
                   </p>
                   <div className="modal-signature-wrapper">

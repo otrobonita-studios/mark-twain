@@ -533,7 +533,7 @@ export default function ChatClient() {
                 <p className="empty-chat-text typewriter">
                   The reports of my death have been exaggerated
                 </p>
-                <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.35' }}>
+                <h2 className="empty-chat-title" style={{ lineHeight: '1.35' }}>
                   I have returned to discover whether mankind has improved
                 </h2>
                 <Image
@@ -568,7 +568,7 @@ export default function ChatClient() {
                       <span className="chat-bubble-sender">
                         {msg.role === 'user' ? 'You' : 'Mark Twain'}
                       </span>
-                      <div className="chat-bubble-text font-serif">
+                      <div className="chat-bubble-text">
                         <p>{msg.content}</p>
                       </div>
 
@@ -697,7 +697,7 @@ export default function ChatClient() {
         {/* Input Panel */}
         <div className="chat-input-panel">
           {messages.length === 0 && (
-            <h2 className="empty-chat-title font-serif" style={{ lineHeight: '1.15', fontSize: '1.6rem', textAlign: 'center', margin: '1rem 0 2rem 0' }}>
+            <h2 className="empty-chat-title" style={{ lineHeight: '1.15', fontSize: '1.6rem', textAlign: 'center', margin: '1rem 0 2rem 0' }}>
               Let us talk
             </h2>
           )}
@@ -841,7 +841,7 @@ export default function ChatClient() {
                   <X size={18} />
                 </button>
                 <div className="modal-body custom-scrollbar" style={{ marginTop: '1rem' }}>
-                  <h2 className="font-serif text-2xl text-[var(--primary)] mb-1">Building a Mark Twain Corpus</h2>
+                  <h2 className="text-2xl text-[var(--primary)] mb-1">Building a Mark Twain Corpus</h2>
                   <h3 className="typewriter text-xs text-white mb-4 uppercase tracking-widest">RAG: Read And Guess-less</h3>
                   <div className="modal-divider mb-6" />
 
@@ -849,7 +849,7 @@ export default function ChatClient() {
                     "Get your facts first, and then you can distort them as much as you please." – Mark Twain
                   </div>
 
-                  <div className="font-serif space-y-4 text-sm leading-relaxed" style={{ fontSize: '0.92rem', color: 'rgba(255, 244, 223, 0.85)' }}>
+                  <div className="space-y-4 text-sm leading-relaxed" style={{ fontSize: '0.92rem', color: 'rgba(255, 244, 223, 0.85)' }}>
                     <p style={{ marginBottom: '1rem' }}>
                       The hardest thing to understand about RAG might be the actual acronym: <strong>Retrieval Augmented (= enhanced) Generation</strong>. 
                       In practice, when you ask the model a question, it first reads topic-specific data from an added database, 
@@ -862,7 +862,7 @@ export default function ChatClient() {
                       The body becomes the brain.
                     </p>
                     
-                    <h4 className="font-serif text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Goal</h4>
+                    <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Goal</h4>
                     <p style={{ marginBottom: '1rem' }}>
                       Build a corpus of public-domain material by and about Mark Twain — substantial enough and clean enough 
                       to feed into a Retrieval-Augmented Generation (RAG) system. The corpus needed to be:
@@ -873,7 +873,7 @@ export default function ChatClient() {
                       <li style={{ marginBottom: '0.25rem' }}><strong>Reproducible:</strong> The build pipeline itself should be runnable from scratch by anyone.</li>
                     </ul>
 
-                    <h4 className="font-serif text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Three Sources</h4>
+                    <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Three Sources</h4>
                     <p style={{ marginBottom: '1rem' }}>
                       Each holds Twain-related material, but each uses a different access pattern. That diversity is part of the lesson: 
                       in any real corpus-building project, the sources don't conform to one shape.
@@ -893,7 +893,7 @@ export default function ChatClient() {
                       (Notably absent: Chronicling America at the Library of Congress, which would have given historic newspaper coverage. The script existed but failed at run time — see "Lessons" below.)
                     </p>
 
-                    <h4 className="font-serif text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Architecture</h4>
+                    <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Architecture</h4>
                     <p style={{ marginBottom: '1rem' }}>
                       Each of those sources got its own downloader, but they all produce output in the same shared shape: one HTML file (or plain text, for sources without HTML) + a <code>.txt</code> sidecar + a <code>.meta.json</code> sidecar following a common schema (id, source, source_url, title, author, date, category, file, text_file, bytes_text, fetched_at). A downstream aggregator walks the corpus directory, finds every <code>.meta.json</code>, and produces one unified <code>corpus.json</code> index.
                     </p>
@@ -906,7 +906,7 @@ export default function ChatClient() {
                       <li style={{ marginBottom: '0.25rem' }}><strong>Idempotent:</strong> Chunk IDs in the embedding phase are deterministic (UUID5 of filename:chunk_index), so re-running any phase overwrites the same vectors rather than creating duplicates.</li>
                     </ul>
 
-                    <h4 className="font-serif text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Two-Phase Ingestion</h4>
+                    <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Two-Phase Ingestion</h4>
                     <p style={{ marginBottom: '1rem' }}>
                       Once the corpus is on disk, getting it into a vector database (Qdrant in this case) is a separate problem with separate failure modes. Embedding is CPU-bound and local; uploading is network-bound and cloud. Mixing them in one script means one timeout kills both.
                     </p>
@@ -916,7 +916,7 @@ export default function ChatClient() {
                       <li style={{ marginBottom: '0.25rem' }}><code>upload_vectors.py</code> — pure network. Reads <code>vectors.jsonl</code>, batches into 250-vector upserts, pushes to Qdrant with retries.</li>
                     </ul>
 
-                    <h4 className="font-serif text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Numbers</h4>
+                    <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Numbers</h4>
                     <ul style={{ listStyleType: 'circle', paddingLeft: '1.25rem', marginBottom: '1.5rem' }}>
                       <li style={{ marginBottom: '0.25rem' }}>~189 source files in the corpus (after PG + Wikisource + IA, deduped)</li>
                       <li style={{ marginBottom: '0.25rem' }}>~50 books from PG canon (~20 MB), ~30 Wikisource pages, ~100–200 IA items</li>
@@ -925,7 +925,7 @@ export default function ChatClient() {
                       <li style={{ marginBottom: '0.25rem' }}>Total pipeline runtime: hours for embedding, minutes for upload</li>
                     </ul>
 
-                    <h4 className="font-serif text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>Lessons Learned</h4>
+                    <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>Lessons Learned</h4>
                     <ul style={{ listStyleType: 'decimal', paddingLeft: '1.25rem', marginBottom: '1.5rem' }}>
                       <li style={{ marginBottom: '0.5rem' }}><strong>APIs decay — and your pipeline needs to notice.</strong> Halfway through the project the Library of Congress migrated Chronicling America (August 2025); the old endpoint just 404s now. Swapping in new APIs should be cheap.</li>
                       <li style={{ marginBottom: '0.5rem' }}><strong>Conventions vary by source.</strong> Generalizing requires building source-by-source, not designing one ideal abstraction up front.</li>

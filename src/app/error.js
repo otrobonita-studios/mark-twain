@@ -9,7 +9,7 @@ export default function Error({ error, reset }) {
   }, [error]);
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-[#15110d] text-[#fff4df] text-center font-serif">
+    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-[#15110d] text-[#fff4df] text-center font-sans">
       <div className="max-w-md w-full border border-[rgba(217,163,74,0.15)] bg-[#1d1611] p-8 rounded-xl shadow-2xl">
         <h2 className="text-[2rem] font-bold text-[var(--primary)] mb-4">Great Scott!</h2>
         <p className="text-sm opacity-80 leading-relaxed mb-6 font-sans">
