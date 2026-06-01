@@ -346,21 +346,6 @@ export default function ChatClient() {
           />
         </div>
         <div className="hero-overlay" style={{ display: 'block', background: 'linear-gradient(to top, rgba(21, 17, 13, 0.95) 0%, rgba(21, 17, 13, 0.4) 100%)' }} />
-
-        {/* Top Content on Image */}
-        <div className="logo-container" style={{ marginTop: 'auto' }}>
-          <Image
-            src="/images/MarkTwainnReappears.webp"
-            alt="Mark Twain Reappears Logo"
-            width={300}
-            height={110}
-            priority
-            className="logo-img"
-          />
-          <p className="logo-subtitle" style={{ color: '#573122' }}>
-            Brought back, facing forward
-          </p>
-        </div>
       </Link>
 
       {/* RIGHT PANEL: The Writing Desk / Chat Feed */}
