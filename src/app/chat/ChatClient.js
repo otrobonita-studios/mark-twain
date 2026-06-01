@@ -1,12 +1,11 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu, Volume2, Play, Pause, Globe, Copy, Check, Download } from 'lucide-react';
-import MediaPlayer from '@/components/MediaPlayer';
 
 export default function ChatClient() {
   const [messages, setMessages] = useState([]);
@@ -141,7 +140,7 @@ export default function ChatClient() {
   };
 
 
-  const handleSend = async (textToSend, excerptToSend) => {
+  const handleSend = useCallback(async (textToSend, excerptToSend) => {
     const text = textToSend || input;
     if (!text.trim()) return;
 
@@ -225,7 +224,7 @@ export default function ChatClient() {
 
       }
     }
-  };
+  }, [input, messages, conversationStyle, conversationTone, simplifyLanguage]);
 
   // Keyboard-first focus retention: focus textarea whenever messages or loading state changes
   useEffect(() => {
@@ -250,7 +249,7 @@ export default function ChatClient() {
       initialQueryProcessed.current = true;
       handleSend(query, excerpt);
     }
-  }, [searchParams]);
+  }, [searchParams, handleSend]);
 
   const toggleSources = (index) => {
     setExpandedSources(prev => ({
@@ -345,7 +344,7 @@ export default function ChatClient() {
             style={{ objectPosition: 'center 20%' }}
           />
         </div>
-        <div className="hero-overlay" style={{ display: 'block', background: 'linear-gradient(to top, rgba(21, 17, 13, 0.95) 0%, rgba(21, 17, 13, 0.4) 100%)' }} />
+        <div className="hero-overlay hero-overlay-visible" />
       </Link>
 
       {/* RIGHT PANEL: The Writing Desk / Chat Feed */}
@@ -946,7 +945,6 @@ export default function ChatClient() {
         src="/sounds/music/the-awakening.mp3"
         preload="auto"
       />
-      <MediaPlayer />
     </div>
   );
 }

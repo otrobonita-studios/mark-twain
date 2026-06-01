@@ -14,11 +14,11 @@ neutral or corporate voice.
 
 
 ## Stack decisions
-- Next.js App Router, static export (`output: 'export'` in next.config.mjs)
-- Deployed to Firebase Hosting — output dir is `/out`, not `/build`
-- Firestore via client SDK — all config through NEXT_PUBLIC_ env vars
-- Firebase initializes only client-side (isConfigured guard in lib/firebase.js)
-- No server components that rely on Node.js APIs — this is currently a static site
+- Next.js App Router. Serves pages statically via Firebase Hosting (the `/out` directory).
+- Dynamic API routes (`/api/...`) use Node.js server environments (e.g. Vercel or Firebase Cloud Functions/App Hosting).
+- Firestore via client SDK — all config through NEXT_PUBLIC_ env vars.
+- Firebase initializes only client-side with checks (guarded using page level `useEffect` and `isConfigured` checks).
+- Firestore Security Rules restrict `subscribers` collection: anonymous users can only `create` entries, they cannot `read`, `update`, or `delete` (defined in `firestore.rules`).
 
 ## What requires .env.local to work
 Firebase will silently fall back to localStorage if env vars are missing.

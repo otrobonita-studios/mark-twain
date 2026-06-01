@@ -5,9 +5,28 @@ export function getDiaryData() {
   const filePath = path.join(process.cwd(), 'rag/data-collection/TwainCorpus/HTML/Eves-Diary.html');
   const htmlContent = fs.readFileSync(filePath, 'utf8');
 
-  // Extract from line 96 to 1329 (0-indexed line numbers 95 to 1328)
   const lines = htmlContent.split('\n');
-  let extractedContent = lines.slice(95, 1329).join('\n');
+  const startMarker = '*** START OF THIS PROJECT GUTENBERG';
+  const endMarker = '*** END OF THIS PROJECT GUTENBERG';
+  
+  const startMarkerLineIdx = lines.findIndex(l => l.includes(startMarker));
+  let startIdx = lines.findIndex((l, i) => i > startMarkerLineIdx && (l.includes('<hr />') || l.includes('<hr>')));
+  if (startIdx === -1) startIdx = 95; // fallback
+  
+  const endMarkerLineIdx = lines.findIndex(l => l.includes(endMarker));
+  let endIdx = -1;
+  if (endMarkerLineIdx !== -1) {
+    // Find the nearest <pre xml:space="preserve"> or <hr /> going backwards from the end marker
+    for (let i = endMarkerLineIdx - 1; i > startIdx; i--) {
+      if (lines[i].includes('<hr />') || lines[i].includes('<hr>')) {
+        endIdx = i;
+        break;
+      }
+    }
+  }
+  if (endIdx === -1) endIdx = 1329; // fallback
+  
+  let extractedContent = lines.slice(startIdx, endIdx).join('\n');
 
   // Clean up empty Project Gutenberg spacing paragraphs (e.g. <p><br><br></p>)
   extractedContent = extractedContent.replace(/<p>\s*(?:<br\s*\/?>\s*)*<\/p>/gi, '');

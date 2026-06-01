@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Sun, Moon, BookOpen, X, Sparkles, Download, Clipboard, Check, Loader2, Play, Pause, RotateCcw } from 'lucide-react';
-import MediaPlayer from '@/components/MediaPlayer';
 import { motion, AnimatePresence } from 'framer-motion';
 import { youngReadersParagraphs, youngReadersGlossary, youngReadersNotes } from './YoungReadersText';
 
@@ -314,7 +313,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                   // Parse brackets [word] into glossary term spans
                   let html = item.text.replace(/\[(.*?)\]/g, (match, word) => {
                     const cleanWord = word.toLowerCase();
-                    const def = youngReadersGlossary[cleanWord] || "";
+                    const def = (youngReadersGlossary[cleanWord] || "").replace(/"/g, '&quot;');
                     return `<span class="glossary-term" data-definition="${def}">${word}</span>`;
                   });
                   // Parse weekdays like SATURDAY, SUNDAY, FRIDAY into diary-day-anchor style
@@ -623,7 +622,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                 This reading room configuration is currently in public test mode. Feel free to try it out.
               </p>
               <div className="preview-concept">
-                {experience === 'drama' && "Concept: A multi-track audio player syncing background ambient tracks with segmented character dialogues for Adam and Eve."}
               </div>
               <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">
                 Return to Traditional Read
@@ -632,9 +630,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
           )}
         </article>
       </main>
-
-      {/* Persistent Audio Player */}
-      <MediaPlayer />
 
 
 

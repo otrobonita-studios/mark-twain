@@ -11,7 +11,6 @@ import Image from 'next/image';
 import { db, isConfigured } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { Mail, ShieldAlert, Award, PenTool, X, Volume2 } from 'lucide-react';
-import MediaPlayer from '@/components/MediaPlayer';
 import UpcomingEpisodes from '@/components/UpcomingEpisodes';
 import { deskCopy, subscribeCopy, diaryCopy, footerCopy } from '@/data/copy_i18n';
 
@@ -23,8 +22,13 @@ export default function Home() {
   const [submitMessage, setSubmitMessage] = useState('');
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
+  const [firebaseActive, setFirebaseActive] = useState(false);
 
   useEffect(() => {
+    if (isConfigured && db) {
+      setFirebaseActive(true);
+    }
+
     const savedClosed = sessionStorage.getItem('media-player-closed');
     setIsMusicPlayerClosed(savedClosed !== null ? savedClosed === 'true' : true);
 
@@ -59,7 +63,7 @@ export default function Home() {
     setSubmitStatus('idle');
 
     try {
-      if (isConfigured && db) {
+      if (firebaseActive) {
         // Save to Firestore
         await addDoc(collection(db, 'subscribers'), {
           email,
@@ -95,9 +99,6 @@ export default function Home() {
 
   return (
     <div className="app-container">
-      {/* FLOATING MEDIA PLAYER (Top Right) */}
-      <MediaPlayer />
-
       {/* LEFT PANEL: Media & Poster (Splash image, Logo) */}
       <section className="hero-panel">
         <div className="hero-bg-wrapper">

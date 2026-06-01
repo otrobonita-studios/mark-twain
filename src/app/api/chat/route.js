@@ -97,7 +97,7 @@ async function getEmbedding(text) {
   try {
     const { execFileSync } = await import('child_process');
     const pythonPath = path.resolve('rag/data-collection/.venv/Scripts/python.exe');
-    const scriptPath = path.resolve('src/lib/get_embedding.py');
+    const scriptPath = path.resolve('rag/get_embedding.py');
     
     const result = execFileSync(pythonPath, [scriptPath, text], {
       encoding: 'utf-8',
@@ -117,13 +117,12 @@ async function getEmbedding(text) {
 
 // Helper to query Qdrant REST API
 async function searchQdrant(embedding) {
-  const qdrantUrl = process.env.QDRANT_URL || "https://08ab60e3-e210-44c0-b662-524102fd37c3.europe-west3-0.gcp.cloud.qdrant.io:6333";
-  const qdrantApiKey = (process.env.QDRANT_API_KEY || "").trim();
-  const collectionName = "twain_test";
-
+  const qdrantUrl = process.env.QDRANT_URL;
   if (!qdrantUrl) {
     throw new Error("QDRANT_URL is not configured.");
   }
+  const qdrantApiKey = (process.env.QDRANT_API_KEY || "").trim();
+  const collectionName = "twain_test";
 
   const baseUrl = qdrantUrl.replace(/\/$/, "");
   const searchUrl = `${baseUrl}/collections/${collectionName}/points/search`;
@@ -228,9 +227,10 @@ Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyIn
       userPrompt = `Context from my archive:\n---\n${contextText}\n---\n\nQuestion: ${message}`;
     }
 
-    // 6. Format chat history for the official SDK
-    // SDK expects format: list of { role: 'user'|'model', parts: [{ text: '...' }] }
-    const sdkHistory = (history || []).map(item => ({
+    // Limit conversation history to the last 12 messages to avoid context window exhaustion
+    const maxHistoryLength = 12;
+    const historyToUse = (history || []).slice(-maxHistoryLength);
+    const sdkHistory = historyToUse.map(item => ({
       role: item.role === 'user' ? 'user' : 'model',
       parts: [{ text: item.content || '' }]
     }));
@@ -260,16 +260,18 @@ Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyIn
 
     const textResponse = response.text;
 
-    // Generate modern speaking translation for international viewers
+    // Generate modern speaking translation for international viewers (only if simplify is false)
     let translation = "";
-    try {
-      const translationResponse = await ai.models.generateContent({
-        model: modelName,
-        contents: `Translate the following 19th-century vintage text into clear, direct, and simplified modern English for international non-native English speakers. Keep the meaning and general sentiment identical, but remove all archaic slang, idioms, or outdated syntax:\n\n"${textResponse}"`
-      });
-      translation = translationResponse.text;
-    } catch (transErr) {
-      console.error("Translation generation failed:", transErr);
+    if (!simplify) {
+      try {
+        const translationResponse = await ai.models.generateContent({
+          model: modelName,
+          contents: `Translate the following 19th-century vintage text into clear, direct, and simplified modern English for international non-native English speakers. Keep the meaning and general sentiment identical, but remove all archaic slang, idioms, or outdated syntax:\n\n"${textResponse}"`
+        });
+        translation = translationResponse.text;
+      } catch (transErr) {
+        console.error("Translation generation failed:", transErr);
+      }
     }
 
     return NextResponse.json({

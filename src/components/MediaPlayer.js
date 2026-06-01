@@ -80,15 +80,15 @@ export default function MediaPlayer() {
     
     if (savedTrackIndex !== null) {
       setCurrentTrackIndex(parseInt(savedTrackIndex, 10));
-    }
-
-    // Set default track based on pathname
-    if (typeof window !== 'undefined') {
-      const path = window.location.pathname;
-      if (path.includes('/eves-diary')) {
-        setCurrentTrackIndex(0); // Eve's Diary Theme
-      } else if (path === '/' || path === '/home') {
-        setCurrentTrackIndex(1); // Original Theme on homepage
+    } else {
+      // Set default track based on pathname
+      if (typeof window !== 'undefined') {
+        const path = window.location.pathname;
+        if (path.includes('/eves-diary')) {
+          setCurrentTrackIndex(0); // Eve's Diary Theme
+        } else if (path === '/' || path === '/home') {
+          setCurrentTrackIndex(1); // Original Theme on homepage
+        }
       }
     }
 

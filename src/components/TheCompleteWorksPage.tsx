@@ -5,11 +5,164 @@ import Link from 'next/link';
 import { Moon, Sun, Sparkles, Mic, Map, BookOpen } from 'lucide-react';
 import TxtReaderClient from './TxtReaderClient';
 
+const books = [
+  {
+    title: "A Connecticut Yankee in King Arthur's Court",
+    filename: "Connecticut-Yankee.txt",
+    cover: "/images/book-covers/Book-cover-Connecticut-Yankee.jpg",
+    desc: "An ingenious Yankee mechanic is transported to 6th-century England and uses modern science to reform Camelot.",
+    status: "Modernized",
+    genre: "Satire / Sci-Fi",
+    year: 1889,
+    color: "from-[#382b1f] to-[#1c150f]"
+  },
+  {
+    title: "Life on the Mississippi",
+    filename: "Life-on-the-Mississippi.txt",
+    cover: "/images/book-covers/Book-cover-Life-on-the-Mississippi.jpg",
+    desc: "Twain's evocative memoir of his pre-war days as a steamboat pilot, charting the river's changing landscape.",
+    status: "Modernized",
+    genre: "Memoir",
+    year: 1883,
+    color: "from-[#202d3d] to-[#101720]"
+  },
+  {
+    title: "Roughing It",
+    filename: "Roughing-It.txt",
+    cover: "/images/book-covers/Book-cover-Roughing-It.jpg",
+    desc: "A wild and humorous account of Twain's stagecoach journey to Nevada and his search for silver in the frontier.",
+    status: "Modernized",
+    genre: "Travel / Humor",
+    year: 1872,
+    color: "from-[#3f2024] to-[#201012]"
+  },
+  {
+    title: "Following the Equator",
+    filename: "Following-The-Equator.txt",
+    cover: "/images/book-covers/Book-cover-Following-The-Equator.jpg",
+    desc: "A witty, critical record of Twain's worldwide lecture tour across Australia, India, and South Africa.",
+    status: "Modernized",
+    genre: "Travelogue",
+    year: 1897,
+    color: "from-[#1a382c] to-[#0d1c16]"
+  },
+  {
+    title: "Adventures of Huckleberry Finn",
+    filename: "Huckleberry-Finn.txt",
+    cover: "/images/book-covers/Book-cover-Huckleberry-Finn.jpg",
+    desc: "The legendary journey of Huck and Jim escaping civilization down the Mississippi, tackling race, freedom, and friendship.",
+    status: "Youth Edition",
+    genre: "Fiction",
+    year: 1884,
+    color: "from-[#35381f] to-[#1a1c0f]"
+  },
+  {
+    title: "The Adventures of Tom Sawyer",
+    filename: "Adventures-of-Tom-Sawyer.txt",
+    cover: "/images/book-covers/Book-cover-Adventures-of-Tom-Sawyer.jpg",
+    desc: "The classic tale of childhood escapades, whitewashed fences, and puppy love in St. Petersburg, Missouri.",
+    status: "Youth Edition",
+    genre: "Fiction",
+    year: 1876,
+    color: "from-[#3d2a1f] to-[#1e150f]"
+  },
+  {
+    title: "The Prince and the Pauper",
+    filename: "Prince-and-Pauper.txt",
+    cover: "/images/book-covers/Book-cover-Prince-and-Pauper.jpg",
+    desc: "A royal prince and a beggar boy switch roles in Tudor London, exposing the dramatic class divides of England.",
+    status: "Youth Edition",
+    genre: "Historical Fiction",
+    year: 1881,
+    color: "from-[#3a1a2e] to-[#1d0d17]"
+  },
+  {
+    title: "The $30,000 Bequest and Others",
+    filename: "The-30000-Bequest-and-Others.txt",
+    cover: "/images/book-covers/Book-cover-The-30000-Bequest-and-Others.jpg",
+    desc: "A rich anthology of Twain's late short fiction, highlighting his biting satire and deep irony.",
+    status: "Modernized",
+    genre: "Short Stories",
+    year: 1906,
+    color: "from-[#1d2d3d] to-[#0e161e]"
+  },
+  {
+    title: "Eve's Diary",
+    filename: null,
+    href: "/read/eves-diary",
+    cover: "/images/book-covers/book-cover-eves-diary.jpg",
+    desc: "Eve's exquisite, poetic account of life in Eden, her fascination with Adam, and the beauty of creation.",
+    status: "Interactive, Voiced",
+    genre: "Diary / Romance",
+    year: 1906,
+    color: "from-[#3a2020] to-[#1d1010]"
+  },
+  {
+    title: "The American Claimant",
+    filename: "The-American-Claimant.txt",
+    cover: "/images/book-covers/Book-cover-The-American-Claimant.jpg",
+    desc: "A comedy of errors involving an eccentric American inventor claiming a British earldom and swapping lives.",
+    status: "Planning",
+    genre: "Satire",
+    year: 1892,
+    color: "from-[#1e3d30] to-[#0f1e18]"
+  },
+  {
+    title: "The Innocents Abroad",
+    filename: "The-Innocents-Abroad.txt",
+    cover: "/images/book-covers/Book-cover-The-Innocents-Abroad.jpg",
+    desc: "Twain's highly popular travel book charting his journey to Europe and the Holy Land on a steamship cruise.",
+    status: "Planning",
+    genre: "Travelogue",
+    year: 1869,
+    color: "from-[#383a1a] to-[#1c1d0d]"
+  },
+  {
+    title: "The Tragedy of Pudd'nhead Wilson",
+    filename: "Tragedy-of-Pudd'nhead-Wilson.txt",
+    cover: "/images/book-covers/Book-cover-Tragedy-of-Puddnhead-Wilson.jpg",
+    desc: "A tense story of switched infants, legal drama, racial identity, and early forensics in a Missouri town.",
+    status: "Planning",
+    genre: "Mystery",
+    year: 1894,
+    color: "from-[#381f3b] to-[#1c0f1d]"
+  },
+  {
+    title: "Tom Sawyer Abroad",
+    filename: "Tom-Sawyer-Abroad.txt",
+    cover: "/images/book-covers/Book-cover-Tom-Sawyer-Abroad.jpg",
+    desc: "Tom Sawyer, Huck Finn, and Jim drift across the Atlantic in a balloon and explore the Sahara Desert.",
+    status: "Planning",
+    genre: "Adventure",
+    year: 1894,
+    color: "from-[#1c3838] to-[#0e1c1c]"
+  },
+  {
+    title: "Tom Sawyer, Detective",
+    filename: "Tom-Sawyer-Detective.txt",
+    cover: "/images/book-covers/Book-cover-Tom-Sawyer-Detective.png",
+    desc: "Tom Sawyer turns detective to solve a mysterious murder and gem theft in the backwoods of Arkansas.",
+    status: "Planning",
+    genre: "Mystery",
+    year: 1896,
+    color: "from-[#3a351a] to-[#1d1a0d]"
+  },
+  {
+    title: "The Mysterious Stranger",
+    filename: "Mysterious-Stranger.txt",
+    cover: "/images/book-covers/Book-cover-Mysterious-Stranger.jpg",
+    desc: "Twain's dark, profound posthumous fable set in medieval Austria, questioning the nature of human existence.",
+    status: "Planning",
+    genre: "Philosophical",
+    year: 1916,
+    color: "from-[#20203d] to-[#10101e]"
+  }
+];
+
 export default function TheCompleteWorksPage() {
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [scrollProgress, setScrollProgress] = useState(0);
-  const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(true);
 
   // Modal states for .txt manuscripts
   const [activeTxtFile, setActiveTxtFile] = useState<string | null>(null);
@@ -58,159 +211,7 @@ export default function TheCompleteWorksPage() {
     }
   };
 
-  const books = [
-    {
-      title: "A Connecticut Yankee in King Arthur's Court",
-      filename: "Connecticut-Yankee.txt",
-      cover: "/images/book-covers/Book-cover-Connecticut-Yankee.jpg",
-      desc: "An ingenious Yankee mechanic is transported to 6th-century England and uses modern science to reform Camelot.",
-      status: "Modernized",
-      genre: "Satire / Sci-Fi",
-      year: 1889,
-      color: "from-[#382b1f] to-[#1c150f]"
-    },
-    {
-      title: "Life on the Mississippi",
-      filename: "Life-on-the-Mississippi.txt",
-      cover: "/images/book-covers/Book-cover-Life-on-the-Mississippi.jpg",
-      desc: "Twain's evocative memoir of his pre-war days as a steamboat pilot, charting the river's changing landscape.",
-      status: "Modernized",
-      genre: "Memoir",
-      year: 1883,
-      color: "from-[#202d3d] to-[#101720]"
-    },
-    {
-      title: "Roughing It",
-      filename: "Roughing-It.txt",
-      cover: "/images/book-covers/Book-cover-Roughing-It.jpg",
-      desc: "A wild and humorous account of Twain's stagecoach journey to Nevada and his search for silver in the frontier.",
-      status: "Modernized",
-      genre: "Travel / Humor",
-      year: 1872,
-      color: "from-[#3f2024] to-[#201012]"
-    },
-    {
-      title: "Following the Equator",
-      filename: "Following-The-Equator.txt",
-      cover: "/images/book-covers/Book-cover-Following-The-Equator.jpg",
-      desc: "A witty, critical record of Twain's worldwide lecture tour across Australia, India, and South Africa.",
-      status: "Modernized",
-      genre: "Travelogue",
-      year: 1897,
-      color: "from-[#1a382c] to-[#0d1c16]"
-    },
-    {
-      title: "Adventures of Huckleberry Finn",
-      filename: "Huckleberry-Finn.txt",
-      cover: "/images/book-covers/Book-cover-Huckleberry-Finn.jpg",
-      desc: "The legendary journey of Huck and Jim escaping civilization down the Mississippi, tackling race, freedom, and friendship.",
-      status: "Youth Edition",
-      genre: "Fiction",
-      year: 1884,
-      color: "from-[#35381f] to-[#1a1c0f]"
-    },
-    {
-      title: "The Adventures of Tom Sawyer",
-      filename: "Adventures-of-Tom-Sawyer.txt",
-      cover: "/images/book-covers/Book-cover-Adventures-of-Tom-Sawyer.jpg",
-      desc: "The classic tale of childhood escapades, whitewashed fences, and puppy love in St. Petersburg, Missouri.",
-      status: "Youth Edition",
-      genre: "Fiction",
-      year: 1876,
-      color: "from-[#3d2a1f] to-[#1e150f]"
-    },
-    {
-      title: "The Prince and the Pauper",
-      filename: "Prince-and-Pauper.txt",
-      cover: "/images/book-covers/Book-cover-Prince-and-Pauper.jpg",
-      desc: "A royal prince and a beggar boy switch roles in Tudor London, exposing the dramatic class divides of England.",
-      status: "Youth Edition",
-      genre: "Historical Fiction",
-      year: 1881,
-      color: "from-[#3a1a2e] to-[#1d0d17]"
-    },
-    {
-      title: "The $30,000 Bequest and Others",
-      filename: "The-30000-Bequest-and-Others.txt",
-      cover: "/images/book-covers/Book-cover-The-30000-Bequest-and-Others.jpg",
-      desc: "A rich anthology of Twain's late short fiction, highlighting his biting satire and deep irony.",
-      status: "Modernized",
-      genre: "Short Stories",
-      year: 1906,
-      color: "from-[#1d2d3d] to-[#0e161e]"
-    },
-    {
-      title: "Eve's Diary",
-      filename: null,
-      href: "/read/eves-diary",
-      cover: "/images/book-covers/book-cover-eves-diary.jpg",
-      desc: "Eve's exquisite, poetic account of life in Eden, her fascination with Adam, and the beauty of creation.",
-      status: "Interactive, Voiced",
-      genre: "Diary / Romance",
-      year: 1906,
-      color: "from-[#3a2020] to-[#1d1010]"
-    },
-    {
-      title: "The American Claimant",
-      filename: "The-American-Claimant.txt",
-      cover: "/images/book-covers/Book-cover-The-American-Claimant.jpg",
-      desc: "A comedy of errors involving an eccentric American inventor claiming a British earldom and swapping lives.",
-      status: "Planning",
-      genre: "Satire",
-      year: 1892,
-      color: "from-[#1e3d30] to-[#0f1e18]"
-    },
-    {
-      title: "The Innocents Abroad",
-      filename: "The-Innocents-Abroad.txt",
-      cover: "/images/book-covers/Book-cover-The-Innocents-Abroad.jpg",
-      desc: "Twain's highly popular travel book charting his journey to Europe and the Holy Land on a steamship cruise.",
-      status: "Planning",
-      genre: "Travelogue",
-      year: 1869,
-      color: "from-[#383a1a] to-[#1c1d0d]"
-    },
-    {
-      title: "The Tragedy of Pudd'nhead Wilson",
-      filename: "Tragedy-of-Pudd'nhead-Wilson.txt",
-      cover: "/images/book-covers/Book-cover-Tragedy-of-Puddnhead-Wilson.jpg",
-      desc: "A tense story of switched infants, legal drama, racial identity, and early forensics in a Missouri town.",
-      status: "Planning",
-      genre: "Mystery",
-      year: 1894,
-      color: "from-[#381f3b] to-[#1c0f1d]"
-    },
-    {
-      title: "Tom Sawyer Abroad",
-      filename: "Tom-Sawyer-Abroad.txt",
-      cover: "/images/book-covers/Book-cover-Tom-Sawyer-Abroad.jpg",
-      desc: "Tom Sawyer, Huck Finn, and Jim drift across the Atlantic in a balloon and explore the Sahara Desert.",
-      status: "Planning",
-      genre: "Adventure",
-      year: 1894,
-      color: "from-[#1c3838] to-[#0e1c1c]"
-    },
-    {
-      title: "Tom Sawyer, Detective",
-      filename: "Tom-Sawyer-Detective.txt",
-      cover: "/images/book-covers/Book-cover-Tom-Sawyer-Detective.png",
-      desc: "Tom Sawyer turns detective to solve a mysterious murder and gem theft in the backwoods of Arkansas.",
-      status: "Planning",
-      genre: "Mystery",
-      year: 1896,
-      color: "from-[#3a351a] to-[#1d1a0d]"
-    },
-    {
-      title: "The Mysterious Stranger",
-      filename: "Mysterious-Stranger.txt",
-      cover: "/images/book-covers/Book-cover-Mysterious-Stranger.jpg",
-      desc: "Twain's dark, profound posthumous fable set in medieval Austria, questioning the nature of human existence.",
-      status: "Planning",
-      genre: "Philosophical",
-      year: 1916,
-      color: "from-[#20203d] to-[#10101e]"
-    }
-  ];
+
 
   const [displayedIndices, setDisplayedIndices] = useState([0, 1, 2, 3]);
   const [fadingSlot, setFadingSlot] = useState<number | null>(null);
@@ -267,25 +268,13 @@ export default function TheCompleteWorksPage() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Sync state for media player
+  // Sync state settings
   useEffect(() => {
     const savedTheme = localStorage.getItem('eves-diary-theme');
     const savedFontSize = localStorage.getItem('eves-diary-font-size');
-    const savedClosed = sessionStorage.getItem('media-player-closed');
 
     if (savedTheme) setTheme(savedTheme);
     if (savedFontSize) setFontSize(savedFontSize);
-    setIsMusicPlayerClosed(savedClosed !== null ? savedClosed === 'true' : true);
-
-    const handleCloseChange = (e) => {
-      setIsMusicPlayerClosed(e.detail.isClosed);
-    };
-
-    window.addEventListener('media-player-close-change', handleCloseChange);
-
-    return () => {
-      window.removeEventListener('media-player-close-change', handleCloseChange);
-    };
   }, []);
 
   // Save settings when they change
@@ -293,10 +282,6 @@ export default function TheCompleteWorksPage() {
     localStorage.setItem('eves-diary-theme', theme);
     localStorage.setItem('eves-diary-font-size', fontSize);
   }, [theme, fontSize]);
-
-  const handleReopenMusic = () => {
-    window.dispatchEvent(new CustomEvent('media-player-open'));
-  };
 
   return (
     <div className={`book-reader-container theme-${theme}`}>
@@ -506,7 +491,7 @@ export default function TheCompleteWorksPage() {
 
       {/* OS-Themed Text Viewer Modal */}
       {activeTxtFile && (
-        <div className="fixed inset-0 z-[9999] bg-[#241e17] overflow-auto">
+        <div className="fixed inset-0 z-[9999] bg-[var(--reader-modal-bg)] overflow-auto">
           {txtLoading ? (
             <div className="flex flex-col items-center justify-center w-full min-h-screen bg-[#15110d] space-y-4">
               <div className="w-8 h-8 border-2 border-[var(--primary)] border-t-transparent rounded-full animate-spin" />

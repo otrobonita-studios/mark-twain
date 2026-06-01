@@ -17,10 +17,10 @@ function findFilePath(filename) {
     return dataCollectionPath;
   }
   
-  // 3. Recursive fallback under the 'rag' directory
-  const ragDir = path.join(baseDir, 'rag');
-  if (fs.existsSync(ragDir)) {
-    const recursivePath = searchRecursively(ragDir, filename);
+  // 3. Recursive fallback under the 'rag/data-collection/TwainCorpus' directory
+  const corpusDir = path.join(baseDir, 'rag', 'data-collection', 'TwainCorpus');
+  if (fs.existsSync(corpusDir)) {
+    const recursivePath = searchRecursively(corpusDir, filename, 0);
     if (recursivePath) {
       return recursivePath;
     }
@@ -30,13 +30,14 @@ function findFilePath(filename) {
   return path.join(baseDir, filename);
 }
 
-function searchRecursively(dir, filename) {
+function searchRecursively(dir, filename, depth = 0) {
+  if (depth > 4) return null;
   const files = fs.readdirSync(dir);
   for (const file of files) {
     const fullPath = path.join(dir, file);
     if (fs.statSync(fullPath).isDirectory()) {
-      if (file !== 'node_modules' && file !== '.next' && file !== '.venv') {
-        const found = searchRecursively(fullPath, filename);
+      if (file !== 'node_modules' && file !== '.next' && file !== '.venv' && file !== '__pycache__') {
+        const found = searchRecursively(fullPath, filename, depth + 1);
         if (found) return found;
       }
     } else if (file.toLowerCase() === filename.toLowerCase()) {

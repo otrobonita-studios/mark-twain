@@ -56,7 +56,7 @@ export default function TxtReaderClient({ filename, initialContent, initialError
   }, []);
 
   return (
-    <div className="w-full min-h-screen bg-[#241e17] text-[#fff4df] flex flex-col font-sans">
+    <div className="w-full min-h-screen bg-[var(--reader-modal-bg)] text-[#fff4df] flex flex-col font-sans">
       {/* Top Bar with OS theme switcher and Back desk link */}
       <div className="bg-[#1b1510] border-b border-[rgba(255,244,223,0.08)] px-4 py-3 flex items-center justify-between z-50">
         {onClose ? (
