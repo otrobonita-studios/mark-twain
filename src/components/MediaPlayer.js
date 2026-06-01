@@ -21,8 +21,9 @@ const soundtrack = [
   {
     id: "eves-diary",
     title: "Eve's Diary",
-    file: "/sounds/music/mark-twains-eves-diary.mp3",
-    style: "Album: Mark Twain Reappears"
+    file: "/sounds/music/eves-diary-by-eve.mp3",
+    style: "Album: Mark Twain Reappears",
+    cover: "/images/eves-diary-the-scratched-experience-cover.jpg"
   },
   {
     id: "original-theme",
@@ -59,6 +60,9 @@ export default function MediaPlayer() {
   const [isDragging, setIsDragging] = useState(false);
 
   const currentTrack = soundtrack[currentTrackIndex] || soundtrack[0];
+  const spotifyHref = currentTrack.id === 'eves-diary'
+    ? 'https://open.spotify.com/album/4TA8m9s8x1rq127gt8Nj5n?si=LBE2Sli2RQePEWFg7TdsUw'
+    : 'https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S';
 
   // Initialize from LocalStorage
   useEffect(() => {
@@ -79,8 +83,11 @@ export default function MediaPlayer() {
 
     // Set default track based on pathname
     if (typeof window !== 'undefined') {
-      if (window.location.pathname.includes('/eves-diary')) {
+      const path = window.location.pathname;
+      if (path.includes('/eves-diary')) {
         setCurrentTrackIndex(0); // Eve's Diary Theme
+      } else if (path === '/' || path === '/home') {
+        setCurrentTrackIndex(1); // Original Theme on homepage
       }
     }
 
@@ -188,9 +195,6 @@ export default function MediaPlayer() {
 
     const updateAudioProgress = () => {
       setCurrentTime(audio.currentTime);
-      if (audio.duration) {
-        setAudioProgress((audio.currentTime / audio.duration) * 100);
-      }
     };
 
     const handleLoadedMetadata = () => {
@@ -199,7 +203,12 @@ export default function MediaPlayer() {
 
     audio.addEventListener('ended', handleEnded);
     audio.addEventListener('timeupdate', updateAudioProgress);
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('loadedmetadata', () => {
+      handleLoadedMetadata();
+      // Reset progress when new track loads
+      setAudioProgress(0);
+      setCurrentTime(0);
+    });
 
     return () => {
       audio.removeEventListener('ended', handleEnded);
@@ -395,7 +404,7 @@ export default function MediaPlayer() {
         // MINIMIZED MODE (Pill structure)
         <div className="mini-player-pill-content">
           <a 
-            href="https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S" 
+            href={spotifyHref} 
             target="_blank" 
             rel="noopener noreferrer" 
             className="mini-cover-link"
@@ -416,11 +425,14 @@ export default function MediaPlayer() {
 
           <div className="mini-text-info">
             <div className="mini-title typewriter">{currentTrack.title.replace("Mark Twain Reappears: ", "").replace(" Theme", "")}</div>
+            <div className="mini-time typewriter" style={{ fontSize: '9px', opacity: 0.7 }}>
+              {formatTime(currentTime)} / {formatTime(duration)}
+            </div>
           </div>
 
           <div className="mini-action-controls">
             <a 
-              href="https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S" 
+              href={spotifyHref} 
               target="_blank" 
               rel="noopener noreferrer" 
               className="mini-control-btn spotify-link-btn" 
@@ -440,6 +452,8 @@ export default function MediaPlayer() {
               <X size={10} />
             </button>
           </div>
+          {/* Mini progress bar */}
+          <div className="mini-progress" style={{ width: `${audioProgress}%`, height: '2px', background: 'var(--primary)', transition: 'width 0.2s', position: 'absolute', bottom: 0, left: 0 }} />
         </div>
       ) : (
         // EXPANDED MODE (Full player card)
@@ -459,7 +473,7 @@ export default function MediaPlayer() {
 
           {/* Album Cover Art */}
           <a 
-            href="https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S" 
+            href={spotifyHref} 
             target="_blank" 
             rel="noopener noreferrer" 
             className="player-cover-link"
@@ -468,8 +482,8 @@ export default function MediaPlayer() {
           >
             <div className="player-cover-art">
               <Image 
-                src="/images/MarkTwainSpotifyCover.png" 
-                alt="Mark Twain Spotify Cover" 
+                src={currentTrack.cover || "/images/MarkTwainSpotifyCover.png"} 
+                alt={currentTrack.title + " cover"} 
                 width={264} 
                 height={264}
                 priority
@@ -505,6 +519,7 @@ export default function MediaPlayer() {
               type="range"
               min="0"
               max="100"
+              step="0.1"
               value={audioProgress}
               onChange={handleAudioProgressChange}
               className="player-audio-slider"

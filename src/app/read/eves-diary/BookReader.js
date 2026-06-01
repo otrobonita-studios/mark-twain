@@ -3,9 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Sun, Moon, Volume2, Cpu, BookOpen, X } from 'lucide-react';
+import { ArrowLeft, Sun, Moon, Volume2, BookOpen, X, Sparkles, Download, Clipboard, Check, Loader2 } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
-import TechDetect from '@/components/TechDetect';
 import { motion, AnimatePresence } from 'framer-motion';
 import { youngReadersParagraphs, youngReadersGlossary, youngReadersNotes } from './YoungReadersText';
 
@@ -16,15 +15,46 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [experience, setExperience] = useState(initialExperience); // 'traditional' | 'app' | 'parallax' | 'voice' | 'drama' | 'chat' | 'split' | 'comments' | 'child'
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
-  const [isTechDetectClosed, setIsTechDetectClosed] = useState(false);
   const [selectedZoomImage, setSelectedZoomImage] = useState(null);
   const [isTocOpen, setIsTocOpen] = useState(false);
   const [activeId, setActiveId] = useState(null);
 
+  // EPUB Compiler States
+  const [epubStatus, setEpubStatus] = useState('idle'); // 'idle' | 'generating' | 'success' | 'error'
+  const [epubUrl, setEpubUrl] = useState('');
+  const [epubError, setEpubError] = useState('');
+  const [copyFeedback, setCopyFeedback] = useState(false);
+
+  const handleGenerateEpub = async () => {
+    setEpubStatus('generating');
+    setEpubError('');
+    try {
+      const res = await fetch('/api/epub');
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setEpubUrl(data.downloadUrl);
+        setEpubStatus('success');
+      } else {
+        throw new Error(data.error || 'Failed to generate EPUB');
+      }
+    } catch (err) {
+      setEpubError(err.message);
+      setEpubStatus('error');
+    }
+  };
+
+  const handleCopyLink = () => {
+    if (!epubUrl) return;
+    const absoluteUrl = `${window.location.origin}${epubUrl}`;
+    navigator.clipboard.writeText(absoluteUrl);
+    setCopyFeedback(true);
+    setTimeout(() => setCopyFeedback(false), 2000);
+  };
+
   const experiences = [
     { id: 'drama', label: 'Index', description: 'Navigate the story by Index.' },
-    { id: 'traditional', label: 'Traditional Read', description: "Original Gutenberg text and illustrations." },
-    { id: 'voice', label: 'Voice-First Edition', description: 'Voice-command navigation and speech narration.' },
+    { id: 'traditional', label: 'Traditional Read', description: "Original text and illustrations as published in the first edition." },
+    { id: 'voice', label: 'E-Ink and Kindle', description: 'Optimal formatting for Kindle and e-paper screens.' },
     { id: 'chat', label: 'Dramatized Excerpt', description: 'Audio drama script for Eve and Adam.' },
     { id: 'split', label: 'Sung Edition', description: 'Hear the diary set to music.' },
     { id: 'child', label: 'Young Readers', description: 'Simplified text and glossary for young minds.' }
@@ -39,7 +69,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
     const savedFontSize = localStorage.getItem('eves-diary-font-size');
     const savedExperience = localStorage.getItem('eves-diary-experience');
     const savedClosed = localStorage.getItem('media-player-closed');
-    const savedTechClosed = localStorage.getItem('tech-detect-closed');
 
     if (savedTheme) setTheme(savedTheme);
     if (savedFontSize) setFontSize(savedFontSize);
@@ -53,7 +82,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
       setExperience(initialExperience);
     }
     setIsMusicPlayerClosed(savedClosed !== null ? savedClosed === 'true' : true);
-    setIsTechDetectClosed(savedTechClosed === 'true');
 
     isLoadedRef.current = true;
 
@@ -62,17 +90,10 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
       setIsMusicPlayerClosed(e.detail.isClosed);
     };
 
-    // Listen to tech-detect close-change events
-    const handleTechCloseChange = (e) => {
-      setIsTechDetectClosed(e.detail.isClosed);
-    };
-
     window.addEventListener('media-player-close-change', handleCloseChange);
-    window.addEventListener('tech-detect-close-change', handleTechCloseChange);
     
     return () => {
       window.removeEventListener('media-player-close-change', handleCloseChange);
-      window.removeEventListener('tech-detect-close-change', handleTechCloseChange);
     };
   }, []);
 
@@ -180,10 +201,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
     window.dispatchEvent(new CustomEvent('media-player-open'));
   };
 
-  const handleReopenTechDetect = () => {
-    window.dispatchEvent(new CustomEvent('tech-detect-open'));
-  };
-
   return (
     <div className={`book-reader-container theme-${theme} ${isTocOpen ? 'toc-sidebar-open' : ''}`}>
       {/* Scroll Progress Bar */}
@@ -225,17 +242,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
             </button>
           </div>
 
-          {/* Reopen Tech Detect Icon (only if closed) */}
-          {isTechDetectClosed && (
-            <button 
-              onClick={handleReopenTechDetect} 
-              className="book-control-btn reopen-music-btn" 
-              title="Open Tech Detect Window"
-              style={{ marginRight: '0.45rem' }}
-            >
-              <Cpu size={16} />
-            </button>
-          )}
+
 
           {/* Reopen Music Icon (only if closed) */}
           {isMusicPlayerClosed && (
@@ -336,7 +343,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                   return <h2 key={idx} className="young-readers-subtitle">{item.text}</h2>;
                 }
                 if (item.type === 'section') {
-                  return <h2 key={idx} className="young-readers-section-header">{item.text}</h2>;
+                  return <h2 key={idx} className="young-readers-section-header">Adapted for Young Readers</h2>;
                 }
                 if (item.type === 'illustrator') {
                   return <h3 key={idx} className="young-readers-illustrator">{item.text}</h3>;
@@ -385,14 +392,16 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
             </div>
           ) : experience === 'chat' ? (
             <div className="experience-dramatized-excerpt">
-              <div className="preview-stamp">DESIGN PHASE</div>
-              <h3 className="excerpt-main-title">EVE'S DIARY &mdash; DRAMATIZED EXCERPT</h3>
-              <h4 className="excerpt-sub-title">&ldquo;The Reptile, and the First Sorrow&rdquo;</h4>
-              <p className="excerpt-running-time">Running time: approximately 4 minutes</p>
-              
-              <p className="preview-status">
-                This configuration is currently in layout design.
-              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', width: '100%' }}>
+                <div className="preview-stamp">DESIGN PHASE</div>
+                <h3 className="excerpt-main-title" style={{ marginTop: '0.5rem' }}>EVE'S DIARY &mdash; DRAMATIZED EXCERPT</h3>
+                <h4 className="excerpt-sub-title">&ldquo;The Reptile, and the First Sorrow&rdquo;</h4>
+                <p className="excerpt-running-time">Running time: approximately 4 minutes</p>
+                
+                <p className="preview-status" style={{ textAlign: 'center', fontFamily: 'var(--font-mono), monospace', fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '2rem', textIndent: 0 }}>
+                  This configuration is currently in layout design.
+                </p>
+              </div>
 
               <div className="script-cast-section">
                 <h5 className="script-cast-header">Cast:</h5>
@@ -532,6 +541,97 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                 Return to Traditional Read
               </button>
             </div>
+          ) : experience === 'voice' ? (
+            <div className="experience-voice-eink max-w-2xl mx-auto py-10 px-6 bg-[rgba(255,244,223,0.02)] border border-[rgba(255,244,223,0.08)] rounded-2xl shadow-xl text-center relative overflow-hidden my-8">
+              {/* Glassmorphic decorative circles */}
+              <div className="absolute -left-16 -top-16 w-36 h-36 bg-[var(--primary)] opacity-5 rounded-full blur-2xl" />
+              <div className="absolute -right-16 -bottom-16 w-36 h-36 bg-[var(--primary)] opacity-5 rounded-full blur-2xl" />
+              
+              <div className="w-16 h-16 mx-auto rounded-full bg-[rgba(217,163,74,0.08)] flex items-center justify-center text-[var(--primary)] mb-6">
+                <Sparkles className="w-8 h-8 animate-pulse" />
+              </div>
+
+              <h3 className="text-2xl font-semibold text-[rgba(255,244,223,0.95)] mb-3">E-Ink &amp; Kindle Edition Compiler</h3>
+              <p className="text-sm text-[rgba(255,244,223,0.65)] leading-relaxed max-w-md mx-auto mb-8">
+                Compile Eve's Diary into a standardized, DRM-free `.epub` file optimized for Kindle, Kobo, and modern e-paper screens.
+              </p>
+
+              {epubStatus === 'idle' && (
+                <div className="space-y-4">
+                  <button 
+                    onClick={handleGenerateEpub}
+                    className="px-6 py-3 bg-[var(--primary)] text-black rounded-lg font-medium hover:bg-[var(--primary-hover)] transition-all transform hover:-translate-y-0.5 active:translate-y-0 shadow-lg inline-flex items-center gap-2"
+                  >
+                    <span>Compile E-Ink Edition</span>
+                  </button>
+                </div>
+              )}
+
+              {epubStatus === 'generating' && (
+                <div className="flex flex-col items-center justify-center py-6 space-y-4">
+                  <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin" />
+                  <p className="text-sm font-mono text-[var(--primary)] animate-pulse">
+                    Synthesizing chapters, parsing XHTML, packing ZIP...
+                  </p>
+                </div>
+              )}
+
+              {epubStatus === 'success' && (
+                <div className="space-y-6 py-4 animate-fadeIn">
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-400 mb-2 border border-emerald-500/20">
+                    <Check className="w-6 h-6" />
+                  </div>
+                  
+                  <div>
+                    <h4 className="text-lg font-medium text-emerald-400">Compilation Successful!</h4>
+                    <p className="text-xs text-[rgba(255,244,223,0.45)] mt-1 font-mono">eves-diary.epub ready for download</p>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3 max-w-sm mx-auto">
+                    <a 
+                      href={epubUrl}
+                      download="eves-diary.epub"
+                      className="w-full px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-all inline-flex items-center justify-center gap-2 decoration-none"
+                    >
+                      <Download size={16} />
+                      <span>Download EPUB</span>
+                    </a>
+                    
+                    <button 
+                      onClick={handleCopyLink}
+                      className="w-full px-5 py-2.5 bg-[rgba(255,244,223,0.05)] border border-[rgba(255,244,223,0.15)] hover:bg-[rgba(255,244,223,0.1)] text-[rgba(255,244,223,0.9)] rounded-lg text-sm font-medium transition-all inline-flex items-center justify-center gap-2"
+                    >
+                      {copyFeedback ? <Check size={16} className="text-emerald-400" /> : <Clipboard size={16} />}
+                      <span>{copyFeedback ? 'Copied Link!' : 'Copy Download Link'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {epubStatus === 'error' && (
+                <div className="space-y-4 py-4">
+                  <div className="text-red-400 text-sm">
+                    Failed to compile book: {epubError}
+                  </div>
+                  <button 
+                    onClick={handleGenerateEpub}
+                    className="px-4 py-2 bg-red-950/40 border border-red-500/30 text-red-300 rounded-lg text-xs font-medium hover:bg-red-950/60 transition-all"
+                  >
+                    Retry Compilation
+                  </button>
+                </div>
+              )}
+
+              <div className="border-t border-[rgba(255,244,223,0.06)] mt-8 pt-6 flex justify-between items-center text-xs text-[rgba(255,244,223,0.4)]">
+                <span>Optimized layout: Reflowable Text</span>
+                <button 
+                  onClick={() => setExperience('traditional')}
+                  className="hover:text-[var(--primary)] transition-colors bg-transparent border-none p-0 cursor-pointer"
+                >
+                  Back to Traditional Read
+                </button>
+              </div>
+            </div>
           ) : (
             <div className="experience-design-preview">
               <div className="preview-stamp">DESIGN PHASE</div>
@@ -540,7 +640,6 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
                 This reading room configuration is currently in layout design.
               </p>
               <div className="preview-concept">
-                {experience === 'voice' && "Coming to an appstore on your mobile device."}
                 {experience === 'drama' && "Concept: A multi-track audio player syncing background ambient tracks with segmented character dialogues for Adam and Eve."}
               </div>
               <button onClick={() => setExperience('traditional')} className="btn-gold return-traditional-btn">
@@ -554,8 +653,7 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
       {/* Persistent Audio Player */}
       <MediaPlayer />
 
-      {/* Persistent Tech Detect Window */}
-      <TechDetect />
+
 
 
 

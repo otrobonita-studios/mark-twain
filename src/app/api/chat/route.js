@@ -152,7 +152,7 @@ async function searchQdrant(embedding) {
 
 export async function POST(request) {
   try {
-    const { message, history, style, tone, simplify } = await request.json();
+    const { message, history, style, tone, simplify, excerpt } = await request.json();
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ error: 'Message is required and must be a string' }, { status: 400 });
@@ -217,9 +217,12 @@ You are chatting with a modern visitor. For their question, some context passage
 Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyInstruction}`;
 
     // 5. Package user prompt with current turn context
-    const userPrompt = contextText 
-      ? `Context from my archive:\n---\n${contextText}\n---\n\nQuestion: ${message}`
-      : message;
+    let userPrompt = message;
+    if (excerpt) {
+      userPrompt = `The user clicked on a comment tooltip while reading the following passage from your book:\n"${excerpt}"\n\nThey asked you: ${message}`;
+    } else if (contextText) {
+      userPrompt = `Context from my archive:\n---\n${contextText}\n---\n\nQuestion: ${message}`;
+    }
 
     // 6. Format chat history for the official SDK
     // SDK expects format: list of { role: 'user'|'model', parts: [{ text: '...' }] }

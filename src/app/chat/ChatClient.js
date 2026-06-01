@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu, Volume2, Play, Pause, Globe } from 'lucide-react';
+import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu, Volume2, Play, Pause, Globe, Copy, Check, Download } from 'lucide-react';
 import MediaPlayer from '@/components/MediaPlayer';
 
 export default function ChatClient() {
@@ -21,6 +21,7 @@ export default function ChatClient() {
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [isMusicPlayerClosed, setIsMusicPlayerClosed] = useState(false);
   const [isVoicePlaying, setIsVoicePlaying] = useState(false);
+  const [copiedMessageIndex, setCopiedMessageIndex] = useState(null);
 
   const voiceAudioRef = useRef(null);
   const chatInputRef = useRef(null);
@@ -140,7 +141,7 @@ export default function ChatClient() {
   };
 
 
-  const handleSend = async (textToSend) => {
+  const handleSend = async (textToSend, excerptToSend) => {
     const text = textToSend || input;
     if (!text.trim()) return;
 
@@ -175,6 +176,7 @@ export default function ChatClient() {
           style: conversationStyle,
           tone: conversationTone,
           simplify: simplifyLanguage,
+          excerpt: excerptToSend,
           // Extract only role and content for API history seed
           history: messages.map(msg => ({ role: msg.role, content: msg.content }))
         }),
@@ -243,9 +245,10 @@ export default function ChatClient() {
   useEffect(() => {
     if (initialQueryProcessed.current) return;
     const query = searchParams.get('query');
+    const excerpt = searchParams.get('excerpt');
     if (query) {
       initialQueryProcessed.current = true;
-      handleSend(query);
+      handleSend(query, excerpt);
     }
   }, [searchParams]);
 
@@ -261,6 +264,57 @@ export default function ChatClient() {
       ...prev,
       [index]: !prev[index]
     }));
+  };
+
+  const handleCopyMessage = (text, index) => {
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        setCopiedMessageIndex(index);
+        setTimeout(() => {
+          setCopiedMessageIndex(null);
+        }, 2000);
+      })
+      .catch(err => {
+        console.error('Could not copy text: ', err);
+      });
+  };
+
+  const handleDownloadChat = () => {
+    if (messages.length === 0) return;
+    
+    const header = `==================================================\n` +
+                   `          MARK TWAIN CHAT TRANSCRIPT              \n` +
+                   `          Generated: ${new Date().toLocaleString()} \n` +
+                   `==================================================\n\n`;
+                   
+    const body = messages.map((msg) => {
+      const roleName = msg.role === 'user' ? 'YOU' : 'MARK TWAIN';
+      let messageText = `[${roleName}]\n${msg.content}\n`;
+      
+      if (msg.role === 'model' && msg.translation) {
+        messageText += `\n[MODERN TRANSLATION]\n${msg.translation}\n`;
+      }
+      
+      if (msg.role === 'model' && msg.sources && msg.sources.length > 0) {
+        messageText += `\n[SOURCES]\n`;
+        msg.sources.forEach((src) => {
+          messageText += `- ${src.filename} (Match: ${Math.round(src.score * 100)}%): "${src.text}"\n`;
+        });
+      }
+      
+      return messageText;
+    }).join('\n--------------------------------------------------\n\n');
+    
+    const fullText = header + body;
+    const blob = new Blob([fullText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `mark-twain-chat-${new Date().toISOString().slice(0,10)}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const clearChat = () => {
@@ -534,9 +588,32 @@ export default function ChatClient() {
                         <p>{msg.content}</p>
                       </div>
 
+                      {/* User message copy button */}
+                      {msg.role === 'user' && (
+                        <div className="message-footer-controls" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.75rem', alignItems: 'center' }}>
+                          <button
+                            onClick={() => handleCopyMessage(msg.content, idx)}
+                            className="sources-trigger"
+                            aria-label="Copy question"
+                          >
+                            {copiedMessageIndex === idx ? <Check size={10} /> : <Copy size={10} />}
+                            <span>{copiedMessageIndex === idx ? 'Copied' : 'Copy'}</span>
+                          </button>
+                        </div>
+                      )}
+
                       {/* Sources and Translations (for Twain's responses) */}
                       {msg.role === 'model' && (
                         <div className="message-footer-controls" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.75rem', alignItems: 'center' }}>
+                          <button
+                            onClick={() => handleCopyMessage(msg.content, idx)}
+                            className="sources-trigger"
+                            aria-label="Copy answer"
+                          >
+                            {copiedMessageIndex === idx ? <Check size={10} /> : <Copy size={10} />}
+                            <span>{copiedMessageIndex === idx ? 'Copied' : 'Copy'}</span>
+                          </button>
+
                           {msg.sources && msg.sources.length > 0 && (
                               <button
                                 onClick={() => toggleSources(idx)}
@@ -642,6 +719,17 @@ export default function ChatClient() {
           )}
 
           <div className="chat-input-wrapper">
+            {messages.length > 0 && (
+              <button
+                id="chat-download-button"
+                onClick={handleDownloadChat}
+                className="chat-download-btn"
+                title="Download chat history"
+                aria-label="Download chat history"
+              >
+                <Download size={16} />
+              </button>
+            )}
             <textarea
               ref={chatInputRef}
               id="chat-input-textarea"
