@@ -361,8 +361,8 @@ export default function TheCompleteWorksPage() {
                       height: 227,
                       flexShrink: 0,
                       transform: isActive ? 'scale(1.08)' : 'scale(0.95)',
-                      opacity: isActive ? 1 : 0.6,
-                      transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                      opacity: 1,
+                      transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                       zIndex: isActive ? 10 : 1
                     }}
                     className={`relative rounded-lg border ${cardBorderClass} bg-[rgba(255,244,223,0.02)] shadow-md group text-left flex flex-col cursor-pointer snap-center`}
@@ -381,9 +381,9 @@ export default function TheCompleteWorksPage() {
                   >
                     {CardContent}
                     {(book.href || book.filename) && (
-                      <div className={`absolute inset-0 bg-black/60 transition-opacity duration-300 flex flex-col items-center justify-center gap-2 rounded-lg pointer-events-none ${isActive ? 'opacity-100' : 'opacity-0'}`}>
-                        <BookOpen className="w-8 h-8 text-[var(--primary)]" />
-                        <span className="text-[10px] font-mono uppercase tracking-widest text-[#fff4df] font-semibold">
+                      <div className={`absolute inset-0 bg-gradient-to-t from-black/85 via-black/15 to-transparent transition-opacity duration-300 flex flex-col items-center justify-end pb-4 gap-1 rounded-lg pointer-events-none ${isActive ? 'opacity-100' : 'opacity-0'}`}>
+                        <BookOpen className="w-5 h-5 text-[var(--primary)]" />
+                        <span className="text-[9px] font-mono uppercase tracking-widest text-[#fff4df] font-semibold">
                           Open
                         </span>
                       </div>
@@ -397,8 +397,7 @@ export default function TheCompleteWorksPage() {
             <button 
               className="carousel-control-btn prev"
               style={{ left: '-12px' }}
-              onClick={() => scrollToBook(Math.max(0, active - 1))}
-              disabled={active === 0}
+              onClick={() => scrollToBook(active === 0 ? books.length - 1 : active - 1)}
               aria-label="Previous book"
               type="button"
             >
@@ -407,8 +406,7 @@ export default function TheCompleteWorksPage() {
             <button 
               className="carousel-control-btn next"
               style={{ right: '-12px' }}
-              onClick={() => scrollToBook(Math.min(books.length - 1, active + 1))}
-              disabled={active === books.length - 1}
+              onClick={() => scrollToBook(active === books.length - 1 ? 0 : active + 1)}
               aria-label="Next book"
               type="button"
             >
