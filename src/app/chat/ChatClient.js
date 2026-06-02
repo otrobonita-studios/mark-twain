@@ -492,8 +492,8 @@ export default function ChatClient() {
                     onClick={handlePlayVoiceOfMark}
                     className="voice-of-mark-btn"
                   >
-                    {isVoicePlaying ? <Pause size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" />}
-                    <span>Picture the Voice</span>
+                    {isVoicePlaying ? <Pause size={13.2} fill="currentColor" /> : <Play size={13.2} fill="currentColor" />}
+                    <span>Hear the voice</span>
                   </button>
                 </div>
               </div>
