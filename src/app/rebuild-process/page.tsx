@@ -156,7 +156,7 @@ export default function RebuildProcessPage() {
           <div className="space-y-12">
             {/* The Challenge */}
             <section className="text-left">
-              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-4 text-left">
+              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-4 text-left" style={{ marginTop: '4rem' }}>
                 The Challenge
               </h3>
               <p className="text-base leading-relaxed text-justify mb-0">
