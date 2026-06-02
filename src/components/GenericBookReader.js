@@ -112,39 +112,51 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
   // Dynamic event binding for collapsible Table of Contents in injected HTML
   useEffect(() => {
     const handleTocClick = (e) => {
+      // Table of Contents expand button
       const btn = e.target.closest('.book-toc-expand-btn');
-      if (!btn) return;
-
-      // Find the outermost wrapper containing this button
-      let current = btn.closest('.book-toc-collapsed-wrapper');
-      let outermost = current;
-      while (current) {
-        const parent = current.parentElement ? current.parentElement.closest('.book-toc-collapsed-wrapper') : null;
-        if (parent) {
-          outermost = parent;
+      if (btn) {
+        // Find the outermost wrapper containing this button
+        let current = btn.closest('.book-toc-collapsed-wrapper');
+        let outermost = current;
+        while (current) {
+          const parent = current.parentElement ? current.parentElement.closest('.book-toc-collapsed-wrapper') : null;
+          if (parent) {
+            outermost = parent;
+          }
+          current = parent;
         }
-        current = parent;
+
+        if (!outermost) return;
+
+        const willExpand = !outermost.classList.contains('expanded');
+
+        // Toggle expanded on outermost and all nested wrappers
+        const allWrappers = [outermost, ...outermost.querySelectorAll('.book-toc-collapsed-wrapper')];
+        allWrappers.forEach(w => {
+          if (willExpand) {
+            w.classList.add('expanded');
+          } else {
+            w.classList.remove('expanded');
+          }
+        });
+
+        // Update text for all buttons inside the outermost wrapper
+        const allButtons = outermost.querySelectorAll('.book-toc-expand-btn');
+        allButtons.forEach(b => {
+          b.textContent = willExpand ? 'Collapse Table of Contents' : 'Expand Table of Contents';
+        });
+        return;
       }
 
-      if (!outermost) return;
-
-      const willExpand = !outermost.classList.contains('expanded');
-
-      // Toggle expanded on outermost and all nested wrappers
-      const allWrappers = [outermost, ...outermost.querySelectorAll('.book-toc-collapsed-wrapper')];
-      allWrappers.forEach(w => {
-        if (willExpand) {
-          w.classList.add('expanded');
-        } else {
-          w.classList.remove('expanded');
+      // Illustrations (LOI) expand button
+      const loiBtn = e.target.closest('.book-loi-expand-btn');
+      if (loiBtn) {
+        const wrapper = loiBtn.closest('.book-loi-collapsed-wrapper');
+        if (wrapper) {
+          wrapper.classList.toggle('expanded');
         }
-      });
-
-      // Update text for all buttons inside the outermost wrapper
-      const allButtons = outermost.querySelectorAll('.book-toc-expand-btn');
-      allButtons.forEach(b => {
-        b.textContent = willExpand ? 'Collapse Table of Contents' : 'Expand Table of Contents';
-      });
+        return;
+      }
     };
 
     const container = document.querySelector('.book-text-content');

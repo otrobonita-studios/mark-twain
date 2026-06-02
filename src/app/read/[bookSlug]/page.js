@@ -235,6 +235,22 @@ export default async function ReadPage({ params }) {
     tocItems = parsed.tocItems;
   }
 
+  // Wrap list of illustrations in a collapsible container
+  processedHtmlContent = processedHtmlContent.replace(
+    /(<h2[^>]*>(?:LIST OF\s+)?ILLUSTRATIONS\.?<\/h2>\s*(?:<\/div>\s*)?)(\s*<table[^>]*>[\s\S]*?<\/table>)/gi,
+    (match, heading, table) => {
+      return `${heading}
+<div class="book-loi-collapsed-wrapper">
+  <div class="book-loi-content-inside">
+    ${table}
+  </div>
+  <button class="book-loi-expand-btn">
+    Illustrations <span class="chevron">▼</span>
+  </button>
+</div>`;
+    }
+  );
+
   return (
     <GenericBookReader 
       htmlContent={processedHtmlContent} 
