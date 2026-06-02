@@ -382,14 +382,6 @@ export default function ChatClient() {
               <Info size={18} color="currentColor" />
               The Rebuild Process
             </button>
-            <button
-              onClick={() => setShowMobileMenu(!showMobileMenu)}
-              className="mobile-only-control"
-              style={{ background: 'none', border: 'none', padding: 0, color: 'var(--muted-foreground)', display: 'flex', alignItems: 'center', cursor: 'pointer' }}
-              aria-label="Toggle settings"
-            >
-              {showMobileMenu ? <X size={22} /> : <Sliders size={22} />}
-            </button>
           </div>
         </div>
 
@@ -654,6 +646,14 @@ export default function ChatClient() {
           )}
 
           <div className="chat-input-wrapper">
+            <button
+              onClick={() => setShowMobileMenu(!showMobileMenu)}
+              className="chat-settings-mobile-btn mobile-only-control"
+              title="Chat Settings"
+              aria-label="Toggle settings"
+            >
+              {showMobileMenu ? <X size={16} /> : <Sliders size={16} />}
+            </button>
             {messages.length > 0 && (
               <button
                 id="chat-download-button"
