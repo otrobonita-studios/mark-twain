@@ -84,7 +84,7 @@ export default function RebuildProcessPage() {
     {
       num: '10',
       title: 'Deploy and iterate',
-      desc: 'Monitor queries. Notice what people ask. Add new sources. Fine-tune if needed. The brain learns as the company evolves.'
+      desc: 'Monitor queries. Notice what people ask. Add new sources. Fine-tune when needed. The brain learns as the company evolves.'
     }
   ];
 
@@ -229,7 +229,7 @@ export default function RebuildProcessPage() {
             </section>
 
             {/* The Next Step */}
-            <section className="text-left border-t border-[rgba(217,163,74,0.12)] pt-10">
+            <section className="text-left border-t border-[rgba(217,163,74,0.12)] pt-10" style={{ marginTop: '5rem' }}>
               <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-4 text-left">
                 The Next Step
               </h3>
