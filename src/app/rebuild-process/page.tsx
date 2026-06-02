@@ -120,13 +120,13 @@ export default function RebuildProcessPage() {
       {/* Top Left Logo (Back to Home Link) */}
       <div className="book-logo-container" style={{ position: 'absolute', top: '2rem', left: '2rem', zIndex: 10 }}>
         <Link href="/">
-          <img 
-            alt="Mark Twain Logo" 
-            width="98" 
-            height="35" 
-            className="mark-twain-solo-logo" 
-            src="/images/MarkTwainSoloLogo.webp" 
-            style={{ color: 'transparent' }} 
+          <img
+            alt="Mark Twain Logo"
+            width="98"
+            height="35"
+            className="mark-twain-solo-logo"
+            src="/images/MarkTwainSoloLogo.webp"
+            style={{ color: 'transparent' }}
           />
         </Link>
       </div>
@@ -148,7 +148,7 @@ export default function RebuildProcessPage() {
           <h1 className="text-text-100 text-[2.25rem] font-bold text-center leading-tight mb-2">
             Building Your Company's Central Intelligence
           </h1>
-          
+
           <h2 className="text-xs uppercase tracking-widest text-center font-mono opacity-60 mb-12">
             Your company needs a brain as much as Mark did.
           </h2>
@@ -156,46 +156,46 @@ export default function RebuildProcessPage() {
           <div className="space-y-12">
             {/* The Challenge */}
             <section className="text-left">
-              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-4 text-left" style={{ marginTop: '4rem' }}>
+              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-4 text-left" style={{ marginTop: '4rem', textAlign: 'left', color: 'var(--primary)' }}>
                 The Challenge
               </h3>
               <p className="text-base leading-relaxed text-justify mb-0">
-                Right now, knowledge lives in people. When Sarah leaves, her years of client context go with her. 
-                When the team pivots, the institutional lessons from three failed projects are scattered across forgotten 
-                Slack threads and personal notebooks. Each new hire re-learns what the last one figured out. 
+                Right now, knowledge lives in people. When Sarah leaves, her years of client context go with her.
+                When the team pivots, the institutional lessons from three failed projects are scattered across forgotten
+                Slack threads and personal notebooks. Each new hire re-learns what the last one figured out.
                 You're not investing in a company that learns — you're investing in individuals who do.
               </p>
             </section>
 
             {/* The Opportunity */}
             <section className="text-left">
-              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-4 text-left">
+              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-4 text-left" style={{ textAlign: 'left', color: 'var(--primary)' }}>
                 The Opportunity
               </h3>
               <p className="text-base leading-relaxed text-justify mb-0">
-                Building central intelligence isn't hard, but it takes planning. Here's how I created the base 
+                Building central intelligence isn't hard, but it takes planning. Here's how I created the base
                 knowledge layer that Mark Twain's personality now runs on — and how your company can do the same.
               </p>
             </section>
 
             {/* The 10-Step Process */}
             <section className="text-left">
-              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-6 text-left">
+              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-6 text-left" style={{ textAlign: 'left', color: 'var(--primary)' }}>
                 The 10-Step Process
               </h3>
               <div className="space-y-6">
                 {steps.map((step, idx) => (
                   <div key={idx} className="border-b border-[rgba(217,163,74,0.06)] pb-5 last:border-b-0">
                     <div className="flex-1">
-                      <h4 className="text-[1.05rem] font-bold mb-1 leading-normal text-left" style={{ margin: 0, color: 'var(--foreground)' }}>
+                      <div className="text-[1.05rem] font-bold mb-1 leading-normal text-left font-serif" style={{ margin: 0, textAlign: 'left', color: 'var(--foreground)' }}>
                         <span className="font-mono text-sm font-bold text-[var(--primary)] opacity-85 pt-1 select-none" style={{ marginRight: '0.75rem' }}>
                           {step.num}
                         </span>
                         {step.title}
-                      </h4>
-                      <p className="text-sm leading-relaxed text-justify mb-0 opacity-80" style={{ color: 'inherit' }}>
+                      </div>
+                      <div className="text-sm leading-relaxed text-justify opacity-80" style={{ color: 'inherit', margin: 0 }}>
                         {step.desc}
-                      </p>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -204,26 +204,26 @@ export default function RebuildProcessPage() {
 
             {/* What You Get */}
             <section className="text-left">
-              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-6 text-left">
+              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-6 text-left" style={{ textAlign: 'left', color: 'var(--primary)' }}>
                 What You Get
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {outcomes.map((item, idx) => (
-                  <div 
-                    key={idx} 
-                    className="rounded-lg border text-left" 
+                  <div
+                    key={idx}
+                    className="rounded-lg border text-left"
                     style={{
                       padding: '1.5rem',
                       backgroundColor: isParchment ? 'rgba(44, 31, 17, 0.02)' : 'rgba(255, 244, 223, 0.01)',
                       borderColor: isParchment ? 'rgba(44, 31, 17, 0.08)' : 'rgba(255, 244, 223, 0.06)'
                     }}
                   >
-                    <h4 className="font-serif font-bold text-base mb-2 text-[var(--primary)] leading-normal">
+                    <div className="font-serif font-bold text-base mb-2 text-[var(--primary)] leading-normal text-center" style={{ textAlign: 'center', margin: 0, marginBottom: '0.5rem', color: 'var(--primary)' }}>
                       {item.title}
-                    </h4>
-                    <p className="text-xs leading-relaxed opacity-85 mb-0" style={{ fontFamily: 'sans-serif' }}>
+                    </div>
+                    <div className="text-xs leading-relaxed opacity-85 text-center" style={{ fontFamily: 'sans-serif', textAlign: 'center', margin: 0, padding: 0 }}>
                       {item.desc}
-                    </p>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -231,10 +231,10 @@ export default function RebuildProcessPage() {
 
             {/* The Next Step */}
             <section className="text-left border-t border-[rgba(217,163,74,0.12)] pt-10" style={{ marginTop: '5rem' }}>
-              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-4 text-left">
+              <h3 className="text-lg font-bold uppercase tracking-wider text-[var(--primary)] mb-4 text-left" style={{ textAlign: 'left', color: 'var(--primary)' }}>
                 The Next Step
               </h3>
-              <p className="text-base leading-relaxed text-justify mb-6">
+              <p className="text-base leading-relaxed text-center mb-6" style={{ textAlign: 'center' }}>
                 Mr Twain's progress has been faster than expected, which means we have capacity.
               </p>
               <p className="text-base leading-relaxed text-justify mb-8">
