@@ -32,6 +32,7 @@ export default function Navigation() {
     { href: '/chat', label: 'Chat MkII', icon: MessageSquare, desc: 'Interactive AI Dialogue' },
     { href: '/read/eves-diary', label: 'Read & Listen', icon: BookOpen, desc: 'Eve\'s Diary Multimedia Edition' },
     { href: '/complete-works', label: 'In the Remake', icon: Layers, desc: 'Mark Twain\'s Complete Library' },
+    { href: '/about', label: 'About Mark', icon: BookOpen, desc: 'Twain\'s Life & Biography' },
     { href: '/rebuild-process', label: 'Corporate Brain', icon: FileText, desc: 'Building Central Intelligence' }
   ];
 

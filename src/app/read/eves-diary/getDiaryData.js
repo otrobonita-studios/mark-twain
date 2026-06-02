@@ -52,9 +52,9 @@ export function getDiaryData() {
   extractedContent = extractedContent.replace(
     /<div class="fig"[^>]*>\s*<img[^>]+cover\.jpg[^>]*>\s*(?:<br\s*\/?>)?\s*<\/div>\s*<div class="fig"[^>]*>\s*<img[^>]+front\.jpg[^>]*>\s*(?:<br\s*\/?>)?\s*<\/div>\s*<div class="fig"[^>]*>\s*<img[^>]+title\.jpg[^>]*>\s*(?:<br\s*\/?>)?\s*<\/div>/gi,
     `<div class="book-cover-trio">
-      <div class="fig-trio-item"><img alt="cover.jpg" src="/images/eves-diary/cover.jpg" /></div>
-      <div class="fig-trio-item"><img alt="front.jpg" src="/images/eves-diary/front.jpg" /></div>
-      <div class="fig-trio-item"><img alt="title.jpg" src="/images/eves-diary/title.jpg" /></div>
+      <div class="fig-trio-item"><img alt="cover.jpg" src="/images/book-illustrations/eves-diary/cover.jpg" /></div>
+      <div class="fig-trio-item"><img alt="front.jpg" src="/images/book-illustrations/eves-diary/front.jpg" /></div>
+      <div class="fig-trio-item"><img alt="title.jpg" src="/images/book-illustrations/eves-diary/title.jpg" /></div>
     </div>`
   );
   // Tag H2 headings with section-N IDs for ToC mapping
@@ -209,7 +209,7 @@ export function getDiaryData() {
     '109.jpg': ["atthegrave", "at-the-grave", "at_the_grave", "at eve's grave", "attevesgrave"]
   };
 
-  const evesDiaryDir = path.join(process.cwd(), 'public/images/eves-diary');
+  const evesDiaryDir = path.join(process.cwd(), 'public/images/book-illustrations/eves-diary');
   try {
     if (fs.existsSync(evesDiaryDir)) {
       const files = fs.readdirSync(evesDiaryDir);
@@ -224,7 +224,7 @@ export function getDiaryData() {
           const originalEscaped = original.replace(/\./g, '\\.');
           // Match the wrapping div.fig and the img child to change width and max-height
           const divRegex = new RegExp(
-            `(<div class="fig" style="width:)40%(;">\\s*<img[^>]*src="\\/images\\/eves-diary\\/${originalEscaped}"[^>]*>)`,
+            `(<div class="fig" style="width:)40%(;">\\s*<img[^>]*src="\\/images\\/book-illustrations\\/eves-diary\\/${originalEscaped}"[^>]*>)`,
             'g'
           );
           
@@ -232,14 +232,14 @@ export function getDiaryData() {
             divRegex.lastIndex = 0; // reset regex
             extractedContent = extractedContent.replace(
               divRegex,
-              `<div class="fig fig-square" style="width:25%;"><img class="square-img" src="/images/eves-diary/${croppedFile}" data-zoom-src="/images/eves-diary/${original}" style="width:100%; max-height:250px; object-fit:cover;" />`
+              `<div class="fig fig-square" style="width:25%;"><img class="square-img" src="/images/book-illustrations/eves-diary/${croppedFile}" data-zoom-src="/images/book-illustrations/eves-diary/${original}" style="width:100%; max-height:250px; object-fit:cover;" />`
             );
           } else {
             // Fallback for simple image swap if structure differs
-            const fallbackRegex = new RegExp(`src="\\/images\\/eves-diary\\/${originalEscaped}"`, 'g');
+            const fallbackRegex = new RegExp(`src="\\/images\\/book-illustrations\\/eves-diary\\/${originalEscaped}"`, 'g');
             extractedContent = extractedContent.replace(
               fallbackRegex,
-              `src="/images/eves-diary/${croppedFile}" data-zoom-src="/images/eves-diary/${original}"`
+              `src="/images/book-illustrations/eves-diary/${croppedFile}" data-zoom-src="/images/book-illustrations/eves-diary/${original}"`
             );
           }
         }
@@ -252,10 +252,10 @@ export function getDiaryData() {
         if (match) {
           const originalNum = match[1];
           const original = `${originalNum}.jpg`;
-          const regex = new RegExp(`src="\\/images\\/eves-diary\\/${originalNum}\\.jpg"`, 'g');
+          const regex = new RegExp(`src="\\/images\\/book-illustrations\\/eves-diary\\/${originalNum}\\.jpg"`, 'g');
           extractedContent = extractedContent.replace(
             regex,
-            `src="/images/eves-diary/${file}" data-zoom-src="/images/eves-diary/${original}"`
+            `src="/images/book-illustrations/eves-diary/${file}" data-zoom-src="/images/book-illustrations/eves-diary/${original}"`
           );
         }
       });

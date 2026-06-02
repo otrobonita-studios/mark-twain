@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Moon, Sun, Sparkles, Mic, Map, BookOpen, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion } from 'framer-motion';
-import TxtReaderClient from './TxtReaderClient';
 
 const books = [
   {
@@ -104,7 +103,7 @@ const books = [
     filename: "The-American-Claimant.txt",
     cover: "/images/book-covers/Book-cover-The-American-Claimant.jpg",
     desc: "A comedy of errors involving an eccentric American inventor claiming a British earldom and swapping lives.",
-    status: "Planning",
+    status: "Modernized",
     genre: "Satire",
     year: 1892,
     color: "from-[#1e3d30] to-[#0f1e18]"
@@ -114,7 +113,7 @@ const books = [
     filename: "The-Innocents-Abroad.txt",
     cover: "/images/book-covers/Book-cover-The-Innocents-Abroad.jpg",
     desc: "Twain's highly popular travel book charting his journey to Europe and the Holy Land on a steamship cruise.",
-    status: "Planning",
+    status: "Modernized",
     genre: "Travelogue",
     year: 1869,
     color: "from-[#383a1a] to-[#1c1d0d]"
@@ -124,7 +123,7 @@ const books = [
     filename: "Tragedy-of-Pudd'nhead-Wilson.txt",
     cover: "/images/book-covers/Book-cover-Tragedy-of-Puddnhead-Wilson.jpg",
     desc: "A tense story of switched infants, legal drama, racial identity, and early forensics in a Missouri town.",
-    status: "Planning",
+    status: "Modernized",
     genre: "Mystery",
     year: 1894,
     color: "from-[#381f3b] to-[#1c0f1d]"
@@ -134,7 +133,7 @@ const books = [
     filename: "Tom-Sawyer-Abroad.txt",
     cover: "/images/book-covers/Book-cover-Tom-Sawyer-Abroad.jpg",
     desc: "Tom Sawyer, Huck Finn, and Jim drift across the Atlantic in a balloon and explore the Sahara Desert.",
-    status: "Planning",
+    status: "Modernized",
     genre: "Adventure",
     year: 1894,
     color: "from-[#1c3838] to-[#0e1c1c]"
@@ -142,9 +141,9 @@ const books = [
   {
     title: "Tom Sawyer, Detective",
     filename: "Tom-Sawyer-Detective.txt",
-    cover: "/images/book-covers/Book-cover-Tom-Sawyer-Detective.png",
+    cover: "/images/book-covers/Book-cover-Tom-Sawyer-Detective.jpg",
     desc: "Tom Sawyer turns detective to solve a mysterious murder and gem theft in the backwoods of Arkansas.",
-    status: "Planning",
+    status: "Modernized",
     genre: "Mystery",
     year: 1896,
     color: "from-[#3a351a] to-[#1d1a0d]"
@@ -154,7 +153,7 @@ const books = [
     filename: "Mysterious-Stranger.txt",
     cover: "/images/book-covers/Book-cover-Mysterious-Stranger.jpg",
     desc: "Twain's dark, profound posthumous fable set in medieval Austria, questioning the nature of human existence.",
-    status: "Planning",
+    status: "Modernized",
     genre: "Philosophical",
     year: 1916,
     color: "from-[#20203d] to-[#10101e]"
@@ -167,54 +166,73 @@ export default function TheCompleteWorksPage() {
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [scrollProgress, setScrollProgress] = useState(0);
 
-  // Modal states for .txt manuscripts
-  const [activeTxtFile, setActiveTxtFile] = useState<string | null>(null);
-  const [txtContent, setTxtContent] = useState('');
-  const [txtLoading, setTxtLoading] = useState(false);
-  const [txtError, setTxtError] = useState<string | null>(null);
-  const handleOpenTxtFile = async (filename: string) => {
-    setActiveTxtFile(filename);
-    setTxtLoading(true);
-    setTxtError(null);
-    setTxtContent('');
-    try {
-      const res = await fetch(`/api/txt?file=${encodeURIComponent(filename)}`);
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setTxtContent(data.content);
-      } else {
-        throw new Error(data.error || 'Failed to load text file.');
+  const [active, setActive] = useState(4);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isProgrammaticScrollRef = useRef(true); // Start true to allow initial mount scroll
+  const isInitialRenderRef = useRef(true);
+
+  const scrollToBook = (index: number) => {
+    isProgrammaticScrollRef.current = true;
+    setActive(index);
+    
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    scrollTimeoutRef.current = setTimeout(() => {
+      isProgrammaticScrollRef.current = false;
+    }, 600);
+  };
+
+  const handleContainerScroll = () => {
+    if (isProgrammaticScrollRef.current) return;
+    if (!containerRef.current) return;
+
+    const container = containerRef.current;
+    const containerCenter = container.scrollLeft + container.clientWidth / 2;
+    
+    let closestIndex = active;
+    let minDistance = Infinity;
+    
+    cardRefs.current.forEach((card, idx) => {
+      if (!card) return;
+      const cardCenter = card.offsetLeft + card.clientWidth / 2;
+      const distance = Math.abs(containerCenter - cardCenter);
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestIndex = idx;
       }
-    } catch (err: any) {
-      setTxtError(err.message || 'An error occurred while loading the file.');
-    } finally {
-      setTxtLoading(false);
+    });
+    
+    if (closestIndex !== active) {
+      setActive(closestIndex);
     }
   };
 
-  const handleCloseTxtFile = () => {
-    setActiveTxtFile(null);
-    setTxtContent('');
-    setTxtError(null);
-  };
-
-  const handleContainerClick = (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    const anchor = target.closest('a');
-    if (anchor) {
-      const href = anchor.getAttribute('href');
-      if (href && href.startsWith('/read/txt?file=')) {
-        e.preventDefault();
-        const urlParams = new URLSearchParams(href.split('?')[1]);
-        const file = urlParams.get('file');
-        if (file) {
-          handleOpenTxtFile(file);
-        }
+  useEffect(() => {
+    if (isProgrammaticScrollRef.current) {
+      const activeCard = cardRefs.current[active];
+      if (activeCard && containerRef.current) {
+        activeCard.scrollIntoView({
+          behavior: isInitialRenderRef.current ? 'auto' : 'smooth',
+          block: 'nearest',
+          inline: 'center'
+        });
+      }
+      
+      if (isInitialRenderRef.current) {
+        isInitialRenderRef.current = false;
+        setTimeout(() => {
+          isProgrammaticScrollRef.current = false;
+        }, 150);
       }
     }
-  };
+  }, [active]);
 
-  const [active, setActive] = useState(0);
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -266,7 +284,7 @@ export default function TheCompleteWorksPage() {
       </div>
 
       {/* Reading Desk */}
-      <main className="book-page-desk" onClick={handleContainerClick}>
+      <main className="book-page-desk">
         <article className={`book-page-parchment font-serif size-${fontSize}`}>
           {/* Theme Selector (Floating inside parchment card) */}
           <button
@@ -283,110 +301,103 @@ export default function TheCompleteWorksPage() {
 
           <div className="relative w-full px-10 mb-8 mt-2 flex flex-col items-center select-none">
             {/* Viewport */}
-            <div className="w-full overflow-hidden py-4" style={{ minHeight: 250 }}>
-              <motion.div
-                className="flex"
-                style={{ gap: '16px', width: 'max-content' }}
-                animate={{ x: -active * (170 + 16) }}
-                transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-                drag="x"
-                dragConstraints={{ left: -(books.length - 1) * (170 + 16), right: 0 }}
-                dragElastic={0.2}
-                onDragEnd={(event, info) => {
-                  const swipeThreshold = 50;
-                  if (info.offset.x < -swipeThreshold) {
-                    setActive(Math.min(books.length - 1, active + 1));
-                  } else if (info.offset.x > swipeThreshold) {
-                    setActive(Math.max(0, active - 1));
-                  }
-                }}
-              >
-                {books.map((book, i) => {
-                  const isActive = i === active;
-                  const isParchment = theme === 'parchment';
-                  
-                  const cardBorderClass = isParchment 
-                    ? (isActive ? 'border-[var(--primary)]' : 'border-[rgba(44,31,17,0.12)]')
-                    : (isActive ? 'border-[var(--primary)]' : 'border-[rgba(255,244,223,0.08)]');
+            <div 
+              ref={containerRef}
+              onScroll={handleContainerScroll}
+              className="w-full overflow-x-auto snap-x snap-mandatory scroll-smooth no-scrollbar py-6 flex"
+              style={{ 
+                minHeight: 300,
+                paddingLeft: 'calc(50% - 85px)',
+                paddingRight: 'calc(50% - 85px)',
+                gap: '16px'
+              }}
+            >
+              {books.map((book, i) => {
+                const isActive = i === active;
+                const isParchment = theme === 'parchment';
+                
+                const cardBorderClass = isParchment 
+                  ? (isActive ? 'border-[var(--primary)]' : 'border-[rgba(44,31,17,0.12)]')
+                  : (isActive ? 'border-[var(--primary)]' : 'border-[rgba(255,244,223,0.08)]');
 
-                  const CardContent = book.cover ? (
-                    <div className="w-full h-full overflow-hidden relative rounded-lg">
-                      <div className="absolute -right-8 -top-8 w-24 h-24 bg-[var(--primary)] opacity-5 rounded-full blur-xl group-hover:opacity-10 transition-opacity duration-300 pointer-events-none" />
-                      <img 
-                        src={book.cover} 
-                        alt={book.title} 
-                        className="w-full h-full object-cover" 
-                        draggable={false}
-                      />
+                const CardContent = book.cover ? (
+                  <div className="w-full h-full overflow-hidden relative rounded-lg">
+                    <div className="absolute -right-8 -top-8 w-24 h-24 bg-[var(--primary)] opacity-5 rounded-full blur-xl group-hover:opacity-10 transition-opacity duration-300 pointer-events-none" />
+                    <img 
+                      src={book.cover} 
+                      alt={book.title} 
+                      className="w-full h-full object-cover" 
+                      draggable={false}
+                    />
+                  </div>
+                ) : (
+                  <div className={`w-full h-full bg-gradient-to-br ${book.color} flex flex-col justify-between p-4 relative shadow-inner overflow-hidden rounded-lg`}>
+                    <div className="absolute -right-8 -top-8 w-24 h-24 bg-[var(--primary)] opacity-5 rounded-full blur-xl group-hover:opacity-10 transition-opacity duration-300 pointer-events-none" />
+                    <div className="absolute inset-2 border border-[rgba(217,163,74,0.12)] pointer-events-none rounded" />
+                    
+                    <div className="text-[9px] font-mono text-[rgba(255,244,223,0.35)] uppercase tracking-widest text-center mt-1 select-none">
+                      Mark Twain
                     </div>
-                  ) : (
-                    <div className={`w-full h-full bg-gradient-to-br ${book.color} flex flex-col justify-between p-4 relative shadow-inner overflow-hidden rounded-lg`}>
-                      <div className="absolute -right-8 -top-8 w-24 h-24 bg-[var(--primary)] opacity-5 rounded-full blur-xl group-hover:opacity-10 transition-opacity duration-300 pointer-events-none" />
-                      <div className="absolute inset-2 border border-[rgba(217,163,74,0.12)] pointer-events-none rounded" />
-                      
-                      <div className="text-[9px] font-mono text-[rgba(255,244,223,0.35)] uppercase tracking-widest text-center mt-1 select-none">
-                        Mark Twain
-                      </div>
-                      
-                      <div className="my-auto px-1 flex flex-col items-center">
-                        <BookOpen className="w-6 h-6 text-[rgba(217,163,74,0.25)] mb-3" />
-                        <span className="font-serif text-xs font-semibold tracking-wide text-[rgba(255,244,223,0.85)] text-center leading-relaxed line-clamp-4 max-w-[90%]">
-                          {book.title}
+                    
+                    <div className="my-auto px-1 flex flex-col items-center">
+                      <BookOpen className="w-6 h-6 text-[rgba(217,163,74,0.25)] mb-3" />
+                      <span className="font-serif text-xs font-semibold tracking-wide text-[rgba(255,244,223,0.85)] text-center leading-relaxed line-clamp-4 max-w-[90%]">
+                        {book.title}
+                      </span>
+                    </div>
+                    
+                    <div className="text-[8px] font-mono text-[rgba(217,163,74,0.45)] text-center mb-1 uppercase tracking-wider select-none">
+                      {book.genre}
+                    </div>
+                  </div>
+                );
+
+                return (
+                  <div
+                    key={book.title}
+                    ref={el => { cardRefs.current[i] = el; }}
+                    style={{
+                      width: 170,
+                      height: 227,
+                      flexShrink: 0,
+                      transform: isActive ? 'scale(1.08)' : 'scale(0.95)',
+                      opacity: isActive ? 1 : 0.6,
+                      transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                      zIndex: isActive ? 10 : 1
+                    }}
+                    className={`relative rounded-lg border ${cardBorderClass} bg-[rgba(255,244,223,0.02)] shadow-md group text-left flex flex-col cursor-pointer snap-center`}
+                    onClick={() => {
+                      if (isActive) {
+                        if (book.href) {
+                          router.push(book.href);
+                        } else if (book.filename) {
+                          const slug = book.filename.replace(/\.txt$/, '');
+                          router.push(`/read/${slug}`);
+                        }
+                      } else {
+                        scrollToBook(i);
+                      }
+                    }}
+                  >
+                    {CardContent}
+                    {(book.href || book.filename) && (
+                      <div className={`absolute inset-0 bg-black/60 transition-opacity duration-300 flex flex-col items-center justify-center gap-2 rounded-lg pointer-events-none ${isActive ? 'opacity-100' : 'opacity-0'}`}>
+                        <BookOpen className="w-8 h-8 text-[var(--primary)]" />
+                        <span className="text-[10px] font-mono uppercase tracking-widest text-[#fff4df] font-semibold">
+                          Open
                         </span>
                       </div>
-                      
-                      <div className="text-[8px] font-mono text-[rgba(217,163,74,0.45)] text-center mb-1 uppercase tracking-wider select-none">
-                        {book.genre}
-                      </div>
-                    </div>
-                  );
-
-                  return (
-                    <motion.div
-                      key={book.title}
-                      style={{
-                        width: 170,
-                        height: 227,
-                        flexShrink: 0,
-                      }}
-                      animate={{
-                        scale: isActive ? 1.02 : 0.94,
-                        opacity: isActive ? 1 : 0.6,
-                      }}
-                      transition={{ duration: 0.25 }}
-                      className={`relative rounded-lg border ${cardBorderClass} bg-[rgba(255,244,223,0.02)] shadow-md transition-all duration-300 group text-left flex flex-col cursor-pointer`}
-                      onClick={() => {
-                        if (isActive) {
-                          if (book.href) {
-                            router.push(book.href);
-                          } else if (book.filename) {
-                            handleOpenTxtFile(book.filename);
-                          }
-                        } else {
-                          setActive(i);
-                        }
-                      }}
-                    >
-                      {CardContent}
-                      {isActive && (book.href || book.filename) && (
-                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-center gap-2 rounded-lg pointer-events-none">
-                          <BookOpen className="w-8 h-8 text-[var(--primary)]" />
-                          <span className="text-[10px] font-mono uppercase tracking-widest text-[#fff4df] font-semibold">
-                            {book.href ? 'Read' : 'Open'}
-                          </span>
-                        </div>
-                      )}
-                    </motion.div>
-                  );
-                })}
-              </motion.div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {/* Chevron buttons */}
             <button 
               className="carousel-control-btn prev"
               style={{ left: '-12px' }}
-              onClick={() => setActive(Math.max(0, active - 1))}
+              onClick={() => scrollToBook(Math.max(0, active - 1))}
               disabled={active === 0}
               aria-label="Previous book"
               type="button"
@@ -396,7 +407,7 @@ export default function TheCompleteWorksPage() {
             <button 
               className="carousel-control-btn next"
               style={{ right: '-12px' }}
-              onClick={() => setActive(Math.min(books.length - 1, active + 1))}
+              onClick={() => scrollToBook(Math.min(books.length - 1, active + 1))}
               disabled={active === books.length - 1}
               aria-label="Next book"
               type="button"
@@ -410,7 +421,7 @@ export default function TheCompleteWorksPage() {
                 <button
                   key={idx}
                   className={`carousel-dot ${idx === active ? 'active' : ''}`}
-                  onClick={() => setActive(idx)}
+                  onClick={() => scrollToBook(idx)}
                   aria-label={`Go to book ${idx + 1}`}
                   type="button"
                 />
@@ -428,81 +439,157 @@ export default function TheCompleteWorksPage() {
               Already out: <Link href="/read/eves-diary" className="text-[var(--primary)] hover:underline font-semibold">Eve's Diary</Link>. Give it a go, it's excellent.
             </p>
 
-            <h2 className="text-text-100 mt-3 -mb-1 text-[1.5rem] font-bold">Books (16 full-length novels &amp; story collections)</h2>
+            <h2 className="text-text-100 mt-5 -mb-1 text-[1.5rem] font-bold">Books — restored, free to read, might still be rough at the edges</h2>
             <div className="overflow-x-auto w-full mb-[3.5rem]">
-              <table className="min-w-full border-collapse text-sm leading-[1.7] whitespace-normal">
+              <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
                 <thead className="text-left">
                   <tr>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Filename</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Formats</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">The Adventures of Tom Sawyer</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Adventures-of-Tom-Sawyer.txt" target="_blank" rel="noopener noreferrer">Adventures-of-Tom-Sawyer.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized, Youth Edition</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Adventures of Huckleberry Finn</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Huckleberry-Finn.txt" target="_blank" rel="noopener noreferrer">Huckleberry-Finn.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized, Youth Edition</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">A Connecticut Yankee in King Arthur's Court</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Connecticut-Yankee.txt" target="_blank" rel="noopener noreferrer">Connecticut-Yankee.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Following the Equator</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Following-The-Equator.txt" target="_blank" rel="noopener noreferrer">Following-The-Equator.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Life on the Mississippi</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Life-on-the-Mississippi.txt" target="_blank" rel="noopener noreferrer">Life-on-the-Mississippi.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">The Prince and the Pauper</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Prince-and-Pauper.txt" target="_blank" rel="noopener noreferrer">Prince-and-Pauper.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized, Youth Edition</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Roughing It</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Roughing-It.txt" target="_blank" rel="noopener noreferrer">Roughing-It.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">The $30,000 Bequest and Others</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=The-30000-Bequest-and-Others.txt" target="_blank" rel="noopener noreferrer">The-30000-Bequest-and-Others.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">The American Claimant</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=The-American-Claimant.txt" target="_blank" rel="noopener noreferrer">The-American-Claimant.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">The Innocents Abroad</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=The-Innocents-Abroad.txt" target="_blank" rel="noopener noreferrer">The-Innocents-Abroad.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">The Tragedy of Pudd'nhead Wilson</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Tragedy-of-Pudd'nhead-Wilson.txt" target="_blank" rel="noopener noreferrer">Tragedy-of-Pudd'nhead-Wilson.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Tom Sawyer Abroad</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Tom-Sawyer-Abroad.txt" target="_blank" rel="noopener noreferrer">Tom-Sawyer-Abroad.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Tom Sawyer, Detective</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Tom-Sawyer-Detective.txt" target="_blank" rel="noopener noreferrer">Tom-Sawyer-Detective.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">The Mysterious Stranger</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Mysterious-Stranger.txt" target="_blank" rel="noopener noreferrer">Mysterious-Stranger.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Complete Works Vol. 1</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Volume-1.txt" target="_blank" rel="noopener noreferrer">Volume-1.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Complete Works Vol. 2–6</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Volume-2.txt" target="_blank" rel="noopener noreferrer">Volume-2.txt through Volume-6.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Adventures-of-Tom-Sawyer')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Adventures of Tom Sawyer</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized, Youth Edition</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Huckleberry-Finn')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Adventures of Huckleberry Finn</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized, Youth Edition</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Connecticut-Yankee')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">A Connecticut Yankee in King Arthur's Court</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Following-The-Equator')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Following the Equator</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Life-on-the-Mississippi')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Life on the Mississippi</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Prince-and-Pauper')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Prince and the Pauper</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized, Youth Edition</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Roughing-It')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Roughing It</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/The-30000-Bequest-and-Others')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The $30,000 Bequest and Others</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/The-American-Claimant')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The American Claimant</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/The-Innocents-Abroad')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Innocents Abroad</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Tragedy-of-Pudd\'nhead-Wilson')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Tragedy of Pudd'nhead Wilson</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Tom-Sawyer-Abroad')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Tom Sawyer Abroad</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Tom-Sawyer-Detective')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Tom Sawyer, Detective</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Mysterious-Stranger')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Mysterious Stranger</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-1')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Complete Works Vol. 1</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-2')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Complete Works Vol. 2–6</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
 
 
-            <h2 className="text-text-100 mt-3 -mb-1 text-[1.3rem] font-bold">Letters (1)</h2>
+            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Letters (1)</h2>
             <div className="overflow-x-auto w-full mb-[3.5rem]">
-              <table className="min-w-full border-collapse text-sm leading-[1.7] whitespace-normal">
+              <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
                 <thead className="text-left">
                   <tr>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Filename</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Formats</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">The Complete Correspondence of Mark Twain</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Letters.txt" target="_blank" rel="noopener noreferrer">Letters.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized, searchable</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Letters')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Complete Correspondence of Mark Twain</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized, searchable</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
 
 
-            <h2 className="text-text-100 mt-3 -mb-1 text-[1.3rem] font-bold">Essays, Diaries, Stories &amp; Miscellaneous (84)</h2>
+            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Essays, Diaries, Stories &amp; Miscellaneous (83)</h2>
             <div className="overflow-x-auto w-full mb-[3.5rem]">
-              <table className="min-w-full border-collapse text-sm leading-[1.7] whitespace-normal">
+              <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
                 <thead className="text-left">
                   <tr>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Filename</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Formats</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">What Is Man? and Other Essays</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=What-Is-Man-And-Others.txt" target="_blank" rel="noopener noreferrer">What-Is-Man-And-Others.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Recollections of Joan of Arc</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=Recollections-of-Joan-of-Arc-I.txt" target="_blank" rel="noopener noreferrer">Recollections-of-Joan-of-Arc-I.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Mark's Diary</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top"><Link href="/read/txt?file=MarksDiary.txt" target="_blank" rel="noopener noreferrer">MarksDiary.txt</Link></td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">81 additional works</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[essays, short stories, speeches, travel sketches, diaries]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/What-Is-Man-And-Others')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">What Is Man? and Other Essays</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Recollections-of-Joan-of-Arc-I')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Recollections of Joan of Arc</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="opacity-80">
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">81 additional works</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">[essays, short stories, speeches, travel sketches, diaries]</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
 
 
-            <h2 className="text-text-100 mt-3 -mb-1 text-[1.3rem] font-bold">Recent Interviews &amp; Analysis (Generated)</h2>
+            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Recent Interviews &amp; Analysis (Generated)</h2>
             <div className="overflow-x-auto w-full mb-[3.5rem]">
-              <table className="min-w-full border-collapse text-sm leading-[1.7] whitespace-normal">
+              <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
                 <thead className="text-left">
                   <tr>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
@@ -519,10 +606,9 @@ export default function TheCompleteWorksPage() {
                 </tbody>
               </table>
             </div>
-            <p className="font-claude-response-body break-words whitespace-normal leading-[1.7]"><em>This section grows as Mark engages with readers and current events.</em></p>
 
 
-            <h2 className="text-text-100 mt-3 -mb-1 text-[1.3rem] font-bold">Format Key</h2>
+            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Format Key</h2>
             <ul className="[li_&]:mb-0 [li_&]:mt-1 [li_&]:gap-1 [&:not(:last-child)_ul]:pb-1 [&:not(:last-child)_ol]:pb-1 list-disc flex flex-col gap-1 pl-8 mb-[3.5rem] text-left">
               <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Modernized</strong> — Texts cleaned of 1800s ephemera, readable on any device. Ask questions, get responses informed by the full work.</li>
               <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Youth Edition</strong> — Adapted for classroom reading (vocabulary, pacing, focus)</li>
@@ -534,25 +620,6 @@ export default function TheCompleteWorksPage() {
 
         </article>
       </main>
-
-      {/* OS-Themed Text Viewer Modal */}
-      {activeTxtFile && (
-        <div className="fixed inset-0 z-[9999] bg-[var(--reader-modal-bg)] overflow-auto">
-          {txtLoading ? (
-            <div className="flex flex-col items-center justify-center w-full min-h-screen bg-[#15110d] space-y-4">
-              <div className="w-8 h-8 border-2 border-[var(--primary)] border-t-transparent rounded-full animate-spin" />
-              <p className="text-sm font-mono text-[var(--primary)]">Retrieving manuscript: {activeTxtFile}...</p>
-            </div>
-          ) : (
-            <TxtReaderClient
-              filename={activeTxtFile}
-              initialContent={txtContent}
-              initialError={txtError}
-              onClose={handleCloseTxtFile}
-            />
-          )}
-        </div>
-      )}
     </div>
   );
 }
