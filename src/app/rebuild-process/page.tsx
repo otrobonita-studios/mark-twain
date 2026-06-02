@@ -185,12 +185,12 @@ export default function RebuildProcessPage() {
               </h3>
               <div className="space-y-6">
                 {steps.map((step, idx) => (
-                  <div key={idx} className="flex gap-4 items-start border-b border-[rgba(217,163,74,0.06)] pb-5 last:border-b-0">
-                    <span className="font-mono text-sm font-bold text-[var(--primary)] opacity-85 pt-1 select-none">
-                      {step.num}
-                    </span>
+                  <div key={idx} className="border-b border-[rgba(217,163,74,0.06)] pb-5 last:border-b-0">
                     <div className="flex-1">
                       <h4 className="text-[1.05rem] font-bold mb-1 leading-normal text-left" style={{ margin: 0, color: 'var(--foreground)' }}>
+                        <span className="font-mono text-sm font-bold text-[var(--primary)] opacity-85 pt-1 select-none" style={{ marginRight: '0.75rem' }}>
+                          {step.num}
+                        </span>
                         {step.title}
                       </h4>
                       <p className="text-sm leading-relaxed text-justify mb-0 opacity-80" style={{ color: 'inherit' }}>

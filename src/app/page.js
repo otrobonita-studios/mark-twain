@@ -126,17 +126,32 @@ export default function Home() {
 
         {/* Top: Logo */}
         <div className="logo-container">
-          <Image
-            src="/images/MarkTwainnReappears.webp"
-            alt="Mark Twain Reappears"
-            width={400}
-            height={150}
-            priority
-            className="logo-img"
-          />
-          <p className="logo-subtitle">
-            The Open Source AI Project
-          </p>
+          {/* Mobile Logo */}
+          <div className="logo-mobile-only">
+            <Image
+              src="/images/MarkTwainSoloLogo.webp"
+              alt="Mark Twain Logo"
+              width={98}
+              height={35}
+              priority
+              className="mark-twain-solo-logo"
+              style={{ color: 'transparent' }}
+            />
+          </div>
+          {/* Desktop Logo */}
+          <div className="logo-desktop-only">
+            <Image
+              src="/images/MarkTwainnReappears.webp"
+              alt="Mark Twain Reappears"
+              width={400}
+              height={150}
+              priority
+              className="logo-img"
+            />
+            <p className="logo-subtitle">
+              The Open Source AI Project
+            </p>
+          </div>
         </div>
       </section>
 

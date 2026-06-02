@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Menu, Volume2, Play, Pause, Globe, Copy, Check, Download } from 'lucide-react';
+import { ArrowLeft, Send, ChevronDown, ChevronUp, RefreshCw, X, Info, BookOpen, Sliders, Volume2, Play, Pause, Globe, Copy, Check, Download } from 'lucide-react';
 
 export default function ChatClient() {
   const [messages, setMessages] = useState([]);
@@ -386,9 +386,9 @@ export default function ChatClient() {
               onClick={() => setShowMobileMenu(!showMobileMenu)}
               className="mobile-only-control"
               style={{ background: 'none', border: 'none', padding: 0, color: 'var(--muted-foreground)', display: 'flex', alignItems: 'center', cursor: 'pointer' }}
-              aria-label="Toggle menu"
+              aria-label="Toggle settings"
             >
-              {showMobileMenu ? <X size={22} /> : <Menu size={22} />}
+              {showMobileMenu ? <X size={22} /> : <Sliders size={22} />}
             </button>
           </div>
         </div>
@@ -405,33 +405,6 @@ export default function ChatClient() {
               style={{ overflow: 'hidden' }}
             >
               <div className="mobile-settings-drawer-inner">
-                {/* Navigation */}
-                <div className="drawer-section">
-                  <Link 
-                    href="/" 
-                    onClick={() => setShowMobileMenu(false)}
-                    className="drawer-link"
-                  >
-                    <ArrowLeft size={16} />
-                    <span>Go to Home</span>
-                  </Link>
-                  <Link 
-                    href="/read/eves-diary" 
-                    onClick={() => setShowMobileMenu(false)}
-                    className="drawer-link"
-                  >
-                    <BookOpen size={16} />
-                    <span>Read Eve's Diary</span>
-                  </Link>
-                  <button 
-                    onClick={() => { setShowNotesModal(true); setShowMobileMenu(false); }}
-                    className="drawer-btn"
-                  >
-                    <Info size={16} />
-                    <span>The Rebuild Process</span>
-                  </button>
-                </div>
-
                 {/* Settings Switches */}
                 <div className="drawer-section">
                   <div className="drawer-switch-row">
