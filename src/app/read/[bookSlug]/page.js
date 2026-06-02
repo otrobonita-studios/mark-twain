@@ -183,6 +183,17 @@ export default async function ReadPage({ params }) {
       cleanContent = cleanContent.substring(31, cleanContent.length - 6);
     }
 
+    // Clean legacy enlarge zoom buttons and curly braces from illustrations
+    cleanContent = cleanContent
+      .replace(/<h5[^>]*>\s*<a[^>]*href=["'][^"']*["'][^>]*>\s*<img[^>]*src=["'][^"']*enlarge\.jpg["'][^>]*>\s*<\/a>\s*<\/h5>/gi, '')
+      .replace(/<a[^>]*href=["'][^"']*["'][^>]*>\s*<img[^>]*src=["'][^"']*enlarge\.jpg["'][^>]*>\s*<\/a>/gi, '');
+
+    let prevContent;
+    do {
+      prevContent = cleanContent;
+      cleanContent = cleanContent.replace(/(src|href|alt)=["']([^"']*?)\{([^"']*?)\}([^"']*?)["']/gi, '$1="$2$3$4"');
+    } while (cleanContent !== prevContent);
+
     // Parse H2 elements
     let headerIndex = 0;
     
