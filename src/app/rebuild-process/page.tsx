@@ -193,7 +193,7 @@ export default function RebuildProcessPage() {
                         </span>
                         {step.title}
                       </div>
-                      <div className="text-sm leading-relaxed text-justify opacity-80" style={{ color: 'inherit', margin: 0 }}>
+                      <div className="mb-2 leading-relaxed text-justify opacity-80" style={{ color: 'inherit', margin: 0 }}>
                         {step.desc}
                       </div>
                     </div>
