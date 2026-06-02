@@ -211,8 +211,9 @@ export default function RebuildProcessPage() {
                 {outcomes.map((item, idx) => (
                   <div 
                     key={idx} 
-                    className="p-5 rounded-lg border text-left" 
+                    className="rounded-lg border text-left" 
                     style={{
+                      padding: '1.5rem',
                       backgroundColor: isParchment ? 'rgba(44, 31, 17, 0.02)' : 'rgba(255, 244, 223, 0.01)',
                       borderColor: isParchment ? 'rgba(44, 31, 17, 0.08)' : 'rgba(255, 244, 223, 0.06)'
                     }}
