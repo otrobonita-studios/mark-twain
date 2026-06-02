@@ -111,25 +111,51 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
 
   // Dynamic event binding for collapsible Table of Contents in injected HTML
   useEffect(() => {
-    const wrappers = document.querySelectorAll('.book-toc-collapsed-wrapper');
-    const handlers = [];
+    const handleTocClick = (e) => {
+      const btn = e.target.closest('.book-toc-expand-btn');
+      if (!btn) return;
 
-    wrappers.forEach(wrapper => {
-      const btn = wrapper.querySelector('.book-toc-expand-btn');
-      if (btn) {
-        const handler = () => {
-          const isExpanded = wrapper.classList.toggle('expanded');
-          btn.textContent = isExpanded ? 'Collapse Table of Contents' : 'Expand Table of Contents';
-        };
-        btn.addEventListener('click', handler);
-        handlers.push({ btn, handler });
+      // Find the outermost wrapper containing this button
+      let current = btn.closest('.book-toc-collapsed-wrapper');
+      let outermost = current;
+      while (current) {
+        const parent = current.parentElement ? current.parentElement.closest('.book-toc-collapsed-wrapper') : null;
+        if (parent) {
+          outermost = parent;
+        }
+        current = parent;
       }
-    });
+
+      if (!outermost) return;
+
+      const willExpand = !outermost.classList.contains('expanded');
+
+      // Toggle expanded on outermost and all nested wrappers
+      const allWrappers = [outermost, ...outermost.querySelectorAll('.book-toc-collapsed-wrapper')];
+      allWrappers.forEach(w => {
+        if (willExpand) {
+          w.classList.add('expanded');
+        } else {
+          w.classList.remove('expanded');
+        }
+      });
+
+      // Update text for all buttons inside the outermost wrapper
+      const allButtons = outermost.querySelectorAll('.book-toc-expand-btn');
+      allButtons.forEach(b => {
+        b.textContent = willExpand ? 'Collapse Table of Contents' : 'Expand Table of Contents';
+      });
+    };
+
+    const container = document.querySelector('.book-text-content');
+    if (container) {
+      container.addEventListener('click', handleTocClick);
+    }
 
     return () => {
-      handlers.forEach(({ btn, handler }) => {
-        btn.removeEventListener('click', handler);
-      });
+      if (container) {
+        container.removeEventListener('click', handleTocClick);
+      }
     };
   }, [htmlContent]);
 
