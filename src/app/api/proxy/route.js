@@ -3,12 +3,12 @@ import { GoogleGenAI } from '@google/genai';
 const ALLOWED_ORIGINS = [
   'http://localhost:5173', // Vite dev default
   'http://localhost:3000', // Next.js dev default
-  'https://superday.web.app',
-  'https://superday.firebaseapp.com',
-  'https://blueprint-validator.web.app',
-  'https://blueprint-validator.firebaseapp.com',
-  'https://the-production-unit.web.app',
-  'https://the-production-unit.firebaseapp.com',
+  'https://otrobonita-superday.web.app',
+  'https://otrobonita-superday.firebaseapp.com',
+  'https://otrobonita-blueprint.web.app',
+  'https://otrobonita-blueprint.firebaseapp.com',
+  'https://otrobonita-theproductionunit.web.app',
+  'https://otrobonita-theproductionunit.firebaseapp.com',
   'https://otrobonita-official.web.app',
   'https://otrobonita-official.firebaseapp.com',
 ];
