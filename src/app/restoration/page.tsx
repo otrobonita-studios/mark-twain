@@ -97,7 +97,7 @@ export default function RestorationPage() {
   const primaryText = 'text-[#d9a34a]';
 
   return (
-    <div className={`min-h-screen flex flex-col font-mono transition-colors duration-300 pb-16 ${bgClass}`}>
+    <div className={`min-h-screen flex flex-col font-mono transition-colors duration-300 pb-16 p-3 md:p-8 ${bgClass}`}>
       {/* Interactive 3D Card styles injected locally to guarantee performance */}
       <style dangerouslySetInnerHTML={{ __html: `
         .scene-3d {
@@ -121,7 +121,7 @@ export default function RestorationPage() {
       `}} />
 
       {/* Header Panel */}
-      <header className={`w-full max-w-7xl mx-auto px-6 pt-24 pb-8 border-b ${theme === 'charcoal' ? 'border-amber-500/10' : 'border-amber-900/10'} mb-8`}>
+      <header className={`w-full max-w-7xl mx-auto pt-24 pb-8 border-b ${theme === 'charcoal' ? 'border-amber-500/10' : 'border-amber-900/10'} mb-8`}>
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="text-center md:text-left">
             <div className="flex items-center gap-3 justify-center md:justify-start">
@@ -186,7 +186,7 @@ export default function RestorationPage() {
       </header>
 
       {/* Main Container */}
-      <main className="w-full max-w-7xl mx-auto px-6 flex-1 flex flex-col items-center justify-center">
+      <main className="w-full mx-auto flex-1 flex flex-col items-center justify-center">
         {activeTab === 'flashcards' ? (
           /* ==================== FLASHCARDS MODE ==================== */
           <div className="w-full flex flex-col items-center gap-6">
