@@ -443,89 +443,72 @@ export default function TheCompleteWorksPage() {
                 <thead className="text-left">
                   <tr>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Formats</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Adventures-of-Tom-Sawyer')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Adventures of Tom Sawyer</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized, Youth Edition</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Huckleberry-Finn')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Adventures of Huckleberry Finn</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized, Youth Edition</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Connecticut-Yankee')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">A Connecticut Yankee in King Arthur's Court</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Following-The-Equator')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Following the Equator</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Life-on-the-Mississippi')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Life on the Mississippi</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Prince-and-Pauper')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Prince and the Pauper</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized, Youth Edition</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Roughing-It')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Roughing It</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/The-30000-Bequest-and-Others')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The $30,000 Bequest and Others</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/The-American-Claimant')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The American Claimant</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/The-Innocents-Abroad')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Innocents Abroad</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Tragedy-of-Pudd\'nhead-Wilson')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Tragedy of Pudd'nhead Wilson</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Tom-Sawyer-Abroad')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Tom Sawyer Abroad</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Tom-Sawyer-Detective')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Tom Sawyer, Detective</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Mysterious-Stranger')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Mysterious Stranger</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-1')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Complete Works Vol. 1</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-2')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Complete Works Vol. 2–6</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                 </tbody>
@@ -539,14 +522,12 @@ export default function TheCompleteWorksPage() {
                 <thead className="text-left">
                   <tr>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Formats</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Letters')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Complete Correspondence of Mark Twain</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized, searchable</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                 </tbody>
@@ -560,7 +541,6 @@ export default function TheCompleteWorksPage() {
                 <thead className="text-left">
                   <tr>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Formats</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
                   </tr>
                 </thead>
@@ -568,16 +548,13 @@ export default function TheCompleteWorksPage() {
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/What-Is-Man-And-Others')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">What Is Man? and Other Essays</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Recollections-of-Joan-of-Arc-I')}>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Recollections of Joan of Arc</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                   <tr className="opacity-80">
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">81 additional works</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">[essays, short stories, speeches, travel sketches, diaries]</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                 </tbody>
@@ -593,14 +570,13 @@ export default function TheCompleteWorksPage() {
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Source</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Date</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Format</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Interview: AI and the American Dream]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Chat conversation</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Coming</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Mark on Modern Education]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">X/Twitter thread</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Coming</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Analysis: What Twain Would Say About 2026]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Synthesized from corpus + current events</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Coming</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Modernized</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
+                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Interview: AI and the American Dream]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Chat conversation</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Coming</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
+                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Mark on Modern Education]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">X/Twitter thread</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Coming</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
+                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Analysis: What Twain Would Say About 2026]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Synthesized from corpus + current events</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Coming</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
                 </tbody>
               </table>
             </div>
