@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Sun, Moon, BookOpen, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function GenericBookReader({ htmlContent, tocItems = [], bookTitle = 'Read Book' }) {
+export default function GenericBookReader({ htmlContent, tocItems = [], bookTitle = 'Read Book', showExperienceSelector = true }) {
   const progressRef = useRef(null);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [experience, setExperience] = useState('traditional');
@@ -232,33 +232,35 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
           </button>
 
           {/* Reading Experience Selector */}
-          <div className="reading-experience-selector" style={{ marginTop: '2.5rem' }}>
-            <h4 className="experience-heading">WAYS TO EXPERIENCE</h4>
-            <div className="experience-grid">
-              {experiences.map((exp) => {
-                const isCardActive = exp.id === 'drama' ? isTocOpen : experience === exp.id;
-                
-                return (
-                  <button
-                    key={exp.id}
-                    disabled={!exp.supported}
-                    onClick={() => {
-                      if (exp.id === 'drama') {
-                        setIsTocOpen(!isTocOpen);
-                      } else {
-                        setExperience(exp.id);
-                      }
-                    }}
-                    className={`experience-card ${isCardActive ? 'active' : ''} ${exp.supported ? '' : 'opacity-40 cursor-not-allowed'}`}
-                    style={!exp.supported ? { pointerEvents: 'none' } : {}}
-                  >
-                    <span className="experience-card-label">{exp.label}</span>
-                    <span className="experience-card-desc">{exp.description}</span>
-                  </button>
-                );
-              })}
+          {showExperienceSelector && (
+            <div className="reading-experience-selector" style={{ marginTop: '2.5rem' }}>
+              <h4 className="experience-heading">WAYS TO EXPERIENCE</h4>
+              <div className="experience-grid">
+                {experiences.map((exp) => {
+                  const isCardActive = exp.id === 'drama' ? isTocOpen : experience === exp.id;
+                  
+                  return (
+                    <button
+                      key={exp.id}
+                      disabled={!exp.supported}
+                      onClick={() => {
+                        if (exp.id === 'drama') {
+                          setIsTocOpen(!isTocOpen);
+                        } else {
+                          setExperience(exp.id);
+                        }
+                      }}
+                      className={`experience-card ${isCardActive ? 'active' : ''} ${exp.supported ? '' : 'opacity-40 cursor-not-allowed'}`}
+                      style={!exp.supported ? { pointerEvents: 'none' } : {}}
+                    >
+                      <span className="experience-card-label">{exp.label}</span>
+                      <span className="experience-card-desc">{exp.description}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
         </article>

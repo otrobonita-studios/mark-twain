@@ -49,6 +49,7 @@ export default async function AboutPage() {
       htmlContent={fullContent} 
       tocItems={tocItems} 
       bookTitle="About Mark" 
+      showExperienceSelector={false}
     />
   );
 }
