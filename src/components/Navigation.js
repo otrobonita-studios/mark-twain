@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { Menu, X, Home, MessageSquare, BookOpen, Layers, FileText } from 'lucide-react';
+import { Menu, X, Home, MessageSquare, BookOpen, Layers, FileText, Eye } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 
 export default function Navigation() {
@@ -32,6 +32,7 @@ export default function Navigation() {
     { href: '/chat', label: 'Chat MkII', icon: MessageSquare, desc: 'Interactive AI Dialogue' },
     { href: '/read/eves-diary', label: 'Read & Listen', icon: BookOpen, desc: 'Eve\'s Diary Multimedia Edition' },
     { href: '/complete-works', label: 'In the Remake', icon: Layers, desc: 'Mark Twain\'s Complete Library' },
+    { href: '/restoration', label: 'Restoration Labs', icon: Eye, desc: 'Following the Equator Images' },
     { href: '/about', label: 'About Mark', icon: BookOpen, desc: 'Twain\'s Life & Biography' },
     { href: '/rebuild-process', label: 'Corporate Brain', icon: FileText, desc: 'Building Central Intelligence' }
   ];
