@@ -89,7 +89,7 @@ export default function RestorationPage() {
   const primaryText = 'text-[#d9a34a]';
 
   return (
-    <div className={`min-h-screen flex flex-col font-mono transition-colors duration-300 pb-16 ${isLocalhost ? 'p-0' : 'p-3 md:p-8'} ${bgClass}`}>
+    <div className={`min-h-screen flex flex-col font-mono transition-colors duration-300 pb-16 ${isLocalhost ? 'p-0' : 'px-0 py-3 md:p-8'} ${bgClass}`}>
       {/* Interactive 3D Card styles injected locally to guarantee performance */}
       <style dangerouslySetInnerHTML={{ __html: `
         .scene-3d {
@@ -155,8 +155,8 @@ export default function RestorationPage() {
             <div className="relative w-full max-w-lg aspect-square scene-3d">
               <div className={`w-full h-full card-3d ${isFlipped ? 'flipped' : ''}`}>
                 {/* Front Face: Original Drawing */}
-                <div className={`face-3d w-full h-full rounded-lg overflow-hidden flex flex-col shadow-2xl border ${borderClass} ${cardBgClass}`}>
-                  <div className="flex-1 relative overflow-hidden bg-[#0a0806] flex items-center justify-center p-4 select-none">
+                <div className={`face-3d w-full h-full rounded-none sm:rounded-lg overflow-hidden flex flex-col shadow-2xl border-y sm:border ${borderClass} ${cardBgClass}`}>
+                  <div className="flex-1 relative overflow-hidden bg-[#0a0806] flex items-center justify-center p-0 sm:p-4 select-none">
                     <img
                       src={SLIDES[pos % 2 === 0 ? pos : pos - 1].src}
                       alt="Original illustration"
@@ -175,8 +175,8 @@ export default function RestorationPage() {
                 </div>
 
                 {/* Back Face: Recreated Photograph */}
-                <div className={`face-3d face-back-3d w-full h-full rounded-lg overflow-hidden flex flex-col shadow-2xl border ${borderClass} ${cardBgClass}`}>
-                  <div className="flex-1 relative overflow-hidden bg-[#0a0806] flex items-center justify-center p-4 select-none">
+                <div className={`face-3d face-back-3d w-full h-full rounded-none sm:rounded-lg overflow-hidden flex flex-col shadow-2xl border-y sm:border ${borderClass} ${cardBgClass}`}>
+                  <div className="flex-1 relative overflow-hidden bg-[#0a0806] flex items-center justify-center p-0 sm:p-4 select-none">
                     <img
                       src={SLIDES[pos % 2 === 1 ? pos : pos + 1].src}
                       alt="Recreated photograph"
@@ -261,7 +261,7 @@ export default function RestorationPage() {
             </div>
 
             {/* Quick Hint */}
-            <div className={`text-[10px] text-center max-w-md leading-relaxed opacity-55 flex items-center justify-center gap-1.5 p-3 rounded border border-dashed ${borderClass} mt-4`}>
+            <div className={`text-[10px] text-center max-w-md leading-relaxed opacity-55 flex items-center justify-center gap-1.5 p-3 mx-4 sm:mx-0 rounded border border-dashed ${borderClass} mt-4`}>
               <HelpCircle size={14} className="shrink-0 text-[#d9a34a]" />
               <span>
                 <strong>Controls:</strong> Click card right &rarr; next side/illustration &middot; Click card left &larr; back &middot; <kbd className="bg-black/35 px-1 py-0.5 rounded">Space</kbd> / <kbd className="bg-black/35 px-1 py-0.5 rounded">&rarr;</kbd> forward &middot; <kbd className="bg-black/35 px-1 py-0.5 rounded">F</kbd> flip &middot; <kbd className="bg-black/35 px-1 py-0.5 rounded">S</kbd> shuffle.
