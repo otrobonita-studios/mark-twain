@@ -6,30 +6,18 @@ import { SLIDES, Slide } from '@/data/restorationSlides';
 import { Moon, Sun, Shuffle, LayoutGrid, Layers, HelpCircle, ArrowLeft, ArrowRight } from 'lucide-react';
 
 export default function RestorationPage() {
-  const [theme, setTheme] = useState<'charcoal' | 'parchment'>('charcoal');
   const [activeTab, setActiveTab] = useState<'flashcards' | 'grid'>('flashcards');
   const [pos, setPos] = useState<number>(0);
   const [gridFlips, setGridFlips] = useState<Record<string, boolean>>({});
   const [showChevrons, setShowChevrons] = useState<{ left: boolean; right: boolean }>({ left: false, right: false });
   const [isLocalhost, setIsLocalhost] = useState<boolean>(false);
 
-  // Load theme from localStorage on mount
+  // Check if running locally on mount
   useEffect(() => {
-    const savedTheme = localStorage.getItem('restoration-theme');
-    if (savedTheme === 'parchment' || savedTheme === 'charcoal') {
-      setTheme(savedTheme);
-    }
     if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
       setIsLocalhost(true);
     }
   }, []);
-
-  // Save theme to localStorage
-  const toggleTheme = () => {
-    const nextTheme = theme === 'charcoal' ? 'parchment' : 'charcoal';
-    setTheme(nextTheme);
-    localStorage.setItem('restoration-theme', nextTheme);
-  };
 
   const totalGroups = 80;
   const currentSlide = SLIDES[pos] || SLIDES[0];
@@ -94,10 +82,10 @@ export default function RestorationPage() {
     });
   }
 
-  const bgClass = theme === 'charcoal' ? 'bg-[#15110d] text-[rgba(255,244,223,0.95)]' : 'bg-[#f4efe6] text-[#2c1f11]';
-  const cardBgClass = theme === 'charcoal' ? 'bg-[#0d0a07]' : 'bg-[#eadecc]';
-  const controlBgClass = theme === 'charcoal' ? 'bg-[#1d1611]' : 'bg-[#dfd3c3]';
-  const borderClass = theme === 'charcoal' ? 'border-[rgba(217,163,74,0.3)]' : 'border-[rgba(44,31,17,0.2)]';
+  const bgClass = 'bg-[#15110d] text-[rgba(255,244,223,0.95)]';
+  const cardBgClass = 'bg-[#0d0a07]';
+  const controlBgClass = 'bg-[#1d1611]';
+  const borderClass = 'border-[rgba(217,163,74,0.3)]';
   const primaryText = 'text-[#d9a34a]';
 
   return (
@@ -125,9 +113,9 @@ export default function RestorationPage() {
       `}} />
 
       {/* Header Panel */}
-      <header className={`w-full max-w-7xl mx-auto pt-24 pb-8 border-b ${theme === 'charcoal' ? 'border-amber-500/10' : 'border-amber-900/10'} mb-8`}>
+      <header className="w-full max-w-7xl mx-auto pt-24 pb-8 border-b border-amber-500/10 mb-8">
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="text-center md:text-left">
+          <div className="text-center md:text-left p-5">
             <div className="flex items-center gap-3 justify-center md:justify-start">
               <Link href="/" className="hover:opacity-85 transition-opacity">
                 <img
@@ -149,43 +137,6 @@ export default function RestorationPage() {
             </p>
           </div>
 
-          {/* Controls */}
-          <div className="flex items-center gap-3">
-            {/* View switcher */}
-            <div className={`flex rounded overflow-hidden p-1 border ${borderClass} ${controlBgClass}`}>
-              <button
-                onClick={() => setActiveTab('flashcards')}
-                className={`px-3 py-1.5 rounded text-xs flex items-center gap-1.5 transition-all ${
-                  activeTab === 'flashcards'
-                    ? 'bg-[#d9a34a] text-[#15110d] font-bold'
-                    : 'opacity-70 hover:opacity-100'
-                }`}
-              >
-                <Layers size={13} />
-                <span>Inspector</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('grid')}
-                className={`px-3 py-1.5 rounded text-xs flex items-center gap-1.5 transition-all ${
-                  activeTab === 'grid'
-                    ? 'bg-[#d9a34a] text-[#15110d] font-bold'
-                    : 'opacity-70 hover:opacity-100'
-                }`}
-              >
-                <LayoutGrid size={13} />
-                <span>Grid View</span>
-              </button>
-            </div>
-
-            {/* Theme Toggle */}
-            <button
-              onClick={toggleTheme}
-              className={`p-2.5 rounded-md border ${borderClass} ${controlBgClass} hover:text-[#d9a34a] hover:border-[#d9a34a] transition-all`}
-              title="Toggle Theme"
-            >
-              {theme === 'charcoal' ? <Sun size={15} /> : <Moon size={15} />}
-            </button>
-          </div>
         </div>
       </header>
 
@@ -340,7 +291,7 @@ export default function RestorationPage() {
                       isApproved 
                         ? 'border-[#d9a34a] hover:shadow-[#d9a34a]/5' 
                         : 'border-amber-500/35 hover:shadow-amber-500/5'
-                    } ${theme === 'charcoal' ? 'bg-[#1d1611]' : 'bg-[#eadecc]'} shadow-lg hover:shadow-xl`}
+                    } bg-[#1d1611] shadow-lg hover:shadow-xl`}
                   >
                     <div className="aspect-[16/10] relative w-full overflow-hidden bg-black/60 rounded">
                       {/* Photo Face (Shown by default) */}
