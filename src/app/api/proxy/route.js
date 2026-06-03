@@ -1,22 +1,25 @@
 import { GoogleGenAI } from '@google/genai';
 
-const ALLOWED_ORIGINS = [
-  'http://localhost:5173', // Vite dev default
-  'http://localhost:3000', // Next.js dev default
-  'https://otrobonita-superday.web.app',
-  'https://otrobonita-superday.firebaseapp.com',
-  'https://otrobonita-blueprint.web.app',
-  'https://otrobonita-blueprint.firebaseapp.com',
-  'https://otrobonita-theproductionunit.web.app',
-  'https://otrobonita-theproductionunit.firebaseapp.com',
-  'https://otrobonita-official.web.app',
-  'https://otrobonita-official.firebaseapp.com',
-];
-
 function isOriginAllowed(origin) {
   if (!origin) return false;
-  if (ALLOWED_ORIGINS.includes(origin)) return true;
   if (origin.startsWith('http://localhost:')) return true;
+
+  try {
+    const url = new URL(origin);
+    const hostname = url.hostname;
+
+    // Allow main domain and any subdomains of otrobonita.com
+    if (hostname === 'otrobonita.com' || hostname.endsWith('.otrobonita.com')) {
+      return true;
+    }
+    // Allow standard Firebase hosting domains
+    if (hostname.endsWith('.web.app') || hostname.endsWith('.firebaseapp.com')) {
+      return true;
+    }
+  } catch (e) {
+    return false;
+  }
+
   return false;
 }
 
