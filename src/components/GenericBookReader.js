@@ -5,7 +5,36 @@ import Link from 'next/link';
 import { Sun, Moon, BookOpen, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function GenericBookReader({ htmlContent, tocItems = [], bookTitle = 'Read Book', showExperienceSelector = true }) {
+
+function formatTocLabel(label) {
+  if (!label) return '';
+  
+  const isRoman = (word) => {
+    return /^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/i.test(word);
+  };
+
+  return label.split(/\s+/).map(word => {
+    const cleanWord = word.replace(/[^a-zA-Z]/g, '');
+    if (cleanWord && isRoman(cleanWord)) {
+      return word.toUpperCase();
+    }
+    
+    if (word === word.toUpperCase() && /[a-zA-Z]/.test(word)) {
+      const lower = word.toLowerCase();
+      const firstLetterIdx = lower.search(/[a-z]/i);
+      if (firstLetterIdx !== -1) {
+        return lower.substring(0, firstLetterIdx) + 
+               lower.charAt(firstLetterIdx).toUpperCase() + 
+               lower.substring(firstLetterIdx + 1);
+      }
+      return lower;
+    }
+    
+    return word;
+  }).join(' ');
+}
+
+export default function GenericBookReader({ htmlContent, tocItems = [], bookTitle = 'Read Book', showExperienceSelector = true, headerExtra = null }) {
   const progressRef = useRef(null);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [experience, setExperience] = useState('traditional');
@@ -262,6 +291,8 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
             </div>
           )}
 
+          {headerExtra}
+
           <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
         </article>
       </main>
@@ -302,7 +333,7 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
                     className={`toc-item type-${item.type} ${activeId === item.id ? 'active' : ''}`}
                   >
                     {item.type === 'day' && <span className="toc-bullet">•</span>}
-                    <span className="toc-label">{item.label}</span>
+                    <span className="toc-label">{formatTocLabel(item.label)}</span>
                   </button>
                 ))}
               </nav>

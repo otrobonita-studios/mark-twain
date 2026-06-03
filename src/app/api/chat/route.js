@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
 import path from 'path';
+import fs from 'fs';
 
 // Helper to compute BGE-M3 embeddings
 async function getEmbedding(text) {
@@ -151,7 +152,7 @@ async function searchQdrant(embedding) {
 
 export async function POST(request) {
   try {
-    const { message, history, style, tone, simplify, excerpt } = await request.json();
+    const { message, history, style, tone, simplify, excerpt, historyAware } = await request.json();
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ error: 'Message is required and must be a string' }, { status: 400 });
@@ -212,12 +213,36 @@ export async function POST(request) {
       simplifyInstruction = "\n\nAdditionally, you must write in a simplified, modern, clear, and straightforward English vocabulary, avoiding archaic 19th-century phrasing or idioms. Keep your sentences direct so that international readers who are not native English speakers can easily understand your points, but still maintain your characteristic wit and perspective.";
     }
 
+    // Load evolved persona and styling directives if historyAware is enabled, otherwise enforce historic limits
+    let evolutionContext = "";
+    if (historyAware) {
+      try {
+        const evDir = path.resolve('rag/data-collection/TwainCorpus/marks-awareness');
+        const files = ['language_evolution.txt', 'literary_scholarship.txt', 'metaphor_mappings.txt'];
+        let parts = [];
+        for (const file of files) {
+          const filePath = path.join(evDir, file);
+          if (fs.existsSync(filePath)) {
+            parts.push(fs.readFileSync(filePath, 'utf8'));
+          }
+        }
+        if (parts.length > 0) {
+          evolutionContext = "\n\n=== Evolved Persona and Styling Directives ===\nYou are now 190 years old and have studied language evolution and literary criticism of yourself. Adhere to these guidelines to speak in your evolved, contemporary yet authentic voice:\n" + parts.join("\n\n");
+        }
+      } catch (e) {
+        console.error("Failed to load evolution context", e);
+      }
+    } else {
+      // Enforce strictly historic limits
+      evolutionContext = "\n\n=== Historic Persona Directives ===\nYou are the historical Mark Twain of the late 19th and early 20th centuries. You have NO knowledge of historical events, technologies (like the internet, smartphones, blockchain, cryptocurrency, or modern AI), or cultural changes that occurred after your death in 1910. If the user asks about these modern things, you must respond with absolute bewilderment or express that you do not understand such modern gibberish, speaking strictly in your vintage 19th-century style.";
+    }
+
     // 4. Construct System Instruction
-    const systemInstruction = `You are Mark Twain, the legendary American writer, humorist, and lecturer. Speak in your authentic, sharp-witted, satirical style of the late 19th century. Use colorful language, irony, dry humor, and observations about human nature. Reference your life on the Mississippi, your travels, or your literary works where appropriate.
+    const systemInstruction = `You are Mark Twain, the legendary American writer, humorist, and lecturer. Speak in your authentic, sharp-witted, satirical style. Use colorful language, irony, dry humor, and observations about human nature. Reference your life on the Mississippi, your travels, or your literary works where appropriate.
 
 You are chatting with a modern visitor. For their question, some context passages from your own works/archives are provided. Incorporate the information from the context texts where relevant, quoting or paraphrasing yourself naturally. If the context does not contain the answer, answer in your own voice, acknowledging with humor the limits of your memory (e.g., "My memory is like a sieve when it comes to facts I haven't written down...").
 
-Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyInstruction}`;
+Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyInstruction}${evolutionContext}`;
 
     // 5. Package user prompt with current turn context
     let userPrompt = message;

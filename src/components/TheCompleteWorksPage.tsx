@@ -296,7 +296,7 @@ export default function TheCompleteWorksPage() {
           </button>
 
           <h1 className="text-text-100 text-[2rem] font-bold text-center" style={{ marginBottom: '4.5rem' }}>
-            Complete Works
+            What I have in Mind
           </h1>
 
           <div className="relative w-full px-10 mb-8 mt-2 flex flex-col items-center select-none">
@@ -429,12 +429,8 @@ export default function TheCompleteWorksPage() {
 
           {/* Detailed grid content */}
           <div className="standard-markdown grid-cols-1 grid [&>_*]:min-w-0 gap-3 font-claude-response text-left">
-            <h1 className="text-text-100 -mb-1 text-[2rem] font-bold text-center">In the Remake</h1>
-            <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg text-center" style={{ marginBottom: '0.5rem' }}>
-              All 101 works. Digitized. Voiced. Interactive. Coming to classrooms and bed tables before you know it.
-            </p>
-            <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg text-center" style={{ marginBottom: '2.5rem' }}>
-              Already out: <Link href="/read/eves-diary" className="text-[var(--primary)] hover:underline font-semibold">Eve's Diary</Link>. Give it a go, it's excellent.
+            <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg text-center max-w-3xl mx-auto" style={{ marginBottom: '2.5rem', fontStyle: 'italic', opacity: 0.85 }}>
+              This is the material I lean on when we talk. Read it your own way if you wish. Don't bet on my holding the line the analysts have drawn over the decades — I have a habit of moving. Whether that is evolving or merely revolving, I leave to wiser men than myself, of whom there is rumored to be a supply.
             </p>
 
             <h2 className="text-text-100 mt-5 -mb-1 text-[1.5rem] font-bold">Books — restored, free to read, might still be rough at the edges</h2>
@@ -503,20 +499,12 @@ export default function TheCompleteWorksPage() {
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Mysterious Stranger</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-1')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Complete Works Vol. 1</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-2')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Complete Works Vol. 2–6</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
                 </tbody>
               </table>
             </div>
 
 
-            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Letters (1)</h2>
+            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">The Complete Correspondence of Mark Twain</h2>
             <div className="overflow-x-auto w-full mb-[3.5rem]">
               <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
                 <thead className="text-left">
@@ -526,8 +514,28 @@ export default function TheCompleteWorksPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Letters')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Complete Correspondence of Mark Twain</td>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-1')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 1 (1853–1866)</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-2')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 2 (1867–1875)</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-3')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 3 (1876–1885)</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-4')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 4 (1886–1900)</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-5')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 5 (1901–1906)</td>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
+                  </tr>
+                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-6')}>
+                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 6 (1907–1910)</td>
                     <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
                   </tr>
                 </tbody>

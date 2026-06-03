@@ -29,12 +29,10 @@ export default function Navigation() {
 
   const links = [
     { href: '/', label: 'Home', icon: Home, desc: 'Writing Desk & Journal' },
-    { href: '/chat', label: 'Chat MkII', icon: MessageSquare, desc: 'Interactive AI Dialogue' },
-    { href: '/read/eves-diary', label: 'Read & Listen', icon: BookOpen, desc: 'Eve\'s Diary Multimedia Edition' },
-    { href: '/complete-works', label: 'In the Remake', icon: Layers, desc: 'My Library' },
-    { href: '/restoration', label: 'Restoration Labs', icon: Eye, desc: 'Following the Equator Images' },
-    { href: '/about', label: 'About Me', icon: BookOpen, desc: 'Against My Better Judgment' },
-    { href: '/rebuild-process', label: 'Corporate Brain', icon: FileText, desc: 'Building Central Intelligence' }
+    { href: '/chat', label: 'Let us Talk', icon: MessageSquare, desc: 'Interactive AI Dialogue' },
+    { href: '/read/eves-diary', label: 'Eve\'s Diary', badge: 'Featured', icon: BookOpen, desc: 'Eve\'s Diary Multimedia Edition' },
+    { href: '/complete-works', label: 'The Library', icon: Layers, desc: 'Books, Songs, Photos and Letters' },
+    { href: '/about', label: 'About Me', icon: BookOpen, desc: 'Against My Better Judgment' }
   ];
 
   return (
@@ -95,6 +93,11 @@ export default function Navigation() {
                           <IconComponent size={20} />
                         </div>
                         <div className="nav-link-text-wrapper">
+                          {link.badge && (
+                            <span className="text-[9px] uppercase tracking-widest text-[var(--primary)] font-semibold leading-none mb-1 opacity-90">
+                              {link.badge}
+                            </span>
+                          )}
                           <span className="nav-link-label">{link.label}</span>
                           <span className="nav-link-desc">{link.desc}</span>
                         </div>
@@ -104,6 +107,51 @@ export default function Navigation() {
                   );
                 })}
               </ul>
+
+              {/* Bottom Aligned Links: Marks Memory & Restorations */}
+              <div className="global-nav-bottom-links flex flex-col gap-3 mt-4 mb-2">
+                {/* Marks Memory */}
+                <motion.div
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.05 + links.length * 0.05 }}
+                >
+                  <Link
+                    href="/rebuild-process"
+                    className={`global-nav-link-item ${pathname === '/rebuild-process' ? 'active' : ''}`}
+                  >
+                    <div className="nav-link-icon-wrapper">
+                      <FileText size={20} />
+                    </div>
+                    <div className="nav-link-text-wrapper">
+                      <span className="nav-link-label">Marks Memory</span>
+                      <span className="nav-link-desc">Building Central Intelligence</span>
+                    </div>
+                    {pathname === '/rebuild-process' && <div className="nav-link-active-dot" />}
+                  </Link>
+                </motion.div>
+
+                {/* Restorations */}
+                <motion.div
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.05 + (links.length + 1) * 0.05 }}
+                >
+                  <Link
+                    href="/restoration"
+                    className={`global-nav-link-item ${pathname === '/restoration' ? 'active' : ''}`}
+                  >
+                    <div className="nav-link-icon-wrapper">
+                      <Eye size={20} />
+                    </div>
+                    <div className="nav-link-text-wrapper">
+                      <span className="nav-link-label">Restorations</span>
+                      <span className="nav-link-desc">Following the Equator Images</span>
+                    </div>
+                    {pathname === '/restoration' && <div className="nav-link-active-dot" />}
+                  </Link>
+                </motion.div>
+              </div>
 
               <div className="global-nav-footer">
                 <p className="typewriter text-[9px] text-[var(--muted-foreground)]">

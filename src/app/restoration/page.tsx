@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { SLIDES, Slide } from '@/data/restorationSlides';
-import { Moon, Sun, Shuffle, LayoutGrid, Layers, HelpCircle, ArrowLeft, ArrowRight } from 'lucide-react';
+import { Moon, Sun, LayoutGrid, Layers, ArrowLeft, ArrowRight } from 'lucide-react';
 
 export default function RestorationPage() {
   const [activeTab, setActiveTab] = useState<'flashcards' | 'grid'>('flashcards');
@@ -28,15 +28,6 @@ export default function RestorationPage() {
     setPos((prev) => (prev + d + SLIDES.length) % SLIDES.length);
   }, []);
 
-  const flipCard = useCallback(() => {
-    setPos((prev) => (prev % 2 === 0 ? prev + 1 : prev - 1));
-  }, []);
-
-  const triggerShuffle = useCallback(() => {
-    const randomGroup = Math.floor(Math.random() * totalGroups);
-    setPos(randomGroup * 2); // Start at the original side of a random group
-  }, [totalGroups]);
-
   // Handle keyboard events
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -50,18 +41,12 @@ export default function RestorationPage() {
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
         step(-1);
-      } else if (e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        triggerShuffle();
-      } else if (e.key.toLowerCase() === 'f') {
-        e.preventDefault();
-        flipCard();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTab, step, triggerShuffle, flipCard]);
+  }, [activeTab, step]);
 
   // Grid card flip toggle
   const toggleGridFlip = (stem: string) => {
@@ -89,7 +74,7 @@ export default function RestorationPage() {
   const primaryText = 'text-[#d9a34a]';
 
   return (
-    <div className={`min-h-screen flex flex-col font-mono transition-colors duration-300 pb-16 ${isLocalhost ? 'p-0' : 'px-0 py-3 md:p-8'} ${bgClass}`}>
+    <div className={`min-h-screen flex flex-col font-mono transition-colors duration-300 pb-16 ${isLocalhost ? 'p-0' : 'p-8'} ${bgClass}`}>
       {/* Interactive 3D Card styles injected locally to guarantee performance */}
       <style dangerouslySetInnerHTML={{ __html: `
         .scene-3d {
@@ -112,33 +97,30 @@ export default function RestorationPage() {
         }
       `}} />
 
-      {/* Header Panel */}
-      <header className="w-full max-w-7xl mx-auto pt-24 pb-8 border-b border-amber-500/10 mb-8">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="text-center md:text-left p-5">
-            <div className="flex items-center gap-3 justify-center md:justify-start">
-              <Link href="/" className="hover:opacity-85 transition-opacity">
-                <img
-                  alt="Mark Twain Logo"
-                  width="70"
-                  height="25"
-                  className="mark-twain-solo-logo"
-                  src="/images/MarkTwainSoloLogo.webp"
-                  style={{ color: 'transparent' }}
-                />
-              </Link>
-              <span className="text-[10px] uppercase tracking-widest text-[#d9a34a] font-bold">Restoration Labs</span>
-            </div>
-            <h1 className="font-serif text-3xl font-bold text-[#d9a34a] tracking-wide mt-2">
-              Following the Equator
-            </h1>
-            <p className="text-xs opacity-65 mt-1">
-              Restoring Mark Twain's 1897 travelogue illustrations as high-fidelity 1899 photographs.
-            </p>
+      <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="text-center md:text-left p-5">
+          <div className="flex items-center gap-3 justify-center md:justify-start">
+            <Link href="/" className="hover:opacity-85 transition-opacity">
+              <img
+                alt="Mark Twain Logo"
+                width="70"
+                height="25"
+                className="mark-twain-solo-logo"
+                src="/images/MarkTwainSoloLogo.webp"
+                style={{ color: 'transparent' }}
+              />
+            </Link>
+            <span className="text-[10px] uppercase tracking-widest text-[#d9a34a] font-bold">Restoration Labs</span>
           </div>
-
+          <h1 className="font-serif text-3xl font-bold text-[#d9a34a] tracking-wide mt-2">
+            Following the Equator
+          </h1>
+          <p className="text-xs opacity-65 mt-1 leading-relaxed">
+            I'm restoring my 1897 travelogue illustrations and low-res photos into <br />
+            higher-resolution, turn-of-the-century style photographs.
+          </p>
         </div>
-      </header>
+      </div>
 
       {/* Main Container */}
       <main className="w-full mx-auto flex-1 flex flex-col items-center justify-center">
@@ -146,19 +128,19 @@ export default function RestorationPage() {
           /* ==================== FLASHCARDS MODE ==================== */
           <div className="w-full flex flex-col items-center gap-6">
             <div className="w-full max-w-2xl text-center">
-              <span className={`text-[10px] tracking-[2px] font-bold uppercase py-1 px-3.5 rounded border border-[#d9a34a]/30 bg-[#d9a34a]/5 ${primaryText}`}>
-                Interactive Flashcards
+              <span className={`inline-block text-[10px] tracking-[2px] font-bold uppercase py-1 px-3.5 rounded border border-[#d9a34a]/30 bg-[#d9a34a]/5 ${primaryText}`}>
+                Ongoing Restoration
               </span>
             </div>
 
             {/* 3D Card Scene */}
-            <div className="relative w-full max-w-lg aspect-square scene-3d">
+            <div className="relative w-full max-w-4xl h-[70vh] md:h-[75vh] scene-3d">
               <div className={`w-full h-full card-3d ${isFlipped ? 'flipped' : ''}`}>
                 {/* Front Face: Original Drawing */}
                 <div className={`face-3d w-full h-full rounded-none sm:rounded-lg overflow-hidden flex flex-col shadow-2xl border-y sm:border ${borderClass} ${cardBgClass}`}>
                   <div className="flex-1 relative overflow-hidden bg-[#0a0806] flex items-center justify-center p-0 sm:p-4 select-none">
                     <img
-                      src={SLIDES[pos % 2 === 0 ? pos : pos - 1].src}
+                      src={SLIDES[pos % 2 === 0 ? pos : pos - 1]?.src}
                       alt="Original illustration"
                       className="max-w-full max-h-full object-contain pointer-events-none"
                     />
@@ -166,10 +148,10 @@ export default function RestorationPage() {
                   <div className="p-4 flex items-center justify-between border-t border-[#d9a34a]/15 bg-black/25">
                     <div className="flex flex-col">
                       <span className="font-serif font-bold text-sm text-[#d9a34a]">Original Drawing</span>
-                      <span className="text-[11px] opacity-60 font-mono mt-0.5">{SLIDES[pos % 2 === 0 ? pos : pos - 1].stem}</span>
+                      <span className="text-[11px] opacity-60 font-mono mt-0.5">{SLIDES[pos % 2 === 0 ? pos : pos - 1]?.stem}</span>
                     </div>
-                    <span className="text-[10px] border border-amber-500/20 px-2 py-0.5 rounded text-amber-500/70 font-mono uppercase bg-amber-500/5">
-                      {SLIDES[pos % 2 === 0 ? pos : pos - 1].status}
+                    <span className="inline-block text-[10px] border border-amber-500/20 px-2 py-0.5 rounded text-amber-500/70 font-mono uppercase bg-amber-500/5">
+                      {SLIDES[pos % 2 === 0 ? pos : pos - 1]?.status}
                     </span>
                   </div>
                 </div>
@@ -178,18 +160,18 @@ export default function RestorationPage() {
                 <div className={`face-3d face-back-3d w-full h-full rounded-none sm:rounded-lg overflow-hidden flex flex-col shadow-2xl border-y sm:border ${borderClass} ${cardBgClass}`}>
                   <div className="flex-1 relative overflow-hidden bg-[#0a0806] flex items-center justify-center p-0 sm:p-4 select-none">
                     <img
-                      src={SLIDES[pos % 2 === 1 ? pos : pos + 1].src}
+                      src={SLIDES[pos % 2 === 1 ? pos : pos + 1]?.src}
                       alt="Recreated photograph"
                       className="max-w-full max-h-full object-contain pointer-events-none"
                     />
                   </div>
                   <div className="p-4 flex items-center justify-between border-t border-[#d9a34a]/15 bg-black/25">
                     <div className="flex flex-col">
-                      <span className="font-serif font-bold text-sm text-[rgba(255,244,223,0.9)]">Recreated Photo</span>
-                      <span className="text-[11px] opacity-60 font-mono mt-0.5">{SLIDES[pos % 2 === 1 ? pos : pos + 1].stem}</span>
+                      <span className="font-serif font-bold text-sm text-[rgba(255,244,223,0.9)]">Recreated Sample</span>
+                      <span className="text-[11px] opacity-60 font-mono mt-0.5">{SLIDES[pos % 2 === 1 ? pos : pos + 1]?.stem}</span>
                     </div>
-                    <span className="text-[10px] border border-[#d9a34a]/30 px-2 py-0.5 rounded text-[#d9a34a] font-mono uppercase bg-[#d9a34a]/5">
-                      {SLIDES[pos % 2 === 1 ? pos : pos + 1].status}
+                    <span className="inline-block text-[10px] border border-[#d9a34a]/30 px-2 py-0.5 rounded text-[#d9a34a] font-mono uppercase bg-[#d9a34a]/5">
+                      {SLIDES[pos % 2 === 1 ? pos : pos + 1]?.status}
                     </span>
                   </div>
                 </div>
@@ -244,27 +226,6 @@ export default function RestorationPage() {
             <div className="flex items-center gap-4 mt-2">
               <span className="text-xs opacity-75 font-mono min-w-[80px] text-center select-none">
                 {currentSlide.gi + 1} / {totalGroups}
-              </span>
-              <button
-                onClick={flipCard}
-                className={`px-4 py-2 text-xs border ${borderClass} ${controlBgClass} hover:border-[#d9a34a] hover:text-[#d9a34a] transition-all active:scale-95`}
-              >
-                Flip (F)
-              </button>
-              <button
-                onClick={triggerShuffle}
-                className={`px-4 py-2 text-xs border ${borderClass} ${controlBgClass} hover:border-[#d9a34a] hover:text-[#d9a34a] transition-all flex items-center gap-1.5 active:scale-95`}
-              >
-                <Shuffle size={12} />
-                <span>Shuffle (S)</span>
-              </button>
-            </div>
-
-            {/* Quick Hint */}
-            <div className={`text-[10px] text-center max-w-md leading-relaxed opacity-55 flex items-center justify-center gap-1.5 p-3 mx-4 sm:mx-0 rounded border border-dashed ${borderClass} mt-4`}>
-              <HelpCircle size={14} className="shrink-0 text-[#d9a34a]" />
-              <span>
-                <strong>Controls:</strong> Click card right &rarr; next side/illustration &middot; Click card left &larr; back &middot; <kbd className="bg-black/35 px-1 py-0.5 rounded">Space</kbd> / <kbd className="bg-black/35 px-1 py-0.5 rounded">&rarr;</kbd> forward &middot; <kbd className="bg-black/35 px-1 py-0.5 rounded">F</kbd> flip &middot; <kbd className="bg-black/35 px-1 py-0.5 rounded">S</kbd> shuffle.
               </span>
             </div>
           </div>
