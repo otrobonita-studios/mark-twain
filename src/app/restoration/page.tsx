@@ -11,12 +11,16 @@ export default function RestorationPage() {
   const [pos, setPos] = useState<number>(0);
   const [gridFlips, setGridFlips] = useState<Record<string, boolean>>({});
   const [showChevrons, setShowChevrons] = useState<{ left: boolean; right: boolean }>({ left: false, right: false });
+  const [isLocalhost, setIsLocalhost] = useState<boolean>(false);
 
   // Load theme from localStorage on mount
   useEffect(() => {
     const savedTheme = localStorage.getItem('restoration-theme');
     if (savedTheme === 'parchment' || savedTheme === 'charcoal') {
       setTheme(savedTheme);
+    }
+    if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+      setIsLocalhost(true);
     }
   }, []);
 
@@ -97,7 +101,7 @@ export default function RestorationPage() {
   const primaryText = 'text-[#d9a34a]';
 
   return (
-    <div className={`min-h-screen flex flex-col font-mono transition-colors duration-300 pb-16 p-3 md:p-8 ${bgClass}`}>
+    <div className={`min-h-screen flex flex-col font-mono transition-colors duration-300 pb-16 ${isLocalhost ? 'p-0' : 'p-3 md:p-8'} ${bgClass}`}>
       {/* Interactive 3D Card styles injected locally to guarantee performance */}
       <style dangerouslySetInnerHTML={{ __html: `
         .scene-3d {
