@@ -3,8 +3,8 @@ import path from 'path';
 import GenericBookReader from '@/components/GenericBookReader';
 
 export const metadata = {
-  title: "Mark Twain — A Biographical Summary",
-  description: "A detailed biographical summary of Samuel Langhorne Clemens (Mark Twain), written by Albert Bigelow Paine.",
+  title: "About Me — Mark Twain",
+  description: "An introduction by Mark Twain, against his better judgment.",
 };
 
 export default async function AboutPage() {
@@ -21,23 +21,23 @@ export default async function AboutPage() {
   // Define a simple Table of Contents item for the page
   const tocItems = [
     {
-      id: 'bio-title',
-      label: 'Biographical Summary',
+      id: 'intro-title',
+      label: 'An Introduction',
       type: 'section'
     }
   ];
 
-  // Make sure the title element inside htmlContent has id="bio-title"
+  // Make sure the title element inside htmlContent has id="intro-title"
   if (htmlContent.includes('<h2>')) {
-    htmlContent = htmlContent.replace('<h2>', '<h2 id="bio-title">');
+    htmlContent = htmlContent.replace('<h2>', '<h2 id="intro-title">');
   }
 
   // Prepend the premium book title block
   const titleBlock = `
     <div class="book-title-block">
       <h1>MARK TWAIN</h1>
-      <h2>A Biographical Summary</h2>
-      <h2>By Albert Bigelow Paine</h2>
+      <h2>An Introduction</h2>
+      <h2>Against My Better Judgment</h2>
     </div>
     <hr />
   `;
@@ -48,7 +48,7 @@ export default async function AboutPage() {
     <GenericBookReader 
       htmlContent={fullContent} 
       tocItems={tocItems} 
-      bookTitle="About Mark" 
+      bookTitle="About Me" 
       showExperienceSelector={false}
     />
   );

@@ -31,9 +31,9 @@ export default function Navigation() {
     { href: '/', label: 'Home', icon: Home, desc: 'Writing Desk & Journal' },
     { href: '/chat', label: 'Chat MkII', icon: MessageSquare, desc: 'Interactive AI Dialogue' },
     { href: '/read/eves-diary', label: 'Read & Listen', icon: BookOpen, desc: 'Eve\'s Diary Multimedia Edition' },
-    { href: '/complete-works', label: 'In the Remake', icon: Layers, desc: 'Mark Twain\'s Complete Library' },
+    { href: '/complete-works', label: 'In the Remake', icon: Layers, desc: 'My Library' },
     { href: '/restoration', label: 'Restoration Labs', icon: Eye, desc: 'Following the Equator Images' },
-    { href: '/about', label: 'About Mark', icon: BookOpen, desc: 'Twain\'s Life & Biography' },
+    { href: '/about', label: 'About Me', icon: BookOpen, desc: 'Against My Better Judgment' },
     { href: '/rebuild-process', label: 'Corporate Brain', icon: FileText, desc: 'Building Central Intelligence' }
   ];
 

@@ -24,9 +24,9 @@ export const subscribeCopy = {
     placeholder: "Enter your email address...",
     btn: "SIGN\u00a0UP",
     submitting: "Signing up...",
-    successSpectator: "Mark notes your interest. You shall receive dispatch by wire when he reflects next. Feel free to check in at GitHub meanwhile: https://github.com/otrobonita-studios/mark-twain",
-    successThinker: "Welcome to the drawing board. Mark Twain notes your perspective. We shall shape the ideas together.",
-    successBuilder: "Welcome to the Engine Room. Mark Twain notes your credentials. Use the GitHub link to inspect the machinery.",
+    successSpectator: "I note your interest. You shall receive dispatch by wire when I reflect next. Feel free to check in at GitHub meanwhile: https://github.com/otrobonita-studios/mark-twain",
+    successThinker: "Welcome to the drawing board. I note your perspective. We shall shape the ideas together.",
+    successBuilder: "Welcome to the Engine Room. I note your credentials. Use the GitHub link to inspect the machinery.",
     error: "The inkwell ran dry. Please try again in a moment.",
     invalidEmail: "Please enter a valid email address."
   }
@@ -34,7 +34,7 @@ export const subscribeCopy = {
 
 export const diaryCopy = {
   en: {
-    title: "The Diary of Mark",
+    title: "My Diary",
     subtitle: "Entries from the log",
     read: "Read",
     collapse: "Collapse",
