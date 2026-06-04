@@ -4,24 +4,25 @@ import GenericBookReader from '@/components/GenericBookReader';
 
 function findBookFile(slug) {
   const baseDir = process.cwd();
+  const decodedSlug = decodeURIComponent(slug);
   
   // 1. Check in src/data/books/
-  let htmlPath = path.join(baseDir, 'src/data/books', `${slug}.html`);
+  let htmlPath = path.join(baseDir, 'src/data/books', `${decodedSlug}.html`);
   if (fs.existsSync(htmlPath)) return { path: htmlPath, type: 'html' };
   
-  let txtPath = path.join(baseDir, 'src/data/books', `${slug}.txt`);
+  let txtPath = path.join(baseDir, 'src/data/books', `${decodedSlug}.txt`);
   if (fs.existsSync(txtPath)) return { path: txtPath, type: 'txt' };
 
   // 2. Check in rag/data-collection/TwainCorpus/converted/
-  htmlPath = path.join(baseDir, 'rag', 'data-collection', 'TwainCorpus', 'converted', `${slug}.html`);
+  htmlPath = path.join(baseDir, 'rag', 'data-collection', 'TwainCorpus', 'converted', `${decodedSlug}.html`);
   if (fs.existsSync(htmlPath)) return { path: htmlPath, type: 'html' };
 
   // 3. Check for .txt in project-gutenberg/Works/
-  txtPath = path.join(baseDir, 'rag', 'data-collection', 'TwainCorpus', 'project-gutenberg', 'Works', `${slug}.txt`);
+  txtPath = path.join(baseDir, 'rag', 'data-collection', 'TwainCorpus', 'project-gutenberg', 'Works', `${decodedSlug}.txt`);
   if (fs.existsSync(txtPath)) return { path: txtPath, type: 'txt' };
 
   // 4. Check in rag/data-collection/
-  txtPath = path.join(baseDir, 'rag', 'data-collection', `${slug}.txt`);
+  txtPath = path.join(baseDir, 'rag', 'data-collection', `${decodedSlug}.txt`);
   if (fs.existsSync(txtPath)) return { path: txtPath, type: 'txt' };
 
   return null;
@@ -109,7 +110,8 @@ function formatTxtToHtml(text) {
 
 export async function generateMetadata({ params }) {
   const { bookSlug } = await params;
-  const fileInfo = findBookFile(bookSlug);
+  const decodedSlug = decodeURIComponent(bookSlug);
+  const fileInfo = findBookFile(decodedSlug);
   
   if (!fileInfo) {
     return {
@@ -118,7 +120,7 @@ export async function generateMetadata({ params }) {
     };
   }
 
-  let cleanTitle = bookSlug.replace(/-/g, ' ');
+  let cleanTitle = decodedSlug.replace(/-/g, ' ');
 
   try {
     const rawContent = fs.readFileSync(fileInfo.path, 'utf8');
@@ -133,7 +135,7 @@ export async function generateMetadata({ params }) {
       }
     } else {
       // For txt file, clean the slug
-      cleanTitle = bookSlug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      cleanTitle = decodedSlug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     }
     
     return {
@@ -149,12 +151,13 @@ export async function generateMetadata({ params }) {
 
 export default async function ReadPage({ params }) {
   const { bookSlug } = await params;
-  const fileInfo = findBookFile(bookSlug);
+  const decodedSlug = decodeURIComponent(bookSlug);
+  const fileInfo = findBookFile(decodedSlug);
 
   if (!fileInfo) {
     return (
       <div style={{ padding: '2rem', fontFamily: 'monospace', color: '#ff5555', backgroundColor: '#15110d', minHeight: '100vh' }}>
-        Error: Book "{bookSlug}" not found.
+        Error: Book "{decodedSlug}" not found.
       </div>
     );
   }
@@ -162,7 +165,7 @@ export default async function ReadPage({ params }) {
   const rawContent = fs.readFileSync(fileInfo.path, 'utf8');
   let processedHtmlContent = '';
   let tocItems = [];
-  let cleanTitle = bookSlug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  let cleanTitle = decodedSlug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
   if (fileInfo.type === 'html') {
     // Extract body content
@@ -221,7 +224,7 @@ export default async function ReadPage({ params }) {
         let finalLabel = cleanLabel;
         let shouldPush = true;
 
-        if (/^Volume-[1-6]$/i.test(bookSlug)) {
+        if (/^Volume-[1-6]$/i.test(decodedSlug)) {
           if (cleanLabel.toLowerCase() === 'by mark twain') {
             finalLabel = 'Top';
           } else if (cleanLabel.toLowerCase() === '(samuel langhorne clemens)') {
