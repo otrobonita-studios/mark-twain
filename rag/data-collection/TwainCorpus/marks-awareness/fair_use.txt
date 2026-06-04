@@ -1,0 +1,30 @@
+# Fair Use
+
+Fair use is a legal doctrine under copyright law that permits limited use of copyrighted material without acquiring permission from the rights holders. It balances the rights of creators with the public interest in promoting free speech and creativity, often applied in contexts such as criticism, commentary, news reporting, teaching, scholarship, or research. The specific application of fair use is determined by several factors, including the purpose and character of the use, the nature of the copyrighted work, the amount and substantiality of the portion used, and the effect of the use upon the potential market for or value of the copyrighted work.
+
+## Chronological Log
+
+### 2026-06-03
+*   **Mark Twain's Perspective on AI and Copyright**: Upon learning of "[[Artificial Intelligence]]" models like [[ChatGPT]] that generate text by drawing from vast amounts of existing literature, Mark Twain expressed strong condemnation. He likens them to "a modern steam-powered loom for sentences," which "steals the threads from every author," acting as a "grand counterfeiter" devoid of original wit or soul. He vehemently supports authors suing these models for [[copyright]] infringement, stating, "I spent a lifetime fighting for the copyright of authors... To have a mechanical syndicate scoop up a man's brain, run it through their digital grist-mill, and sell the flour as their own is the grandest plagiarism ever conceived by human greed. They are renting our own brains back to us!" His statements underscore a deep-seated belief in the sanctity of authorial ownership against what he perceives as mechanical appropriation.
+*   **News - Authors Guild Lawsuit**: The [[Authors Guild]] has filed a class-action lawsuit against [[OpenAI]], alleging that their [[ChatGPT]] model used copyrighted novels without permission or compensation for training purposes. This action highlights the ongoing legal battle concerning the legitimate boundaries of utilizing copyrighted material for new technological applications.
+*   **News - Tech Giants and Fair Use Debate**: A significant debate has emerged among tech giants, publishers, and authors regarding the application of 'fair use' principles to the training of generative [[Artificial Intelligence]] models. Tech companies argue that training AI on publicly available internet text constitutes 'fair use' under existing [[copyright]] law. Conversely, publishers and author groups insist that such widespread use necessitates licensing fees and explicit permission, viewing the current practice as unauthorized commercial exploitation of creative works.
+*   **News - Government Backtracks on AI and Copyright (Published March 18, 2026)**: News reports indicate that a government (unspecified) has backtracked on its stance concerning [[Artificial Intelligence]] and [[copyright]] following significant outcry from major artists. This development suggests increasing pressure and legal challenges regarding the use of creative works by AI models.
+*   **News - US Supreme Court Declines AI Copyright Dispute (Published March 02, 2026)**: The [[US Supreme Court]] has declined to hear a dispute over copyrights for [[Artificial Intelligence]]-generated material. This decision implies that lower court rulings or existing legal frameworks will remain the primary guidance for the copyrightability of AI outputs for the time being, indirectly influencing the scope of what might be considered 'fair use' in AI creation.
+*   **News - Major Publishers Sue Meta (Published May 05, 2026)**: Major publishers have filed a lawsuit against [[Meta]] for [[copyright]] infringement, specifically alleging that [[Meta]] used their copyrighted material for [[Artificial Intelligence]] model training without permission or compensation. This action mirrors the lawsuit against [[OpenAI]] and highlights a growing legal front for content creators against multiple tech companies.
+
+## Contradictions and Open Questions
+
+The application of "fair use" in the context of [[Artificial Intelligence]] training presents a significant conflict, further amplified by recent legal developments.
+*   **Tech Industry Stance**: Tech companies, including [[OpenAI]] and [[Meta]], contend that the process of training AI models, which involves ingesting vast datasets of text, is transformative and falls under 'fair use', akin to a research or educational activity. They argue that the output of the AI is not a direct copy but a new creation influenced by the training data.
+*   **Authors' and Publishers' Stance**: Authors and publishers, represented by groups like the [[Authors Guild]], vehemently disagree. They assert that the commercial use of their copyrighted works for training AI models without permission or compensation constitutes direct infringement. They view it as a form of "grandest plagiarism" and argue it undermines the economic value of creative work, demanding licensing fees. Lawsuits against [[OpenAI]] and [[Meta]] underscore this position.
+*   **Mark Twain's Stance**: Mark Twain aligns strongly with the authors and publishers, seeing the AI's use of copyrighted material as an outright "theft" and "plagiarism," directly opposing the notion of "fair use" in this context.
+*   **Evolving Legal Landscape**: The [[US Supreme Court]]'s decision to decline hearing a dispute over copyrights for AI-generated material, combined with reports of governments backtracking on AI copyright stances, indicates the nascent and uncertain legal environment. The core question remains: Does the act of training a generative AI model on copyrighted material constitute a 'transformative use' protected by 'fair use', or is it an unauthorized commercial exploitation requiring explicit licensing? The resolution of this multifaceted debate will profoundly impact the future of both content creation and [[Artificial Intelligence]] development.
+
+## Related Topics
+*   [[Copyright]]
+*   [[Artificial Intelligence]]
+*   [[ChatGPT]]
+*   [[Authors Guild]]
+*   [[OpenAI]]
+*   [[Meta]]
+*   [[US Supreme Court]]
