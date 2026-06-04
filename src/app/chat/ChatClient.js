@@ -357,14 +357,16 @@ export default function ChatClient() {
         {/* Desk Header / Status bar */}
         <div className="desk-header-left" style={{ position: 'relative', top: 'auto', left: 'auto', marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            <Image
-              src="/images/MarkTwainSoloLogo.webp"
-              alt="Mark Twain Logo"
-              width={98}
-              height={35}
-              priority
-              className="mark-twain-solo-logo"
-            />
+            <Link href="/">
+              <Image
+                src="/images/MarkTwainSoloLogo.webp"
+                alt="Mark Twain Logo"
+                width={98}
+                height={35}
+                priority
+                className="mark-twain-solo-logo"
+              />
+            </Link>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
             <Link
