@@ -160,6 +160,65 @@ const books = [
   }
 ];
 
+const miscellaneousWorks = [
+  { title: "1601", slug: "1601" },
+  { title: "1911 Encyclopædia Britannica", slug: "1911-Encyclopædia-Britannica" },
+  { title: "1911 Encyclopædia Britannica: Mark Twain", slug: "1911-Encyclopædia-Britannica-Twain-Mark" },
+  { title: "A Burlesque Autobiography", slug: "A-Burlesque-Autobiography" },
+  { title: "A Dog's Tale", slug: "A-Dog's-Tale" },
+  { title: "A Double Barrelled Detective Story", slug: "The-Double-Barrelled-Detective" },
+  { title: "A Horse's Tale", slug: "A-Horse's-Tale" },
+  { title: "A Tramp Abroad", slug: "A-Tramp-Abroad" },
+  { title: "Alonzo Fitz and Other Stories", slug: "The-Loves-of-Alonzo-Fitz" },
+  { title: "Appletons' Cyclopædia of American Biography", slug: "Appletons'-Cyclopædia-of-American-Biography" },
+  { title: "Appletons' Cyclopædia of American Biography: Samuel Langhorne Clemens", slug: "Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne" },
+  { title: "Cartoon Portraits and Biographical Sketches", slug: "Cartoon-portraits-and-biographical-sketches-of-men-of-the-day" },
+  { title: "Cartoon Portraits and Biographical Sketches: Mark Twain", slug: "Cartoon-portraits-and-biographical-sketches-of-men-of-the-day-Mark-Twain" },
+  { title: "Christian Science", slug: "Christian-Science" },
+  { title: "Collier's New Encyclopedia (1921)", slug: "Collier's-New-Encyclopedia-1921" },
+  { title: "Collier's New Encyclopedia (1921): Samuel Langhorne Clemens", slug: "Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne" },
+  { title: "Crowd Endangers Steamer to Get Passing Glimpse of Humorist Mark Twain", slug: "Crowd-Endangers-Steamer-to-Get-Passing-Glimpse-of-Humorist-Mark-Twain" },
+  { title: "Easy Mark Twain", slug: "Easy-Mark-Twain" },
+  { title: "Essays on Paul Bourget", slug: "Essays-on-Paul-Bourget" },
+  { title: "Extract from Captain Stormfield's Visit to Heaven", slug: "Captain-Stormfield's-Vist-to-Heaven" },
+  { title: "Fenimore Cooper's Literary Offences", slug: "Fennimore-Cooper-Offences" },
+  { title: "Goldsmith's Friend Abroad Again", slug: "Goldsmith's-Friend-Abroad-Again" },
+  { title: "How to Tell a Story and Others", slug: "How-to-Tell-a-Story" },
+  { title: "In Defense of Harriet Shelley", slug: "Defence-of-Harriet-Shelley" },
+  { title: "Is Shakespeare Dead?", slug: "Is-Shakespeare-Dead" },
+  { title: "Mark Twain at railroad feast", slug: "Mark-Twain-at-railroad-feast" },
+  { title: "Mark Twain here with H. H. Rogers", slug: "Mark-Twain-here-with-H-H-Rogers" },
+  { title: "Mark Twain's Speeches", slug: "Mark-Twain's-Speeches" },
+  { title: "Marooned Mark Twain", slug: "Marooned-Mark-Twain" },
+  { title: "Personal Recollections of Joan of Arc (Volume I)", slug: "Recollections-of-Joan-of-Arc-I" },
+  { title: "Personal Recollections of Joan of Arc (Volume II)", slug: "Recollections-of-Joan-of-Arc-II" },
+  { title: "San Francisco Call (1910): Mark Twain Called by Death", slug: "San-Francisco-Call-1910-Mark-Twain-Called-by-Death" },
+  { title: "Sketches New and Old", slug: "Sketches-New-and-Old" },
+  { title: "Some Rambling Notes of an Idle Excursion", slug: "Rambling-Idle-Excursion" },
+  { title: "The American Cyclopædia (1879)", slug: "The-American-Cyclopædia-1879" },
+  { title: "The American Cyclopædia (1879): Samuel Langhorne Clemens", slug: "The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne" },
+  { title: "The American Novel", slug: "The-American-Novel" },
+  { title: "The American Novel: Chapter 7", slug: "The-American-Novel-Chapter-7" },
+  { title: "The Curious Republic of Gondour", slug: "Curious-Republic-of-Gondour" },
+  { title: "The Encyclopedia Americana (1920)", slug: "The-Encyclopedia-Americana-1920" },
+  { title: "The Encyclopedia Americana (1920): Samuel Langhorne Clemens", slug: "The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne" },
+  { title: "The Facts Concerning the Recent Carnival of Crime in Connecticut", slug: "Carnival-of-Crime-in-CT" },
+  { title: "The Gilded Age", slug: "A-Gilded-Age" },
+  { title: "The Man That Corrupted Hadleyburg", slug: "The-Man-who-Corrupted-Hadleyburg" },
+  { title: "The Man That Corrupted Hadleyburg and Other Stories", slug: "Hadleyberg-Stories-et-al" },
+  { title: "The New International Encyclopædia", slug: "The-New-International-Encyclopædia" },
+  { title: "The New International Encyclopædia: Samuel Langhorne Clemens", slug: "The-New-International-Encyclopædia-Clemens-Samuel-Langhorne" },
+  { title: "The New Student's Reference Work", slug: "The-New-Student's-Reference-Work" },
+  { title: "The New Student's Reference Work: Samuel Langhorne Clemens", slug: "The-New-Student's-Reference-Work-Clemens-Samuel-Langhorne" },
+  { title: "The New York Times: Mark Twain", slug: "The-New-York-Times-Mark-Twain" },
+  { title: "The New York Times: Mark Twain Investigating", slug: "The-New-York-Times-Mark-Twain-Investigating" },
+  { title: "The New York Times: Mark Twain is Dead at 74", slug: "The-New-York-Times-Mark-Twain-is-Dead-at-74" },
+  { title: "The Stolen White Elephant", slug: "The-Stolen-White-Elephant" },
+  { title: "The Washington Post (1907): Publisher Tells What The Humorist Is Paid", slug: "The-Washington-Post-newspaper-1907-Mark-Twain's-Exclusive-Publisher-Tells-What-The-Humorist-Is-Paid" },
+  { title: "Those Extraordinary Twins", slug: "Those-Extraordinary-Twins" },
+  { title: "What Is Man? and Other Essays", slug: "What-Is-Man-And-Others" }
+];
+
 export default function TheCompleteWorksPage() {
   const router = useRouter();
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
@@ -543,33 +602,6 @@ export default function TheCompleteWorksPage() {
             </div>
 
 
-            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Essays, Diaries, Stories &amp; Miscellaneous (83)</h2>
-            <div className="overflow-x-auto w-full mb-[3.5rem]">
-              <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
-                <thead className="text-left">
-                  <tr>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/What-Is-Man-And-Others')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">What Is Man? and Other Essays</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Recollections-of-Joan-of-Arc-I')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Recollections of Joan of Arc</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="opacity-80">
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">81 additional works</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-
             <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Recent Interviews &amp; Analysis (Generated)</h2>
             <div className="overflow-x-auto w-full mb-[3.5rem]">
               <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
@@ -587,6 +619,20 @@ export default function TheCompleteWorksPage() {
                   <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Analysis: What Twain Would Say About 2026]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Synthesized from corpus + current events</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Coming</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
                 </tbody>
               </table>
+            </div>
+
+
+            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Essays, Diaries, Stories &amp; Miscellaneous</h2>
+            <div className="w-full mb-[3.5rem] mt-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 text-md leading-[1.7]">
+                {miscellaneousWorks.map((work) => (
+                  <div key={work.slug} className="py-1 border-b border-[rgba(217,163,74,0.08)] hover:bg-[rgba(217,163,74,0.03)] transition-colors px-2 rounded">
+                    <Link href={`/read/${work.slug}`} className="font-semibold text-[var(--primary)] hover:underline block truncate w-full">
+                      {work.title}
+                    </Link>
+                  </div>
+                ))}
+              </div>
             </div>
 
 
