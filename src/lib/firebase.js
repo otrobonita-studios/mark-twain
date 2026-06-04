@@ -22,7 +22,8 @@ let db;
 if (isConfigured) {
   try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
-    db = getFirestore(app);
+    const databaseId = process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID;
+    db = databaseId ? getFirestore(app, databaseId) : getFirestore(app);
   } catch (error) {
     console.error('Failed to initialize Firebase SDK:', error);
   }

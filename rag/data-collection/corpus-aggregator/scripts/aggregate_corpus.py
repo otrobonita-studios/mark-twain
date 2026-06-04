@@ -54,7 +54,7 @@ def find_source_manifests(corpus_dir: Path) -> dict[str, Path]:
 
 def load_json(path: Path) -> dict | None:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception as e:
         print(f"  warning: failed to read {path}: {e}", file=sys.stderr)
         return None

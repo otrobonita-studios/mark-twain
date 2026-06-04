@@ -1,9 +1,87 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import { Sun, Moon, BookOpen, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import MarkTwainLetterCard from './MarkTwainLetterCard';
+
+function isLetterSegment(segment) {
+  const recipientMatch = segment.match(/^\s*(?:<a[^>]*>[\s\S]*?<\/a>)?\s*(?:<div[^>]*>[\s\S]*?<\/div>)?\s*(?:<br\s*\/?>)?\s*(?:<p[^>]*>)?\s*(To\s+|Fragment\s+of\s+a\s+letter\s+|Letter\s+to\s+)/i);
+  return !!recipientMatch;
+}
+
+function isSignatureText(text) {
+  const cleanText = text.replace(/<[^>]+>/g, '').trim();
+  if (cleanText.length > 120) return false;
+  const signaturePatterns = [
+    /yours/i, /brother/i, /friend/i, /mark/i, /sam/i, /clemens/i, /ever/i, 
+    /affectionately/i, /sinceres/i, /respectfully/i, /obedient/i, /devotedly/i, 
+    /signing/i
+  ];
+  return signaturePatterns.some(pat => pat.test(cleanText)) || cleanText.length < 50;
+}
+
+function afterDateBlock(text) {
+  const match = text.match(/^\s*(?:<a[^>]*>[\s\S]*?<\/a>)?\s*<pre[^>]*>([\s\S]*?)<\/pre>/i);
+  if (match) {
+    return {
+      content: match[1],
+      length: match[0].length
+    };
+  }
+  return null;
+}
+
+function parseLetter(content, pendingContext) {
+  const pMatch = content.match(/<p>([\s\S]*?)<\/p>/i);
+  let recipient = '';
+  let afterRecipient = content;
+  
+  if (pMatch) {
+    recipient = pMatch[1].trim();
+    afterRecipient = content.substring(pMatch.index + pMatch[0].length).trim();
+  }
+  
+  const preMatch = afterDateBlock(afterRecipient);
+  let date = '';
+  let afterDate = afterRecipient;
+  
+  if (preMatch) {
+    date = preMatch.content.trim();
+    afterDate = afterRecipient.substring(preMatch.length).trim();
+  }
+  
+  const preBlocks = [];
+  const preRegex = /<pre[^>]*>([\s\S]*?)<\/pre>/gi;
+  let match;
+  while ((match = preRegex.exec(afterDate)) !== null) {
+    preBlocks.push({
+      index: match.index,
+      length: match[0].length,
+      content: match[1],
+      full: match[0]
+    });
+  }
+  
+  let signature = '';
+  let bodyHtml = afterDate;
+  
+  if (preBlocks.length > 0) {
+    const sigBlock = preBlocks[preBlocks.length - 1];
+    signature = sigBlock.content;
+    bodyHtml = afterDate.substring(0, sigBlock.index) + afterDate.substring(sigBlock.index + sigBlock.length);
+  }
+  
+  return {
+    type: 'letter',
+    recipient,
+    date,
+    bodyHtml: bodyHtml.trim(),
+    signature,
+    contextHtml: pendingContext
+  };
+}
 
 
 function formatTocLabel(label) {
@@ -41,6 +119,60 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
   const [selectedZoomImage, setSelectedZoomImage] = useState(null);
   const [isTocOpen, setIsTocOpen] = useState(false);
   const [activeId, setActiveId] = useState(null);
+
+  const isLetters = bookTitle.toLowerCase().includes('letter');
+
+  const parsedSegments = useMemo(() => {
+    if (!isLetters) return [];
+
+    const parts = htmlContent.split(/<hr\s*\/?>/gi);
+    const segments = [];
+    let pendingContext = '';
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const nextIsLetter = i + 1 < parts.length && isLetterSegment(parts[i + 1]);
+
+      let currentContent = part;
+      let nextContext = '';
+
+      if (nextIsLetter) {
+        const preBlocks = [];
+        const preRegex = /<pre[^>]*>([\s\S]*?)<\/pre>/gi;
+        let match;
+        while ((match = preRegex.exec(part)) !== null) {
+          preBlocks.push({
+            index: match.index,
+            length: match[0].length,
+            content: match[1],
+            full: match[0]
+          });
+        }
+
+        if (preBlocks.length > 0) {
+          const lastBlock = preBlocks[preBlocks.length - 1];
+          if (!isSignatureText(lastBlock.content)) {
+            nextContext = lastBlock.content;
+            currentContent = part.substring(0, lastBlock.index) + part.substring(lastBlock.index + lastBlock.length);
+          }
+        }
+      }
+
+      if (isLetterSegment(part)) {
+        const letter = parseLetter(currentContent, pendingContext);
+        segments.push(letter);
+      } else {
+        segments.push({
+          type: 'html',
+          content: currentContent
+        });
+      }
+
+      pendingContext = nextContext;
+    }
+
+    return segments;
+  }, [htmlContent, isLetters]);
 
   const experiences = [
     { id: 'drama', label: 'Index', description: 'Navigate the story by Index.', supported: true },
@@ -293,7 +425,34 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
 
           {headerExtra}
 
-          <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
+          {isLetters ? (
+            <div className="book-text-content letters-collection space-y-8">
+              {parsedSegments.map((seg, idx) => {
+                if (seg.type === 'letter') {
+                  return (
+                    <MarkTwainLetterCard
+                      key={idx}
+                      recipient={seg.recipient}
+                      date={seg.date}
+                      bodyHtml={seg.bodyHtml}
+                      signature={seg.signature}
+                      contextHtml={seg.contextHtml}
+                    />
+                  );
+                } else {
+                  return (
+                    <div 
+                      key={idx} 
+                      className="book-html-block" 
+                      dangerouslySetInnerHTML={{ __html: seg.content }} 
+                    />
+                  );
+                }
+              })}
+            </div>
+          ) : (
+            <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
+          )}
         </article>
       </main>
 
