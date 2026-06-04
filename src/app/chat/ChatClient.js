@@ -699,7 +699,7 @@ export default function ChatClient() {
             {/* Length Switch */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', whiteSpace: 'nowrap' }}>
               <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]" style={{ marginRight: '0.25rem' }}>
-                Answer
+                Answer:
               </span>
               <span className="typewriter text-[10px]" style={{ color: conversationStyle === 'brief' ? 'var(--primary)' : 'var(--muted-foreground)', transition: 'color 0.2s' }}>Brief</span>
               <div 
