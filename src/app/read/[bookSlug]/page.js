@@ -181,9 +181,18 @@ export default async function ReadPage({ params }) {
 
     let cleanContent = bodyContent.trim();
     
+    // Extract title block to avoid matching its h2 elements as chapters/TOC items
+    let titleBlock = '';
+    const titleBlockMatch = cleanContent.match(/^\s*<div class=["']book-title-block["']>([\s\S]*?)<\/div>\s*(?:<hr\s*\/?>)?/i);
+    if (titleBlockMatch) {
+      titleBlock = titleBlockMatch[0];
+      cleanContent = cleanContent.substring(titleBlockMatch[0].length).trim();
+    }
+
     // Strip outer book-text-content div wrapper
-    if (cleanContent.startsWith('<div class="book-text-content">') && cleanContent.endsWith('</div>')) {
-      cleanContent = cleanContent.substring(31, cleanContent.length - 6);
+    if ((cleanContent.startsWith('<div class="book-text-content">') || cleanContent.startsWith("<div class='book-text-content'>")) && cleanContent.endsWith('</div>')) {
+      const firstClose = cleanContent.indexOf('>');
+      cleanContent = cleanContent.substring(firstClose + 1, cleanContent.length - 6).trim();
     }
 
     // Clean legacy enlarge zoom buttons and curly braces from illustrations
@@ -255,6 +264,9 @@ export default async function ReadPage({ params }) {
         .replace(/\s*by Mark Twain/gi, '')
         .trim();
     }
+    if (titleBlock) {
+      processedHtmlContent = titleBlock + '\n' + processedHtmlContent;
+    }
   } else {
     // Convert text to HTML paragraphs and extract TOC items
     const parsed = formatTxtToHtml(rawContent);
@@ -276,6 +288,16 @@ export default async function ReadPage({ params }) {
   </button>
 </div>`;
     }
+  );
+
+  // Remove inner duplicate book-toc-collapsed-wrapper structures inside table cells (<td>)
+  processedHtmlContent = processedHtmlContent.replace(
+    /<td>\s*<div class=["']book-toc-collapsed-wrapper["']>\s*<div class=["']book-toc-content-inside["']>/gi,
+    '<td>'
+  );
+  processedHtmlContent = processedHtmlContent.replace(
+    /<\/div>\s*(?:<div class=["']book-toc-fade-overlay["']><\/div>\s*)?<button class=["']book-toc-expand-btn["']>[^<]*<\/button>\s*<\/div>\s*<\/td>/gi,
+    '</td>'
   );
 
   return (

@@ -100,6 +100,9 @@ function modernizeBook(filePath) {
   bodyContent = bodyContent.replace(
     /(<h2[^>]*>\s*(?:CONTENTS|Contents|INDEX|Index)\s*<\/h2>)([\s\S]{0,250}?)((?:<p\s+class="toc">[\s\S]*?<\/p>\s*)+)/gi,
     (match, heading, spacing, tocItems) => {
+      if (match.includes('book-toc-collapsed-wrapper')) {
+        return match;
+      }
       console.log('  Wrapped paragraph-based TOC');
       return `${heading}${spacing}
 <div class="book-toc-collapsed-wrapper">
@@ -116,6 +119,9 @@ function modernizeBook(filePath) {
   bodyContent = bodyContent.replace(
     /(<h2[^>]*>\s*(?:CONTENTS|Contents|INDEX|Index)\s*<\/h2>)([\s\S]{0,250}?)((?:<h3>\s*<a\s+href="#ch\d+">[\s\S]*?<\/a>\s*<\/h3>\s*)+)/gi,
     (match, heading, spacing, chapters) => {
+      if (match.includes('book-toc-collapsed-wrapper')) {
+        return match;
+      }
       console.log('  Wrapped h3 chapter list TOC');
       return `${heading}${spacing}
 <div class="book-toc-collapsed-wrapper">
