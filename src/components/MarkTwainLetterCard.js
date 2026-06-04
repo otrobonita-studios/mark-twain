@@ -108,7 +108,7 @@ export default function MarkTwainLetterCard({ recipient, date, bodyHtml, signatu
       </div>
 
       {/* Content Area */}
-      <div className="relative min-h-[220px] max-h-[400px] overflow-y-auto p-6 bg-[#1d1915] text-[var(--foreground)] scrollbar-thin">
+      <div className="relative min-h-[220px] max-h-[400px] overflow-y-auto px-6 py-1 bg-[#1d1915] text-[var(--foreground)] scrollbar-thin">
         {activeTab === 'letter' ? (
           <div className="font-serif leading-relaxed text-justify space-y-4">
             {recipient && (
@@ -119,12 +119,12 @@ export default function MarkTwainLetterCard({ recipient, date, bodyHtml, signatu
             )}
             {date && (
               <div 
-                className="italic text-xs text-[var(--muted-foreground)] text-right font-mono mb-4"
+                className="italic text-sm text-[var(--muted-foreground)] text-right font-mono"
                 dangerouslySetInnerHTML={{ __html: date }}
               />
             )}
             <div 
-              className="text-base text-[rgba(255,244,223,0.9)] whitespace-pre-wrap book-letter-body"
+              className="text-base text-[rgba(255,244,223,0.9)] book-letter-body"
               dangerouslySetInnerHTML={{ __html: bodyHtml }}
             />
             {signature && (
@@ -160,7 +160,7 @@ export default function MarkTwainLetterCard({ recipient, date, bodyHtml, signatu
             className="flex items-center gap-2 px-3 py-1 bg-[#1d1915] text-xs font-semibold text-[rgba(255,244,223,0.85)] hover:text-white hover:bg-[rgba(255,244,223,0.02)] transition-all duration-200 border-r border-[rgba(255,244,223,0.08)]"
           >
             <Send size={12} className="text-[var(--primary)]" />
-            Comment to my Awareness Layer
+            Ask Me
           </button>
           
           <button
