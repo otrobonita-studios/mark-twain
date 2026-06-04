@@ -218,11 +218,24 @@ export default async function ReadPage({ params }) {
       const isBanned = ['contents', 'illustrations', 'loi', 'toc', 'index'].some(b => cleanLabel.toLowerCase().includes(b));
       
       if (cleanLabel && !isBanned) {
-        tocItems.push({
-          id,
-          label: cleanLabel,
-          type: 'section'
-        });
+        let finalLabel = cleanLabel;
+        let shouldPush = true;
+
+        if (/^Volume-[1-6]$/i.test(bookSlug)) {
+          if (cleanLabel.toLowerCase() === 'by mark twain') {
+            finalLabel = 'Top';
+          } else if (cleanLabel.toLowerCase() === '(samuel langhorne clemens)') {
+            shouldPush = false;
+          }
+        }
+
+        if (shouldPush) {
+          tocItems.push({
+            id,
+            label: finalLabel,
+            type: 'section'
+          });
+        }
       }
 
       if (!attrs.includes('id=')) {

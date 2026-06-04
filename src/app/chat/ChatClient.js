@@ -176,6 +176,7 @@ export default function ChatClient() {
           tone: conversationTone,
           simplify: simplifyLanguage,
           excerpt: excerptToSend,
+          historyAware: true,
           // Extract only role and content for API history seed
           history: messages.map(msg => ({ role: msg.role, content: msg.content }))
         }),
@@ -398,57 +399,57 @@ export default function ChatClient() {
             >
               <div className="mobile-settings-drawer-inner">
                 {/* Settings Switches */}
-                <div className="drawer-section">
-                  <div className="drawer-switch-row">
-                    <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
-                      Answer Size:
-                    </span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <span className="typewriter text-[10px]" style={{ color: conversationStyle === 'brief' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Brief</span>
-                      <div 
-                        onClick={() => setConversationStyle(conversationStyle === 'brief' ? 'in-depth' : 'brief')}
-                        className={`switch-track ${conversationStyle === 'in-depth' ? 'active' : ''}`}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <div className="switch-thumb" />
-                      </div>
-                      <span className="typewriter text-[10px]" style={{ color: conversationStyle === 'in-depth' ? 'var(--primary)' : 'var(--muted-foreground)' }}>In-Depth</span>
+                <div className="drawer-grid-container">
+                  {/* Answer Size Row */}
+                  <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
+                    Answer Size:
+                  </span>
+                  <span className="typewriter text-[10px] text-right" style={{ color: conversationStyle === 'brief' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Brief</span>
+                  <div className="flex items-center justify-center">
+                    <div 
+                      onClick={() => setConversationStyle(conversationStyle === 'brief' ? 'in-depth' : 'brief')}
+                      className={`switch-track ${conversationStyle === 'in-depth' ? 'active' : ''}`}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <div className="switch-thumb" />
                     </div>
                   </div>
+                  <span className="typewriter text-[10px] text-left" style={{ color: conversationStyle === 'in-depth' ? 'var(--primary)' : 'var(--muted-foreground)' }}>In-Depth</span>
+                  <div style={{ width: '3.5rem' }} />
 
-                  <div className="drawer-switch-row">
-                    <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
-                      Tone:
-                    </span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <span className="typewriter text-[10px]" style={{ color: conversationTone === 'playful' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Playful</span>
-                      <div 
-                        onClick={() => setConversationTone(conversationTone === 'playful' ? 'critical' : 'playful')}
-                        className={`switch-track ${conversationTone === 'critical' ? 'active' : ''}`}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <div className="switch-thumb" />
-                      </div>
-                      <span className="typewriter text-[10px]" style={{ color: conversationTone === 'critical' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Critical</span>
+                  {/* Tone Row */}
+                  <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
+                    Tone:
+                  </span>
+                  <span className="typewriter text-[10px] text-right" style={{ color: conversationTone === 'playful' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Playful</span>
+                  <div className="flex items-center justify-center">
+                    <div 
+                      onClick={() => setConversationTone(conversationTone === 'playful' ? 'critical' : 'playful')}
+                      className={`switch-track ${conversationTone === 'critical' ? 'active' : ''}`}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <div className="switch-thumb" />
                     </div>
                   </div>
+                  <span className="typewriter text-[10px] text-left" style={{ color: conversationTone === 'critical' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Critical</span>
+                  <div style={{ width: '3.5rem' }} />
 
-                  <div className="drawer-switch-row">
-                    <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
-                      Language:
-                    </span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      <span className="typewriter text-[10px]" style={{ color: !simplifyLanguage ? 'var(--primary)' : 'var(--muted-foreground)' }}>Standard</span>
-                      <div 
-                        onClick={() => setSimplifyLanguage(!simplifyLanguage)}
-                        className={`switch-track ${simplifyLanguage ? 'active' : ''}`}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <div className="switch-thumb" />
-                      </div>
-                      <span className="typewriter text-[10px]" style={{ color: simplifyLanguage ? 'var(--primary)' : 'var(--muted-foreground)' }}>Simplified</span>
+                  {/* Language Row */}
+                  <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
+                    Language:
+                  </span>
+                  <span className="typewriter text-[10px] text-right" style={{ color: !simplifyLanguage ? 'var(--primary)' : 'var(--muted-foreground)' }}>Standard</span>
+                  <div className="flex items-center justify-center">
+                    <div 
+                      onClick={() => setSimplifyLanguage(!simplifyLanguage)}
+                      className={`switch-track ${simplifyLanguage ? 'active' : ''}`}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <div className="switch-thumb" />
                     </div>
                   </div>
+                  <span className="typewriter text-[10px] text-left" style={{ color: simplifyLanguage ? 'var(--primary)' : 'var(--muted-foreground)' }}>Simplified</span>
+                  <div style={{ width: '3.5rem' }} />
                 </div>
 
                 {/* Clear Conversation */}

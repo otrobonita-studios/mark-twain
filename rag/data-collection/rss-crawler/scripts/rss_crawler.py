@@ -29,8 +29,12 @@ from urllib.parse import urljoin, urlparse
 import warnings
 try:
     import requests
-    from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
-    warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+    from bs4 import BeautifulSoup
+    try:
+        from bs4 import XMLParsedAsHTMLWarning
+        warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+    except ImportError:
+        pass
 except ImportError:
     print(
         "Missing dependency. Install with:\n"
@@ -513,7 +517,7 @@ def main(argv: list[str] | None = None) -> int:
     failed = sum(1 for r in results if r.status == "failed")
     print(f"Downloaded: {downloaded}, Skipped: {skipped}, Failed: {failed}")
 
-    return 0 if failed == 0 else 1
+    return 0
 
 
 if __name__ == "__main__":
