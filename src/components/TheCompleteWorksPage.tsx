@@ -618,14 +618,6 @@ export default function TheCompleteWorksPage() {
             ))}
 
 
-            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Format Key</h2>
-            <ul className="[li_&]:mb-0 [li_&]:mt-1 [li_&]:gap-1 [&:not(:last-child)_ul]:pb-1 [&:not(:last-child)_ol]:pb-1 list-disc flex flex-col gap-1 pl-8 mb-[3.5rem] text-left">
-              <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Modernized</strong> — Texts cleaned of 1800s ephemera, readable on any device. Ask questions, get responses informed by the full work.</li>
-              <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Youth Edition</strong> — Adapted for classroom reading (vocabulary, pacing, focus)</li>
-              <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Sung Version</strong> — AI-generated musical interpretation featuring Mark's voice</li>
-              <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>E-Ink and Kindle</strong> — DRM-Free EPUB files optimized for e-paper and Kindle screens</li>
-              <li className="font-claude-response-body whitespace-normal break-words pl-2"><strong>Audio-Text Sync</strong> — Read along with highlighted text as the audio plays (for grandparents and bedtime readers)</li>
-            </ul>
           </div>
 
         </article>

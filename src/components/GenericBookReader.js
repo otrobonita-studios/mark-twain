@@ -363,17 +363,36 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
         style={{ width: '0%' }}
       />
 
-      {/* Top Left Logo (Back to Home Link) */}
-      <div className="book-logo-container" style={{ position: 'absolute', top: '2rem', left: '2rem', zIndex: 10 }}>
+      {/* Top Left: Logo + Back to Library */}
+      <div style={{ position: 'absolute', top: '2rem', left: '2rem', zIndex: 10, display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
         <Link href="/">
-          <img 
-            alt="Mark Twain Logo" 
-            width={98} 
-            height={35} 
-            className="mark-twain-solo-logo" 
-            src="/images/MarkTwainSoloLogo.webp" 
-            style={{ color: 'transparent' }} 
+          <img
+            alt="Mark Twain Logo"
+            width={98}
+            height={35}
+            className="mark-twain-solo-logo"
+            src="/images/MarkTwainSoloLogo.webp"
+            style={{ color: 'transparent' }}
           />
+        </Link>
+        <Link
+          href="/complete-works"
+          style={{
+            fontSize: '0.72rem',
+            fontFamily: 'var(--font-mono, monospace)',
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'rgba(217,163,74,0.6)',
+            textDecoration: 'none',
+            borderBottom: '1px solid rgba(217,163,74,0.25)',
+            paddingBottom: '1px',
+            whiteSpace: 'nowrap',
+            transition: 'color 0.2s',
+          }}
+          onMouseEnter={e => e.currentTarget.style.color = 'rgba(217,163,74,1)'}
+          onMouseLeave={e => e.currentTarget.style.color = 'rgba(217,163,74,0.6)'}
+        >
+          ← The Library
         </Link>
       </div>
 
