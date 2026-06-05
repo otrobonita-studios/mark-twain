@@ -212,6 +212,20 @@ export default async function ReadPage({ params }) {
       ''
     );
 
+    // Remove all <hr> elements (visual rules disrupt reading flow)
+    cleanContent = cleanContent.replace(/<hr[^>]*\/?>/gi, '');
+
+    // Remove Gutenberg navigation anchors — standalone and paragraph-wrapped
+    // (link2H_, link2HCH_ etc. were used by the in-book TOC, now stripped)
+    cleanContent = cleanContent.replace(
+      /<p[^>]*>\s*(?:<br\s*\/?>\s*)*<a[^>]*(?:name|id)="link2H[^"]*"[^>]*>\s*(?:<!--[\s\S]*?-->\s*)*<\/a>\s*(?:<br\s*\/?>\s*)*<\/p>/gi,
+      ''
+    );
+    cleanContent = cleanContent.replace(
+      /<a[^>]*(?:name|id)="link2H[^"]*"[^>]*>\s*(?:<!--[\s\S]*?-->\s*)*<\/a>/gi,
+      ''
+    );
+
     // Parse H2 elements
     let headerIndex = 0;
     
@@ -283,6 +297,26 @@ export default async function ReadPage({ params }) {
   // Remove list of illustrations entirely (Gutenberg source files preserved)
   processedHtmlContent = processedHtmlContent.replace(
     /<h2[^>]*>(?:LIST OF\s+)?ILLUSTRATIONS\.?<\/h2>\s*(?:<\/div>\s*)?(?:<table[^>]*>[\s\S]*?<\/table>|<ul[^>]*>[\s\S]*?<\/ul>)/gi,
+    ''
+  );
+
+  // Remove book-toc-collapsed-wrapper structures (blockquote-wrapped CONTENTS not caught earlier)
+  processedHtmlContent = processedHtmlContent.replace(
+    /<blockquote[^>]*>\s*<h2[^>]*>[\s\S]*?CONTENTS[\s\S]*?<\/h2>\s*<div[^>]*book-toc-collapsed-wrapper[^>]*>[\s\S]*?<\/div>\s*<\/blockquote>/gi,
+    ''
+  );
+  // Also strip any remaining standalone book-toc-collapsed-wrapper
+  processedHtmlContent = processedHtmlContent.replace(
+    /<div[^>]*book-toc-collapsed-wrapper[^>]*>[\s\S]*?<\/div>/gi,
+    ''
+  );
+
+  // Final pass: strip all remaining <hr> (including any from prepended title block)
+  processedHtmlContent = processedHtmlContent.replace(/<hr[^>]*\/?>/gi, '');
+
+  // Strip remaining link2H href links (from TOC structures not caught above)
+  processedHtmlContent = processedHtmlContent.replace(
+    /<a[^>]*href=["']#link2H[^"']*["'][^>]*>[\s\S]*?<\/a>/gi,
     ''
   );
 
