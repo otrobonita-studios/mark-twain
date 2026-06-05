@@ -1,14 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { Copy, Check, Mail, Send, ChevronDown } from 'lucide-react';
+import { Copy, Check, ArrowRight } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 export default function MarkTwainLetterCard({ recipient, date, bodyHtml, signature, contextHtml }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState('letter'); // 'letter' | 'context'
   const [copied, setCopied] = useState(false);
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   // Subject line for the letter
   const cleanRecipient = (recipient || '')
@@ -44,14 +43,6 @@ export default function MarkTwainLetterCard({ recipient, date, bodyHtml, signatu
     navigator.clipboard.writeText(fullText);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleOpenInMail = () => {
-    const plainBody = getPlainText(bodyHtml);
-    const plainSig = getPlainText(signature);
-    const fullText = `${plainBody}${plainSig ? '\n\n' + plainSig : ''}`;
-    const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(fullText)}`;
-    window.open(mailto, '_blank');
   };
 
   const handleCommentAwareness = () => {
@@ -92,9 +83,6 @@ export default function MarkTwainLetterCard({ recipient, date, bodyHtml, signatu
             </button>
           )}
         </div>
-        <span className="text-[10px] uppercase tracking-widest text-[var(--primary)] opacity-75 font-mono">
-          VINTAGE MAIL CLIENT
-        </span>
       </div>
 
       {/* Subject Line */}
@@ -153,44 +141,14 @@ export default function MarkTwainLetterCard({ recipient, date, bodyHtml, signatu
           {copied ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
         </button>
 
-        {/* Action Dropdown Group */}
-        <div className="relative flex items-stretch rounded overflow-hidden border border-[rgba(255,244,223,0.08)] bg-[#1d1915]">
-          <button
-            onClick={handleCommentAwareness}
-            className="flex items-center gap-2 px-3 py-1 bg-[#1d1915] text-xs font-semibold text-[rgba(255,244,223,0.85)] hover:text-white hover:bg-[rgba(255,244,223,0.02)] transition-all duration-200 border-r border-[rgba(255,244,223,0.08)]"
-          >
-            <Send size={12} className="text-[var(--primary)]" />
-            Ask Me
-          </button>
-          
-          <button
-            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-            className="flex items-center justify-center w-8 bg-[#1d1915] text-[var(--muted-foreground)] hover:text-white transition-all duration-200"
-          >
-            <ChevronDown size={14} />
-          </button>
-
-          {isDropdownOpen && (
-            <>
-              <div 
-                className="fixed inset-0 z-10" 
-                onClick={() => setIsDropdownOpen(false)}
-              />
-              <div className="absolute right-0 bottom-full mb-1 z-20 w-40 rounded bg-[#1c1814] border border-[rgba(255,244,223,0.12)] shadow-xl overflow-hidden">
-                <button
-                  onClick={() => {
-                    setIsDropdownOpen(false);
-                    handleOpenInMail();
-                  }}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-[var(--muted-foreground)] hover:text-white hover:bg-[rgba(255,244,223,0.04)]"
-                >
-                  <Mail size={12} className="text-[var(--primary)]" />
-                  Open in Mail
-                </button>
-              </div>
-            </>
-          )}
-        </div>
+        {/* Ask Me Action Button */}
+        <button
+          onClick={handleCommentAwareness}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[rgba(255,244,223,0.08)] bg-[#1d1915] text-xs font-semibold text-[rgba(255,244,223,0.85)] hover:text-white hover:border-[var(--primary)] hover:bg-[rgba(255,244,223,0.02)] transition-all duration-200"
+        >
+          Ask Me
+          <ArrowRight size={12} className="text-[var(--primary)]" />
+        </button>
       </div>
     </div>
   );

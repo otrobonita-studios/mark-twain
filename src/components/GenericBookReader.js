@@ -125,7 +125,9 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
   const parsedSegments = useMemo(() => {
     if (!isLetters) return [];
 
-    const parts = htmlContent.split(/<hr\s*\/?>/gi);
+    // Ensure all h2 headers start on their own segment by prefixing them with a virtual <hr />
+    const normalizedContent = htmlContent.replace(/(?:\s*<hr\s*\/?>\s*)*\s*(<h2[^>]*>)/gi, '\n<hr />$1');
+    const parts = normalizedContent.split(/<hr\s*\/?>/gi);
     const segments = [];
     let pendingContext = '';
 
@@ -161,7 +163,7 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
       if (isLetterSegment(part)) {
         const letter = parseLetter(currentContent, pendingContext);
         segments.push(letter);
-      } else {
+      } else if (currentContent.trim() !== '') {
         segments.push({
           type: 'html',
           content: currentContent
