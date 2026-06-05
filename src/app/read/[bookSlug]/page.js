@@ -206,6 +206,12 @@ export default async function ReadPage({ params }) {
       cleanContent = cleanContent.replace(/(src|href|alt)=["']([^"']*?)\{([^"']*?)\}([^"']*?)["']/gi, '$1="$2$3$4"');
     } while (cleanContent !== prevContent);
 
+    // Remove internal Table of Contents (redundant with sidebar TOC)
+    cleanContent = cleanContent.replace(
+      /<h2[^>]*>\s*(?:<[^>]+>\s*)*(?:TABLE OF\s+)?CONTENTS\.?\s*(?:<\/[^>]+>\s*)*<\/h2>\s*(?:<table[^>]*>[\s\S]*?<\/table>|<ul[^>]*>[\s\S]*?<\/ul>)/gi,
+      ''
+    );
+
     // Parse H2 elements
     let headerIndex = 0;
     
@@ -274,20 +280,10 @@ export default async function ReadPage({ params }) {
     tocItems = parsed.tocItems;
   }
 
-  // Wrap list of illustrations in a collapsible container
+  // Remove list of illustrations entirely (Gutenberg source files preserved)
   processedHtmlContent = processedHtmlContent.replace(
-    /(<h2[^>]*>(?:LIST OF\s+)?ILLUSTRATIONS\.?<\/h2>\s*(?:<\/div>\s*)?)(\s*<table[^>]*>[\s\S]*?<\/table>)/gi,
-    (match, heading, table) => {
-      return `${heading}
-<div class="book-loi-collapsed-wrapper">
-  <div class="book-loi-content-inside">
-    ${table}
-  </div>
-  <button class="book-loi-expand-btn">
-    Illustrations <span class="chevron">▼</span>
-  </button>
-</div>`;
-    }
+    /<h2[^>]*>(?:LIST OF\s+)?ILLUSTRATIONS\.?<\/h2>\s*(?:<\/div>\s*)?(?:<table[^>]*>[\s\S]*?<\/table>|<ul[^>]*>[\s\S]*?<\/ul>)/gi,
+    ''
   );
 
   // Remove inner duplicate book-toc-collapsed-wrapper structures inside table cells (<td>)
