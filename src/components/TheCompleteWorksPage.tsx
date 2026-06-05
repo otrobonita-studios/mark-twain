@@ -209,6 +209,7 @@ const shortFiction: WorkEntry[] = [
   { title: "Sketches New and Old",                              slug: "Sketches-New-and-Old",                  year: 1875 },
   { title: "The Curious Republic of Gondour",                   slug: "Curious-Republic-of-Gondour",          year: 1875 },
   { title: "The Gilded Age",                                    slug: "A-Gilded-Age",                          year: 1873 },
+  { title: "Mark Twain's Curious Dream",                        slug: "Mark-Twain's-Curious-Dream",           year: 1872 },
   { title: "A Burlesque Autobiography",                         slug: "A-Burlesque-Autobiography",             year: 1871 },
 ];
 
