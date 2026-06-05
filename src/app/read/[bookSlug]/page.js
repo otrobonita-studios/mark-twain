@@ -226,6 +226,16 @@ export default async function ReadPage({ params }) {
       ''
     );
 
+    // Remove Gutenberg page-number anchors (p001, p019, etc.) — paragraph-wrapped and standalone
+    cleanContent = cleanContent.replace(
+      /<p[^>]*>\s*(?:<br\s*\/?>\s*)*<a[^>]*(?:name|id)="p\d+"[^>]*>\s*<\/a>\s*(?:<br\s*\/?>\s*)*<\/p>/gi,
+      ''
+    );
+    cleanContent = cleanContent.replace(
+      /<a[^>]*(?:name|id)="p\d+"[^>]*>\s*<\/a>/gi,
+      ''
+    );
+
     // Parse H2 elements
     let headerIndex = 0;
     
