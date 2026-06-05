@@ -300,14 +300,20 @@ export default async function ReadPage({ params }) {
     ''
   );
 
-  // Remove book-toc-collapsed-wrapper structures (blockquote-wrapped CONTENTS not caught earlier)
+  // Remove book-toc-collapsed-wrapper — match to the expand button (unique sentinel at end of structure)
+  // Using button as anchor avoids the nested-div problem with non-greedy </div> matching
   processedHtmlContent = processedHtmlContent.replace(
-    /<blockquote[^>]*>\s*<h2[^>]*>[\s\S]*?CONTENTS[\s\S]*?<\/h2>\s*<div[^>]*book-toc-collapsed-wrapper[^>]*>[\s\S]*?<\/div>\s*<\/blockquote>/gi,
+    /<blockquote[^>]*>\s*(?:<h2[^>]*>\s*(?:TABLE OF\s+)?CONTENTS\.?\s*<\/h2>\s*)?<div[^>]*book-toc-collapsed-wrapper[^>]*>[\s\S]*?<\/button>\s*<\/div>\s*<\/blockquote>/gi,
     ''
   );
-  // Also strip any remaining standalone book-toc-collapsed-wrapper
+  // Also catch standalone wrappers (not in blockquote)
   processedHtmlContent = processedHtmlContent.replace(
-    /<div[^>]*book-toc-collapsed-wrapper[^>]*>[\s\S]*?<\/div>/gi,
+    /<div[^>]*book-toc-collapsed-wrapper[^>]*>[\s\S]*?<\/button>\s*<\/div>/gi,
+    ''
+  );
+  // Clean up any orphaned CONTENTS h2 left behind
+  processedHtmlContent = processedHtmlContent.replace(
+    /<h2[^>]*>\s*(?:TABLE OF\s+)?CONTENTS\.?\s*<\/h2>/gi,
     ''
   );
 
