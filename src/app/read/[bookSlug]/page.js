@@ -166,6 +166,15 @@ export default async function ReadPage({ params }) {
   let processedHtmlContent = '';
   let tocItems = [];
   let cleanTitle = decodedSlug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  const titleMatch = rawContent.match(/<title>([\s\S]*?)<\/title>/i);
+  if (titleMatch) {
+    cleanTitle = titleMatch[1]
+      .replace(/\s*\|\s*Project Gutenberg/gi, '')
+      .replace(/\s*,\s*by Mark Twain/gi, '')
+      .replace(/\s*by Mark Twain/gi, '')
+      .trim();
+  }
+  const isLetters = cleanTitle.toLowerCase().includes('letter');
 
   if (fileInfo.type === 'html') {
     // Extract body content
@@ -212,8 +221,10 @@ export default async function ReadPage({ params }) {
       ''
     );
 
-    // Remove all <hr> elements (visual rules disrupt reading flow)
-    cleanContent = cleanContent.replace(/<hr[^>]*\/?>/gi, '');
+    // Remove all <hr> elements (visual rules disrupt reading flow) except for letters
+    if (!isLetters) {
+      cleanContent = cleanContent.replace(/<hr[^>]*\/?>/gi, '');
+    }
 
     // Remove Gutenberg navigation anchors — standalone and paragraph-wrapped
     // (link2H_, link2HCH_ etc. were used by the in-book TOC, now stripped)
@@ -286,14 +297,7 @@ export default async function ReadPage({ params }) {
       return match;
     });
 
-    const titleMatch = rawContent.match(/<title>([\s\S]*?)<\/title>/i);
-    if (titleMatch) {
-      cleanTitle = titleMatch[1]
-        .replace(/\s*\|\s*Project Gutenberg/gi, '')
-        .replace(/\s*,\s*by Mark Twain/gi, '')
-        .replace(/\s*by Mark Twain/gi, '')
-        .trim();
-    }
+
     if (titleBlock) {
       processedHtmlContent = titleBlock + '\n' + processedHtmlContent;
     }
@@ -327,8 +331,10 @@ export default async function ReadPage({ params }) {
     ''
   );
 
-  // Final pass: strip all remaining <hr> (including any from prepended title block)
-  processedHtmlContent = processedHtmlContent.replace(/<hr[^>]*\/?>/gi, '');
+  // Final pass: strip all remaining <hr> (including any from prepended title block) except for letters
+  if (!isLetters) {
+    processedHtmlContent = processedHtmlContent.replace(/<hr[^>]*\/?>/gi, '');
+  }
 
   // Strip remaining link2H href links (from TOC structures not caught above)
   processedHtmlContent = processedHtmlContent.replace(
