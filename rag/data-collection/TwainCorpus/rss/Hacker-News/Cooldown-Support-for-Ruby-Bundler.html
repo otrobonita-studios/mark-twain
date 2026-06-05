@@ -1,0 +1,57 @@
+<article class="prose prose-lg max-w-none">
+<p>Most supply-chain attacks against RubyGems exploit a narrow window: an account is compromised, a malicious version ships, and any <code class="language-plaintext highlighter-rouge">bundle install</code> in the minutes that follow resolves straight to it. <strong>Bundler 4.0.13</strong> introduces <strong>cooldown</strong>, a time-based filter that refuses to resolve to a version until it has been public for at least <em>N</em> days. Releases too new to have been scrutinized are passed over in favor of ones that have aged past the window.</p>
+<p>The feature was <a href="https://github.com/ruby/rubygems/discussions/9113">designed in the open</a>, drawing on <a href="https://dev.to/hsbt/should-rubygemsbundler-have-a-cooldown-feature-40cp">how other ecosystems approach the same problem</a>. It is opt-in, and complements rather than replaces existing defenses like mandatory 2FA and trusted publishing.</p>
+<p>Cooldown reads the per-version <code class="language-plaintext highlighter-rouge">created_at</code> timestamp that rubygems.org’s v2 compact index now serves. A version whose source does not expose <code class="language-plaintext highlighter-rouge">created_at</code>, such as older gem servers, historical entries from before the v2 cutover, or private registries still on the v1 format, is treated as outside the window and stays resolvable. Cooldown never blocks resolution silently; it only holds back versions it can prove are too new.</p>
+<h3 id="getting-started">Getting started</h3>
+<p>Cooldown ships in <a href="/2026/06/03/4.0.13-released.html">Bundler 4.0.13</a>. If you are on an earlier release, update Bundler in place and pin the same version in your lockfile so the whole team moves together:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>gem update <span class="nt">--system</span>          <span class="c"># or: gem install bundler -v 4.0.13</span>
+<span class="gp">$</span>bundle update <span class="nt">--bundler</span><span class="o">=</span>4.0.13
+</code></pre></div></div>
+<p>Then declare a small cooldown on your source in the <code class="language-plaintext highlighter-rouge">Gemfile</code>. This is the right setup for most teams: it is committed alongside your code, so every developer and CI run enforce the same window with no extra setup.</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">source</span> <span class="s2">"https://rubygems.org"</span><span class="p">,</span> <span class="ss">cooldown: </span><span class="mi">7</span>
+
+<span class="n">gem</span> <span class="s2">"rails"</span>
+<span class="n">gem</span> <span class="s2">"puma"</span>
+</code></pre></div></div>
+<p>Cooldown takes effect during resolution. Run <code class="language-plaintext highlighter-rouge">bundle install</code> when there is no lockfile yet, or <code class="language-plaintext highlighter-rouge">bundle update</code> to re-resolve against it once a lockfile exists; an existing <code class="language-plaintext highlighter-rouge">Gemfile.lock</code> is always honored as-is, so adding a cooldown never disturbs versions you have already locked. Cooldown is unset by default, so a project without it keeps resolving to the newest versions.</p>
+<p>That is all most projects need. The rest of this post covers the finer-grained controls.</p>
+<h3 id="other-ways-to-set-it">Other ways to set it</h3>
+<p>Beyond the per-source keyword, the <code class="language-plaintext highlighter-rouge">cooldown</code> setting applies one value across every source, scoped per-project, globally, or through the environment:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>bundle config <span class="nb">set </span>cooldown 7          <span class="c"># stored in .bundle/config for this project</span>
+<span class="gp">$</span>bundle config <span class="nb">set</span> <span class="nt">--global</span> cooldown 7 <span class="c"># applies to every project for this user</span>
+<span class="gp">$</span><span class="nv">BUNDLE_COOLDOWN</span><span class="o">=</span>7 bundle <span class="nb">install</span>      <span class="c"># no lockfile yet, e.g. a fresh CI checkout</span>
+<span class="gp">$</span><span class="nv">BUNDLE_COOLDOWN</span><span class="o">=</span>7 bundle update       <span class="c"># re-resolve when a lockfile already exists</span>
+</code></pre></div></div>
+<p>For a one-off run, pass <code class="language-plaintext highlighter-rouge">--cooldown</code> to <code class="language-plaintext highlighter-rouge">install</code>, <code class="language-plaintext highlighter-rouge">update</code>, <code class="language-plaintext highlighter-rouge">add</code>, or <code class="language-plaintext highlighter-rouge">outdated</code>:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>bundle <span class="nb">install</span> <span class="nt">--cooldown</span> 7
+<span class="gp">$</span>bundle update <span class="nt">--cooldown</span> 7
+<span class="gp">$</span>bundle add rails <span class="nt">--cooldown</span> 7
+<span class="gp">$</span>bundle outdated <span class="nt">--cooldown</span> 7
+</code></pre></div></div>
+<p>When more than one of these is present, they resolve in a fixed order of precedence: <strong>command-line flag &gt; configuration setting &gt; per-source <code class="language-plaintext highlighter-rouge">cooldown:</code> in the <code class="language-plaintext highlighter-rouge">Gemfile</code></strong>. A <code class="language-plaintext highlighter-rouge">--cooldown</code> flag overrides the <code class="language-plaintext highlighter-rouge">cooldown</code> setting (<code class="language-plaintext highlighter-rouge">bundle config</code> or <code class="language-plaintext highlighter-rouge">BUNDLE_COOLDOWN</code>), which in turn overrides a <code class="language-plaintext highlighter-rouge">cooldown:</code> declared on a source. The cooldown value is always a <strong>non-negative integer number of days</strong>; a string, float, negative number, or array is rejected with an <code class="language-plaintext highlighter-rouge">InvalidOption</code> error.</p>
+<h3 id="mixing-sources">Mixing sources</h3>
+<p>Because the flag and the setting apply <strong>uniformly to every source</strong>, the per-source keyword is what you reach for when policy differs by registry, for instance cooling down public gems while trusting an internal registry you operate:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">source</span> <span class="s2">"https://rubygems.org"</span><span class="p">,</span> <span class="ss">cooldown: </span><span class="mi">7</span>
+
+<span class="n">source</span> <span class="s2">"https://gems.internal.example.com"</span><span class="p">,</span> <span class="ss">cooldown: </span><span class="mi">0</span> <span class="k">do</span>
+  <span class="n">gem</span> <span class="s2">"internal-tool"</span>
+<span class="k">end</span>
+</code></pre></div></div>
+<p><code class="language-plaintext highlighter-rouge">cooldown: 0</code> on the private source keeps it permanently exempt while public gems still age. Note that a command-line <code class="language-plaintext highlighter-rouge">--cooldown N</code> overrides every source for that run, including the exempt one.</p>
+<h3 id="the-escape-hatch">The escape hatch</h3>
+<p>Passing <code class="language-plaintext highlighter-rouge">0</code> disables cooldown for the run. It is the reliable way to reach the newest version on demand and to override a per-source or configured cooldown. This matters most when waiting is the wrong default: a fix lands for an actively exploited 0-day, or a vulnerability disclosure tells you to upgrade immediately. In those cases the freshest release is exactly the one you want, and <code class="language-plaintext highlighter-rouge">--cooldown 0</code> lets you take it without removing the policy for everyone else:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>bundle <span class="nb">install</span> <span class="nt">--cooldown</span> 0
+<span class="gp">$</span><span class="nv">BUNDLE_COOLDOWN</span><span class="o">=</span>0 bundle update rails   <span class="c"># ignore any configured cooldown this time</span>
+</code></pre></div></div>
+<p>You will reach for this when every candidate version of a gem is still inside the window. Rather than fall back to a too-new release, Bundler stops, reports how many versions the cooldown excluded, and points you at <code class="language-plaintext highlighter-rouge">--cooldown 0</code> to proceed.</p>
+<h3 id="seeing-what-is-held-back">Seeing what is held back</h3>
+<p><code class="language-plaintext highlighter-rouge">bundle outdated</code> is cooldown-aware. It annotates versions that are newer but still inside the window with the days left before they become resolvable, so “up to date” stays distinct from “deliberately waiting”:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>bundle outdated <span class="nt">--cooldown</span> 7
+<span class="go">Gem             Current   Latest                  Requested   Groups
+aws-partitions  1.1251.0  1.1256.0 (cooldown 3d)  = 1.1251.0  default
+</span></code></pre></div></div>
+<h3 id="one-layer-among-many">One layer among many</h3>
+<p>Cooldown is most useful as one part of the wider security investment happening on rubygems.org. The registry now validates gem contents at push time and checks logins against Have I Been Pwned so that compromised passwords cannot be reused, work described in <a href="/2026/04/09/protecting-rubygems-from-the-outside-in.html">Protecting rubygems.org from the outside in</a>. A dedicated team is running <a href="/2026/04/29/scaling-rubys-defenses-with-ai.html">AI-assisted vulnerability scanning against the most critical gems</a>, backed by Alpha Omega and Anthropic, and the direction of all of this is tracked on a <a href="/2026/04/15/rubygems-org-has-a-public-roadmap.html">public roadmap</a>. Trusted publishing and mandatory 2FA already raise the bar for who can push a release in the first place.</p>
+<p>Cooldown itself only works because rubygems.org now publishes the per-version <code class="language-plaintext highlighter-rouge">created_at</code> timestamp through its <a href="https://github.com/rubygems/rubygems.org/issues/6412">v2 compact index</a> (v2 is an internal format version, not a public API change), delivered through a careful dual-write migration and a flagged cutover with no disruption for clients. I’m grateful to the rubygems.org team for that groundwork. Cooldown is a thin client-side filter on top of it.</p>
+<p>Each of these defenses covers a different gap, and they compound. Resolving your dependencies against rubygems.org is what puts all of them to work on your behalf, which makes it the safest default for Ruby projects.</p>
+</article>
