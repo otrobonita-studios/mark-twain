@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import MarkTwainLetterCard from './MarkTwainLetterCard';
 
 function isLetterSegment(segment) {
-  const recipientMatch = segment.match(/^\s*(?:<a[^>]*>[\s\S]*?<\/a>)?\s*(?:<div[^>]*>[\s\S]*?<\/div>)?\s*(?:<br\s*\/?>)?\s*(?:<p[^>]*>)?\s*(To\s+|Fragment\s+of\s+a\s+letter\s+|Letter\s+to\s+)/i);
+  const recipientMatch = segment.match(/^\s*(?:<a[^>]*>[\s\S]*?<\/a>)?\s*(?:<div[^>]*>[\s\S]*?<\/div>)?\s*(?:<br\s*\/?>)?\s*(?:<p\b[^>]*>)?\s*(To\s+|From\s+|Fragment\s+(?:of|to)\s+a\s+letter\s+|Part\s+of\s+a\s+letter\s+|Letter\s+to\s+|Letters\s+to\s+|Telegram\s+to\s+|Telegrams\s+to\s+)/i);
   return !!recipientMatch;
 }
 
@@ -125,8 +125,10 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
   const parsedSegments = useMemo(() => {
     if (!isLetters) return [];
 
-    // Ensure all h2 headers start on their own segment by prefixing them with a virtual <hr />
-    const normalizedContent = htmlContent.replace(/(?:\s*<hr\s*\/?>\s*)*\s*(<h2[^>]*>)/gi, '\n<hr />$1');
+    // Ensure all h2 headers and letter starting paragraphs start on their own segment by prefixing them with a virtual <hr />
+    const normalizedContent = htmlContent
+      .replace(/(?:\s*<hr\s*\/?>\s*)*\s*(<h2[^>]*>)/gi, '\n<hr />$1')
+      .replace(/(?:\s*<hr\s*\/?>\s*)*\s*(<p\b[^>]*>\s*(?:To\s+|From\s+|Fragment\s+(?:of|to)\s+a\s+letter|Part\s+of\s+a\s+letter|Letter\s+to|Letters\s+to|Telegram\s+to|Telegrams\s+to))/gi, '\n<hr />$1');
     const parts = normalizedContent.split(/<hr\s*\/?>/gi);
     const segments = [];
     let pendingContext = '';

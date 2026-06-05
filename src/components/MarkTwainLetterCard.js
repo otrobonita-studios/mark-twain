@@ -10,14 +10,15 @@ export default function MarkTwainLetterCard({ recipient, date, bodyHtml, signatu
   const [copied, setCopied] = useState(false);
 
   // Subject line for the letter
+  const isFrom = /^\s*From/i.test(recipient || '');
   const cleanRecipient = (recipient || '')
     .replace(/<[^>]+>/g, '') // strip HTML
-    .replace(/To\s+/i, '')
+    .replace(/^(?:To|From)\s+/i, '')
     .replace(/:/g, '')
     .trim();
     
   const cleanDate = (date || '').replace(/<[^>]+>/g, '').trim();
-  const subject = `Concerning the letter to ${cleanRecipient || 'Friend'}${cleanDate ? ' (' + cleanDate + ')' : ''}`;
+  const subject = `Concerning the letter ${isFrom ? 'from' : 'to'} ${cleanRecipient || 'Friend'}${cleanDate ? ' (' + cleanDate + ')' : ''}`;
 
   // Helper to extract plain text from HTML for copy function
   const getPlainText = (html) => {
@@ -102,6 +103,7 @@ export default function MarkTwainLetterCard({ recipient, date, bodyHtml, signatu
             {recipient && (
               <p 
                 className="font-bold text-[var(--primary)] text-lg"
+                style={{ lineHeight: 1.5, marginTop: '2.18rem' }}
                 dangerouslySetInnerHTML={{ __html: recipient }}
               />
             )}

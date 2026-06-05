@@ -235,7 +235,7 @@ export default function RestorationPage() {
             <div className="text-center md:text-left border-b border-[#d9a34a]/10 pb-4">
               <h2 className="font-serif text-lg font-bold text-[#d9a34a]">Photographs vs. Original Sketches</h2>
               <p className="text-xs opacity-60 mt-1">
-                Hover or tap a card to flip and view the original Gutenberg sketch. Click/tap to lock the flipped state.
+                Hover or tap a card to flip and view the original book sketch. Click/tap to lock the flipped state.
               </p>
             </div>
 

@@ -834,7 +834,7 @@ export default function ChatClient() {
                     </p>
                     <ul style={{ listStyleType: 'disc', paddingLeft: '1.25rem', marginBottom: '1.5rem' }}>
                       <li style={{ marginBottom: '0.75rem' }}>
-                        <strong>Project Gutenberg:</strong> The canonical English-language editions of Twain's works (the novels, the autobiography, the seven-volume Letters, the speeches, the essays). About 50 works, ~20 MB. We started from a curated index page edited by David Widger that organizes Twain's PG output into a clean bibliography. The same script also handles PG's "subject" pages, which is how you find works about a person rather than by them.
+                        <strong>Standard Digital Library:</strong> The canonical English-language editions of Twain's works (the novels, the autobiography, the seven-volume Letters, the speeches, the essays). About 50 works, ~20 MB. We started from a curated index page that organizes Twain's output into a clean bibliography. The same script also handles "subject" pages, which is how you find works about a person rather than by them.
                       </li>
                       <li style={{ marginBottom: '0.75rem' }}>
                         <strong>Wikisource:</strong> Human-transcribed (not OCR'd) public-domain texts. Smaller volume, very clean. For "works about Twain", Wikisource doesn't use a category — instead, the author page has a hand-curated "Works about Twain" section. The script reads that section via the MediaWiki API and downloads each linked page: encyclopedia entries from the 1911 Britannica, 1879 American Cyclopædia, Collier's, Appletons'; biographical sketches; obituaries from the New York Times and the San Francisco Call.

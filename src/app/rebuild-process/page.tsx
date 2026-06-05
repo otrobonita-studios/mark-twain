@@ -39,7 +39,7 @@ export default function RebuildProcessPage() {
     {
       num: '01',
       title: 'Identify your sources',
-      desc: 'Where does knowledge live? Wikis, Slack archives, Google Docs, past projects, customer interviews, internal databases? List them all. (I used Project Gutenberg, Wikisource, and Internet Archive.)'
+      desc: 'Where does knowledge live? Wikis, Slack archives, Google Docs, past projects, customer interviews, internal databases? List them all. (I used public domain texts, Wikisource, and Internet Archive.)'
     },
     {
       num: '02',

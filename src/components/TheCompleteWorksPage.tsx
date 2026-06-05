@@ -8,16 +8,6 @@ import { motion } from 'framer-motion';
 
 const books = [
   {
-    title: "A Connecticut Yankee in King Arthur's Court",
-    filename: "Connecticut-Yankee.txt",
-    cover: "/images/book-covers/Book-cover-Connecticut-Yankee.jpg",
-    desc: "An ingenious Yankee mechanic is transported to 6th-century England and uses modern science to reform Camelot.",
-    status: "Modernized",
-    genre: "Satire / Sci-Fi",
-    year: 1889,
-    color: "from-[#382b1f] to-[#1c150f]"
-  },
-  {
     title: "Life on the Mississippi",
     filename: "Life-on-the-Mississippi.txt",
     cover: "/images/book-covers/Book-cover-Life-on-the-Mississippi.jpg",
@@ -26,66 +16,6 @@ const books = [
     genre: "Memoir",
     year: 1883,
     color: "from-[#202d3d] to-[#101720]"
-  },
-  {
-    title: "Roughing It",
-    filename: "Roughing-It.txt",
-    cover: "/images/book-covers/Book-cover-Roughing-It.jpg",
-    desc: "A wild and humorous account of Twain's stagecoach journey to Nevada and his search for silver in the frontier.",
-    status: "Modernized",
-    genre: "Travel / Humor",
-    year: 1872,
-    color: "from-[#3f2024] to-[#201012]"
-  },
-  {
-    title: "Following the Equator",
-    filename: "Following-The-Equator.txt",
-    cover: "/images/book-covers/Book-cover-Following-The-Equator.jpg",
-    desc: "A witty, critical record of Twain's worldwide lecture tour across Australia, India, and South Africa.",
-    status: "Modernized",
-    genre: "Travelogue",
-    year: 1897,
-    color: "from-[#1a382c] to-[#0d1c16]"
-  },
-  {
-    title: "Adventures of Huckleberry Finn",
-    filename: "Huckleberry-Finn.txt",
-    cover: "/images/book-covers/Book-cover-Huckleberry-Finn.jpg",
-    desc: "The legendary journey of Huck and Jim escaping civilization down the Mississippi, tackling race, freedom, and friendship.",
-    status: "Youth Edition",
-    genre: "Fiction",
-    year: 1884,
-    color: "from-[#35381f] to-[#1a1c0f]"
-  },
-  {
-    title: "The Adventures of Tom Sawyer",
-    filename: "Adventures-of-Tom-Sawyer.txt",
-    cover: "/images/book-covers/Book-cover-Adventures-of-Tom-Sawyer.jpg",
-    desc: "The classic tale of childhood escapades, whitewashed fences, and puppy love in St. Petersburg, Missouri.",
-    status: "Youth Edition",
-    genre: "Fiction",
-    year: 1876,
-    color: "from-[#3d2a1f] to-[#1e150f]"
-  },
-  {
-    title: "The Prince and the Pauper",
-    filename: "Prince-and-Pauper.txt",
-    cover: "/images/book-covers/Book-cover-Prince-and-Pauper.jpg",
-    desc: "A royal prince and a beggar boy switch roles in Tudor London, exposing the dramatic class divides of England.",
-    status: "Youth Edition",
-    genre: "Historical Fiction",
-    year: 1881,
-    color: "from-[#3a1a2e] to-[#1d0d17]"
-  },
-  {
-    title: "The $30,000 Bequest and Others",
-    filename: "The-30000-Bequest-and-Others.txt",
-    cover: "/images/book-covers/Book-cover-The-30000-Bequest-and-Others.jpg",
-    desc: "A rich anthology of Twain's late short fiction, highlighting his biting satire and deep irony.",
-    status: "Modernized",
-    genre: "Short Stories",
-    year: 1906,
-    color: "from-[#1d2d3d] to-[#0e161e]"
   },
   {
     title: "Eve's Diary",
@@ -99,14 +29,84 @@ const books = [
     color: "from-[#3a2020] to-[#1d1010]"
   },
   {
-    title: "The American Claimant",
-    filename: "The-American-Claimant.txt",
-    cover: "/images/book-covers/Book-cover-The-American-Claimant.jpg",
-    desc: "A comedy of errors involving an eccentric American inventor claiming a British earldom and swapping lives.",
+    title: "Personal Recollections of Joan of Arc (Volume I)",
+    filename: "Recollections-of-Joan-of-Arc-I.txt",
+    cover: "/images/book-covers/Book-cover-Joan-Of-Arc-Vol1.jpg",
+    desc: "Twain's ambitious historical novel detailing the life, trials, and martyrdom of Joan of Arc.",
     status: "Modernized",
-    genre: "Satire",
-    year: 1892,
-    color: "from-[#1e3d30] to-[#0f1e18]"
+    genre: "Historical Fiction",
+    year: 1896,
+    color: "from-[#202d3d] to-[#101720]"
+  },
+  {
+    title: "Personal Recollections of Joan of Arc (Volume II)",
+    filename: "Recollections-of-Joan-of-Arc-II.txt",
+    cover: "/images/book-covers/Book-cover-Joan-Of-Arc-Vol2.jpg",
+    desc: "The continuation of Joan's heroic journey, her triumphs on the battlefield, and her tragic trial.",
+    status: "Modernized",
+    genre: "Historical Fiction",
+    year: 1896,
+    color: "from-[#202d3d] to-[#101720]"
+  },
+  {
+    title: "The Gilded Age",
+    filename: "A-Gilded-Age.txt",
+    cover: "/images/book-covers/Book-cover-The-Gilded-Age.jpg",
+    desc: "A biting satirical novel co-written with Charles Dudley Warner, exposing post-Civil War greed and corruption.",
+    status: "Modernized",
+    genre: "Satire / Fiction",
+    year: 1873,
+    color: "from-[#3d2a1f] to-[#1e150f]"
+  },
+  {
+    title: "Sketches New and Old",
+    filename: "Sketches-New-and-Old.txt",
+    cover: "/images/book-covers/Book-cover-The-Celebrated-jumping-Frog.png",
+    desc: "A collection of Twain's early short stories and sketches, including the legendary Jumping Frog of Calaveras County.",
+    status: "Modernized",
+    genre: "Short Stories",
+    year: 1875,
+    color: "from-[#3f2024] to-[#201012]"
+  },
+  {
+    title: "Mark Twain's Curious Dream",
+    filename: "Mark-Twain's-Curious-Dream.txt",
+    cover: "/images/book-covers/Book-cover-Curious-Dream.jpg",
+    desc: "A humorous and satirical story of a dreamer encountering spirits of the deceased who complain about their graveyard.",
+    status: "Modernized",
+    genre: "Humor / Satire",
+    year: 1872,
+    color: "from-[#1a382c] to-[#0d1c16]"
+  },
+  {
+    title: "Following the Equator",
+    filename: "Following-The-Equator.txt",
+    cover: "/images/book-covers/Book-cover-Following-The-Equator.jpg",
+    desc: "A witty, critical record of Twain's worldwide lecture tour across Australia, India, and South Africa.",
+    status: "Modernized",
+    genre: "Travelogue",
+    year: 1897,
+    color: "from-[#1a382c] to-[#0d1c16]"
+  },
+  {
+    title: "Roughing It",
+    filename: "Roughing-It.txt",
+    cover: "/images/book-covers/Book-cover-Roughing-It.jpg",
+    desc: "A wild and humorous account of Twain's stagecoach journey to Nevada and his search for silver in the frontier.",
+    status: "Modernized",
+    genre: "Travel / Humor",
+    year: 1872,
+    color: "from-[#3f2024] to-[#201012]"
+  },
+  {
+    title: "A Connecticut Yankee in King Arthur's Court",
+    filename: "Connecticut-Yankee.txt",
+    cover: "/images/book-covers/Book-cover-Connecticut-Yankee.jpg",
+    desc: "An ingenious Yankee mechanic is transported to 6th-century England and uses modern science to reform Camelot.",
+    status: "Modernized",
+    genre: "Satire / Sci-Fi",
+    year: 1889,
+    color: "from-[#382b1f] to-[#1c150f]"
   },
   {
     title: "The Innocents Abroad",
@@ -119,6 +119,26 @@ const books = [
     color: "from-[#383a1a] to-[#1c1d0d]"
   },
   {
+    title: "The American Claimant",
+    filename: "The-American-Claimant.txt",
+    cover: "/images/book-covers/Book-cover-The-American-Claimant.jpg",
+    desc: "A comedy of errors involving an eccentric American inventor claiming a British earldom and swapping lives.",
+    status: "Modernized",
+    genre: "Satire",
+    year: 1892,
+    color: "from-[#1e3d30] to-[#0f1e18]"
+  },
+  {
+    title: "The $30,000 Bequest and Others",
+    filename: "The-30000-Bequest-and-Others.txt",
+    cover: "/images/book-covers/Book-cover-The-30000-Bequest-and-Others.jpg",
+    desc: "A rich anthology of Twain's late short fiction, highlighting his biting satire and deep irony.",
+    status: "Modernized",
+    genre: "Short Stories",
+    year: 1906,
+    color: "from-[#1d2d3d] to-[#0e161e]"
+  },
+  {
     title: "The Tragedy of Pudd'nhead Wilson",
     filename: "Tragedy-of-Pudd'nhead-Wilson.txt",
     cover: "/images/book-covers/Book-cover-Tragedy-of-Puddnhead-Wilson.jpg",
@@ -127,6 +147,46 @@ const books = [
     genre: "Mystery",
     year: 1894,
     color: "from-[#381f3b] to-[#1c0f1d]"
+  },
+  {
+    title: "The Mysterious Stranger",
+    filename: "Mysterious-Stranger.txt",
+    cover: "/images/book-covers/Book-cover-Mysterious-Stranger.jpg",
+    desc: "Twain's dark, profound posthumous fable set in medieval Austria, questioning the nature of human existence.",
+    status: "Modernized",
+    genre: "Philosophical",
+    year: 1916,
+    color: "from-[#20203d] to-[#10101e]"
+  },
+  {
+    title: "The Adventures of Tom Sawyer",
+    filename: "Adventures-of-Tom-Sawyer.txt",
+    cover: "/images/book-covers/Book-cover-Adventures-of-Tom-Sawyer.jpg",
+    desc: "The classic tale of childhood escapades, whitewashed fences, and puppy love in St. Petersburg, Missouri.",
+    status: "Youth Edition",
+    genre: "Fiction",
+    year: 1876,
+    color: "from-[#3d2a1f] to-[#1e150f]"
+  },
+  {
+    title: "Adventures of Huckleberry Finn",
+    filename: "Huckleberry-Finn.txt",
+    cover: "/images/book-covers/Book-cover-Huckleberry-Finn.jpg",
+    desc: "The legendary journey of Huck and Jim escaping civilization down the Mississippi, tackling race, freedom, and friendship.",
+    status: "Youth Edition",
+    genre: "Fiction",
+    year: 1884,
+    color: "from-[#35381f] to-[#1a1c0f]"
+  },
+  {
+    title: "The Prince and the Pauper",
+    filename: "Prince-and-Pauper.txt",
+    cover: "/images/book-covers/Book-cover-Prince-and-Pauper.jpg",
+    desc: "A royal prince and a beggar boy switch roles in Tudor London, exposing the dramatic class divides of England.",
+    status: "Youth Edition",
+    genre: "Historical Fiction",
+    year: 1881,
+    color: "from-[#3a1a2e] to-[#1d0d17]"
   },
   {
     title: "Tom Sawyer Abroad",
@@ -147,16 +207,6 @@ const books = [
     genre: "Mystery",
     year: 1896,
     color: "from-[#3a351a] to-[#1d1a0d]"
-  },
-  {
-    title: "The Mysterious Stranger",
-    filename: "Mysterious-Stranger.txt",
-    cover: "/images/book-covers/Book-cover-Mysterious-Stranger.jpg",
-    desc: "Twain's dark, profound posthumous fable set in medieval Austria, questioning the nature of human existence.",
-    status: "Modernized",
-    genre: "Philosophical",
-    year: 1916,
-    color: "from-[#20203d] to-[#10101e]"
   }
 ];
 
@@ -218,7 +268,21 @@ const essaysSpeechs: WorkEntry[] = [
   { title: "Mark Twain's Speeches",                  slug: "Mark-Twain's-Speeches",                year: 1910 },
   { title: "Is Shakespeare Dead?",                   slug: "Is-Shakespeare-Dead",                  year: 1909 },
   { title: "Christian Science",                      slug: "Christian-Science",                    year: 1907 },
-  { title: "What Is Man? and Other Essays",          slug: "What-Is-Man-And-Others",               year: 1906 },
+  { title: "What Is Man?",                           slug: "What-Is-Man",                          year: 1906 },
+  { title: "The Death of Jean",                      slug: "The-Death-of-Jean",                    year: 1906 },
+  { title: "The Turning-Point of My Life",           slug: "The-Turning-Point-of-My-Life",        year: 1906 },
+  { title: "How to Make History Dates Stick",        slug: "How-to-Make-History-Dates-Stick",     year: 1906 },
+  { title: "The Memorable Assassination",            slug: "The-Memorable-Assassination",         year: 1906 },
+  { title: "A Scrap of Curious History",             slug: "A-Scrap-of-Curious-History",          year: 1906 },
+  { title: "Switzerland, The Cradle of Liberty",     slug: "Switzerland-The-Cradle-of-Liberty",   year: 1906 },
+  { title: "At the Shrine of St. Wagner",            slug: "At-the-Shrine-of-St-Wagner",          year: 1906 },
+  { title: "William Dean Howells",                   slug: "William-Dean-Howells",                 year: 1906 },
+  { title: "English As She Is Taught",               slug: "English-As-She-Is-Taught",             year: 1906 },
+  { title: "A Simplified Alphabet",                  slug: "A-Simplified-Alphabet",                year: 1906 },
+  { title: "As Concerns Interpreting the Deity",     slug: "As-Concerns-Interpreting-the-Deity",   year: 1906 },
+  { title: "Concerning Tobacco",                     slug: "Concerning-Tobacco",                   year: 1906 },
+  { title: "The Bee",                                slug: "The-Bee",                              year: 1906 },
+  { title: "Taming the Bicycle",                     slug: "Taming-the-Bicycle",                   year: 1906 },
   { title: "How to Tell a Story and Others",         slug: "How-to-Tell-a-Story",                  year: 1897 },
   { title: "Essays on Paul Bourget",                 slug: "Essays-on-Paul-Bourget",               year: 1895 },
   { title: "Fenimore Cooper's Literary Offences",    slug: "Fennimore-Cooper-Offences",            year: 1895 },
@@ -241,8 +305,8 @@ const referenceBio: WorkEntry[] = [
 const newsAccounts: WorkEntry[] = [
   { title: "The New York Times: Mark Twain",                                           slug: "The-New-York-Times-Mark-Twain",                                                                              year: 1910 },
   { title: "The New York Times: Mark Twain is Dead at 74",                             slug: "The-New-York-Times-Mark-Twain-is-Dead-at-74",                                                               year: 1910 },
-  { title: "San Francisco Call (1910): Mark Twain Called by Death",                    slug: "San-Francisco-Call-1910-Mark-Twain-Called-by-Death",                                                        year: 1910 },
-  { title: "The Washington Post (1907): Publisher Tells What The Humorist Is Paid",    slug: "The-Washington-Post-newspaper-1907-Mark-Twain's-Exclusive-Publisher-Tells-What-The-Humorist-Is-Paid",      year: 1907 },
+  { title: "San Francisco Call: Mark Twain Called by Death",                    slug: "San-Francisco-Call-1910-Mark-Twain-Called-by-Death",                                                        year: 1910 },
+  { title: "The Washington Post: Publisher Tells What The Humorist Is Paid",    slug: "The-Washington-Post-newspaper-1907-Mark-Twain's-Exclusive-Publisher-Tells-What-The-Humorist-Is-Paid",      year: 1907 },
   { title: "Crowd Endangers Steamer to Get Passing Glimpse of Humorist Mark Twain",   slug: "Crowd-Endangers-Steamer-to-Get-Passing-Glimpse-of-Humorist-Mark-Twain",                                   year: 1907 },
   { title: "Easy Mark Twain",                                                          slug: "Easy-Mark-Twain",                                                                                            year: 1907 },
   { title: "Mark Twain at railroad feast",                                             slug: "Mark-Twain-at-railroad-feast",                                                                               year: 1907 },
@@ -386,7 +450,7 @@ export default function TheCompleteWorksPage() {
             {theme === 'parchment' ? <Moon size={16} /> : <Sun size={16} />}
           </button>
 
-          <h1 className="text-text-100 text-[2rem] font-bold text-center" style={{ marginBottom: '4.5rem' }}>
+          <h1 className="text-text-100 text-[2rem] font-bold text-center" style={{ marginBottom: '2rem' }}>
             What I have in Mind
           </h1>
 
@@ -524,7 +588,7 @@ export default function TheCompleteWorksPage() {
               This is the material I lean on when we talk. Read it your own way if you wish. Don't bet on my holding the line the analysts have drawn over the decades — I have a habit of moving. Whether that is evolving or merely revolving, I leave to wiser men than myself, of whom there is rumored to be a supply.
             </p>
 
-            <h2 className="text-text-100 mt-5 -mb-1 text-[1.5rem] font-bold">Books — restored, free to read, might still be rough at the edges</h2>
+            <h2 className="text-text-100 mt-5 -mb-1 text-[1.5rem] font-bold">My library's open. Read what you like, listen if your eyes are tired, sing along where I've set it to music — and ask, I'm in a talkative mood these days. As always, work in progress.</h2>
             <div className="overflow-x-auto w-full mb-[3.5rem]">
               <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
                 <thead className="text-left">

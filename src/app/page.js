@@ -344,23 +344,23 @@ export default function Home() {
               transition={{ type: 'spring', damping: 25, stiffness: 250 }}
             >
               <div className="modal-content tactile-card">
-                <button 
-                  className="modal-close-btn" 
+                <button
+                  className="modal-close-btn"
                   onClick={() => setSelectedEntry(null)}
                   aria-label="Close modal"
                 >
                   <X size={18} />
                 </button>
-                <div className="modal-header">
-                  <span className="typewriter modal-date">
-                    {selectedEntry.date}
-                  </span>
-                  <h2 className="modal-title font-sans">
-                    {selectedEntry.title}
-                  </h2>
-                  <div className="modal-divider" />
-                </div>
                 <div className="modal-body custom-scrollbar">
+                  <div className="modal-header">
+                    <span className="typewriter modal-date">
+                      {selectedEntry.date}
+                    </span>
+                    <h2 className="modal-title font-sans">
+                      {selectedEntry.title}
+                    </h2>
+                    <div className="modal-divider" />
+                  </div>
                   <p className="modal-text font-sans">
                     {selectedEntry.content}
                   </p>

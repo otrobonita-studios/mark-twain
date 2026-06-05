@@ -2,19 +2,12 @@ const fs = require('fs');
 const path = require('path');
 
 const cssPath = path.join(__dirname, '../src/app/globals.css');
-const css = fs.readFileSync(cssPath, 'utf8');
+const content = fs.readFileSync(cssPath, 'utf8');
+const lines = content.split('\n');
 
-const lines = css.split('\n');
-console.log("Searching for 'in-paragraph-img' in globals.css:");
-lines.forEach((line, index) => {
-  if (line.includes('in-paragraph-img')) {
-    console.log(`Line ${index + 1}: ${line.trim()}`);
-  }
-});
-
-console.log("\nSearching for 'circle-img-wrapper' in globals.css:");
-lines.forEach((line, index) => {
-  if (line.includes('circle-img-wrapper')) {
-    console.log(`Line ${index + 1}: ${line.trim()}`);
+console.log("Searching for 'global-nav' in globals.css:");
+lines.forEach((line, idx) => {
+  if (line.includes('global-nav') || line.includes('nav-drawer') || line.includes('nav-overlay')) {
+    console.log(`${idx + 1}: ${line}`);
   }
 });
