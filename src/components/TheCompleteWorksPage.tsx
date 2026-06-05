@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Moon, Sun, Sparkles, Mic, Map, BookOpen, ChevronLeft, ChevronRight } from 'lucide-react';
@@ -160,54 +160,94 @@ const books = [
   }
 ];
 
-const miscellaneousWorks = [
-  { title: "1601", slug: "1601" },
-  { title: "A Burlesque Autobiography", slug: "A-Burlesque-Autobiography" },
-  { title: "A Dog's Tale", slug: "A-Dog's-Tale" },
-  { title: "A Double Barrelled Detective Story", slug: "The-Double-Barrelled-Detective" },
-  { title: "A Horse's Tale", slug: "A-Horse's-Tale" },
-  { title: "A Tramp Abroad", slug: "A-Tramp-Abroad" },
-  { title: "Alonzo Fitz and Other Stories", slug: "The-Loves-of-Alonzo-Fitz" },
-  { title: "Appletons' Cyclopædia of American Biography (Mark Twain Entry)", slug: "Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne" },
-  { title: "Cartoon Portraits and Biographical Sketches (Mark Twain Entry)", slug: "Cartoon-portraits-and-biographical-sketches-of-men-of-the-day-Mark-Twain" },
-  { title: "Christian Science", slug: "Christian-Science" },
-  { title: "Collier's New Encyclopedia (Mark Twain Entry)", slug: "Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne" },
-  { title: "Crowd Endangers Steamer to Get Passing Glimpse of Humorist Mark Twain", slug: "Crowd-Endangers-Steamer-to-Get-Passing-Glimpse-of-Humorist-Mark-Twain" },
-  { title: "Easy Mark Twain", slug: "Easy-Mark-Twain" },
-  { title: "Encyclopædia Britannica (Mark Twain Entry)", slug: "1911-Encyclopædia-Britannica-Twain-Mark" },
-  { title: "Essays on Paul Bourget", slug: "Essays-on-Paul-Bourget" },
-  { title: "Extract from Captain Stormfield's Visit to Heaven", slug: "Captain-Stormfield's-Vist-to-Heaven" },
-  { title: "Fenimore Cooper's Literary Offences", slug: "Fennimore-Cooper-Offences" },
-  { title: "Goldsmith's Friend Abroad Again", slug: "Goldsmith's-Friend-Abroad-Again" },
-  { title: "How to Tell a Story and Others", slug: "How-to-Tell-a-Story" },
-  { title: "In Defense of Harriet Shelley", slug: "Defence-of-Harriet-Shelley" },
-  { title: "Is Shakespeare Dead?", slug: "Is-Shakespeare-Dead" },
-  { title: "Mark Twain at railroad feast", slug: "Mark-Twain-at-railroad-feast" },
-  { title: "Mark Twain here with H. H. Rogers", slug: "Mark-Twain-here-with-H-H-Rogers" },
-  { title: "Mark Twain's Speeches", slug: "Mark-Twain's-Speeches" },
-  { title: "Marooned Mark Twain", slug: "Marooned-Mark-Twain" },
-  { title: "Personal Recollections of Joan of Arc (Volume I)", slug: "Recollections-of-Joan-of-Arc-I" },
-  { title: "Personal Recollections of Joan of Arc (Volume II)", slug: "Recollections-of-Joan-of-Arc-II" },
-  { title: "San Francisco Call (1910): Mark Twain Called by Death", slug: "San-Francisco-Call-1910-Mark-Twain-Called-by-Death" },
-  { title: "Sketches New and Old", slug: "Sketches-New-and-Old" },
-  { title: "Some Rambling Notes of an Idle Excursion", slug: "Rambling-Idle-Excursion" },
-  { title: "The American Cyclopædia (Mark Twain Entry)", slug: "The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne" },
-  { title: "The American Novel (Mark Twain Chapter)", slug: "The-American-Novel-Chapter-7" },
-  { title: "The Curious Republic of Gondour", slug: "Curious-Republic-of-Gondour" },
-  { title: "The Encyclopedia Americana (Mark Twain Entry)", slug: "The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne" },
-  { title: "The Facts Concerning the Recent Carnival of Crime in Connecticut", slug: "Carnival-of-Crime-in-CT" },
-  { title: "The Gilded Age", slug: "A-Gilded-Age" },
-  { title: "The Man That Corrupted Hadleyburg", slug: "The-Man-who-Corrupted-Hadleyburg" },
-  { title: "The Man That Corrupted Hadleyburg and Other Stories", slug: "Hadleyberg-Stories-et-al" },
-  { title: "The New International Encyclopædia (Mark Twain Entry)", slug: "The-New-International-Encyclopædia-Clemens-Samuel-Langhorne" },
-  { title: "The New Student's Reference Work (Mark Twain Entry)", slug: "The-New-Student's-Reference-Work-Clemens-Samuel-Langhorne" },
-  { title: "The New York Times: Mark Twain", slug: "The-New-York-Times-Mark-Twain" },
-  { title: "The New York Times: Mark Twain Investigating", slug: "The-New-York-Times-Mark-Twain-Investigating" },
-  { title: "The New York Times: Mark Twain is Dead at 74", slug: "The-New-York-Times-Mark-Twain-is-Dead-at-74" },
-  { title: "The Stolen White Elephant", slug: "The-Stolen-White-Elephant" },
-  { title: "The Washington Post (1907): Publisher Tells What The Humorist Is Paid", slug: "The-Washington-Post-newspaper-1907-Mark-Twain's-Exclusive-Publisher-Tells-What-The-Humorist-Is-Paid" },
-  { title: "Those Extraordinary Twins", slug: "Those-Extraordinary-Twins" },
-  { title: "What Is Man? and Other Essays", slug: "What-Is-Man-And-Others" }
+interface BookListEntry { title: string; slug: string; year: number; }
+interface LetterEntry { title: string; slug: string; years: string; }
+interface WorkEntry { title: string; slug?: string; href?: string; year: number; }
+
+const booksList: BookListEntry[] = [
+  { title: "The Mysterious Stranger",                          slug: "Mysterious-Stranger",                        year: 1916 },
+  { title: "The $30,000 Bequest and Others",                   slug: "The-30000-Bequest-and-Others",               year: 1906 },
+  { title: "Following the Equator",                            slug: "Following-The-Equator",                      year: 1897 },
+  { title: "Tom Sawyer, Detective",                            slug: "Tom-Sawyer-Detective",                       year: 1896 },
+  { title: "Personal Recollections of Joan of Arc (Volume I)", slug: "Recollections-of-Joan-of-Arc-I",             year: 1896 },
+  { title: "Personal Recollections of Joan of Arc (Volume II)",slug: "Recollections-of-Joan-of-Arc-II",            year: 1896 },
+  { title: "The Tragedy of Pudd'nhead Wilson",                 slug: "Tragedy-of-Pudd'nhead-Wilson",               year: 1894 },
+  { title: "Tom Sawyer Abroad",                                slug: "Tom-Sawyer-Abroad",                          year: 1894 },
+  { title: "The American Claimant",                            slug: "The-American-Claimant",                      year: 1892 },
+  { title: "A Connecticut Yankee in King Arthur's Court",      slug: "Connecticut-Yankee",                         year: 1889 },
+  { title: "Adventures of Huckleberry Finn",                   slug: "Huckleberry-Finn",                           year: 1884 },
+  { title: "Life on the Mississippi",                          slug: "Life-on-the-Mississippi",                    year: 1883 },
+  { title: "The Prince and the Pauper",                        slug: "Prince-and-Pauper",                          year: 1881 },
+  { title: "The Adventures of Tom Sawyer",                     slug: "Adventures-of-Tom-Sawyer",                   year: 1876 },
+  { title: "Roughing It",                                      slug: "Roughing-It",                                year: 1872 },
+  { title: "The Innocents Abroad",                             slug: "The-Innocents-Abroad",                       year: 1869 },
+];
+
+const lettersList: LetterEntry[] = [
+  { title: "Mark Twain's Letters, Volume 6", slug: "Volume-6", years: "1907–1910" },
+  { title: "Mark Twain's Letters, Volume 5", slug: "Volume-5", years: "1901–1906" },
+  { title: "Mark Twain's Letters, Volume 4", slug: "Volume-4", years: "1886–1900" },
+  { title: "Mark Twain's Letters, Volume 3", slug: "Volume-3", years: "1876–1885" },
+  { title: "Mark Twain's Letters, Volume 2", slug: "Volume-2", years: "1867–1875" },
+  { title: "Mark Twain's Letters, Volume 1", slug: "Volume-1", years: "1853–1866" },
+];
+
+const shortFiction: WorkEntry[] = [
+  { title: "Extract from Captain Stormfield's Visit to Heaven", slug: "Captain-Stormfield's-Vist-to-Heaven",  year: 1909 },
+  { title: "A Horse's Tale",                                    slug: "A-Horse's-Tale",                       year: 1907 },
+  { title: "Eve's Diary",                                       href: "/read/eves-diary",                     year: 1906 },
+  { title: "Alonzo Fitz and Other Stories",                     slug: "The-Loves-of-Alonzo-Fitz",             year: 1906 },
+  { title: "A Dog's Tale",                                      slug: "A-Dog's-Tale",                         year: 1904 },
+  { title: "A Double Barrelled Detective Story",                slug: "The-Double-Barrelled-Detective",        year: 1902 },
+  { title: "The Man That Corrupted Hadleyburg and Other Stories",slug: "Hadleyberg-Stories-et-al",            year: 1900 },
+  { title: "The Man That Corrupted Hadleyburg",                 slug: "The-Man-who-Corrupted-Hadleyburg",     year: 1899 },
+  { title: "Those Extraordinary Twins",                         slug: "Those-Extraordinary-Twins",            year: 1894 },
+  { title: "The Stolen White Elephant",                         slug: "The-Stolen-White-Elephant",            year: 1882 },
+  { title: "1601",                                              slug: "1601",                                  year: 1880 },
+  { title: "Some Rambling Notes of an Idle Excursion",          slug: "Rambling-Idle-Excursion",              year: 1878 },
+  { title: "The Facts Concerning the Recent Carnival of Crime in Connecticut", slug: "Carnival-of-Crime-in-CT", year: 1876 },
+  { title: "Sketches New and Old",                              slug: "Sketches-New-and-Old",                  year: 1875 },
+  { title: "The Curious Republic of Gondour",                   slug: "Curious-Republic-of-Gondour",          year: 1875 },
+  { title: "The Gilded Age",                                    slug: "A-Gilded-Age",                          year: 1873 },
+  { title: "A Burlesque Autobiography",                         slug: "A-Burlesque-Autobiography",             year: 1871 },
+];
+
+const essaysSpeechs: WorkEntry[] = [
+  { title: "The American Novel (Mark Twain Chapter)", slug: "The-American-Novel-Chapter-7",         year: 1912 },
+  { title: "Mark Twain's Speeches",                  slug: "Mark-Twain's-Speeches",                year: 1910 },
+  { title: "Is Shakespeare Dead?",                   slug: "Is-Shakespeare-Dead",                  year: 1909 },
+  { title: "Christian Science",                      slug: "Christian-Science",                    year: 1907 },
+  { title: "What Is Man? and Other Essays",          slug: "What-Is-Man-And-Others",               year: 1906 },
+  { title: "How to Tell a Story and Others",         slug: "How-to-Tell-a-Story",                  year: 1897 },
+  { title: "Essays on Paul Bourget",                 slug: "Essays-on-Paul-Bourget",               year: 1895 },
+  { title: "Fenimore Cooper's Literary Offences",    slug: "Fennimore-Cooper-Offences",            year: 1895 },
+  { title: "In Defense of Harriet Shelley",          slug: "Defence-of-Harriet-Shelley",           year: 1894 },
+  { title: "A Tramp Abroad",                         slug: "A-Tramp-Abroad",                       year: 1880 },
+  { title: "Goldsmith's Friend Abroad Again",        slug: "Goldsmith's-Friend-Abroad-Again",      year: 1870 },
+];
+
+const referenceBio: WorkEntry[] = [
+  { title: "Collier's New Encyclopedia (Mark Twain Entry)",           slug: "Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne",                            year: 1921 },
+  { title: "The Encyclopedia Americana (Mark Twain Entry)",           slug: "The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne",                           year: 1920 },
+  { title: "The New Student's Reference Work (Mark Twain Entry)",     slug: "The-New-Student's-Reference-Work-Clemens-Samuel-Langhorne",                          year: 1914 },
+  { title: "Encyclopædia Britannica (Mark Twain Entry)",              slug: "1911-Encyclopædia-Britannica-Twain-Mark",                                            year: 1911 },
+  { title: "The New International Encyclopædia (Mark Twain Entry)",   slug: "The-New-International-Encyclopædia-Clemens-Samuel-Langhorne",                        year: 1902 },
+  { title: "Appletons' Cyclopædia of American Biography (Mark Twain Entry)", slug: "Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne",        year: 1887 },
+  { title: "The American Cyclopædia (Mark Twain Entry)",              slug: "The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne",                              year: 1879 },
+  { title: "Cartoon Portraits and Biographical Sketches (Mark Twain Entry)", slug: "Cartoon-portraits-and-biographical-sketches-of-men-of-the-day-Mark-Twain",   year: 1873 },
+];
+
+const newsAccounts: WorkEntry[] = [
+  { title: "The New York Times: Mark Twain",                                           slug: "The-New-York-Times-Mark-Twain",                                                                              year: 1910 },
+  { title: "The New York Times: Mark Twain is Dead at 74",                             slug: "The-New-York-Times-Mark-Twain-is-Dead-at-74",                                                               year: 1910 },
+  { title: "San Francisco Call (1910): Mark Twain Called by Death",                    slug: "San-Francisco-Call-1910-Mark-Twain-Called-by-Death",                                                        year: 1910 },
+  { title: "The Washington Post (1907): Publisher Tells What The Humorist Is Paid",    slug: "The-Washington-Post-newspaper-1907-Mark-Twain's-Exclusive-Publisher-Tells-What-The-Humorist-Is-Paid",      year: 1907 },
+  { title: "Crowd Endangers Steamer to Get Passing Glimpse of Humorist Mark Twain",   slug: "Crowd-Endangers-Steamer-to-Get-Passing-Glimpse-of-Humorist-Mark-Twain",                                   year: 1907 },
+  { title: "Easy Mark Twain",                                                          slug: "Easy-Mark-Twain",                                                                                            year: 1907 },
+  { title: "Mark Twain at railroad feast",                                             slug: "Mark-Twain-at-railroad-feast",                                                                               year: 1907 },
+  { title: "Mark Twain here with H. H. Rogers",                                       slug: "Mark-Twain-here-with-H-H-Rogers",                                                                            year: 1907 },
+  { title: "Marooned Mark Twain",                                                     slug: "Marooned-Mark-Twain",                                                                                        year: 1907 },
+  { title: "The New York Times: Mark Twain Investigating",                             slug: "The-New-York-Times-Mark-Twain-Investigating",                                                               year: 1907 },
 ];
 
 export default function TheCompleteWorksPage() {
@@ -489,66 +529,16 @@ export default function TheCompleteWorksPage() {
                 <thead className="text-left">
                   <tr>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
+                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Year</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Adventures-of-Tom-Sawyer')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Adventures of Tom Sawyer</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Huckleberry-Finn')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Adventures of Huckleberry Finn</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Connecticut-Yankee')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">A Connecticut Yankee in King Arthur's Court</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Following-The-Equator')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Following the Equator</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Life-on-the-Mississippi')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Life on the Mississippi</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Prince-and-Pauper')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Prince and the Pauper</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Roughing-It')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Roughing It</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/The-30000-Bequest-and-Others')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The $30,000 Bequest and Others</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/The-American-Claimant')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The American Claimant</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/The-Innocents-Abroad')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Innocents Abroad</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Tragedy-of-Pudd\'nhead-Wilson')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Tragedy of Pudd'nhead Wilson</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Tom-Sawyer-Abroad')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Tom Sawyer Abroad</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Tom-Sawyer-Detective')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Tom Sawyer, Detective</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Mysterious-Stranger')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">The Mysterious Stranger</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
+                  {booksList.map((book) => (
+                    <tr key={book.slug} className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push(`/read/${book.slug}`)}>
+                      <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">{book.title}</td>
+                      <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">{book.year}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -560,34 +550,16 @@ export default function TheCompleteWorksPage() {
                 <thead className="text-left">
                   <tr>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
+                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Year</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-1')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 1 (1853–1866)</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-2')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 2 (1867–1875)</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-3')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 3 (1876–1885)</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-4')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 4 (1886–1900)</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-5')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 5 (1901–1906)</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
-                  <tr className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push('/read/Volume-6')}>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">Mark Twain's Letters, Volume 6 (1907–1910)</td>
-                    <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">Modernized</td>
-                  </tr>
+                  {lettersList.map((vol) => (
+                    <tr key={vol.slug} className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push(`/read/${vol.slug}`)}>
+                      <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">{vol.title}</td>
+                      <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">{vol.years}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -600,31 +572,49 @@ export default function TheCompleteWorksPage() {
                   <tr>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
                     <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Source</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Date</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Status</th>
+                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Year</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Interview: AI and the American Dream]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Chat conversation</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Coming</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Mark on Modern Education]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">X/Twitter thread</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Coming</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Analysis: What Twain Would Say About 2026]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Synthesized from corpus + current events</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Coming</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Planning</td></tr>
+                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Interview: AI and the American Dream]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Chat conversation</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">2026</td></tr>
+                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Mark on Modern Education]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">X/Twitter thread</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">2026</td></tr>
+                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Analysis: What Twain Would Say About 2026]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Synthesized from corpus + current events</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">2026</td></tr>
                 </tbody>
               </table>
             </div>
 
 
-            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Essays, Diaries, Stories &amp; Miscellaneous</h2>
-            <div className="w-full mb-[3.5rem] mt-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 text-md leading-[1.7]">
-                {miscellaneousWorks.map((work) => (
-                  <div key={work.slug} className="py-1 border-b border-[rgba(217,163,74,0.08)] hover:bg-[rgba(217,163,74,0.03)] transition-colors px-2 rounded">
-                    <Link href={`/read/${work.slug}`} className="font-semibold text-[var(--primary)] hover:underline block truncate w-full">
-                      {work.title}
-                    </Link>
-                  </div>
-                ))}
-              </div>
-            </div>
+            {([
+              { heading: 'Short Fiction',                data: shortFiction    },
+              { heading: 'Essays &amp; Speeches',        data: essaysSpeechs   },
+              { heading: 'Reference &amp; Biography',    data: referenceBio    },
+              { heading: 'News &amp; Contemporary Accounts', data: newsAccounts },
+            ] as { heading: string; data: WorkEntry[] }[]).map(({ heading, data }) => (
+              <React.Fragment key={heading}>
+                <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold" dangerouslySetInnerHTML={{ __html: heading }} />
+                <div className="overflow-x-auto w-full mb-[3.5rem]">
+                  <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
+                    <thead className="text-left">
+                      <tr>
+                        <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
+                        <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Year</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.map((work) => {
+                        const dest = work.href ?? `/read/${work.slug}`;
+                        return (
+                          <tr key={dest} className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push(dest)}>
+                            <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">{work.title}</td>
+                            <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">{work.year}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </React.Fragment>
+            ))}
 
 
             <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Format Key</h2>
