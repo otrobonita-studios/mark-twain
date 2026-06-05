@@ -228,14 +228,14 @@ const essaysSpeechs: WorkEntry[] = [
 ];
 
 const referenceBio: WorkEntry[] = [
-  { title: "Collier's New Encyclopedia (Mark Twain Entry)",           slug: "Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne",                            year: 1921 },
-  { title: "The Encyclopedia Americana (Mark Twain Entry)",           slug: "The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne",                           year: 1920 },
-  { title: "The New Student's Reference Work (Mark Twain Entry)",     slug: "The-New-Student's-Reference-Work-Clemens-Samuel-Langhorne",                          year: 1914 },
-  { title: "Encyclopædia Britannica (Mark Twain Entry)",              slug: "1911-Encyclopædia-Britannica-Twain-Mark",                                            year: 1911 },
-  { title: "The New International Encyclopædia (Mark Twain Entry)",   slug: "The-New-International-Encyclopædia-Clemens-Samuel-Langhorne",                        year: 1902 },
-  { title: "Appletons' Cyclopædia of American Biography (Mark Twain Entry)", slug: "Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne",        year: 1887 },
-  { title: "The American Cyclopædia (Mark Twain Entry)",              slug: "The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne",                              year: 1879 },
-  { title: "Cartoon Portraits and Biographical Sketches (Mark Twain Entry)", slug: "Cartoon-portraits-and-biographical-sketches-of-men-of-the-day-Mark-Twain",   year: 1873 },
+  { title: "Collier's New Encyclopedia",                slug: "Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne",                            year: 1921 },
+  { title: "The Encyclopedia Americana",                slug: "The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne",                           year: 1920 },
+  { title: "The New Student's Reference Work",          slug: "The-New-Student's-Reference-Work-Clemens-Samuel-Langhorne",                          year: 1914 },
+  { title: "Encyclopædia Britannica",                   slug: "1911-Encyclopædia-Britannica-Twain-Mark",                                            year: 1911 },
+  { title: "The New International Encyclopædia",        slug: "The-New-International-Encyclopædia-Clemens-Samuel-Langhorne",                        year: 1902 },
+  { title: "Appletons' Cyclopædia of American Biography", slug: "Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne",             year: 1887 },
+  { title: "The American Cyclopædia",                   slug: "The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne",                              year: 1879 },
+  { title: "Cartoon Portraits and Biographical Sketches", slug: "Cartoon-portraits-and-biographical-sketches-of-men-of-the-day-Mark-Twain",        year: 1873 },
 ];
 
 const newsAccounts: WorkEntry[] = [
