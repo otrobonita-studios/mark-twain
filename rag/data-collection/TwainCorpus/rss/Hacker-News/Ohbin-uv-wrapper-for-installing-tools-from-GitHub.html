@@ -1,0 +1,108 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">ohbin</h1></div>
+<p dir="auto"><a href="https://www.python.org/downloads/" rel="nofollow"></a>
+<a href="https://opensource.org/licenses/MIT" rel="nofollow"></a></p>
+<p dir="auto">ohbin runs the binaries your project needs but can't <code>pip install</code>. You know the ones:
+<code>ripgrep</code> (<a href="https://pypi.org/project/ripgrep/" rel="nofollow">or… can you?</a>), <code>oasdiff</code>, some linter
+written in Rust that only ships as a GitHub release. uv
+installs Python packages, and those aren't Python packages, so normally you're stuck either
+telling everyone to install them by hand and watching the versions drift, or writing a little
+download-and-verify wrapper package and copying it into every repo.</p>
+<p dir="auto">With ohbin you just write the tool down in your <code>pyproject.toml</code>. The first time you run it,
+ohbin downloads it, checks it against a SHA256 you pinned, caches it, and runs it. One
+dev-dependency, as many tools as you want.</p>
+<p dir="auto">It's a small thing on purpose, built for people who already live in uv. Your binaries get
+pinned right next to your Python deps, in the same file, and run through the same flow.</p>
+<p dir="auto">What it gives you:</p>
+<ul dir="auto">
+<li>binaries pinned to a version, pulled from GitHub releases</li>
+<li>a SHA256 per platform, checked before anything gets unpacked</li>
+<li>one dev-dependency, however many tools you declare</li>
+<li>a per-host cache that's safe to hit from parallel CI</li>
+<li>mostly stdlib (it shells out to <code>gh</code> and <code>openssl</code> only for the private-gist part)</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Installation</h2></div>
+<p dir="auto">It's a dev dependency, so with uv:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="uv add --dev git+https://github.com/prostomarkeloff/ohbin.git" dir="auto"><pre>uv add --dev git+https://github.com/prostomarkeloff/ohbin.git</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How to?</h2></div>
+<p dir="auto">Say you want ripgrep. Point ohbin at the repo:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="uv run ohbin add BurntSushi/ripgrep --version 14.1.1 --name rg --binary rg" dir="auto"><pre>uv run ohbin add BurntSushi/ripgrep --version 14.1.1 --name rg --binary rg</pre></div>
+<p dir="auto">This goes and looks at the release, finds the right asset for each platform, pins the SHA256s,
+and writes a little table into your <code>pyproject.toml</code>. Your comments and formatting stay where
+they are:</p>
+<div class="highlight highlight-source-toml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='[tool.ohbin.tools.rg]
+repo = "BurntSushi/ripgrep"
+version = "14.1.1"
+binary = "rg"
+# add writes one [..assets.&lt;os&gt;-&lt;arch&gt;] table per platform under here, checksums and all' dir="auto"><pre>[<span class="pl-en">tool</span>.<span class="pl-en">ohbin</span>.<span class="pl-en">tools</span>.<span class="pl-en">rg</span>]
+<span class="pl-smi">repo</span> = <span class="pl-s"><span class="pl-pds">"</span>BurntSushi/ripgrep<span class="pl-pds">"</span></span>
+<span class="pl-smi">version</span> = <span class="pl-s"><span class="pl-pds">"</span>14.1.1<span class="pl-pds">"</span></span>
+<span class="pl-smi">binary</span> = <span class="pl-s"><span class="pl-pds">"</span>rg<span class="pl-pds">"</span></span>
+<span class="pl-c"><span class="pl-c">#</span> add writes one [..assets.&lt;os&gt;-&lt;arch&gt;] table per platform under here, checksums and all</span></pre></div>
+<p dir="auto"><code>--name</code> is what you'll type when it's different from the repo name (ripgrep becomes rg), and
+<code>--binary</code> is the actual executable inside the archive. If add guesses an asset wrong, don't
+fight it, the table is the source of truth, just fix the line.</p>
+<p dir="auto">Then run it:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="uv run ohbin run rg -- --files     # first time: downloads, checks, caches, runs
+uv run ohbin run rg -- TODO src/   # after that it just runs" dir="auto"><pre>uv run ohbin run rg -- --files     <span class="pl-c"><span class="pl-c">#</span> first time: downloads, checks, caches, runs</span>
+uv run ohbin run rg -- TODO src/   <span class="pl-c"><span class="pl-c">#</span> after that it just runs</span></pre></div>
+<p dir="auto">ohbin hands the process straight over with execv, so the tool itself gets stdin, stdout,
+signals and the exit code, exactly like you'd run it yourself. In a Makefile I usually hide
+the prefix behind a variable:</p>
+<div class="highlight highlight-source-makefile notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="RG := uv run ohbin run rg --
+search:; $(RG) TODO src/" dir="auto"><pre><span class="pl-smi">RG</span> := uv run ohbin run rg --
+<span class="pl-en">search</span>:; <span class="pl-s">$(<span class="pl-smi">RG</span>)</span> TODO src/</pre></div>
+<p dir="auto"><code>ohbin which fd</code> prints the cached path (and downloads it first if it has to), and <code>ohbin list</code>
+shows what you've declared.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Private binaries</h3></div>
+<p dir="auto">Sometimes the binary isn't on a public release page. Maybe you built it yourself and you don't
+want it in a repo at all. ohbin can ship it through a secret gist instead, encrypted with a
+password:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='uv run ohbin publish-gist ./dist/mytool --password "$PW"' dir="auto"><pre>uv run ohbin publish-gist ./dist/mytool --password <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$PW</span><span class="pl-pds">"</span></span></pre></div>
+<p dir="auto">That gzips it, encrypts it, and drops one gist file per platform plus a small index. Run it
+from each platform's own machine, passing <code>--gist &lt;id&gt;</code> to add to the same gist. After that
+it's just another tool:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='uv run ohbin add-gist https://gist.github.com/you/ab12… --name mytool
+uv run ohbin run --password "$PW" mytool -- --help' dir="auto"><pre>uv run ohbin add-gist https://gist.github.com/you/ab12… --name mytool
+uv run ohbin run --password <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$PW</span><span class="pl-pds">"</span></span> mytool -- --help</pre></div>
+<p dir="auto">Why a gist and not a private repo? Because a gist isn't tied to a repo, and that's the whole
+point. You don't commit the binary anywhere, you don't hand out repo access and tokens to
+everyone who needs it, you just give them a link and a password. The link is unlisted and the
+bytes are AES-256-CBC, so a leaked link on its own is nothing without the password. The
+password goes to openssl over a file descriptor, never on the command line. To take access
+away, delete the gist or change the password.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">From Python</h3></div>
+<p dir="auto">If you want the path instead of running the thing:</p>
+<div class="highlight highlight-source-python notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='from ohbin import ensure
+
+path = ensure("rg")   # a Path, downloaded and checked the first time' dir="auto"><pre><span class="pl-k">from</span> <span class="pl-s1">ohbin</span> <span class="pl-k">import</span> <span class="pl-s1">ensure</span>
+
+<span class="pl-s1">path</span> <span class="pl-c1">=</span> <span class="pl-en">ensure</span>(<span class="pl-s">"rg"</span>)   <span class="pl-c"># a Path, downloaded and checked the first time</span></pre></div>
+<p dir="auto">It finds your <code>pyproject.toml</code> by walking up from wherever you are. Set <code>OHBIN_PYPROJECT</code> if
+you need to point it at a specific file, like in CI.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How it works</h2></div>
+<p dir="auto">Nothing clever. On <code>ohbin run rg</code>, it reads the rg table, works out your os and arch, and looks
+for <code>~/.cache/ohbin/rg/14.1.1/rg</code>. If it's there, it runs it. If not, it downloads under a lock
+(so two parallel runs don't race), checks the SHA256 before unpacking anything, extracts, and
+runs. The version is in the cache path, so bumping it is just a fresh download that doesn't step
+on the old one. Downloads retry with backoff, and a real 404 doesn't get mistaken for a flaky
+network.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Limitations</h2></div>
+<p dir="auto">POSIX only for now, the locking uses <code>fcntl</code> so it won't even import on Windows. add
+auto-resolves four platforms (linux and macOS, x86_64 and arm64); anything else (windows, musl,
+riscv) you add to the table by hand and the engine runs it fine. Asset matching is just looking
+at the os/arch words in the filename and preferring <code>.tar.gz</code>, so a weird naming scheme might
+cost you a one-line fix.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Development</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="git clone https://github.com/prostomarkeloff/ohbin
+cd ohbin &amp;&amp; uv sync
+
+make lint-heavy   # ruff format + check + pyright
+make test-full    # the network-free test suite" dir="auto"><pre>git clone https://github.com/prostomarkeloff/ohbin
+<span class="pl-c1">cd</span> ohbin <span class="pl-k">&amp;&amp;</span> uv sync
+
+make lint-heavy   <span class="pl-c"><span class="pl-c">#</span> ruff format + check + pyright</span>
+make test-full    <span class="pl-c"><span class="pl-c">#</span> the network-free test suite</span></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">MIT, see <a href="/prostomarkeloff/ohbin/blob/main/LICENSE">LICENSE</a>.</p>
+<p dir="auto">Made with 📦 by <a href="https://github.com/prostomarkeloff">prostomarkeloff</a> and contributors.</p>
+</article>
