@@ -1,0 +1,239 @@
+Making Debian or Fedora persistent live images
+
+Latest update: 
+2026-05-31 19:51:45
+
+When you download a 'live' ISO, dd it to a USB drive, you notice that
+all your tweaks or installed packages vanish after a reboot. If you
+think about how most such 'live' ISOs work, it becomes apparent
+why:
+
+$ parted -s Fedora-Xfce-Live-44-1.7.x86_64.iso print free | grep '^[PN ]'
+Partition Table: gpt
+Number  Start   End     Size    File system  Name       Flags
+ 1      32.8kB  2897MB  2897MB               ISO9660    hidden, msftdata
+ 2      2897MB  2929MB  31.5MB  fat16        Appended2  boot, esp
+        2929MB  2929MB  512B    Free Space
+
+ISO9660 is a read-only filesystem, & the fact it was written onto a
+writable medium is irrelevant: its fs driver contains no
+implementation for writing data blocks, & the Linux VFS layer immediately
+returns 
+EROFS
+ (code 30, 
+Read-only file system
+) when it sees that a
+fs was mounted read-only.
+
+A common workaround is to use OverlayFS; in the case of 'live' ISOs, to
+do an overlay with a chunk of RAM.
+
+Obviously, you can do an overlay with a filesystem that supports write
+operations instead, like ext4, but inside the Live ISO there isn't
+one, & hence there is nothing to do an overlay with.
+
+While you can always create an ext4 partition manually, how do you tell
+the 'live' OS to use it during boot? This distro corner has no
+standardisation whatsoever, & everybody is doing it in their own
+unique way. E.g., Debian & Ubuntu have diverged so much throughout the
+years that even the kernel parameters for their 'persistence'
+implementations differ. While it may seem logical to an impartial
+spectator to keep at least the user-facing interface the same between the
+distros, it's not how it is done in practice.
+
+Ubuntu
+
+Kernel parameter: "persistent".
+
+An (empty) partition must have the label "casper-rw".
+
+What is annoying is that it's surprisingly non-obvious to detect
+whether such a trick worked: if your partition is 
+/dev/sda4
+, &
+Ubuntu does 
+not
+ show it as mounted, & 
+/cow
+ is roughly the size of
+
+/dev/sda4
+:
+
+$ df -h | grep cow
+/cow           9.8G  161M  9.2G   2% /
+
+then persistence is 
+on
+. If, on the other hand, you see this:
+
+$ df -h | grep casper
+/dev/disk/by-label/casper-rw  9.8G  161M  9.2G   2% /var/log
+
+you most likely mistyped the word 
+persistent
+.
+
+The next issue is how to save grub parameters in the .iso. As it's
+absolutely useless to mount it to modify files, you can either extract
+everything from the .iso, edit what you want in 
+grub.cfg
+, & recreate
+the image, or, alternatively, do a simple 12-byte to 12-byte swap:
+
+$ export LANG=C
+$ sed -i 's/quiet splash/persistent  /' xubuntu-26.04-desktop-amd64.iso
+
+It's amusingly hacky, but works. If your replacement string is not equal
+in length to the pattern, you'll corrupt the ISO9660 filesystem, &
+grub will refuse to boot the kernel.
+
+(See 
+a github sample
+ for a script that does all this; it assumes a
+Linux host & injects an ext4 partition into a copy of an .iso. You can
+always resize the partition (& its filesystem) in real time using the
+Disks utility that the .iso ships with.)
+
+Debian
+
+Kernel parameter: "persistence".
+
+A partition must have:
+
+the label "persistence";
+
+a file named 
+persistence.conf
+ in the root of the partition with
+a line akin to "/ union".
+
+Notice that it was "persisten
+t
+" for Ubuntu, but it's
+"persisten
+ce
+" for Debian. Why not.
+
+The same mechanism of rude byte swapping in the .iso applies here
+too:
+
+$ export LANG=C
+$ sed -i 's/splash quiet/persistence /' debian-live-13.5.0-amd64-xfce.iso
+
+Detecting a successful overlay is easier:
+
+$ mount | grep sda3
+/dev/sda3 on /run/live/persistence/sda3 type ext4 (rw,noatime)
+overlay on / type overlay (rw,noatime,lowerdir=/run/live/rootfs/filesystem.squashfs/,upperdir=/run/live/persistence/sda3/rw,workdir=/run/live/persistence/sda3/work,redirect_dir=on)
+
+Fedora
+
+Kernel parameters: "
+selinux=0 rd.live.overlay=LABEL=foo:/bar
+".
+
+A partition must have:
+
+a label "foo" (choose whatever you want, but it must correspond to
+the value in the kernel parameter);
+
+a "bar" directory (again, see the kernel parameter);
+
+an "ovlwork" directory (this is a hardcoded name).
+
+To check:
+
+$ df -h | grep sdb1
+/dev/sdb1        9.8G  134M  9.1G   2% /run/initramfs/overlayfs
+$ mount | grep Live
+LiveOS_rootfs on / type overlay (rw,relatime,lowerdir=/run/rootfsbase,upperdir=/run/overlayfs,workdir=/run/ovlwork)
+$ file /run/overlayfs
+/run/overlayfs: symbolic link to /run/initramfs/overlayfs/bar
+
+In the case of Fedora, this is all mostly useless. Its 'linux' loader
+command in 
+grub.cfg
+ menu entries contains no space to sacrifice for
+a different 40-byte-long string. You, of course, can delete one menu
+entry completely & substitute it with your own, but this would be
+rather fragile: if, in the next version of Fedora, the size of
+
+grub.cfg
+ changes, your script will corrupt the underlying ISO9660
+filesystem.
+
+If the only reliable way here is to extract the rootfs from the .iso
+to edit it, why bother with overlays then? This is what Fedora Live
+mounts during boot:
+
+$ isoinfo -i Fedora-Xfce-Live-44-1.7.x86_64.iso -Jf | grep -i liveos/
+/LiveOS/squashfs.img
+
+Despite its name, it's a 2.6GB EROFS image file (
+the name is a
+pun
+ on a generic EROFS error code).
+
+The image contains everything, including the kernel & initramfs. We
+can just create 2 image files:
+
+a FAT32 one to hold 
+EFI/BOOT/BOOTX64.EFI
+, alongside the kernel &
+initramfs;
+
+an ext4 one with a label, say "Fedora-Live", into which we extract
+the contents of 
+squashfs.img
+.
+
+The ext4 partition can be of any length, & our 'live' Fedora image
+will have space to hold user files without any shenanigans with
+overlays.
+
+After creating these 2 images, we combine them into 1 (with a GPT
+layout), & dd it onto a USB drive.
+
+grub.cfg
+ can be as short as:
+
+set timeout=3
+menuentry "Fedora Live" {
+  linux /vmlinuz rd.live.image root=LABEL=Fedora-Live rw noresume
+  initrd /initramfs
+}
+
+rd.live.image
+ parameter is required for systemd to start
+
+livesys
+ service, otherwise, no
+
+liveuser
+ will be created.
+
+The mechanism works for any official Fedora
+
+spin
+.
+
+See 
+another github sample
+ for a script that does all this. For a
+quick test in QEMU, you'll need to specify a UEFI bios:
+
+$ sudo ./mflip 10G Fedora-Xfce-Live-44-1.7.x86_64.iso out.img
+
+$ alias qemu3d='qemu-kvm -machine q35 \
+   -bios /usr/share/OVMF/OVMF_CODE.fd -m 4G \
+   -display gtk,gl=on -smp 2 \
+   -device virtio-vga-gl,hostmem=2G,blob=true,venus=true'
+
+$ qemu3d out.img
+
+Tags: 
+Ð¾Ð¹ÑÑ
+
+Authors: 
+ag
