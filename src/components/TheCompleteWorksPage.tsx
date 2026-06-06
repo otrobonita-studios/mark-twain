@@ -296,10 +296,10 @@ const referenceBio: WorkEntry[] = [
   { title: "Collier's New Encyclopedia",                slug: "Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne",                            year: 1921 },
   { title: "The Encyclopedia Americana",                slug: "The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne",                           year: 1920 },
   { title: "The New Student's Reference Work",          slug: "The-New-Student's-Reference-Work-Clemens-Samuel-Langhorne",                          year: 1914 },
-  { title: "EncyclopÃ¦dia Britannica",                   slug: "1911-EncyclopÃ¦dia-Britannica-Twain-Mark",                                            year: 1911 },
-  { title: "The New International EncyclopÃ¦dia",        slug: "The-New-International-EncyclopÃ¦dia-Clemens-Samuel-Langhorne",                        year: 1902 },
-  { title: "Appletons' CyclopÃ¦dia of American Biography", slug: "Appletons'-CyclopÃ¦dia-of-American-Biography-Clemens-Samuel-Langhorne",             year: 1887 },
-  { title: "The American CyclopÃ¦dia",                   slug: "The-American-CyclopÃ¦dia-1879-Clemens-Samuel-Langhorne",                              year: 1879 },
+  { title: "Encyclopædia Britannica",                   slug: "1911-Encyclopædia-Britannica-Twain-Mark",                                            year: 1911 },
+  { title: "The New International Encyclopædia",        slug: "The-New-International-Encyclopædia-Clemens-Samuel-Langhorne",                        year: 1902 },
+  { title: "Appletons' Cyclopædia of American Biography", slug: "Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne",             year: 1887 },
+  { title: "The American Cyclopædia",                   slug: "The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne",                              year: 1879 },
   { title: "Cartoon Portraits and Biographical Sketches", slug: "Cartoon-portraits-and-biographical-sketches-of-men-of-the-day-Mark-Twain",        year: 1873 },
 ];
 
@@ -618,13 +618,13 @@ export default function TheCompleteWorksPage() {
                         <React.Fragment key={book.slug}>
                           <div
                             onClick={() => router.push(`/read/${book.slug}`)}
-                            className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)]"
+                            className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2"
                           >
                             {book.title}
                           </div>
                           <div
                             onClick={() => router.push(`/read/${book.slug}`)}
-                            className="text-sm text-[rgba(255,244,223,0.6)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)] text-right"
+                            className="text-sm text-[rgba(255,244,223,0.6)] cursor-pointer hover:opacity-80 transition-opacity py-2 text-right"
                           >
                             {book.year}
                           </div>
@@ -659,13 +659,13 @@ export default function TheCompleteWorksPage() {
                         <React.Fragment key={vol.slug}>
                           <div
                             onClick={() => router.push(`/read/${vol.slug}`)}
-                            className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)]"
+                            className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2"
                           >
                             {vol.title}
                           </div>
                           <div
                             onClick={() => router.push(`/read/${vol.slug}`)}
-                            className="text-sm text-[rgba(255,244,223,0.6)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)] text-right"
+                            className="text-sm text-[rgba(255,244,223,0.6)] cursor-pointer hover:opacity-80 transition-opacity py-2 text-right"
                           >
                             {vol.years}
                           </div>
@@ -709,13 +709,13 @@ export default function TheCompleteWorksPage() {
                           <React.Fragment key={dest}>
                             <div
                               onClick={() => router.push(dest)}
-                              className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)]"
+                              className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2"
                             >
                               {work.title}
                             </div>
                             <div
                               onClick={() => router.push(dest)}
-                              className="cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)] text-right flex items-center gap-2 justify-end"
+                              className="cursor-pointer hover:opacity-80 transition-opacity py-2 text-right flex items-center gap-2 justify-end"
                             >
                               {work.posthumoristic && <span className="px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-xs text-amber-300">POSTHUM.</span>}
                               <div className="text-sm text-[rgba(255,244,223,0.6)]">{work.year}</div>
