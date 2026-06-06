@@ -529,7 +529,7 @@ export default function TheCompleteWorksPage() {
                           router.push(book.href);
                         } else if (book.filename) {
                           const slug = book.filename.replace(/\.txt$/, '');
-                          router.push("/read/${slug}");
+                          router.push(`/read/${slug}`);
                         }
                       } else {
                         scrollToBook(i);
@@ -587,10 +587,10 @@ export default function TheCompleteWorksPage() {
           {/* Detailed grid content */}
           <div className="standard-markdown grid-cols-1 grid [&>_*]:min-w-0 gap-3 font-claude-response text-left">
             <h2 className="text-text-100 text-[1.5rem] font-bold" style={{ marginTop: 0, marginBottom: '2.8rem' }}>
-              My library's open. Read what you like, listen if your eyes are tired, sing along where I've set it to music â€" and ask, I'm in a talkative mood these days. As always, work in progress.
+              My library's open. Read what you like, listen if your eyes are tired, sing along where I've set it to music – and ask, I'm in a talkative mood these days. As always, work in progress.
             </h2>
             <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg text-center max-w-3xl mx-auto" style={{ marginBottom: '2.5rem', fontStyle: 'italic', opacity: 0.85 }}>
-              This is the material I lean on when we talk. Read it your own way if you wish. Don't bet on my holding the line the analysts have drawn over the decades â€" I have a habit of moving. Whether that is evolving or merely revolving, I leave to wiser men than myself, of whom there is rumored to be a supply.
+              This is the material I lean on when we talk. Read it your own way if you wish. Don't bet on my holding the line the analysts have drawn over the decades – I have a habit of moving. Whether that is evolving or merely revolving, I leave to wiser men than myself, of whom there is rumored to be a supply.
             </p>
 
             {/* Global Search */}
@@ -617,13 +617,13 @@ export default function TheCompleteWorksPage() {
                       {booksFiltered.map((book) => (
                         <React.Fragment key={book.slug}>
                           <div
-                            onClick={() => router.push("/read/${book.slug}")}
+                            onClick={() => router.push(`/read/${book.slug}`)}
                             className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)]"
                           >
                             {book.title}
                           </div>
                           <div
-                            onClick={() => router.push("/read/${book.slug}")}
+                            onClick={() => router.push(`/read/${book.slug}`)}
                             className="text-sm text-[rgba(255,244,223,0.6)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)] text-right"
                           >
                             {book.year}
@@ -636,7 +636,7 @@ export default function TheCompleteWorksPage() {
                     {booksFiltered.map((book) => (
                       <div
                         key={book.slug}
-                        onClick={() => router.push("/read/${book.slug}")}
+                        onClick={() => router.push(`/read/${book.slug}`)}
                         className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all"
                       >
                         <div className="font-semibold text-[var(--primary)] mb-1">{book.title}</div>
@@ -658,13 +658,13 @@ export default function TheCompleteWorksPage() {
                       {lettersFiltered.map((vol) => (
                         <React.Fragment key={vol.slug}>
                           <div
-                            onClick={() => router.push("/read/${vol.slug}")}
+                            onClick={() => router.push(`/read/${vol.slug}`)}
                             className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)]"
                           >
                             {vol.title}
                           </div>
                           <div
-                            onClick={() => router.push("/read/${vol.slug}")}
+                            onClick={() => router.push(`/read/${vol.slug}`)}
                             className="text-sm text-[rgba(255,244,223,0.6)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)] text-right"
                           >
                             {vol.years}
@@ -677,7 +677,7 @@ export default function TheCompleteWorksPage() {
                     {lettersFiltered.map((vol) => (
                       <div
                         key={vol.slug}
-                        onClick={() => router.push("/read/${vol.slug}")}
+                        onClick={() => router.push(`/read/${vol.slug}`)}
                         className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all"
                       >
                         <div className="font-semibold text-[var(--primary)] mb-1">{vol.title}</div>
@@ -704,7 +704,7 @@ export default function TheCompleteWorksPage() {
                   {/* Desktop: Table-style grid | Mobile: Cards */}
                   <div className="w-full mb-[3.5rem] hidden md:grid" style={{ marginTop: "1rem", gridTemplateColumns: "1fr auto", gap: "0.5rem 2rem", alignItems: "center" }}>
                       {filtered.map((work) => {
-                        const dest = work.href ?? "/read/${work.slug}";
+                        const dest = work.href ?? `/read/${work.slug}`;
                         return (
                           <React.Fragment key={dest}>
                             <div
@@ -728,7 +728,7 @@ export default function TheCompleteWorksPage() {
                   {/* Mobile: Cards */}
                   <div className="w-full mb-[3.5rem] md:hidden grid grid-cols-1 gap-4" style={{ marginTop: "1rem" }}>
                     {filtered.map((work) => {
-                      const dest = work.href ?? "/read/${work.slug}";
+                      const dest = work.href ?? `/read/${work.slug}`;
                       return (
                         <div
                           key={dest}
