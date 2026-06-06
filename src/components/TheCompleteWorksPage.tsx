@@ -235,12 +235,12 @@ const booksList: BookListEntry[] = [
 ];
 
 const lettersList: LetterEntry[] = [
-  { title: "Mark Twain's Letters, Volume 6", slug: "Volume-6", years: "1907-1910" },
-  { title: "Mark Twain's Letters, Volume 5", slug: "Volume-5", years: "1901-1906" },
-  { title: "Mark Twain's Letters, Volume 4", slug: "Volume-4", years: "1886-1900" },
-  { title: "Mark Twain's Letters, Volume 3", slug: "Volume-3", years: "1876-1885" },
-  { title: "Mark Twain's Letters, Volume 2", slug: "Volume-2", years: "1867-1875" },
-  { title: "Mark Twain's Letters, Volume 1", slug: "Volume-1", years: "1853-1866" },
+  { title: "Mark Twain's Letters, Volume 6", slug: "Volume-6", years: "1907–1910" },
+  { title: "Mark Twain's Letters, Volume 5", slug: "Volume-5", years: "1901–1906" },
+  { title: "Mark Twain's Letters, Volume 4", slug: "Volume-4", years: "1886–1900" },
+  { title: "Mark Twain's Letters, Volume 3", slug: "Volume-3", years: "1876–1885" },
+  { title: "Mark Twain's Letters, Volume 2", slug: "Volume-2", years: "1867–1875" },
+  { title: "Mark Twain's Letters, Volume 1", slug: "Volume-1", years: "1853–1866" },
 ];
 
 const shortFiction: WorkEntry[] = [
