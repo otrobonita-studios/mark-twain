@@ -1,0 +1,73 @@
+Why we shrank our TimescaleDB chunks from 30 days to 7
+By Yask Srivastava
+WMG Lab
+4 min read
+·
+4 days ago
+--
+Listen
+Share
+Every day, Sodatone (WMG’s A&R intelligence platform) pulls engagement signals from streaming and social platforms and turns them into time-series that our scouts and label teams use to spot emerging artists. Most of that data lives in TimescaleDB hypertables, one per platform-and-metric pair. So when one of them starts misbehaving, it tends to be a leading indicator for the rest.
+If you haven’t lived inside TimescaleDB, here’s the short version. A hypertable looks like a single Postgres table, but under the hood it’s a collection of smaller tables — chunks — each holding rows from a time range. For example, a hypertable with a 30 day chunk that has a year’s worth of data is really 12 tables stitched together. This means if we wanted to query data from the last month to display to users in Sodatone, our query only touches the most recent chunk; all the other chunks are skipped without being read which drastically improves query times.
+Why chunk size matters
+Chunk size affects five key things that compound:
+Working set in memory.
+ The active (uncompressed) chunk is what your hot writes and recent-data reads hit. If it doesn’t fit comfortably in shared buffers and the page cache, every recent query starts paying I/O.
+Chunk pruning
+. The query planner skips chunks whose time range doesn’t overlap with your WHERE predicate. That’s the main reason hypertables are fast for time-range scans — and smaller chunks make the pruning more selective on recent-data queries.
+Compression batch size.
+ TimescaleDB’s compression policy compresses chunks once they pass a configured age. Bigger chunks take longer to compress and decompress than smaller ones.
+Backfill cost.
+ Re-ingesting data into a compressed chunk means decompressing it, applying the change, and recompressing it. The chunk is the unit of that work.
+Retention granularity.
+ If you ever apply 
+add_retention_policy
+, the chunk is also the unit of eviction.
+TimescaleDB’s own guidance is that the active chunk should fit in roughly 25% of your available memory. That’s a moving target. As ingest rates grow, the same time interval represents more bytes, and a 30-day chunk that was fine a year ago can be a problem today.
+The thing worth knowing about 
+set_chunk_time_interval
+ is that it only affects future chunks. Existing chunks keep their original size and keep being queried just fine. There’s no rewrite, exclusive lock, or backfill. The hypertable transitions naturally as the next chunk boundary arrives. That makes this one of the safer knobs in TimescaleDB to turn. If you don’t like the result, you reverse it the same way.
+What we noticed
+Late last year, we noticed one of our heavier hypertables — millions of rows a week, multi-TB on disk before compression — wasn’t aging well. Compression was lagging behind ingest, recent-data reads got progressively heavier through the fall, and every time an upstream feed re-published a few days of history (which happens more often than we’d like), we ended up decompressing whole months of data to absorb the change. The chunk interval — which we’d set to 30 days back when the table was small — had stopped doing us any favors.
+What we changed
+In September the compression job on that table started failing — the chunk had grown too big for a single run to finish. That’s why this was the first table we touched. We dropped the chunk interval from 1 month to 7 days, and watched the job in the Timescale Cloud monitoring dashboard until it ran clean again.
+Get 
+WMG Lab
+’s stories in your inbox
+Join Medium for free to get updates from this writer.
+Subscribe
+Subscribe
+Remember me for faster sign in
+Two months later we saw the same failure on a different table — one of our music-chart-data feeds. The same fix worked. At that point we’d seen it twice in two months, so in early December we updated the rest of our hot platform-engagement tables in one PR. All went to 7-day chunks.
+Each migration looked like this:
+class ShrinkChunks < ActiveRecord::Migration[6.1]
+  def up
+    safety_assured do
+      TimescaleRecord.set_chunk_time_interval(
+        "hypertable", interval: "7 days"
+      )
+    end
+  end
+  def down
+    safety_assured do
+      TimescaleRecord.set_chunk_time_interval(
+        "hypertable", interval: "30 days"
+      )
+    end
+  end
+end
+What we got out of it
+Compression caught up faster.
+ Smaller chunks finish a compression policy run more quickly, so the gap between “live” and “compressed” data shrank for every table we touched.
+Recent weekly chunks for the music-chart-data feed table. Once TimescaleDB’s compression policy kicks in, each 7-day segment typically shrinks to about 10% of its original footprint.
+Backfills got cheaper.
+ When an upstream feed re-publishes a week of history, we now decompress one 7-day chunk instead of dragging an entire month through a rewrite.
+Recent-data reads stayed lean.
+ Queries scoped to “last 24 hours” or “last 7 days” never cross more than one or two chunks, so chunk pruning works the way you want it to.
+Retention granularity is finer.
+ We don’t drop chunks on these tables yet, but if we ever want to, the option is now there without surgery.
+What to watch out for
+More chunks means more rows in TimescaleDB’s catalog and more planner work for queries that span very wide time ranges — think rollups that scan a year or more of data. Right after each change we re-ran our widest queries, then again a week later, then at month-end. Nothing showed up. The right answer also isn’t “always 7 days.” The right answer is whatever keeps your active chunk comfortably in memory at your current ingest rate. For a smaller table, 30 days might still be correct.
+The takeaway
+If you’ve had a TimescaleDB hypertable in production for more than a year and you’ve never revisited its chunk interval, go check it. The migration is one line. It’s reversible. It only affects future chunks. And the rule of thumb — active chunk fits in roughly 25% of memory — is easy to sanity-check with a quick query against your own server. There’s almost no reason not to.
+Thanks to my teammates Thomas Ellis and Nathan Law, who drove most of this work.
