@@ -1,0 +1,70 @@
+Announcing WoofWare.PawPrint, a deterministic .NET runtime
+I just released an early version of 
+WoofWare.PawPrint
+ to 
+NuGet
+.
+PawPrint is a deterministic .NET runtime - think 
+CHESS
+.
+It runs the 
+BCL
+ of .NET 10.
+It interprets IL, shimming out only the BCL’s JIT intrinsics and native code: there are no shortcuts.
+Enough is implemented that it can do:
+Console.Writeline
+async void Main(string[] args) {...}
+Task.Run
+A whole load of reflection
+Many of the low-level synchronisation primitives like 
+Monitor
+It uses a variant of 
+Probabilistic Concurrency Testing
+ when scheduling threads, in an attempt to maximise the exploration of “interesting” thread orderings.
+How I decided it was ready
+I’ve taken six 
+standard race conditions
+ and 
+tested that we can deterministically identify them
+.
+More concretely, inspired by 
+Deadlock Empire
+, these tests are of the form “demonstrate that some interleaving of threads results in some known bad condition happening” (like a deadlock or an exception being thrown).
+Every test I tried, the test harness found the bug immediately, often taking only a couple of trial seeds.
+What it’s not ready for
+Well, I expect that if you use it, it will blow up almost immediately.
+The BCL contains very large amounts of native code, and 
+it must be explicitly modelled
+ in PawPrint for it to execute.
+An upcoming piece of work will be to allow the user to plug in their own implementations so that they aren’t blocked on the built-in incompleteness.
+Overall design
+PawPrint is ultimately intended to allow time-travel debugging and control over history.
+To that end, it maintains an extremely rich internal model of the IL machine.
+Everything is provenance-tracked; every pointer 
+knows what object/field/method/whatever it’s pointing to
+, and 
+every byte array knows
+ whether it’s e.g. “a projection of object Foo into raw bytes” vs “just a bunch of bytes the user gave me”.
+All 
+arithmetic results know
+ whether they are “a sum of raw integers” or “a difference of pointers within the same array” or whatever.
+The use of LLMs
+Original design is my own, and I started writing it by hand.
+Sonnet 4.6 came out at some point during this process, and I started using it for reference information about .NET.
+I also used Gemini 2 Pro to perform fuzzy search through the ECMA-335 spec.
+Then in 2026 I got the same LLM psychosis everyone else has, and used Claude Opus 4.6/7 and GPT-5.5 to “complete” it.
+This was a 
+massive
+ accelerator, and I believe it shaved literally years off the project, at the cost of making the code Claude-shaped in the small.
+This project is particularly LLM-suited because there is a reference implementation (.NET 10 itself) and a spec (ECMA-335).
+Errors the bots made
+Sadly it was still necessary for me to maintain architectural direction during this project.
+There was only one place where I completely abdicated a complex architectural decision to GPT-5.5 because I was too lazy to decide myself, and that was a disaster which I ended up completely rewriting by hand.
+That decision was about the handling of the fact that native code and some unsafe casts require genuine byte arrays to compute a result, and there’s a bunch of 
+Unsafe.As
+ calls in the BCL which make make it hard to avoid laundering provenance-tracked pointers through flat bytes.
+I religiously track provenance in PawPrint.
+GPT-5.5 chose to represent arrays as being located in specific locations in memory, by assigning them fake addresses in a certain range.
+This got more and more unwieldy over time, and arithmetic operations on them became annoying because we lost their provenance as soon as we decided there was a genuine integer representing their location.
+Eventually I tore that out and replaced those integers with synthetic “I am the address of heap object Foo” markers; arithmetic on such objects will generally crash PawPrint, but that’s fine because the resulting integer values are generally undefined by .NET anyway.
+(There is specific support for performing arithmetic on pointers known to be within the same array.)
