@@ -1,0 +1,2528 @@
+PyTorch Custom Operation
+05-10-2026
+05-10-2026
+ 
+blog
+ 23 minutes read (About 3501 words)
+ 
+ visits
+Introduction
+Using PyTorch custom operations is common in PyTorch models. PyTorch custom operations can be custom classes and custom functions implemented in C++ and CUDA and used in both Python and C++ inference programs.
+
+In this blog post, I would like to share how to implement PyTorch custom operations in C++ and CUDA, and how to use them in PyTorch models and AOTInductor compiled inference programs, using a simple 
+identity convolution example
+.
+
+PyTorch Custom Function
+PyTorch custom functions can be implemented in C++ and CUDA and registered using the 
+TORCH_LIBRARY_IMPL
+ macro. Both the CPU and CUDA implementations can be provided, and PyTorch will dispatch to the correct implementation based on the device of the input tensors.
+
+custom_ops.cpp
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+// ---------------------------------------------------------------------------
+// CPU implementation: plain element-wise copy via clone().
+// ---------------------------------------------------------------------------
+torch::Tensor 
+identity_conv_cpu_impl
+(
+const
+ torch::Tensor& input)
+{
+    
+TORCH_CHECK
+(!input.
+is_cuda
+(),
+                
+"identity_conv_cpu_impl: input must be a CPU tensor"
+);
+    
+return
+ input.
+clone
+();
+}
+// ---------------------------------------------------------------------------
+// Host-side dispatcher.
+// ---------------------------------------------------------------------------
+torch::Tensor 
+identity_conv_cuda_impl
+(
+const
+ torch::Tensor& input)
+{
+    
+TORCH_CHECK
+(input.
+is_cuda
+(),
+                
+"identity_conv_cuda_impl: input must be a CUDA tensor"
+);
+    
+// Output has the same shape, dtype, and strides as input.
+    
+auto
+ output = torch::
+empty_like
+(input);
+    
+const
+ 
+int64_t
+ numel = input.
+numel
+();
+    
+if
+ (numel == 
+0
+)
+        
+return
+ output;
+    
+// Upload shape and strides to the device so the kernel can read them.
+    
+const
+ 
+int
+ ndim = input.
+dim
+();
+    
+const
+ 
+auto
+ opts =
+        torch::
+TensorOptions
+().
+dtype
+(torch::kInt64).
+device
+(input.
+device
+());
+    
+const
+ 
+auto
+ shape_dev = torch::
+tensor
+(
+        std::
+vector
+<
+int64_t
+>(input.
+sizes
+().
+begin
+(), input.
+sizes
+().
+end
+()), opts);
+    
+const
+ 
+auto
+ strides_dev = torch::
+tensor
+(
+        std::
+vector
+<
+int64_t
+>(input.
+strides
+().
+begin
+(), input.
+strides
+().
+end
+()),
+        opts);
+    
+constexpr
+ 
+int
+ kThreads = 
+256
+;
+    
+const
+ 
+int
+ blocks = 
+static_cast
+<
+int
+>((numel + kThreads - 
+1
+) / kThreads);
+    
+AT_DISPATCH_FLOATING_TYPES_AND2
+(
+        at::ScalarType::Half, at::ScalarType::BFloat16, input.
+scalar_type
+(),
+        
+"identity_conv_cuda_impl"
+,
+        [&]()
+        {
+            identity_kernel<
+scalar_t
+><<<blocks, kThreads>>>(
+                input.
+data_ptr
+<
+scalar_t
+>(), output.
+data_ptr
+<
+scalar_t
+>(),
+                shape_dev.
+data_ptr
+<
+int64_t
+>(), strides_dev.
+data_ptr
+<
+int64_t
+>(),
+                ndim, numel);
+        });
+    
+C10_CUDA_KERNEL_LAUNCH_CHECK
+();
+    
+return
+ output;
+}
+
+custom_op_registration.cpp
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+// CUDA kernel implementation for my_ops::identity_conv_op.
+TORCH_LIBRARY_IMPL
+(my_ops, CUDA, m)
+{
+    m.
+impl
+(
+"identity_conv_op"
+, identity_conv_cuda_impl);
+}
+// CPU fallback.
+TORCH_LIBRARY_IMPL
+(my_ops, CPU, m)
+{
+    m.
+impl
+(
+"identity_conv_op"
+, identity_conv_cpu_impl);
+}
+
+PyTorch Custom Class
+PyTorch custom functions are stateless and cannot hold any parameters. If we would like to implement a custom class that holds some parameters and has a forward() method that can be called from Python, we can use 
+torch::CustomClassHolder
+ to define a custom class in C++ and register it with 
+TORCH_LIBRARY
+ macro.
+
+custom_class.cpp
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+// ---------------------------------------------------------------------------
+// IdentityConvClass
+//
+// A custom class registered with torch.classes so that it can be embedded
+// in a torch.nn.Module, exported with torch.export, and compiled with
+// AOTInductor.
+//
+// The forward() method delegates to the CUDA identity kernel.  The
+// `channels_` field is preserved for semantic completeness and is serialised
+// via def_pickle so that the class survives export/import round-trips.
+// ---------------------------------------------------------------------------
+struct
+ 
+IdentityConvClass
+ : torch::CustomClassHolder
+{
+    
+int64_t
+ channels_;
+    
+explicit
+ 
+IdentityConvClass
+(
+int64_t
+ channels)
+ : channels_(channels) {
+}
+    
+torch::Tensor 
+forward
+(
+const
+ torch::Tensor& x)
+{
+        
+return
+ x.
+is_cuda
+() ? 
+identity_conv_cuda_impl
+(x)
+                           : 
+identity_conv_cpu_impl
+(x);
+    }
+    
+int64_t
+ 
+get_channels
+()
+ 
+const
+ 
+{ 
+return
+ channels_; }
+};
+
+custom_class_registration.cpp
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+// ---------------------------------------------------------------------------
+// Operator / class registration
+//
+// This file has no pybind11 dependency and is compiled into
+// libidentity_conv_ops.so, which can be dlopen'd by a pure C++ binary
+// without needing libpython.
+// ---------------------------------------------------------------------------
+TORCH_LIBRARY
+(my_ops, m)
+{
+    
+// Register IdentityConvClass so Python can instantiate it as
+    
+// torch.classes.my_ops.IdentityConvClass(channels).
+    m.
+class_
+<IdentityConvClass>(
+"IdentityConvClass"
+)
+        .
+def
+(torch::
+init
+<
+int64_t
+>())
+        .
+def
+(
+"forward"
+, &IdentityConvClass::forward)
+        .
+def
+(
+"get_channels"
+, &IdentityConvClass::get_channels)
+        
+// __obj_flatten__ is called by torch.export's non-strict tracer on
+        
+// the *real* C++ object before it switches to FakeTensor mode.
+        
+// Must return a tuple of (str, value) pair-tuples so that
+        
+// _check_valid_flat_script_obj passes (it checks isinstance(item,
+        
+// tuple) for every element in the flat sequence). We encode `channels_`
+        
+// as a single named entry; there are no tensor leaves.
+        .
+def
+(
+"__obj_flatten__"
+,
+             [](
+const
+ c10::intrusive_ptr<IdentityConvClass>& self)
+             {
+                 
+return
+ std::
+make_tuple
+(
+                     std::
+make_tuple
+(std::
+string
+(
+"channels"
+), self->channels_));
+             })
+        
+// def_pickle enables TorchScript serialisation.
+        .
+def_pickle
+(
+            [](
+const
+ c10::intrusive_ptr<IdentityConvClass>& self) -> 
+int64_t
+            { 
+return
+ self->channels_; },
+            [](
+int64_t
+ channels) -> c10::intrusive_ptr<IdentityConvClass>
+            { 
+return
+ c10::
+make_intrusive
+<IdentityConvClass>(channels); });
+    
+// Register the schema for identity_conv_op.
+    m.
+def
+(
+"identity_conv_op(Tensor x) -> Tensor"
+);
+}
+
+Using Custom Operations and Classes In PyTorch
+The PyTorch custom classes, functions, and their registrations in C++ are built into a shared library (
+libidentity_conv_ops.so
+) that can be loaded and registered in PyTorch using 
+torch.ops.load_library
+. For 
+torch.compile
+ and 
+torch.export
+ compatibility, we also need to register “fake” (abstract) versions of the custom classes and functions in PyTorch using 
+@register_fake_class
+ and 
+@torch.library.register_fake
+ so that the FakeTensor-based symbolic tracing can work correctly without having to execute the actual C++/CUDA code during tracing.
+
+custom_ops.py
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+"""
+custom_ops.py
+=============
+Loads the C++ / CUDA shared library and sets up all custom PyTorch operations
+used by the IdentityModel:
+  1. torch.classes.my_ops.IdentityConvClass  (registered by the shared library)
+     - A fake/abstract version is registered here so that torch.export can
+       trace through module attributes that hold an instance of this class.
+  2. my_ops::identity_conv_op  (schema + CPU + CUDA registered by the shared library)
+     - register_fake: abstract implementation for torch.export / FakeTensor.
+"""
+import
+ os
+import
+ torch
+import
+ torch.library
+# ---------------------------------------------------------------------------
+# 1. Load the C++ / CUDA shared library.
+#    This triggers the TORCH_LIBRARY(my_ops, ...) static initialiser which
+#    registers torch.classes.my_ops.IdentityConvClass into PyTorch's global
+#    operator registry.
+#
+#    The library path can be overridden via the IDENTITY_CONV_OPS_LIB
+#    environment variable; it defaults to ../ext/libidentity_conv_ops.so
+#    relative to this file.
+# ---------------------------------------------------------------------------
+_default_lib = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 
+".."
+, 
+"ext"
+,
+    
+"libidentity_conv_ops.so"
+)
+_lib_path = os.path.abspath(
+    os.environ.get(
+"IDENTITY_CONV_OPS_LIB"
+, _default_lib))
+torch.ops.load_library(_lib_path)
+# ---------------------------------------------------------------------------
+# 2. Register a "fake" (abstract) version of IdentityConvClass for
+#    torch.export tracing.
+#
+#    torch.export uses FakeTensor-based symbolic tracing.  When it encounters
+#    a custom-class attribute on a module it looks for:
+#      • __obj_flatten__  - returns (leaves, context) for pytree flattening
+#      • __obj_unflatten__ - reconstructs the object from (leaves, context)
+#    These are provided by the @register_fake_class-decorated Python class.
+# ---------------------------------------------------------------------------
+from
+ torch._library.fake_class_registry 
+import
+ register_fake_class
+@register_fake_class(
+"my_ops::IdentityConvClass"
+)
+class
+ 
+FakeIdentityConvClass
+:
+    
+"""Abstract counterpart of IdentityConvClass used during torch.export."""
+    
+def
+ 
+__init__
+(
+self, channels: 
+int
+) -> 
+None
+:
+        self.channels_ = channels
+    
+# -- pytree protocol required by torch.export ----------------------------
+    
+def
+ 
+__obj_flatten__
+(
+self
+):
+        
+# Must return a tuple of (str, value) pair-tuples, matching the C++
+        
+# __obj_flatten__ which returns (("channels", N),).
+        
+return
+ ((
+"channels"
+, self.channels_), )
+    @classmethod
+    
+def
+ 
+__obj_unflatten__
+(
+cls, flat
+):
+        
+# `flat` is the (possibly tensor-fakified) sequence of (key, value)
+        
+# pairs produced by maybe_to_fake_obj.  Reconstruct from it.
+        
+return
+ cls(
+dict
+(flat)[
+"channels"
+])
+    
+# -- abstract method implementations (operate on FakeTensors) ------------
+    
+def
+ 
+forward
+(
+self, x: torch.Tensor
+) -> torch.Tensor:
+        
+# Shape / dtype mirrors the input - correct abstract behaviour.
+        
+return
+ torch.empty_like(x)
+    
+def
+ 
+get_channels
+(
+self
+) -> 
+int
+:
+        
+return
+ self.channels_
+# ---------------------------------------------------------------------------
+# 3. Register the fake (abstract) implementation of identity_conv_op for
+#    torch.export tracing.
+#
+#    The schema and both implementations (CUDA and CPU) are already registered
+#    by the C++ extension via TORCH_LIBRARY / TORCH_LIBRARY_IMPL.  Python only
+#    needs to provide the abstract shape/dtype computation so that
+#    torch.export's FakeTensor interpreter can trace through the op.
+# ---------------------------------------------------------------------------
+@torch.library.register_fake(
+"my_ops::identity_conv_op"
+)
+def
+ 
+_identity_conv_op_fake
+(
+x: torch.Tensor
+) -> torch.Tensor:
+    
+"""Abstract implementation used by torch.export / FakeTensor tracing."""
+    
+return
+ torch.empty_like(x)
+# Convenience alias so other modules can do: from custom_ops import identity_conv_op
+identity_conv_op = torch.ops.my_ops.identity_conv_op
+
+PyTorch custom classes can be loaded using 
+torch.classes
+ and PyTorch custom functions can be loaded using 
+torch.ops
+ after the shared library is loaded.
+
+model.py
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+"""
+model.py
+========
+Defines the four-layer IdentityModel used in the AOTInductor demo.
+Layer layout
+------------
+  layer1 : IdentityConv           - native PyTorch operators
+  layer2 : IdentityConvCustomClass - torch.classes  C++/CUDA custom class
+  layer3 : IdentityConvCustomOp   - torch.library.custom_op  C++/CUDA op
+  layer4 : IdentityConv           - native PyTorch operators
+Every layer is an identity transformation, so model(x) == x for any input x.
+"""
+import
+ torch
+import
+ torch.nn 
+as
+ nn
+# Importing custom_ops registers the C++ extension, the fake class, and
+# the custom op - this must happen before any model is instantiated.
+from
+ custom_ops 
+import
+ identity_conv_op  
+# noqa: F401
+# ---------------------------------------------------------------------------
+# Layer 1 / 4 - native PyTorch depthwise 1×1 convolution (identity weights)
+# ---------------------------------------------------------------------------
+class
+ 
+IdentityConv
+(nn.Module):
+    
+"""Identity convolution implemented with native PyTorch operators.
+    Uses a depthwise Conv2d with kernel_size=1 and weight=1.0, which is
+    equivalent to a no-op (output == input).  This layer is compatible with
+    torch.export and AOTInductor out of the box.
+    """
+    
+def
+ 
+__init__
+(
+self, channels: 
+int
+) -> 
+None
+:
+        
+super
+().__init__()
+        self.conv = nn.Conv2d(
+            in_channels=channels,
+            out_channels=channels,
+            kernel_size=(
+1
+, 
+1
+),
+            stride=(
+1
+, 
+1
+),
+            padding=(
+0
+, 
+0
+),
+            dilation=(
+1
+, 
+1
+),
+            groups=channels,
+            bias=
+False
+,
+        )
+        
+# Set all weights to 1.0 so that the convolution acts as identity.
+        self.conv.weight.data = torch.ones(channels, 
+1
+, 
+1
+, 
+1
+)
+        
+# Freeze the weights - they are constants, not learnable parameters.
+        self.conv.weight.requires_grad = 
+False
+    
+def
+ 
+forward
+(
+self, x: torch.Tensor
+) -> torch.Tensor:
+        
+return
+ self.conv(x)
+# ---------------------------------------------------------------------------
+# Layer 2 - custom C++/CUDA class via torch.classes
+# ---------------------------------------------------------------------------
+class
+ 
+IdentityConvCustomClass
+(nn.Module):
+    
+"""Identity convolution backed by a torch.classes C++/CUDA custom class.
+    At runtime the forward call is dispatched to the CUDA kernel registered
+    inside IdentityConvClass (csrc/identity_conv.cpp + .cu).
+    For torch.export compatibility a FakeIdentityConvClass is registered in
+    custom_ops.py via @register_fake_class so that symbolic tracing works.
+    """
+    
+def
+ 
+__init__
+(
+self, channels: 
+int
+) -> 
+None
+:
+        
+super
+().__init__()
+        self.obj = torch.classes.my_ops.IdentityConvClass(channels)
+    
+def
+ 
+forward
+(
+self, x: torch.Tensor
+) -> torch.Tensor:
+        
+return
+ self.obj.forward(x)
+# ---------------------------------------------------------------------------
+# Layer 3 - custom C++/CUDA op via torch.library.custom_op
+# ---------------------------------------------------------------------------
+class
+ 
+IdentityConvCustomOp
+(nn.Module):
+    
+"""Identity convolution backed by a torch.library.custom_op C++/CUDA op.
+    The op (my_ops::identity_conv_op) is defined in custom_ops.py with:
+      • a register_fake  implementation for torch.export tracing
+      • a register_kernel("cuda") implementation that calls the CUDA kernel
+    """
+    
+def
+ 
+__init__
+(
+self, channels: 
+int
+) -> 
+None
+:
+        
+super
+().__init__()
+        self.channels = channels
+    
+def
+ 
+forward
+(
+self, x: torch.Tensor
+) -> torch.Tensor:
+        
+return
+ identity_conv_op(x)
+# ---------------------------------------------------------------------------
+# Full model
+# ---------------------------------------------------------------------------
+class
+ 
+IdentityModel
+(nn.Module):
+    
+"""Four-layer identity model for AOTInductor demo."""
+    
+def
+ 
+__init__
+(
+self, channels: 
+int
+) -> 
+None
+:
+        
+super
+().__init__()
+        self.layer1 = IdentityConv(channels)
+        self.layer2 = IdentityConvCustomClass(channels)
+        self.layer3 = IdentityConvCustomOp(channels)
+        self.layer4 = IdentityConv(channels)
+    
+def
+ 
+forward
+(
+self, x: torch.Tensor
+) -> torch.Tensor:
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        
+return
+ x
+def
+ 
+create_model
+(
+channels: 
+int
+ = 
+3
+) -> IdentityModel:
+    
+"""Return an IdentityModel in eval mode on the default CUDA device."""
+    
+return
+ IdentityModel(channels=channels).cuda().
+eval
+()
+
+PyTorch Model Export and Lowering
+The PyTorch model using custom classes and custom functions can be exported with 
+torch.export
+ if fake (abstract) versions of all custom classes and functions are registered for 
+torch.export
+ symbolic tracing.
+
+export_compile.py
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+#!/usr/bin/env python3
+"""
+export_compile.py
+=================
+Exports the IdentityModel with torch.export and compiles it with
+torch._inductor.aoti_compile_and_package.
+The resulting package (model.pt2) is written to the artifacts/ directory
+and can be loaded by both run_inference.py (Python) and the C++ inference
+binary.
+Usage (run from the python/ directory):
+    python export_compile.py
+"""
+import
+ os
+import
+ sys
+# Ensure the python/ directory is on the path so that local modules are found.
+sys.path.insert(
+0
+, os.path.dirname(os.path.abspath(__file__)))
+import
+ torch
+# Importing custom_ops loads the C++ extension and registers all custom ops.
+import
+ custom_ops  
+# noqa: F401
+from
+ model 
+import
+ create_model
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+CHANNELS = 
+3
+BATCH_SIZE = 
+1
+HEIGHT = 
+224
+WIDTH = 
+224
+# Save the compiled package in the artifacts/ directory at the project root.
+PACKAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
+".."
+,
+                            
+"artifacts"
+, 
+"model.pt2"
+)
+def
+ 
+main
+() -> 
+None
+:
+    
+print
+(
+"="
+ * 
+64
+)
+    
+print
+(
+"AOTInductor  -  Export & Compile"
+)
+    
+print
+(
+"="
+ * 
+64
+)
+    
+# ------------------------------------------------------------------
+    
+# Step 1: Instantiate model and verify correctness on eager execution
+    
+# ------------------------------------------------------------------
+    
+print
+(
+f"\n[1/4] Creating IdentityModel  (channels=
+{CHANNELS}
+) ..."
+)
+    model = create_model(channels=CHANNELS)
+    x = torch.randn(BATCH_SIZE,
+                    CHANNELS,
+                    HEIGHT,
+                    WIDTH,
+                    device=
+"cuda"
+,
+                    dtype=torch.float32)
+    
+with
+ torch.no_grad():
+        out = model(x)
+    
+assert
+ torch.equal(
+        x, out), (
+f"Eager pre-export check FAILED  "
+                  
+f"(max diff = 
+{(x - out).
+abs
+().
+max
+().item():
+.2
+e}
+)"
+)
+    
+print
+(
+"  Eager verification  PASSED  (bitwise identical)"
+)
+    
+# ------------------------------------------------------------------
+    
+# Step 2: Export with torch.export
+    
+# ------------------------------------------------------------------
+    
+print
+(
+"\n[2/4] Exporting model with torch.export.export() ..."
+)
+    
+with
+ torch.no_grad():
+        exported_program = torch.export.export(model, (x, ))
+    
+print
+(
+"  Export  DONE"
+)
+    
+print
+(
+f"\n  Exported graph:\n
+{exported_program.graph}
+"
+)
+    
+# ------------------------------------------------------------------
+    
+# Step 3: Compile with AOTInductor
+    
+# ------------------------------------------------------------------
+    
+print
+(
+        
+"\n[3/4] Compiling with torch._inductor.aoti_compile_and_package ..."
+)
+    package_path = torch._inductor.aoti_compile_and_package(
+        exported_program,
+        package_path=PACKAGE_PATH,
+    )
+    
+print
+(
+f"  Compilation  DONE"
+)
+    
+print
+(
+f"  Package saved to: 
+{os.path.abspath(package_path)}
+"
+)
+    
+# ------------------------------------------------------------------
+    
+# Step 4: Quick sanity check - load the package and run inference
+    
+# ------------------------------------------------------------------
+    
+print
+(
+        
+"\n[4/4] Quick sanity check: loading package and running inference ..."
+    )
+    compiled_model = torch._inductor.aoti_load_package(package_path)
+    
+with
+ torch.no_grad():
+        out_compiled = compiled_model(x)
+    
+# aoti_load_package returns a callable whose output is a list of tensors.
+    
+if
+ 
+isinstance
+(out_compiled, (
+list
+, 
+tuple
+)):
+        out_compiled = out_compiled[
+0
+]
+    
+assert
+ torch.equal(x, out_compiled), (
+        
+f"Compiled model sanity check FAILED  "
+        
+f"(max diff = 
+{(x - out_compiled).
+abs
+().
+max
+().item():
+.2
+e}
+)"
+)
+    
+print
+(
+"  Compiled model verification  PASSED  (bitwise identical)"
+)
+    
+print
+(
+"\n"
+ + 
+"="
+ * 
+64
+)
+    
+print
+(
+f"SUCCESS!  Package: 
+{os.path.abspath(package_path)}
+"
+)
+    
+print
+(
+"="
+ * 
+64
+)
+if
+ __name__ == 
+"__main__"
+:
+    main()
+
+From the exported graph we can see that the custom class 
+IdentityConvClass.forward
+ is represented as a call to 
+torch.ops.higher_order.call_torchbind
+. The custom op 
+identity_conv_op
+ is represented as a call to 
+torch.ops.my_ops.identity_conv_op
+.
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+graph():
+    %p_layer1_conv_weight : [num_users=1] = placeholder[target=p_layer1_conv_weight]
+    %p_layer4_conv_weight : [num_users=1] = placeholder[target=p_layer4_conv_weight]
+    %obj_layer2_obj : [num_users=1] = placeholder[target=obj_layer2_obj]
+    %x : [num_users=1] = placeholder[target=x]
+    %conv2d : [num_users=1] = call_function[target=torch.ops.aten.conv2d.default](args = (%x, %p_layer1_conv_weight, None, [1, 1], [0, 0], [1, 1], 3), kwargs = {})
+    %call_torchbind : [num_users=1] = call_function[target=torch.ops.higher_order.call_torchbind](args = (%obj_layer2_obj, forward, %conv2d), kwargs = {})
+    %identity_conv_op : [num_users=1] = call_function[target=torch.ops.my_ops.identity_conv_op.default](args = (%call_torchbind,), kwargs = {})
+    %conv2d_1 : [num_users=1] = call_function[target=torch.ops.aten.conv2d.default](args = (%identity_conv_op, %p_layer4_conv_weight, None, [1, 1], [0, 0], [1, 1], 3), kwargs = {})
+    return (conv2d_1,)
+
+The exported program can be compiled and packaged with 
+torch._inductor.aoti_compile_and_package
+ to produce a 
+model.pt2
+ package that can be loaded by both Python and C++ inference programs. The custom class and custom op implementations will be loaded from the shared library and correctly dispatched at runtime when the compiled model is executed.
+
+run_inference.py
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+#!/usr/bin/env python3
+"""
+run_inference.py
+================
+Loads the AOTInductor-compiled IdentityModel package (model.pt2) and runs
+inference to verify correctness.
+The output of the identity model must equal the input within a tight
+floating-point tolerance.
+Usage (run from the python/ directory after export_compile.py):
+    python run_inference.py [MODEL_PATH [OP_LIB_PATH]]
+Arguments:
+    MODEL_PATH   Path to the compiled model package (.pt2).
+                 Defaults to ../artifacts/model.pt2 relative to this script.
+    OP_LIB_PATH  Path to the custom-op shared library (.so).
+                 When provided the library path is forwarded to custom_ops.py
+                 via the IDENTITY_CONV_OPS_LIB environment variable so that
+                 torch.ops.load_library uses that file instead of the default
+                 ../ext/libidentity_conv_ops.so.
+"""
+import
+ os
+import
+ sys
+# Ensure the python/ directory is on the path so that local modules are found.
+sys.path.insert(
+0
+, os.path.dirname(os.path.abspath(__file__)))
+import
+ torch
+import
+ torch._inductor.codecache  
+# required before aoti_load_package
+# ---------------------------------------------------------------------------
+# Parse CLI arguments
+# ---------------------------------------------------------------------------
+_DEFAULT_PACKAGE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 
+".."
+, 
+"artifacts"
+, 
+"model.pt2"
+)
+PACKAGE_PATH = sys.argv[
+1
+] 
+if
+ 
+len
+(sys.argv) > 
+1
+ 
+else
+ _DEFAULT_PACKAGE_PATH
+OP_LIB_PATH = sys.argv[
+2
+] 
+if
+ 
+len
+(sys.argv) > 
+2
+ 
+else
+ 
+None
+# ---------------------------------------------------------------------------
+# If an explicit library path was given, pass it to custom_ops.py via an
+# environment variable so that torch.ops.load_library uses that file.
+# ---------------------------------------------------------------------------
+if
+ OP_LIB_PATH 
+is
+ 
+not
+ 
+None
+:
+    os.environ[
+"IDENTITY_CONV_OPS_LIB"
+] = os.path.abspath(OP_LIB_PATH)
+# Importing custom_ops loads the shared library and registers all custom ops
+# BEFORE the compiled model is loaded.
+import
+ custom_ops  
+# noqa: F401
+# ---------------------------------------------------------------------------
+# Configuration - must match the values used in export_compile.py
+# ---------------------------------------------------------------------------
+CHANNELS = 
+3
+BATCH_SIZE = 
+1
+HEIGHT = 
+224
+WIDTH = 
+224
+def
+ 
+main
+() -> 
+None
+:
+    
+print
+(
+"="
+ * 
+64
+)
+    
+print
+(
+"AOTInductor  -  Python Inference"
+)
+    
+print
+(
+"="
+ * 
+64
+)
+    
+# ------------------------------------------------------------------
+    
+# Step 1: Load the compiled model package
+    
+# ------------------------------------------------------------------
+    pkg = os.path.abspath(PACKAGE_PATH)
+    
+if
+ OP_LIB_PATH 
+is
+ 
+not
+ 
+None
+:
+        
+print
+(
+f"  Op library  : 
+{os.path.abspath(OP_LIB_PATH)}
+"
+)
+    
+print
+(
+f"\n[1/3] Loading compiled model from:\n  
+{pkg}
+"
+)
+    compiled_model = torch._inductor.aoti_load_package(pkg)
+    
+print
+(
+"  Model loaded successfully."
+)
+    
+# ------------------------------------------------------------------
+    
+# Step 2: Prepare input
+    
+# ------------------------------------------------------------------
+    x = torch.randn(BATCH_SIZE,
+                    CHANNELS,
+                    HEIGHT,
+                    WIDTH,
+                    device=
+"cuda"
+,
+                    dtype=torch.float32)
+    
+print
+(
+f"\n[2/3] Input  shape=
+{
+list
+(x.shape)}
+  dtype=
+{x.dtype}
+  "
+          
+f"device=
+{x.device}
+"
+)
+    
+# ------------------------------------------------------------------
+    
+# Step 3: Run inference and verify
+    
+# ------------------------------------------------------------------
+    
+print
+(
+"\n[3/3] Running inference ..."
+)
+    
+with
+ torch.no_grad():
+        output = compiled_model(x)
+    
+# aoti_load_package returns a callable whose output is a list of tensors.
+    
+if
+ 
+isinstance
+(output, (
+list
+, 
+tuple
+)):
+        output = output[
+0
+]
+    
+print
+(
+f"  Output shape=
+{
+list
+(output.shape)}
+  dtype=
+{output.dtype}
+"
+)
+    
+if
+ torch.equal(x, output):
+        
+print
+(
+"\n  Verification  PASSED  (bitwise identical)"
+)
+    
+else
+:
+        max_diff = (x - output).
+abs
+().
+max
+().item()
+        
+print
+(
+f"\n  Verification  FAILED  (max diff = 
+{max_diff}
+)"
+              
+f" — expected bitwise identical output"
+)
+        sys.exit(
+1
+)
+    
+print
+(
+"\n"
+ + 
+"="
+ * 
+64
+)
+    
+print
+(
+"SUCCESS!  AOTInductor Python inference verified."
+)
+    
+print
+(
+"="
+ * 
+64
+)
+if
+ __name__ == 
+"__main__"
+:
+    main()
+
+The custom class and custom function shared library loading and registration can be performed using 
+dlopen
+ in a pure C++ inference program without any pybind11 or libpython dependency.
+
+run_inference.cpp
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+/*
+ * main.cpp
+ * ========
+ * C++ inference program for the AOTInductor-compiled IdentityModel.
+ *
+ * Prerequisites
+ * -------------
+ *   • Build libidentity_conv_ops.so (top-level CMakeLists.txt) first.
+ *   • Run export_compile.py to produce model.pt2.
+ *
+ * The custom operator library (libidentity_conv_ops.so) must be loaded before
+ * the compiled model is executed so that torch.classes.my_ops and
+ * my_ops::identity_conv_op are present in the operator registry.
+ *
+ * libidentity_conv_ops.so has no pybind11 dependency and does not link
+ * libtorch_python.so, so no libpython pre-loading is required.
+ *
+ * Usage
+ * -----
+ *   ./run_inference  <path/to/model.pt2>  <path/to/libidentity_conv_ops.so>
+ *
+ * Verification
+ * ------------
+ *   The model is an identity transform, so output should equal the random
+ *   input within floating-point rounding tolerance (< 1e-5).
+ */
+#
+include
+ 
+<cstdlib>
+#
+include
+ 
+<iostream>
+#
+include
+ 
+<stdexcept>
+#
+include
+ 
+<string>
+#
+include
+ 
+<vector>
+#
+include
+ 
+<dlfcn.h>
+ 
+// dlopen / dlclose
+#
+include
+ 
+<torch/csrc/inductor/aoti_package/model_package_loader.h>
+#
+include
+ 
+<torch/torch.h>
+// ---------------------------------------------------------------------------
+// Hyper-parameters - must match the values used in export_compile.py
+// ---------------------------------------------------------------------------
+static
+ 
+constexpr
+ 
+int64_t
+ kBatchSize = 
+1
+;
+static
+ 
+constexpr
+ 
+int64_t
+ kChannels = 
+3
+;
+static
+ 
+constexpr
+ 
+int64_t
+ kHeight = 
+224
+;
+static
+ 
+constexpr
+ 
+int64_t
+ kWidth = 
+224
+;
+int
+ 
+main
+(
+int
+ argc, 
+char
+* argv[])
+{
+    
+if
+ (argc < 
+3
+)
+    {
+        std::cerr << 
+"Usage: "
+ << argv[
+0
+] << 
+" <path/to/model.pt2>"
+                  << 
+" <path/to/libidentity_conv_ops.so>"
+ << std::endl;
+        
+return
+ EXIT_FAILURE;
+    }
+    
+const
+ std::string model_path = argv[
+1
+];
+    
+const
+ std::string custom_op_lib = argv[
+2
+];
+    std::cout << 
+"================================================\n"
+              << 
+"AOTInductor  -  C++ Inference\n"
+              << 
+"================================================\n"
+;
+    
+try
+    {
+        
+// ------------------------------------------------------------------
+        
+// Step 1: Load the custom operator shared library.
+        
+//
+        
+//   libidentity_conv_ops.so contains only TORCH_LIBRARY registrations
+        
+//   and the CPU/CUDA kernels.  It has no pybind11 dependency and does
+        
+//   not link libtorch_python.so, so no libpython pre-loading is needed.
+        
+// ------------------------------------------------------------------
+        std::cout << 
+"\n[1/4] Loading custom op library:\n  "
+ << custom_op_lib
+                  << std::endl;
+        
+void
+* lib_handle =
+            
+dlopen
+(custom_op_lib.
+c_str
+(), RTLD_NOW | RTLD_GLOBAL);
+        
+if
+ (!lib_handle)
+        {
+            
+throw
+ std::
+runtime_error
+(std::
+string
+(
+"dlopen failed: "
+) +
+                                     
+dlerror
+());
+        }
+        std::cout << 
+"  Library loaded."
+ << std::endl;
+        
+// ------------------------------------------------------------------
+        
+// Step 2: Load the compiled model package.
+        
+//
+        
+//   AOTIModelPackageLoader unpacks the .pt2 archive and prepares the
+        
+//   AOTIModelContainerRunner for the target device.
+        
+// ------------------------------------------------------------------
+        std::cout << 
+"\n[2/4] Loading model package:\n  "
+ << model_path
+                  << std::endl;
+        torch::
+inductor::AOTIModelPackageLoader 
+loader
+(model_path)
+;
+        
+auto
+ runner = loader.
+get_runner
+();
+        std::cout << 
+"  Model loaded."
+ << std::endl;
+        
+// ------------------------------------------------------------------
+        
+// Step 3: Prepare a random input tensor on CUDA.
+        
+// ------------------------------------------------------------------
+        
+auto
+ options = torch::
+TensorOptions
+()
+                           .
+dtype
+(torch::kFloat32)
+                           .
+device
+(torch::kCUDA, 
+0
+);
+        
+auto
+ input =
+            torch::
+randn
+({kBatchSize, kChannels, kHeight, kWidth}, options);
+        std::cout << 
+"\n[3/4] Input  shape=["
+ << kBatchSize << 
+", "
+ << kChannels
+                  << 
+", "
+ << kHeight << 
+", "
+ << kWidth << 
+"]"
+                  << 
+"  dtype=float32  device=cuda"
+ << std::endl;
+        
+// ------------------------------------------------------------------
+        
+// Step 4: Run inference and verify correctness.
+        
+// ------------------------------------------------------------------
+        std::cout << 
+"\n[4/4] Running inference ..."
+ << std::endl;
+        std::vector<at::Tensor> inputs = {input};
+        
+auto
+ outputs = runner->
+run
+(inputs);
+        
+const
+ 
+auto
+& output = outputs[
+0
+];
+        
+bool
+ passed = input.
+equal
+(output);
+        
+float
+ max_diff = (input - output).
+abs
+().
+max
+().
+item
+<
+float
+>();
+        std::cout << 
+"  Output shape=["
+ << output.
+size
+(
+0
+) << 
+", "
+                  << output.
+size
+(
+1
+) << 
+", "
+ << output.
+size
+(
+2
+) << 
+", "
+                  << output.
+size
+(
+3
+) << 
+"]"
+ << std::endl;
+        std::cout << 
+"  Max |input - output| = "
+ << max_diff << std::endl;
+        
+dlclose
+(lib_handle);
+        
+if
+ (passed)
+        {
+            std::cout << 
+"\n  Verification  PASSED  (bitwise identical)"
+                      << std::endl;
+        }
+        
+else
+        {
+            std::cerr << 
+"\n  Verification  FAILED  (max diff = "
+ << max_diff
+                      << 
+")"
+ << std::endl;
+            
+return
+ EXIT_FAILURE;
+        }
+    }
+    
+catch
+ (
+const
+ std::exception& e)
+    {
+        std::cerr << 
+"\nError: "
+ << e.
+what
+() << std::endl;
+        
+return
+ EXIT_FAILURE;
+    }
+    std::cout << 
+"\n================================================\n"
+              << 
+"SUCCESS!  AOTInductor C++ inference verified.\n"
+              << 
+"================================================\n"
+;
+    
+return
+ EXIT_SUCCESS;
+}
+
+References
+
+AOTInductor Custom Operator Example - GitHub
+
+PyTorch Custom Operation
+https://leimao.github.io/blog/PyTorch-Custom-Operation/
+Author
+Lei Mao
+Posted on
+05-10-2026
+Updated on
+05-10-2026
+Licensed under
+ 
+CPP,
+ 
+Python,
+ 
+CUDA,
+ 
+PyTorch,
+ 
+AOTInductor
