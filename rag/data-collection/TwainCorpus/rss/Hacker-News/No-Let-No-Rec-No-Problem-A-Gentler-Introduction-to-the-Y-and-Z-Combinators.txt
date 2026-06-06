@@ -1,0 +1,683 @@
+No Let, No Rec, No Problem: A Gentler Introduction to the Y and Z Combinators
+
+Let’s try to solve a simple enough puzzle in JavaScript: You have to write a function 
+fact(n)
+ which calculates the
+factorial of a number 
+n
+, but you can not use loops (
+for
+, 
+while
+, etc), recursion, or even declarations (
+let
+,
+
+const
+, etc).
+
+We start with a canonical recursive non-solution to know what we're aiming for, in terms of behaviour:
+
+function fact(n) {
+  if (n === 0) {
+    return 1
+  }
+  else {
+    return n * fact(n - 1)
+  }
+}
+
+This is a non-solution because we can not use recursion, which means we can not call the function 
+fact
+ from inside the
+definition of the function 
+fact
+.
+
+So, running 
+for
+ loops or calling 
+fact
+ from itself is not allowed. Then, what should we do? Can we call 
+fact
+ from
+some other function and try to arrive at the same behaviour?
+
+After some thinking, we can write a function 
+factf
+ which calculates factorial but doesn't call itself:
+
+function factf(n) {
+  if (n === 0) {
+    return 1
+  }
+  else {
+    return n * factg(n - 1)
+  }
+}
+
+function factg(n) {
+  if (n === 0) {
+    return 1
+  }
+  else {
+    return n * factf(n - 1)
+  }
+}
+
+This works. 
+factf(n)
+ does calculate the factorial. So, are we done? Well, we did avoid explicit call for 
+factf
+ but
+it'd be a lie to say that this doesn't use recursion.
+
+This solution calls for a new rule: 
+mutual recursion
+ is also NOT allowed.
+
+But, can we still learn something from the previous attempt? We know that if we decide to avoid loops, we definitely
+need to emulate a call to something like 
+fact
+ inside 
+fact
+. What if we don't call 
+fact
+ inside 
+fact
+ directly but
+define a generator function 
+factgen
+ and pass a function which gets called instead:
+
+function factgen(self, n) {
+  if (n === 0) {
+    return 1
+  }
+  else {
+    return n * self(self, n - 1)
+  }
+}
+
+let fact = n => factgen(factgen, n)
+
+To see how it works, take 
+fact(4)
+. It is just 
+factgen(factgen, 4)
+ which evaluates to 
+4 * self(self, 3)
+ which is
+just 
+4 * factgen(factgen, 3)
+, which just reduces to 
+4 * 3 * factgen(factgen, 2)
+ and so on. Every 
+factgen(factgen, n)
+ call essentially becomes 
+n * factgen(factgen, n - 1)
+ until 
+n
+ becomes 
+0
+.
+
+It seems like we've solved our puzzle:
+
+fact
+ did not call itself in its own definition (explicit recursion)
+
+fact
+ also did not call any other function which called 
+fact
+ indirectly (mutual recursion).
+
+But alas, even though 
+fact
+ did NOT call itself directly or indirectly, 
+factgen
+ did receive a reference to itself and
+used the reference in the definition of 
+fact
+. And if we look closely at our challenge, we should NOT use a
+declaration.
+
+If we really vowed to 
+let
+ go of declarations, we should avoid using 
+function
+ too. This calls for another rule: all
+declarations (including 
+function
+) are not allowed.
+
+We'd use 
+only anonymous functions
+ like 
+(x, y) => { .. }
+ in our solution.
+
+But like before, let's see if we can get some intuition from the definition above. If we zoom in on the recursive part,
+we see that 
+self(self, n)
+ has a curious property. Evaluating it does not eliminate the self-reference. Instead, it
+eventually produces another call involving the same pattern, namely 
+self(self, n - 1)
+ embedded inside a larger
+expression. The argument changes, but the self-application survives. This is not even specific to the definition of
+
+fact
+ given here. If, say, there was a function 
+f
+ defined like this:
+
+function f(g, n, s) {
+  console.log(s)
+  if (n < 10) {
+    g(g, n + 1, s)
+  }
+}
+
+and then called like this: 
+f(f, 0, "hello, world")
+. We'd get 
+"hello, world"
+ printed repeatedly until 
+n
+ reaches
+
+10
+ (if stack size allows). That's basically a while loop.
+
+So, our venture teaches us that the pattern 
+g(g, ...)
+ captures the core mechanism needed to create recursion. It
+
+results in itself when it executes
+, which allows it to use the same behaviour but with different inputs to emulate
+iteration.
+
+Let's see if we can extract this pattern into a function to gain more insight:
+
+let rep = x => x(x)
+
+(Don't worry about the 
+let
+, this is NOT an attempt at solving the challenge and we'd remove it later.)
+
+Clearly, 
+rep
+ doesn't do anything in particular. It just takes a higher-order function 
+x
+ and calls 
+x
+ with argument
+
+x
+. But something interesting happens when we call rep with itself as an argument. If we reason purely in terms of
+expressions and forget evaluation for a moment, then 
+rep(rep)
+ rewrites to 
+rep(rep)
+ again.
+
+(Operationally, however, a JavaScript engine attempting to evaluate this expression would recurse forever and eventually
+overflow the stack. We'd handle this problem later. For now, we are interested only in the equational behaviour of the
+expression.)
+
+In other words, if written without 
+rep
+, the code 
+(x => x(x))(x => x(x))
+ evaluates to itself. Please note that we
+just obtained self-application without loops, recursion, or declarations. We just used an anonymous function and
+literally wrote the function twice by hand.
+
+But what good is a self-replicating code like 
+rep
+ if we can't use this machinery to do some real task, like
+calculating the factorial. To get something useful with 
+rep
+, we'd need to expand on this idea.
+
+How about we do the obvious and stick a function, say 
+h
+ (assumed to be in scope) inside the definition of 
+rep
+: 
+let rep = x => h(x(x))
+
+Now, something even more interesting happens if we reduce 
+rep(rep)
+ (Again, we just mean reduction in equational sense,
+not how it would run on the system.)
+
+rep(rep)
+ just reduces to 
+(x => h(x(x)))(x => h(x(x)))
+ which is nothing but 
+h((x => h(x(x)))(x => h(x(x))))
+ which,
+if looked closely, is just 
+h(rep(rep))
+ expanded. In other words, 
+rep(rep)
+ evaluates to 
+h(rep(rep))
+ with our new
+definition of rep.
+
+This is more interesting. Now we not only have replication, but we can run some function on the result. This is very
+close to the recursion we're looking for.
+
+What if we wrap this whole self-replicating machine inside a function 
+Y
+ which accepts a payload 
+h
+:
+
+let Y = (h) => {
+  let rep = x => h(x(x))
+  return rep(rep)
+}
+
+The 
+Y
+ is basically a higher-order function which takes a function 
+h
+ and returns the self-replicating code we wrote
+before, parametrised to function 
+h
+.
+
+But there are 2 problems now:
+
+Firstly, it's not clear how to use 
+Y
+ to emulate recursive behaviour.
+
+And, as many of you might be complaining now, the way everything above is written, from 
+rep
+ to 
+Y
+, it won't even
+work because it would never stop evaluating.
+
+Let's tackle the first problem first as it looks easier. Assume that the second problem is solved, ie, assume we have
+some way through which we can delay the call to 
+rep(rep)
+ till just the right moment. Now, given delayable 
+Y
+, how
+then would we come up with the factorial function?
+
+To see what 
+Y
+ does, let's see what 
+Y(f)
+ means. If evaluation can be delayed at will, we can see that 
+Y(f)
+ would
+reduce to 
+rep(rep)
+ which would just evaluate to 
+f(rep(rep))
+ which is identical to 
+f(Y(f))
+ in terms of behaviour.
+
+So 
+Y(f)
+ reduces to 
+f(Y(f))
+, which reduces to 
+f(f(Y(f)))
+, and so on.
+Assuming it exists, let's call the result of 
+Y(f)
+ to be 
+p
+. What we've shown is that 
+p
+ satisfies:
+
+p = f(p)
+
+Feeding 
+p
+ back through 
+f
+ gives 
+p
+ again.
+
+An object with that property is called a fixed point of 
+f
+. So 
+Y(f)
+ is just the fixed point of 
+f
+.
+
+Now admittedly, this is just a tidy definition and not yet a working program. Let me get there via a short detour, on
+the promise that we're close.
+
+Let's go back to our 
+factgen
+ from earlier and try to write a curried version which takes only a single argument and
+returns a function:
+
+function factgen(factaux) {
+  return n => {
+    if (n === 0) {
+      return 1
+    }
+    else {
+      return n * factaux(n - 1)
+    }
+  }
+}
+
+This 
+factgen
+ is the curried analogue to the earlier 
+factgen
+. It takes a function 
+factaux
+ and returns a function which
+takes a number 
+n
+ and returns its factorial by calling 
+factaux
+ internally.
+
+If hypothetically the declaration 
+let fact = factgen(fact)
+ were valid JavaScript, it would define the factorial. Alas,
+JavaScript refuses to accept this because it evaluates the right-hand side first and it cannot pass 
+fact
+ into
+
+factgen
+ before 
+fact
+ has finished being initialised (JavaScript is inadvertently applying the rules of the challenge
+for us here.)
+
+But like before, every failed attempt is an opportunity to look for a new idea. In this case, if we observe closely, we
+can see that the equality 
+let fact = factgen(fact)
+ describes something familiar about 
+fact
+. Going back to our
+discussion of 
+Y
+, if we think that 
+fact
+ is 
+p
+ and 
+factgen
+ is 
+f
+, then a curious fact reveals itself: 
+fact
+ is
+nothing but the fixed point of the function 
+factgen
+!
+
+Note that what was said above is not dependent on the details of the function factorial, which sit cozily inside
+
+factgen
+, untouched by our discussions on fixed points. In fact, the following observation is true for all recursive
+functions:
+
+Every recursive function (like 
+fact
+) can be expressed as a fixed point of an appropriately defined function 
+factgen
+.
+
+To think about why it is true, ponder over the fact that any function satisfying the above equation would behave exactly
+like the recursive function 
+fact
+ we needed to define in the first place as 
+factgen(fact)
+ just produces a function
+whose recursive calls have been delegated to 
+fact
+, which is what we wanted initially.
+
+While JavaScript rejects this definition, what if we had a way to calculate the fixed point of 
+factgen
+ which doesn't
+involve a call to as-of-yet undefined 
+fact
+?
+
+Re-enter 
+Y
+.
+
+Y(factgen)
+ is nothing but the fixed point of 
+factgen
+. So we could now just define 
+fact
+ like:
+
+function factgen(factaux) {
+  return n => {
+    if (n === 0) {
+      return 1
+    }
+    else {
+      return n * factaux(n - 1)
+    }
+  }
+}
+
+let fact = Y(factgen)
+
+We've solved our main problem: 
+fact
+ is no longer defined in terms of itself but as the fixed point of 
+factgen
+.
+(Note that we're still using 
+let
+ and 
+function
+ which we'd get rid of in a while.)
+
+Now that we have a solution using 
+Y
+, let's come to the second problem. So we assumed that we could delay the repeated
+evaluation of 
+Y
+ till it's needed. But how can we do that?
+
+Note that in JavaScript, every function needs to evaluate its arguments before it can be called. In technical terms,
+this is known as eager evaluation. When we try to evaluate 
+Y(factgen)
+, it reduces to 
+factgen(Y(factgen))
+. But this
+never hands control to 
+factgen
+ because the argument 
+Y(factgen)
+ to 
+factgen
+ must be fully evaluated first which
+triggers the exact same loop, looping forever before a single line of factgen actually executes.
+
+What if there was a simple way to introduce delay in the evaluation of a value like 
+Y(factgen)
+? How about trying to
+wrap it inside another function instead?
+
+We tweak 
+Y
+ to wrap the argument of the call 
+h(x(x))
+ and replace it with 
+h(v => x(x)(v))
+:
+
+let Z = (h) => {
+  let rep = x => h(v => x(x)(v))
+  return rep(rep)
+}
+
+If we look closely, 
+Z
+ is almost identical to 
+Y
+. The only difference is that the self-reference is wrapped inside
+another function: 
+v => x(x)(v)
+ This wrapping postpones the self-application until it is actually needed.
+
+But conceptually, the behaviour remains the same.
+
+Z(f)
+ evaluates to 
+rep(rep)
+, which expands to 
+h(v => rep(rep)(v))
+.
+
+Now, the function 
+v => rep(rep)(v)
+ is not literally the same object as 
+rep(rep)
+. The difference is that it delays
+the self-application until an argument is supplied. But for our purposes, 
+v => rep(rep)(v)
+ plays the same role as
+
+rep(rep)
+. Whenever it is eventually called, it re-enters the same self-referential computation that 
+rep(rep)
+ would
+have triggered immediately. The difference is merely one of timing.
+
+Now, let's get back to factorial. Amazingly, 
+Z
+ is so much like 
+Y
+ that we can just replace 
+Y
+ by 
+Z
+ in our
+definition and it works.
+
+Z(factgen)
+ evaluates to 
+factgen(v => rep(rep)(v))
+ which is just the function:
+
+n => {
+  if (n === 0) {
+    return 1
+  }
+  else {
+    return n * (v => rep(rep)(v))(n - 1)
+  }
+}
+
+Here 
+(v => rep(rep)(v))(n - 1)
+ is just 
+rep(rep)(n - 1)
+, and 
+rep(rep)
+ expands back to 
+factgen(v => rep(rep)(v))
+.
+The self-reference is recreated but computation is delayed because lambda 
+v => rep(rep)(v)
+ doesn't need to be reduced
+further until the whole expression is applied to produce some result.
+
+So calling this on 
+4
+ gives 
+4 * rep(rep)(3)
+, which gives 
+4 * 3 * rep(rep)(2)
+, and so on down to 
+n === 0
+, where
+the recursion bottoms out at 
+1
+ and the else branch is finally skipped
+
+Here is a visual trace of the evaluation:
+
+Z(factgen)(4)
+
+factgen(v => rep(rep)(v))(4)
+
+4 * (v => rep(rep)(v))(3)
+
+4 * rep(rep)(3)
+
+4 * factgen(v => rep(rep)(v))(3)
+
+4 * 3 * (v => rep(rep)(v))(2)
+
+4 * 3 * rep(rep)(2)
+
+4 * 3 * 2 * (v => rep(rep)(v))(1)
+
+4 * 3 * 2 * rep(rep)(1)
+
+4 * 3 * 2 * factgen(v => rep(rep)(v))(1)
+
+4 * 3 * 2 * 1 * (v => rep(rep)(v))(0)
+
+4 * 3 * 2 * 1 * rep(rep)(0)
+
+4 * 3 * 2 * 1 * factgen(v => rep(rep)(v))(0)
+
+4 * 3 * 2 * 1 * 1
+
+Notice that in the last step, it doesn't matter what the argument to 
+factgen
+ is. No recursion is triggered and the
+function returned terminates if 
+n
+ is 
+0
+.
+
+So, to conclude, the expression 
+Z(factgen)
+ behaves exactly like a function which calculates a factorial. You can test
+it by calling 
+console.log(Z(factgen)(4))
+.
+
+In fancy parlance, the function 
+Y
+ is called the 
+Y-combinator
+. It is a fixed-point combinator: given a function, it
+produces one of its fixed points.
+
+But the version that actually works in JavaScript is usually called the 
+Z-combinator
+. Conceptually it performs the
+same task as Y, but introduces an extra layer of indirection so that the construction can survive the eager evaluation
+strategy.
+
+So, after many an ordeal and digression, we have finally defined a factorial without iteration or recursion. And if you
+insist, even without declarations:
+
+(f => (x => f(v => x(x)(v))) (x => f(v => x(x)(v)))) (cb => n => (n === 0) ? 1 : n * cb(n - 1))
+
+Case closed.

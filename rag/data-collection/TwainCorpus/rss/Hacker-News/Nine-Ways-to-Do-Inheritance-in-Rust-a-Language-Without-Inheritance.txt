@@ -1,0 +1,877 @@
+Nine Ways to Do Inheritance in Rust, a Language Without Inheritance
+Carl M. Kadie
+17 min read
+·
+4 days ago
+--
+Listen
+Share
+Press enter or click to view image in full size
+A Rust crab builds small, explicit structures from simple pieces while the shadow of a class-inheritance tree looms behind it. Rust can achieve many inheritance-like effects, but it does so through traits, impls, bounds, macros, and composition rather than a class hierarchy. Image created with ChatGPT.
+For a video version of this article, see this 
+talk to the Seattle Rust User Group
+ on the 
+Rust Videos
+ YouTube channel. See 
+CarlKCarlK/inherit
+ on GitHub for this project’s code.
+Rust does not have class inheritance. That is true in the narrow, language-feature sense: there are no classes, no subclass declarations, and no fields inherited from a parent class.
+But when people reach for inheritance in an object-oriented language, they are usually trying to get one of a three effects:
+shared interfaces: the same generic code can work with different concrete types
+shared behavior: many types can reuse one implementation
+sometimes, shared storage: a subtype gets fields from a supertype
+Rust does not give us the third one directly. It does, however, give us a surprisingly rich set of tools for the first two. In this article, I will walk through nine inheritance-shaped problems and the Rust techniques that solve them.
+Aside: In this article, I will use “abstract class,” “interface,” and “trait” as three ways to talk about a role or contract. In Rust, the mechanism is usually a trait: something a concrete type can implement. By contrast, when I say “concrete class,” think Rust 
+struct
+ or 
+enum
+: a type from which you can actually create values.
+The article is organized around nine small puzzles. Each puzzle starts with an object-oriented design, then asks how we should express the same idea in Rust. The puzzles are:
+Giving Every Integer a Shared Helper Method
+Making an Animated Servo Still Count as a Servo
+Adding a Method to a Type You Don’t Own
+Giving a Tiny Enum a Full Set of Standard Behaviors
+Making a Wrapper Feel Like the Thing Inside It
+Adding 
+union()
+ to Any Collection of Range Sets
+Treating Fifteen Integer-Like Types the Same Way
+Giving Only 
+OutputArray<8>
+ a Byte-Oriented Method
+Saving Only Serializable Values to Flash
+Let’s start with the simplest case: several types need the same interface, and they should share one helper method.
+1. Giving Every Integer a Shared Helper Method
+The 
+RangeSetBlaze
+ crate stores mathematical sets of integers: 
+u8
+, 
+i16
+, and so on. The crate works with integers through methods such as 
+min_value
+ and 
+max_value
+ that each integer type must define. Using those required methods, we also want shared code for additional methods such as 
+exhausted_range
+.
+In an object-oriented class diagram, we might draw an abstract 
+Integer
+ class with required methods and one implemented method inherited by concrete integer types.
+Press enter or click to view image in full size
+Puzzle
+: How could you implement this in Rust?
+Solution:
+ In Rust, we can define a trait with two required methods and one default method, 
+exhausted_range
+:
+use std::ops::RangeInclusive;
+trait Integer: Copy + Ord {
+    fn min_value() -> Self;
+    fn max_value() -> Self;
+    fn exhausted_range() -> RangeInclusive<Self> {
+        debug_assert!(Self::min_value() < Self::max_value(), "Precondition");
+        Self::max_value()..=Self::min_value()
+    }
+}
+The shared code lives once in the trait. Each implementor provides the code for its 
+min_value
+ and 
+max_value
+:
+impl Integer for u8 {
+    fn min_value() -> Self {
+        u8::MIN
+    }
+    fn max_value() -> Self {
+        u8::MAX
+    }
+}
+impl Integer for i16 {
+    fn min_value() -> Self {
+        i16::MIN
+    }
+    fn max_value() -> Self {
+        i16::MAX
+    }
+}
+We use the methods like so:
+let r1 = u8::exhausted_range();
+let r2 = i16::exhausted_range();
+assert_eq!(r1, 255..=0);
+assert!(r2.is_empty());
+We call this technique 
+Trait Default Methods
+. A trait defines the required interface, and any method with a body becomes shared behavior for implementors that do not override it.
+But what if we want even more structure?
+2. Making an Animated Servo Still Count as a Servo
+The 
+device-envoy
+ crate helps you write high-level Rust applications on microcontrollers. It works with the ESP32 and Raspberry Pi Pico families of microcontrollers. Among other things, it can help you control a servo motor.
+A servo is an electric motor that we can instruct to move to a specific angle. Let’s model that as an abstract class called 
+Servo
+.
+We also want an abstract class called 
+ServoPlayer
+. Every 
+ServoPlayer
+ is a 
+Servo
+, but a 
+ServoPlayer
+ also knows how to animate through a sequence of angles and hold times.
+For a specific microcontroller family, such as ESP32, we want concrete classes that inherit from 
+Servo
+ and 
+ServoPlayer
+.
+The class diagram looks like this:
+Press enter or click to view image in full size
+Puzzle:
+ How would we implement this in Rust?
+Solution: 
+In Rust, one trait can require another trait:
+trait Servo {
+    fn set_degrees(&self, degrees: u16);
+}
+trait ServoPlayer: Servo {
+    fn animate(&self, steps: &[(u16, u64)]);
+}
+The 
+: Servo
+ part says that every 
+ServoPlayer
+ must also be a 
+Servo
+. In Rust terms, 
+ServoPlayer
+ has 
+Servo
+ as a 
+supertrait
+.
+Aside: In all these examples, we mock up small, self-contained code that illustrates the point. See the real crates for the full code. In this example, rather than really controlling a servo motor, we just print a message.
+A concrete type that implements only 
+Servo
+ could look like this:
+#[derive(Default)]
+struct ServoEsp;
+impl Servo for ServoEsp {
+    fn set_degrees(&self, degrees: u16) {
+        println!("[ServoEsp] set angle -> {degrees}°");
+    }
+}
+A concrete type that implements 
+ServoPlayer
+ must also implement 
+Servo
+:
+#[derive(Default)]
+struct ServoPlayerEsp;
+impl Servo for ServoPlayerEsp {
+    fn set_degrees(&self, degrees: u16) {
+        println!("[ServoPlayerEsp] set angle -> {degrees}°");
+    }
+}
+impl ServoPlayer for ServoPlayerEsp {
+    fn animate(&self, steps: &[(u16, u64)]) {
+        for (degrees, _milliseconds) in steps {
+            self.set_degrees(*degrees);
+        }
+    }
+}
+Aside: Notice that 
+ServoPlayerEsp
+ implements 
+Servo
+ in one impl block and 
+ServoPlayer
+ in another. That is because Rust treats 
+ServoPlayer: Servo
+ as “
+ServoPlayer
+ requires 
+Servo
+,” not as “
+ServoPlayer
+ inherits the 
+Servo
+ implementation.”
+Then generic code can ask for exactly the capability it needs:
+fn center_servo(servo: &impl Servo) {
+    servo.set_degrees(90);
+}
+fn run_wave(player: &impl ServoPlayer) {
+    player.animate(&[(0, 120), (90, 100), (180, 120)]);
+}
+We can pass a 
+ServoPlayerEsp
+ to both functions. We can pass a plain 
+ServoEsp
+ only to 
+center_servo
+:
+let servo_esp = ServoEsp::default();
+let servo_player_esp = ServoPlayerEsp::default();
+center_servo(&servo_esp);
+// `ServoPlayer` can do everything `Servo` can!
+center_servo(&servo_player_esp);
+// and more.
+run_wave(&servo_player_esp);
+We call this technique 
+Supertraits
+. One trait can require another trait, letting you build levels of interfaces without building a class hierarchy. A 
+ServoPlayer
+ is not a subclass of 
+Servo
+, but every 
+ServoPlayer
+ must also satisfy the 
+Servo
+ contract.
+So far, the types have been ours to design. Next, let’s work with a type that already exists.
+3. Adding a Method to a Type You Don’t Own
+Suppose we want to add 
+is_odd()
+ to 
+usize
+, Rust’s standard unsigned integer type for sizes and indexes.
+In object-oriented terms, we want 
+usize
+ to inherit a new method from a new abstract class.
+Puzzle:
+ How would you do this in Rust?
+Aside: Do not confuse the words “inherit” and “inherent.” “Inherit,” meaning to pass down, is the thing that Rust mostly does not do, and mostly does not need. “Inherent,” in Rust, means “directly on the type.”
+Solution: 
+If we try a direct, or inherent, definition of 
+is_odd
+, the compiler will complain:
+// impl usize {
+//     fn is_odd(self) -> bool {
+//         self & 1 != 0
+//     }
+// }
+// error[E0390]: cannot define inherent `impl` for primitive types
+But we can define our own trait and implement it for 
+usize
+:
+trait UsizeExtensions {
+    fn is_odd(self) -> bool;
+}
+impl UsizeExtensions for usize {
+    fn is_odd(self) -> bool {
+        self & 1 != 0
+    }
+}
+Now we can use the method as if it were part of 
+usize
+:
+let count: usize = 7;
+assert!(count.is_odd());
+assert!(!12.is_odd());
+By convention, we call this an 
+Extension Trait
+. To the compiler, however, this is just a trait. The convention is useful because it means, “I am adding methods to a type, often a type I do not own.”
+Aside: Why does the compiler allow you to implement a trait on a type you do not own, but not define direct, inherent methods? Because we are not changing 
+usize
+ itself. We are defining our own trait and saying, “
+usize
+ knows how to play this role.” Another crate can define a different trait and implement it for 
+usize
+, but that is a different role.
+Direct methods are different. If every crate could add methods directly to 
+usize
+, then many crates would be editing the same method list. Two crates could add different 
+is_odd
+ methods, or Rust itself could add one later. To avoid that mess, Rust only lets the crate that defines a type add direct, inherent methods to it.
+Methods are only part of the story. Sometimes a type needs to behave well in the rest of the Rust ecosystem.
+4. Giving a Tiny Enum a Full Set of Standard Behaviors
+For a small enum, we often want standard behaviors: a default value, debug printing, equality, ordering, hashing, copying, cloning, and so on.
+In a class hierarchy, we might draw this as many abstract classes mixed into one concrete type.
+Puzzle:
+ How would you give 
+LedLevel
+ all these standard behaviors without writing each implementation by hand?
+Press enter or click to view image in full size
+Solution: 
+In Rust, the standard traits already exist, and 
+derive
+ writes the implementations for us:
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Default)]
+enum LedLevel {
+    On,
+    #[default]
+    Off,
+}
+We use the derived traits like so:
+let default_level = LedLevel::default();
+let on = LedLevel::On;
+let off = LedLevel::Off;
+assert_eq!(default_level, LedLevel::Off);
+assert_ne!(on, off);
+assert!(off > on);
+let copied = on;
+let cloned = off.clone();
+assert_eq!(copied, on);
+assert_eq!(cloned, off);
+This is inheritance-like in the sense that 
+LedLevel
+ now participates in many standard behaviors: defaulting, printing, comparing, hashing, copying, and cloning. The Rust mechanism is different from class inheritance, though. The 
+derive
+ attribute asks macros to generate ordinary trait implementations for this concrete type.
+We call this technique 
+Derive-Generated Implementations
+. It is one of the most common ways Rust gives a type a bundle of standard behavior.
+So far, the inheritance-like behavior has come through traits. But sometimes we may want something stronger: “I want this concrete type to inherit from that concrete type.”
+5. Making a Wrapper Feel Like the Thing Inside It
+Now for a different kind of puzzle: what if the thing we want to “inherit from” is not a trait at all, but a concrete type?
+Suppose we want an 
+HtmlBuffer
+ to feel like a 
+String
+ for ordinary method calls, while still being a distinct type. The catch is that 
+String
+ is not a trait. It is a concrete type with storage.
+In object-oriented terms, we want one concrete class, 
+HtmlBuffer
+, to inherit methods from another concrete class, 
+String
+.
+Puzzle:
+ How would you make 
+HtmlBuffer
+ inherit ordinary 
+String
+ methods such as 
+push_str
+, 
+len
+, and 
+as_bytes
+, even though 
+String
+ is a concrete type rather than a trait?
+Solution: 
+We cannot implement 
+String
+ for 
+HtmlBuffer
+, because 
+String
+ is not a trait.
+// struct HtmlBuffer;
+// impl String for HtmlBuffer {
+// }
+// Error because String is not a trait.
+But we can wrap a 
+String
+ and implement 
+Deref
+ and 
+DerefMut
+:
+use std::ops::{Deref, DerefMut};
+struct HtmlBuffer(String);
+impl HtmlBuffer {
+    fn new() -> Self {
+        Self(String::new())
+    }
+}
+impl Deref for HtmlBuffer {
+    type Target = String;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for HtmlBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+Now Rust’s deref method lookup lets us call many 
+String
+ methods on 
+HtmlBuffer
+:
+let mut page = HtmlBuffer::new();
+page.push_str("<h1>Hello</h1>");
+page.push_str("<p>Rust</p>");
+assert_eq!(page.len(), 25);
+assert_eq!(&*page, "<h1>Hello</h1><p>Rust</p>");
+We call this technique 
+Deref Method Lookup
+. It is powerful, and it is exactly right for smart pointers like 
+Box
+, 
+Rc
+, and 
+Arc
+. For 
+HtmlBuffer
+, however, using 
+Deref
+ may be unwise for two reasons.
+First, it does not let 
+HtmlBuffer
+ act as a 
+String
+ in every context. For example, the last line above shows that, for this equality check, we must dereference explicitly:
+assert_eq!(&*page, "<h1>Hello</h1><p>Rust</p>");
+The 
+*page
+ asks for the 
+String
+ inside the 
+HtmlBuffer
+; the 
+&
+ then borrows that 
+String
+ for comparison. Thus, 
+Deref
+ helps with method lookup, but it does not make 
+HtmlBuffer
+ identical to 
+String
+.
+Second, 
+Deref
+ is often too permissive. A wrapper type usually exists to keep two meanings separate: an HTML buffer is not just any string. If we expose the entire 
+String
+ interface through deref lookup, we may weaken that distinction. A more explicit method, such as 
+as_str
+, may better communicate what we intend.
+Aside:
+ Related traits include 
+AsRef
+, 
+From
+, and 
+Borrow
+. 
+AsRef
+ can expose a borrowed view, 
+From
+ can express conversion, and 
+Borrow
+ can support lookup-style borrowing. These traits are usually more explicit than 
+Deref
+, but you should still use them with care.
+So far, we have been careful about adding behavior to one type at a time. But sometimes we want the opposite: one method that appears on a whole family of types.
+6. Adding union() to Any Collection of Range Sets
+Suppose we have many 
+RangeSetBlaze
+ values and want the union of all of them. It should work for a vector, an array, or any other iterable collection of 
+RangeSetBlaze
+ references.
+The object-oriented design is: any iterable collection of range sets should inherit a 
+union
+ operation.
+Press enter or click to view image in full size
+Puzzle:
+ How would you add a 
+union()
+ method to every iterable collection of 
+RangeSetBlaze
+ references, including collection types you did not anticipate?
+Solution: 
+In this example, we mock 
+RangeSetBlaze
+ as a wrapper around 
+BTreeSet<u64>
+:
+use std::collections::BTreeSet;
+// For this example, use u64 as our stand-in integer type.
+type Integer = u64;
+// Mock up RangeSetBlaze as a BTreeSet wrapper for demo purposes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RangeSetBlaze {
+    values: BTreeSet<Integer>,
+}
+// not shown: define new, from_slice, union of two sets, is_empty
+With that mock type in place, we can define the collection trait. It supplies 
+union
+ for any type that can become an iterator over borrowed 
+RangeSetBlaze
+ values:
+trait RangeSetCollection<'a>: IntoIterator<Item = &'a RangeSetBlaze> {
+    fn union(self) -> RangeSetBlaze
+    where
+        Self: Sized,
+    {
+        let mut result = RangeSetBlaze::new();
+        for set in self {
+            result = RangeSetBlaze::union(&result, set);
+        }
+        result
+    }
+}
+Finally, we add a “blanket implementation” via generics:
+impl<'a, I> RangeSetCollection<'a> for I
+    where I: IntoIterator<Item = &'a RangeSetBlaze> {}
+That says: every type 
+I
+ that can become an iterator of 
+&RangeSetBlaze
+ gets this trait.
+Now a vector works:
+assert_eq!(vec![&a, &b, &c].union(), expected);
+An array works:
+assert_eq!([&a, &b, &c].union(), expected);
+Even this filtered 
+Option
+ works, because Rust lets us iterate over an 
+Option
+:
+assert_eq!(Some(&a).filter(|set| !set.is_empty()).union(), a);
+We call this technique 
+Blanket Implementations
+. It is broader than an extension trait for one type. It adds behavior to every type that satisfies the condition, including types we did not anticipate.
+7. Treating Fifteen Integer-Like Types the Same Way
+RangeSetBlaze
+ needs to treat 15 integer-like types uniformly: the numeric integer primitives, 
+char
+, 
+Ipv4Addr
+, and 
+Ipv6Addr
+. Each needs 
+add_one
+, 
+min_value
+, and 
+max_value
+.
+In object-oriented terms, we might draw an 
+Integer
+ abstract class, then smaller abstract classes for numeric integers, IP-address integers, and character integers. Each family can share an implementation pattern.
+Press enter or click to view image in full size
+Puzzle:
+ How would you give all 15 types the same 
+Integer
+ interface without writing the same method bodies 15 times?
+Solution: 
+The trait is simple:
+trait Integer: Copy + Ord {
+    fn add_one(self) -> Self;
+    fn min_value() -> Self;
+    fn max_value() -> Self;
+}
+The implementations differ by family. Numeric integers can add one with 
+self + 1
+ and use 
+MIN
+ and 
+MAX
+:
+macro_rules! impl_integer_ops_num {
+    ($t:ty) => {
+        fn add_one(self) -> Self {
+            self + 1
+        }
+        fn min_value() -> Self {
+            <$t>::MIN
+        }
+        fn max_value() -> Self {
+            <$t>::MAX
+        }
+    };
+}
+IP addresses use numeric representation types:
+macro_rules! impl_integer_ops_ip {
+    ($ip_type:ty, $representation_type:ty) => {
+        fn add_one(self) -> Self {
+            <$ip_type>::from(<$representation_type>::from(self) + 1)
+        }
+        fn min_value() -> Self {
+            <$ip_type>::from(<$representation_type>::MIN)
+        }
+        fn max_value() -> Self {
+            <$ip_type>::from(<$representation_type>::MAX)
+        }
+    };
+}
+char
+ has one special case: some 
+u32
+ values are not valid Unicode scalar values, so 
+add_one
+ must skip this range.
+macro_rules! impl_integer_ops_char {
+    () => {
+        fn add_one(self) -> Self {
+            let mut num = u32::from(self) + 1;
+            if num == 0xD800 {
+                num = 0xE000;
+            }
+            char::from_u32(num)
+                 .expect("next char must be a valid Unicode scalar value")
+        }
+        fn min_value() -> Self {
+            char::MIN
+        }
+        fn max_value() -> Self {
+            char::MAX
+        }
+    };
+}
+Aside: 
+0xD800..0xE000
+ is Unicode’s surrogate range. These values are reserved for UTF-16, a Unicode encoding that uses 16-bit code units. They are not real characters by themselves, so Rust’s 
+char
+ skips them.
+Then we still write one 
+impl
+ per target type, but each one is only a one-liner:
+impl Integer for i8 { impl_integer_ops_num!(i8); }
+impl Integer for u8 { impl_integer_ops_num!(u8); }
+impl Integer for i16 { impl_integer_ops_num!(i16); }
+impl Integer for u16 { impl_integer_ops_num!(u16); }
+impl Integer for i32 { impl_integer_ops_num!(i32); }
+impl Integer for u32 { impl_integer_ops_num!(u32); }
+impl Integer for i64 { impl_integer_ops_num!(i64); }
+impl Integer for u64 { impl_integer_ops_num!(u64); }
+impl Integer for i128 { impl_integer_ops_num!(i128); }
+impl Integer for u128 { impl_integer_ops_num!(u128); }
+impl Integer for isize { impl_integer_ops_num!(isize); }
+impl Integer for usize { impl_integer_ops_num!(usize); }
+impl Integer for Ipv4Addr { impl_integer_ops_ip!(Ipv4Addr, u32); }
+impl Integer for Ipv6Addr { impl_integer_ops_ip!(Ipv6Addr, u128); }
+impl Integer for char { impl_integer_ops_char!(); }
+We call this technique 
+Macro-Generated Implementations
+. Instead of using a trait hierarchy to share code, we use macros to generate similar trait impls for a known list of types.
+Aside: Why not use traits? The third-party 
+num_traits
+ crate defines 
+PrimInt
+, a trait that the numeric integer types implement. Could we use 
+PrimInt
+ and a blanket implementation, like in puzzle 6, to write the three numeric method bodies just once? Not safely. 
+PrimInt
+ belongs to another crate, so Rust must consider future implementations. If 
+char
+ someday implemented 
+PrimInt
+, our blanket numeric impl and our special 
+char
+ impl would both apply. A local 
+PrimInt
+-like trait would also be reasonable, but it still would not give us a clean blanket impl for every family because Rust cannot prove that two traits, such as 
+PrimInt
+ and a hypothetical 
+PrimIp
+, are disjoint.
+Macros let us share code across a known list of types. Next, we will make a method appear only for one version of a generic type.
+8. Giving Only OutputArray<8> a Byte-Oriented Method
+Here is one I did not originally know Rust could do.
+Suppose we have 
+OutputArray<N>
+, a fixed-size array of booleans. All lengths should support 
+new
+ and 
+set_level_at_index
+. But when 
+N = 8
+, we also want 
+set_from_bits(u8)
+, because eight booleans map naturally to one byte.
+In object-oriented terms, we might draw 
+OutputArray<8>
+ as a special concrete class with one extra method.
+Press enter or click to view image in full size
+Puzzle:
+ How would you give 
+OutputArray<8>
+ an extra method without giving that method to every 
+OutputArray<N>
+?
+Solution: 
+The general methods go in the general impl block:
+#[derive(Debug, Clone, Copy)]
+struct OutputArray<const N: usize> {
+    levels: [bool; N],
+}
+impl<const N: usize> OutputArray<N> {
+    fn new() -> Self {
+        Self { levels: [false; N] }
+    }
+    fn set_level_at_index(&mut self, index: usize, level: bool) {
+        self.levels[index] = level;
+    }
+}
+The length-8-only method goes in a separate impl block:
+impl OutputArray<8> {
+    fn set_from_bits(&mut self, mut bits: u8) {
+        for slot in &mut self.levels {
+            *slot = (bits & 1) == 1;
+            bits >>= 1;
+        }
+    }
+}
+Now 
+OutputArray::<4>
+ has 
+new
+ and 
+set_level_at_index
+, but not 
+set_from_bits
+. 
+OutputArray::<8>
+ has all three:
+let mut any = OutputArray::<4>::new();
+any.set_level_at_index(2, true);
+let mut eight = OutputArray::<8>::new();
+eight.set_from_bits(0b1011_0001);
+We call this technique 
+Constraint-Gated Methods
+. The method exists only for the version of the type that satisfies the constraint. Here the constraint is 
+N = 8
+, but the same basic idea works with trait bounds, lifetimes, and combinations of constraints.
+So far, the constraint selected a special version of the type. Next, the type stays ordinary, but only some methods require extra bounds.
+9. Saving Only Serializable Values to Flash
+For 
+device-envoy
+, I wanted to write values to flash memory. A flash block should always have 
+new
+ and 
+clear
+. But 
+save
+ and 
+load
+ should only work for types that can be serialized and deserialized.
+In object-oriented terms, we might draw one level with 
+new
+ and 
+clear
+, and a more constrained level that adds 
+save
+ and 
+load
+ only when the value type supports serialization and deserialization.
+Press enter or click to view image in full size
+Puzzle:
+ How would you make some methods available only when the method’s type parameter has the required capabilities?
+Solution: 
+The example uses 
+serde
+ and 
+postcard
+, with a 
+HashMap
+ standing in for flash memory:
+use std::collections::HashMap;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct WifiCredentials {
+    ssid: String,
+    password: String,
+}
+#[derive(Default)]
+struct FlashBlock {
+    store: HashMap<String, Vec<u8>>,
+}
+The type itself is not generic. The methods are:
+impl FlashBlock {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn clear(&mut self) {
+        self.store.clear();
+    }
+    fn save<T>(&mut self, key: &str, value: &T) -> Result<(), postcard::Error>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let bytes = postcard::to_stdvec(value)?;
+        self.store.insert(key.to_string(), bytes);
+        Ok(())
+    }
+    fn load<T>(&self, key: &str) -> Option<T>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let bytes = self.store.get(key)?;
+        postcard::from_bytes(bytes).ok()
+    }
+}
+This works nicely:
+let mut flash = FlashBlock::new();
+let credentials = WifiCredentials {
+    ssid: "HomeWiFi".to_string(),
+    password: "secret".to_string(),
+};
+flash.save("wifi", &credentials)?;
+let loaded: Option<WifiCredentials> = flash.load("wifi");
+let loaded = loaded.unwrap();
+assert_eq!(&loaded.ssid, "HomeWiFi");
+assert_eq!(&loaded.password, "secret");
+But this flexibility has a tradeoff. For example, we can save a number and then try to load it back as a 
+String
+. The compiler does not complain:
+flash.save("number", &42u8)?;
+let loaded: Option<String> = flash.load("number");
+assert!(loaded.is_none());
+Aside: In this run, 
+loaded
+ is 
+None
+, which is better than returning a nonsense string. But the compiler cannot prove that the key and requested type match. In real flash storage, there is another concern too: an older firmware version may have written the bytes. The real 
+device-envoy
+ code stores metadata alongside the value so that 
+load
+ can detect many type or version mismatches and return 
+None
+.
+We call this technique 
+Method-Level Constraints
+. The type itself can stay broadly usable, while individual methods state the extra capabilities they require.
+Conclusion: The Pattern Behind the Nine Patterns
+Here is a recap:
+Giving Every Integer a Shared Helper Method
+Trait Default Methods
+Making an Animated Servo Still Count as a Servo
+Supertraits
+Adding a Method to a Type You Don’t Own
+Extension Traits
+Giving a Tiny Enum a Full Set of Standard Behaviors
+Derive-Generated Implementations
+Making a Wrapper Feel Like the Thing Inside It
+Deref Method Lookup
+Adding 
+union()
+ to Any Collection of Range Sets
+Blanket Implementations
+Treating Fifteen Integer-Like Types the Same Way
+Macro-Generated Implementations
+Giving Only 
+OutputArray<8>
+ a Byte-Oriented Method
+Constraint-Gated Methods
+Saving Only Serializable Values to Flash
+Method-Level Constraints
+I started by thinking of these as nine ways to do inheritance in Rust. By the end, the list looked smaller than that. Most of the techniques are combinations of just a few ideas:
+traits define roles
+impl blocks attach behavior
+generics let the same code apply to many types or values
+bounds decide when generic behavior exists
+macros remove repetition
+Rust does not have class inheritance. But if the thing you wanted from inheritance was shared interfaces and shared behavior, Rust has building blocks for that. The trick is to combine those blocks in a way that says what you mean.
+Aside: Sometimes when you put these building blocks together, the Rust compiler will complain. Rust calls the relevant family of rules 
+coherence
+. Coherence means that, for any given type and trait, Rust wants one clear impl that applies.
+Object-oriented languages often avoid this particular problem by routing method lookup through the class hierarchy. If 
+Dog
+ inherits from 
+Animal
+, and both define 
+speak
+, the language has rules for which method wins.
+For me, the lesson is not “how do I recreate classes in Rust?” It is how to move from translating object-oriented designs into Rust to thinking more fluently in Rust’s own language: traits, bounds, impls, generics, and explicit behavior.
+Thanks for following along on this tour of inheritance-like behavior in Rust.
+Aside: If you’re interested in future articles, please 
+follow me on Medium
+. I write on scientific programming, Rust, Python, machine learning, and statistics. I tend to write about one article per month.
