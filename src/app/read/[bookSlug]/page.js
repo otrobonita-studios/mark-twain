@@ -138,9 +138,12 @@ export async function generateMetadata({ params }) {
       cleanTitle = decodedSlug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     }
     
+    // Remove "COMPLETE" suffix for cleaner titles
+    const titleClean = cleanTitle.replace(/,?\s*COMPLETE\s*$/i, '').trim();
+
     return {
-      title: `${cleanTitle} — Read Book`,
-      description: `Read ${cleanTitle} by Mark Twain in a beautiful interactive format.`
+      title: `The Mark Twain Experience: ${titleClean} — Multimedia Editions from Otrobonita Labs`,
+      description: `Read ${cleanTitle} by Mark Twain in the complete Mark Twain Reappears archive.`
     };
   } catch (e) {
     return {
@@ -328,6 +331,25 @@ export default async function ReadPage({ params }) {
   // Clean up any orphaned CONTENTS h2 left behind
   processedHtmlContent = processedHtmlContent.replace(
     /<h2[^>]*>\s*(?:TABLE OF\s+)?CONTENTS\.?\s*<\/h2>/gi,
+    ''
+  );
+
+  // Remove orphaned CONTENTS blockquotes with only empty toc paragraphs
+  // Matches: <blockquote> -> <p class="toc"> -> <big><b>CONTENTS</b></big> -> empty paragraphs -> </blockquote>
+  processedHtmlContent = processedHtmlContent.replace(
+    /<blockquote[^>]*>\s*<p[^>]*class="toc"[^>]*>\s*<big[^>]*><b[^>]*>CONTENTS<\/b><\/big>[^<]*<\/p>\s*(?:<p[^>]*>\s*(?:<br\s*\/?>\s*)*<\/p>\s*)*(?:<p[^>]*class="toc"[^>]*>\s*<\/p>\s*)*<\/blockquote>/gi,
+    ''
+  );
+
+  // Also catch blockquotes with just the CONTENTS in simple structure
+  processedHtmlContent = processedHtmlContent.replace(
+    /<blockquote[^>]*>\s*<p[^>]*class="toc"[^>]*>\s*<big[^>]*>[^<]*<b[^>]*>CONTENTS<\/b>[^<]*<\/big>\s*<\/p>\s*[\s\S]*?<\/blockquote>/gi,
+    ''
+  );
+
+  // Remove any remaining empty CONTENTS sections (various container types)
+  processedHtmlContent = processedHtmlContent.replace(
+    /<(?:blockquote|div)[^>]*>\s*<p[^>]*>\s*<(?:big|span)[^>]*>(?:TABLE OF\s+)?CONTENTS<\/(?:big|span)>[^<]*<\/p>\s*(?:<p[^>]*>\s*<br\s*\/?>\s*<\/p>\s*)*<\/(?:blockquote|div)>/gi,
     ''
   );
 

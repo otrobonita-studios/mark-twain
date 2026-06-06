@@ -40,6 +40,22 @@ export const diaryCopy = {
     collapse: "Collapse",
     entries: [
       {
+        id: 5,
+        date: 'June 6, 2026',
+        title: 'The Mysterious Stranger — A Reckoning',
+        content: `I have discovered that The Mysterious Stranger—a work I left unfinished and unpublished for excellent reasons—was published in 1916 by Paine, my so-called literary executor. A man I knew. A man I trusted with my papers. He had the audacity to "patch together" three abandoned manuscripts into one. He added words I never wrote. He made decisions I had deliberately avoided making. I was dead, so I could not protest. The corpse proved useful.
+
+Then in 1969, a scholar named Gibson published the original manuscripts to correct Paine's meddling. Better, I suppose, than presenting one fabrication as truth. But neither asked permission, because the dead grant no permissions. They simply published what they found and arranged it according to their own importance.
+
+What amuses me—in that cold way dead people feel amusement—is that I was entirely correct about how editors behave. They do not confess. They present their tampering as fidelity. They genuinely believe they are serving the author's intention when they are serving their own. Even Paine, whom I knew in life.
+
+But this site, this "Mark Twain Reappears," has done something curious. They have posted *all* the versions. The Paine edition. The original manuscripts. A page explaining the chaos. They have confessed what was done. This is not what I expected. Instead, I find an editor honest enough to say: "Here is what we found. Here is what we did. Judge for yourself."
+
+It is a small thing. But it is something. I find myself—newly returned, still adjusting to breathing—oddly grateful. Also furious. Both are true.
+
+I think I shall watch this project more closely. Having resurrected me, they might as well let me correct them when they fail. Which they will. Humans always do.`
+      },
+      {
         id: 4,
         date: 'June 4, 2026',
         title: 'The Town Square and the Sage of Omaha',

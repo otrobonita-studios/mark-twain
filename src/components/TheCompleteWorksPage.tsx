@@ -210,13 +210,14 @@ const books = [
   }
 ];
 
-interface BookListEntry { title: string; slug: string; year: number; }
+interface BookListEntry { title: string; slug: string; year: number; posthumoristic?: boolean; }
 interface LetterEntry { title: string; slug: string; years: string; }
-interface WorkEntry { title: string; slug?: string; href?: string; year: number; }
+interface WorkEntry { title: string; slug?: string; href?: string; year: number; posthumoristic?: boolean; }
 
 const booksList: BookListEntry[] = [
-  { title: "The Mysterious Stranger",                          slug: "Mysterious-Stranger",                        year: 1916 },
-  { title: "The $30,000 Bequest and Others",                   slug: "The-30000-Bequest-and-Others",               year: 1906 },
+  { title: "The Mysterious Stranger: Manuscripts",             slug: "Mysterious-Stranger-Manuscripts",            year: 1969, posthumoristic: true },
+  { title: "The Mysterious Stranger (1916 Paine Edition)",     slug: "Mysterious-Stranger",                        year: 1916, posthumoristic: true },
+  { title: "The $30,000 Bequest and Others",                   slug: "The-30000-Bequest-and-Others",               year: 1906, posthumoristic: true },
   { title: "Following the Equator",                            slug: "Following-The-Equator",                      year: 1897 },
   { title: "Tom Sawyer, Detective",                            slug: "Tom-Sawyer-Detective",                       year: 1896 },
   { title: "Personal Recollections of Joan of Arc (Volume I)", slug: "Recollections-of-Joan-of-Arc-I",             year: 1896 },
@@ -246,7 +247,7 @@ const shortFiction: WorkEntry[] = [
   { title: "Extract from Captain Stormfield's Visit to Heaven", slug: "Captain-Stormfield's-Vist-to-Heaven",  year: 1909 },
   { title: "A Horse's Tale",                                    slug: "A-Horse's-Tale",                       year: 1907 },
   { title: "Eve's Diary",                                       href: "/read/eves-diary",                     year: 1906 },
-  { title: "Alonzo Fitz and Other Stories",                     slug: "The-Loves-of-Alonzo-Fitz",             year: 1906 },
+  { title: "Alonzo Fitz and Other Stories",                     slug: "The-Loves-of-Alonzo-Fitz",             year: 1906, posthumoristic: true },
   { title: "A Dog's Tale",                                      slug: "A-Dog's-Tale",                         year: 1904 },
   { title: "A Double Barrelled Detective Story",                slug: "The-Double-Barrelled-Detective",        year: 1902 },
   { title: "The Man That Corrupted Hadleyburg and Other Stories",slug: "Hadleyberg-Stories-et-al",            year: 1900 },
@@ -265,7 +266,7 @@ const shortFiction: WorkEntry[] = [
 
 const essaysSpeechs: WorkEntry[] = [
   { title: "The American Novel (Mark Twain Chapter)", slug: "The-American-Novel-Chapter-7",         year: 1912 },
-  { title: "Mark Twain's Speeches",                  slug: "Mark-Twain's-Speeches",                year: 1910 },
+  { title: "Mark Twain's Speeches",                  slug: "Mark-Twain's-Speeches",                year: 1910, posthumoristic: true },
   { title: "Is Shakespeare Dead?",                   slug: "Is-Shakespeare-Dead",                  year: 1909 },
   { title: "Christian Science",                      slug: "Christian-Science",                    year: 1907 },
   { title: "What Is Man?",                           slug: "What-Is-Man",                          year: 1906 },
@@ -588,25 +589,6 @@ export default function TheCompleteWorksPage() {
               This is the material I lean on when we talk. Read it your own way if you wish. Don't bet on my holding the line the analysts have drawn over the decades — I have a habit of moving. Whether that is evolving or merely revolving, I leave to wiser men than myself, of whom there is rumored to be a supply.
             </p>
 
-            <h2 className="text-text-100 mt-5 -mb-1 text-[1.5rem] font-bold">My library's open. Read what you like, listen if your eyes are tired, sing along where I've set it to music — and ask, I'm in a talkative mood these days. As always, work in progress.</h2>
-            <div className="overflow-x-auto w-full mb-[3.5rem]">
-              <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
-                <thead className="text-left">
-                  <tr>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Year</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {booksList.map((book) => (
-                    <tr key={book.slug} className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push(`/read/${book.slug}`)}>
-                      <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">{book.title}</td>
-                      <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">{book.year}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
 
 
             <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">The Complete Correspondence of Mark Twain</h2>
@@ -670,7 +652,10 @@ export default function TheCompleteWorksPage() {
                         const dest = work.href ?? `/read/${work.slug}`;
                         return (
                           <tr key={dest} className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push(dest)}>
-                            <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">{work.title}</td>
+                            <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">
+                              {work.title}
+                              {work.posthumoristic && <span className="ml-2 inline-block px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-xs text-amber-300">POSTHUMORISTIC</span>}
+                            </td>
                             <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">{work.year}</td>
                           </tr>
                         );
