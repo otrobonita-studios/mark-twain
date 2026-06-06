@@ -1,0 +1,283 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">A Jiggle Physics Standard - Xlovecam</h1></div>
+<p align="center" dir="auto">
+<a href="/xloveee/jiggle-physics/blob/main/asset/jiggle-physics-demo.gif" rel="noopener noreferrer" target="_blank"></a>
+</p>
+<p dir="auto"><strong>A reference standard for real-time jiggle physics</strong> by <strong>xlovecam</strong> — how to
+paint soft regions, drive damped spring bones, and deform meshes consistently
+across engines.</p>
+<blockquote>
+<p dir="auto">Not ragdoll. Not cloth. Not full soft-body FEM.
+Paint weight on a UV map, drive randomized spring bones from parent motion,
+one rule: <code>vertex += weight * boneJiggle</code>.</p>
+</blockquote>
+<p dir="auto"><strong>Author: <a href="https://github.com/xloveee">xlovecam</a></strong></p>
+<p dir="auto">No build step. Open <code>index.html</code> in any WebGL-capable browser.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Also known as</h2></div>
+<p dir="auto">Spring bones · jiggle bones · soft-body secondary motion · weight-painted physics ·
+vertex weight jiggle · Blender-style flesh bounce · mesh wobble · damped spring
+deformation · parent-velocity lag · orbit-driven bounce</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">The standard</h2></div>
+<p dir="auto">Two pieces, one contract:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Piece</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Weight map</strong></td>
+<td>Per-region softness in <code>[0, 1]</code>, painted on a UV texture (one weight per vertex in a real engine).</td>
+</tr>
+<tr>
+<td><strong>Jiggle bones</strong></td>
+<td>A small set of damped springs; each painted region follows one bone. Randomized frequency/damping so regions wobble <strong>out of sync</strong>.</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">The entire deformation:</p>
+<div class="highlight highlight-source-glsl notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="vertex += weight * boneJiggle;" dir="auto"><pre>vertex <span class="pl-k">+=</span> weight <span class="pl-k">*</span> boneJiggle;</pre></div>
+<p dir="auto">In this demo (SDF ray-marcher), the equivalent samples the base shape at
+<code>q - offset</code> where <code>offset = weight * boneOffset</code>, with asymmetric squash &amp;
+stretch along the motion vector (trailing bulge, leading flatten).</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Architecture</h2></div>
+<p dir="auto">The <strong>engine</strong> and the <strong>renderer</strong> are separate by design. <code>jiggle-physics.js</code>
+does the math only — no DOM, no WebGL — so you can drop it into any renderer.
+This repo ships <strong>one</strong> such renderer (a WebGL demo in <code>jiggle-app.js</code>) to show
+the standard in action.</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="jiggle/
+├── index.html          # markup, styles, GLSL shader
+├── jiggle-physics.js   # pure simulation (no DOM, no WebGL)
+├── jiggle-app.js       # WebGL demo renderer (consumes the engine)
+└── asset/
+    └── jiggle-physics-demo.gif"><pre class="notranslate"><code>jiggle/
+├── index.html          # markup, styles, GLSL shader
+├── jiggle-physics.js   # pure simulation (no DOM, no WebGL)
+├── jiggle-app.js       # WebGL demo renderer (consumes the engine)
+└── asset/
+    └── jiggle-physics-demo.gif
+</code></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1"><code>jiggle-physics.js</code> — simulation engine</h3></div>
+<p dir="auto"><code>createJigglePhysics({ bones: 3 })</code> — drop into any game loop.</p>
+<ul dir="auto">
+<li><strong>No DOM, no WebGL</strong> — renderer-agnostic; all WebGL lives in the demo, not the engine.</li>
+<li>Each bone is a damped spring driven two ways:
+<ul dir="auto">
+<li><strong>Impulse</strong> on parent acceleration (flicks, reversals, constructive interference).</li>
+<li><strong>Velocity drive</strong> — sustained lag while the parent keeps moving.</li>
+</ul>
+</li>
+<li>Per-bone character: randomized stiffness, damping, coupling, and gravity sag.</li>
+<li>Returns bone offsets each frame:</li>
+</ul>
+<div class="highlight highlight-source-js notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="const offsets = physics.update(dt, { yaw, pitch, body: { x, y, z } });
+// Float32Array [x0,y0,z0, x1,y1,z1, ...]" dir="auto"><pre><span class="pl-k">const</span> <span class="pl-s1">offsets</span> <span class="pl-c1">=</span> <span class="pl-s1">physics</span><span class="pl-kos">.</span><span class="pl-en">update</span><span class="pl-kos">(</span><span class="pl-s1">dt</span><span class="pl-kos">,</span> <span class="pl-kos">{</span> yaw<span class="pl-kos">,</span> pitch<span class="pl-kos">,</span> <span class="pl-c1">body</span>: <span class="pl-kos">{</span> x<span class="pl-kos">,</span> y<span class="pl-kos">,</span> z <span class="pl-kos">}</span> <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+<span class="pl-c">// Float32Array [x0,y0,z0, x1,y1,z1, ...]</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1"><code>jiggle-app.js</code> — the WebGL demo renderer</h3></div>
+<p dir="auto">This is one example renderer, not part of the engine. It owns the WebGL setup,
+orbit camera, UV weight painting, controls, and render loop. Each frame it feeds
+parent state into the engine and uploads the returned bone offsets + weight
+textures to the shader.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1"><code>index.html</code> — the reference scene</h3></div>
+<p dir="auto">Five test geometries with demo presets, weight heatmap, physics sliders, and a
+2D UV paint window.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Weight painting</h2></div>
+<p dir="auto">Weights live in a <strong>512×256 RGBA texture</strong> (R / G / B = three jiggle bones).
+Each geometry uses a <strong>Smart-UV-style projection</strong> so paint maps cleanly to the
+surface:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Geometry</th>
+<th>Projection</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Orb</td>
+<td>Sphere (equirectangular)</td>
+</tr>
+<tr>
+<td>Capsule</td>
+<td>Cylinder along Y</td>
+</tr>
+<tr>
+<td>Torus</td>
+<td>Major ring U + tube V</td>
+</tr>
+<tr>
+<td>Air dancer</td>
+<td>Cylinder along swaying centreline</td>
+</tr>
+<tr>
+<td>Walker</td>
+<td>Cylinder, seam at back</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Paint in the <strong>2D UV map panel</strong> (not on the 3D viewport). One texture lookup
+per sample — no brush cap, no per-step cost scaling.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Controls</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>P</code></strong></td>
+<td>Paint mode — UV map panel appears</td>
+</tr>
+<tr>
+<td>Paint in UV window</td>
+<td>Add weight (Blender-style flow build-up)</td>
+</tr>
+<tr>
+<td><strong><code>+</code> / <code>−</code></strong></td>
+<td>Add / erase brush</td>
+</tr>
+<tr>
+<td><strong><code>W</code></strong></td>
+<td>Toggle weight heatmap (blue = anchored → red = soft)</td>
+</tr>
+<tr>
+<td><strong><code>G</code></strong></td>
+<td>Cycle geometry</td>
+</tr>
+<tr>
+<td><strong><code>C</code></strong></td>
+<td>Clear weights</td>
+</tr>
+<tr>
+<td><strong><code>X</code></strong></td>
+<td>Random paint</td>
+</tr>
+<tr>
+<td><strong><code>Space</code></strong></td>
+<td>Shake</td>
+</tr>
+<tr>
+<td><strong><code>R</code></strong></td>
+<td>Reset camera</td>
+</tr>
+<tr>
+<td>Drag</td>
+<td>Orbit (drives jiggle)</td>
+</tr>
+<tr>
+<td>Shift-drag</td>
+<td>Move object (also drives jiggle)</td>
+</tr>
+<tr>
+<td>Wheel</td>
+<td>Zoom</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Region strength sliders</h3></div>
+<p dir="auto">Below the UV map — scale painted regions <strong>after the fact</strong> without re-painting:</p>
+<ul dir="auto">
+<li><strong>all</strong> — master gain on every painted region</li>
+<li><strong>bone 0 / 1 / 2</strong> — per-channel gain (each stroke assigns a bone in rotation)</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Demo presets</h3></div>
+<p dir="auto">Each geometry loads a preset weight map on switch (<code>G</code>) that showcases the
+standard with multiple out-of-sync bones:</p>
+<ul dir="auto">
+<li><strong>Orb</strong> — heavy sagging bottom + softer equatorial band</li>
+<li><strong>Capsule</strong> — heavy hanging bottom cap + mid belly</li>
+<li><strong>Torus</strong> — three lobes evenly spaced on the outer rim</li>
+<li><strong>Air dancer</strong> — head-heavy stacked rings, feet anchored</li>
+<li><strong>Walker</strong> — soft bust, glutes, groin</li>
+</ul>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Physics sliders</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Slider</th>
+<th>Parameter</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>stiffness</td>
+<td>spring constant</td>
+</tr>
+<tr>
+<td>damping</td>
+<td>velocity damping</td>
+</tr>
+<tr>
+<td>mass</td>
+<td>inertia</td>
+</tr>
+<tr>
+<td>gravity</td>
+<td>sag under gravity</td>
+</tr>
+<tr>
+<td>orbit drive</td>
+<td>how hard camera orbit drives jiggle</td>
+</tr>
+<tr>
+<td>brush size</td>
+<td>UV paint radius</td>
+</tr>
+<tr>
+<td>brush weight</td>
+<td>paint target strength</td>
+</tr>
+<tr>
+<td>force radius</td>
+<td>jiggle spread from painted regions</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Integration</h2></div>
+<div class="highlight highlight-source-js notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="const physics = createJigglePhysics({ bones: 3 });
+
+// each frame:
+const offsets = physics.update(dt, {
+  yaw, pitch,
+  body: { x, y, z }   // parent object translation
+});
+
+// per vertex in your mesh:
+const w = sampleWeight(vertex.uv);       // from your weight map (0..1)
+const bone = sampleBoneIndex(vertex.uv); // which spring drives this texel
+vertex.position += w * boneOffset(bone);" dir="auto"><pre><span class="pl-k">const</span> <span class="pl-s1">physics</span> <span class="pl-c1">=</span> <span class="pl-en">createJigglePhysics</span><span class="pl-kos">(</span><span class="pl-kos">{</span> <span class="pl-c1">bones</span>: <span class="pl-c1">3</span> <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+
+<span class="pl-c">// each frame:</span>
+<span class="pl-k">const</span> <span class="pl-s1">offsets</span> <span class="pl-c1">=</span> <span class="pl-s1">physics</span><span class="pl-kos">.</span><span class="pl-en">update</span><span class="pl-kos">(</span><span class="pl-s1">dt</span><span class="pl-kos">,</span> <span class="pl-kos">{</span>
+  yaw<span class="pl-kos">,</span> pitch<span class="pl-kos">,</span>
+  <span class="pl-c1">body</span>: <span class="pl-kos">{</span> x<span class="pl-kos">,</span> y<span class="pl-kos">,</span> z <span class="pl-kos">}</span>   <span class="pl-c">// parent object translation</span>
+<span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+
+<span class="pl-c">// per vertex in your mesh:</span>
+<span class="pl-k">const</span> <span class="pl-s1">w</span> <span class="pl-c1">=</span> <span class="pl-en">sampleWeight</span><span class="pl-kos">(</span><span class="pl-s1">vertex</span><span class="pl-kos">.</span><span class="pl-c1">uv</span><span class="pl-kos">)</span><span class="pl-kos">;</span>       <span class="pl-c">// from your weight map (0..1)</span>
+<span class="pl-k">const</span> <span class="pl-s1">bone</span> <span class="pl-c1">=</span> <span class="pl-en">sampleBoneIndex</span><span class="pl-kos">(</span><span class="pl-s1">vertex</span><span class="pl-kos">.</span><span class="pl-c1">uv</span><span class="pl-kos">)</span><span class="pl-kos">;</span> <span class="pl-c">// which spring drives this texel</span>
+<span class="pl-s1">vertex</span><span class="pl-kos">.</span><span class="pl-c1">position</span> <span class="pl-c1">+=</span> <span class="pl-s1">w</span> <span class="pl-c1">*</span> <span class="pl-en">boneOffset</span><span class="pl-kos">(</span><span class="pl-s1">bone</span><span class="pl-kos">)</span><span class="pl-kos">;</span></pre></div>
+<p dir="auto">The weight map and bone index map are the portable assets. The physics engine
+is the portable simulation. Any renderer that can multiply and add vectors can
+implement the standard.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Running locally</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="open index.html
+# or serve statically:
+python3 -m http.server 8080" dir="auto"><pre>open index.html
+<span class="pl-c"><span class="pl-c">#</span> or serve statically:</span>
+python3 -m http.server 8080</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">Use freely. Please attribute <strong>xlovecam</strong> and link to
+<a href="https://github.com/xloveee/jiggle-physics">github.com/xloveee/jiggle-physics</a>
+if you ship this standard in a project.</p>
+</article>
