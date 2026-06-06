@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
@@ -235,12 +235,12 @@ const booksList: BookListEntry[] = [
 ];
 
 const lettersList: LetterEntry[] = [
-  { title: "Mark Twain's Letters, Volume 6", slug: "Volume-6", years: "1907–1910" },
-  { title: "Mark Twain's Letters, Volume 5", slug: "Volume-5", years: "1901–1906" },
-  { title: "Mark Twain's Letters, Volume 4", slug: "Volume-4", years: "1886–1900" },
-  { title: "Mark Twain's Letters, Volume 3", slug: "Volume-3", years: "1876–1885" },
-  { title: "Mark Twain's Letters, Volume 2", slug: "Volume-2", years: "1867–1875" },
-  { title: "Mark Twain's Letters, Volume 1", slug: "Volume-1", years: "1853–1866" },
+  { title: "Mark Twain's Letters, Volume 6", slug: "Volume-6", years: "1907-1910" },
+  { title: "Mark Twain's Letters, Volume 5", slug: "Volume-5", years: "1901-1906" },
+  { title: "Mark Twain's Letters, Volume 4", slug: "Volume-4", years: "1886-1900" },
+  { title: "Mark Twain's Letters, Volume 3", slug: "Volume-3", years: "1876-1885" },
+  { title: "Mark Twain's Letters, Volume 2", slug: "Volume-2", years: "1867-1875" },
+  { title: "Mark Twain's Letters, Volume 1", slug: "Volume-1", years: "1853-1866" },
 ];
 
 const shortFiction: WorkEntry[] = [
@@ -296,10 +296,10 @@ const referenceBio: WorkEntry[] = [
   { title: "Collier's New Encyclopedia",                slug: "Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne",                            year: 1921 },
   { title: "The Encyclopedia Americana",                slug: "The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne",                           year: 1920 },
   { title: "The New Student's Reference Work",          slug: "The-New-Student's-Reference-Work-Clemens-Samuel-Langhorne",                          year: 1914 },
-  { title: "Encyclopædia Britannica",                   slug: "1911-Encyclopædia-Britannica-Twain-Mark",                                            year: 1911 },
-  { title: "The New International Encyclopædia",        slug: "The-New-International-Encyclopædia-Clemens-Samuel-Langhorne",                        year: 1902 },
-  { title: "Appletons' Cyclopædia of American Biography", slug: "Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne",             year: 1887 },
-  { title: "The American Cyclopædia",                   slug: "The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne",                              year: 1879 },
+  { title: "EncyclopÃ¦dia Britannica",                   slug: "1911-EncyclopÃ¦dia-Britannica-Twain-Mark",                                            year: 1911 },
+  { title: "The New International EncyclopÃ¦dia",        slug: "The-New-International-EncyclopÃ¦dia-Clemens-Samuel-Langhorne",                        year: 1902 },
+  { title: "Appletons' CyclopÃ¦dia of American Biography", slug: "Appletons'-CyclopÃ¦dia-of-American-Biography-Clemens-Samuel-Langhorne",             year: 1887 },
+  { title: "The American CyclopÃ¦dia",                   slug: "The-American-CyclopÃ¦dia-1879-Clemens-Samuel-Langhorne",                              year: 1879 },
   { title: "Cartoon Portraits and Biographical Sketches", slug: "Cartoon-portraits-and-biographical-sketches-of-men-of-the-day-Mark-Twain",        year: 1873 },
 ];
 
@@ -321,6 +321,7 @@ export default function TheCompleteWorksPage() {
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [scrollProgress, setScrollProgress] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const [active, setActive] = useState(4);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -418,11 +419,11 @@ export default function TheCompleteWorksPage() {
   }, [theme, fontSize]);
 
   return (
-    <div className={`book-reader-container theme-${theme}`}>
+    <div className={"book-reader-container theme-${theme}"}>
       {/* Scroll Progress Bar */}
       <div
         className="reading-progress-bar"
-        style={{ width: `${scrollProgress}%` }}
+        style={{ width: "${scrollProgress}%" }}
       />
 
       {/* Top Left Logo (Back to Home Link) */}
@@ -441,12 +442,12 @@ export default function TheCompleteWorksPage() {
 
       {/* Reading Desk */}
       <main className="book-page-desk">
-        <article className={`book-page-parchment font-serif size-${fontSize}`}>
+        <article className={"book-page-parchment font-serif size-${fontSize}"}>
           {/* Theme Selector (Floating inside parchment card) */}
           <button
             onClick={() => setTheme(theme === 'parchment' ? 'charcoal' : 'parchment')}
             className="book-control-btn theme-toggle parchment-theme-toggle"
-            title={`Switch to ${theme === 'parchment' ? 'Charcoal' : 'Parchment'} theme`}
+            title={"Switch to ${theme === 'parchment' ? 'Charcoal' : 'Parchment'} theme"}
           >
             {theme === 'parchment' ? <Moon size={16} /> : <Sun size={16} />}
           </button>
@@ -487,7 +488,7 @@ export default function TheCompleteWorksPage() {
                     />
                   </div>
                 ) : (
-                  <div className={`w-full h-full bg-gradient-to-br ${book.color} flex flex-col justify-between p-4 relative shadow-inner overflow-hidden rounded-lg`}>
+                  <div className={"w-full h-full bg-gradient-to-br ${book.color} flex flex-col justify-between p-4 relative shadow-inner overflow-hidden rounded-lg"}>
                     <div className="absolute -right-8 -top-8 w-24 h-24 bg-[var(--primary)] opacity-5 rounded-full blur-xl group-hover:opacity-10 transition-opacity duration-300 pointer-events-none" />
                     <div className="absolute inset-2 border border-[rgba(217,163,74,0.12)] pointer-events-none rounded" />
                     
@@ -521,14 +522,14 @@ export default function TheCompleteWorksPage() {
                       transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                       zIndex: isActive ? 10 : 1
                     }}
-                    className={`relative rounded-lg border ${cardBorderClass} bg-[rgba(255,244,223,0.02)] shadow-md group text-left flex flex-col cursor-pointer snap-center`}
+                    className={"relative rounded-lg border ${cardBorderClass} bg-[rgba(255,244,223,0.02)] shadow-md group text-left flex flex-col cursor-pointer snap-center"}
                     onClick={() => {
                       if (isActive) {
                         if (book.href) {
                           router.push(book.href);
                         } else if (book.filename) {
                           const slug = book.filename.replace(/\.txt$/, '');
-                          router.push(`/read/${slug}`);
+                          router.push("/read/${slug}");
                         }
                       } else {
                         scrollToBook(i);
@@ -537,7 +538,7 @@ export default function TheCompleteWorksPage() {
                   >
                     {CardContent}
                     {(book.href || book.filename) && (
-                      <div className={`absolute inset-0 bg-gradient-to-t from-black/85 via-black/15 to-transparent transition-opacity duration-300 flex flex-col items-center justify-end pb-4 gap-1 rounded-lg pointer-events-none ${isActive ? 'opacity-100' : 'opacity-0'}`}>
+                      <div className={"absolute inset-0 bg-gradient-to-t from-black/85 via-black/15 to-transparent transition-opacity duration-300 flex flex-col items-center justify-end pb-4 gap-1 rounded-lg pointer-events-none ${isActive ? 'opacity-100' : 'opacity-0'}"}>
                         <BookOpen className="w-5 h-5 text-[var(--primary)]" />
                         <span className="text-[9px] font-mono uppercase tracking-widest text-[#fff4df] font-semibold">
                           Open
@@ -574,9 +575,9 @@ export default function TheCompleteWorksPage() {
               {books.map((_, idx) => (
                 <button
                   key={idx}
-                  className={`carousel-dot ${idx === active ? 'active' : ''}`}
+                  className={"carousel-dot ${idx === active ? 'active' : ''}"}
                   onClick={() => scrollToBook(idx)}
-                  aria-label={`Go to book ${idx + 1}`}
+                  aria-label={"Go to book ${idx + 1}"}
                   type="button"
                 />
               ))}
@@ -585,50 +586,108 @@ export default function TheCompleteWorksPage() {
 
           {/* Detailed grid content */}
           <div className="standard-markdown grid-cols-1 grid [&>_*]:min-w-0 gap-3 font-claude-response text-left">
+            <h2 className="text-text-100 text-[1.5rem] font-bold" style={{ marginTop: 0, marginBottom: '2.8rem' }}>
+              My library's open. Read what you like, listen if your eyes are tired, sing along where I've set it to music â€" and ask, I'm in a talkative mood these days. As always, work in progress.
+            </h2>
             <p className="font-claude-response-body break-words whitespace-normal leading-[1.7] text-lg text-center max-w-3xl mx-auto" style={{ marginBottom: '2.5rem', fontStyle: 'italic', opacity: 0.85 }}>
-              This is the material I lean on when we talk. Read it your own way if you wish. Don't bet on my holding the line the analysts have drawn over the decades — I have a habit of moving. Whether that is evolving or merely revolving, I leave to wiser men than myself, of whom there is rumored to be a supply.
+              This is the material I lean on when we talk. Read it your own way if you wish. Don't bet on my holding the line the analysts have drawn over the decades â€" I have a habit of moving. Whether that is evolving or merely revolving, I leave to wiser men than myself, of whom there is rumored to be a supply.
             </p>
 
-
-
-            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">The Complete Correspondence of Mark Twain</h2>
-            <div className="overflow-x-auto w-full mb-[3.5rem]">
-              <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
-                <thead className="text-left">
-                  <tr>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Year</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lettersList.map((vol) => (
-                    <tr key={vol.slug} className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push(`/read/${vol.slug}`)}>
-                      <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">{vol.title}</td>
-                      <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">{vol.years}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {/* Global Search */}
+            <div style={{ marginBottom: '3rem', marginTop: '2rem' }}>
+              <input
+                type="text"
+                placeholder="Search all works..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full px-4 py-2 bg-[rgba(255,244,223,0.05)] border border-[rgba(217,163,74,0.3)] rounded text-[rgba(255,244,223,0.9)] placeholder-[rgba(255,244,223,0.4)] focus:outline-none focus:border-[var(--primary)]"
+                style={{ fontFamily: 'var(--font-typewriter)', fontSize: '0.875rem' }}
+              />
             </div>
 
 
-            <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold">Recent Interviews &amp; Analysis (Generated)</h2>
-            <div className="overflow-x-auto w-full mb-[3.5rem]">
-              <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
-                <thead className="text-left">
-                  <tr>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Source</th>
-                    <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Year</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Interview: AI and the American Dream]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Chat conversation</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">2026</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Mark on Modern Education]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">X/Twitter thread</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">2026</td></tr>
-                  <tr><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">[Analysis: What Twain Would Say About 2026]</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">Synthesized from corpus + current events</td><td className="border-b-0.5 border-border-300/30 py-2 pr-4 align-top">2026</td></tr>
-                </tbody>
-              </table>
-            </div>
+
+            {(() => {
+              const booksFiltered = booksList.filter(book => book.title.toLowerCase().includes(searchQuery.toLowerCase()));
+              return booksFiltered.length > 0 ? (
+                <>
+                  <h2 className="text-text-100 font-bold" style={{ marginTop: '1rem', fontSize: '2rem' }}>Novels &amp; Major Works</h2>
+                  {/* Desktop: Table-style grid | Mobile: Cards */}
+                  <div className="w-full mb-[3.5rem] hidden md:grid" style={{ marginTop: "1rem", gridTemplateColumns: "1fr auto", gap: "0.5rem 2rem", alignItems: "center" }}>
+                      {booksFiltered.map((book) => (
+                        <React.Fragment key={book.slug}>
+                          <div
+                            onClick={() => router.push("/read/${book.slug}")}
+                            className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)]"
+                          >
+                            {book.title}
+                          </div>
+                          <div
+                            onClick={() => router.push("/read/${book.slug}")}
+                            className="text-sm text-[rgba(255,244,223,0.6)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)] text-right"
+                          >
+                            {book.year}
+                          </div>
+                        </React.Fragment>
+                      ))}
+                  </div>
+                  {/* Mobile: Cards */}
+                  <div className="w-full mb-[3.5rem] md:hidden grid grid-cols-1 gap-4" style={{ marginTop: "1rem" }}>
+                    {booksFiltered.map((book) => (
+                      <div
+                        key={book.slug}
+                        onClick={() => router.push("/read/${book.slug}")}
+                        className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all"
+                      >
+                        <div className="font-semibold text-[var(--primary)] mb-1">{book.title}</div>
+                        <div className="text-sm text-[rgba(255,244,223,0.6)]">{book.year}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null;
+            })()}
+
+            {(() => {
+              const lettersFiltered = lettersList.filter(vol => vol.title.toLowerCase().includes(searchQuery.toLowerCase()));
+              return lettersFiltered.length > 0 ? (
+                <>
+                  <h2 className="text-text-100 font-bold" style={{ marginTop: '1rem', fontSize: '2rem' }}>The Complete Correspondence of Mark Twain</h2>
+                  {/* Desktop: Table-style grid | Mobile: Cards */}
+                  <div className="w-full mb-[3.5rem] hidden md:grid" style={{ marginTop: "1rem", gridTemplateColumns: "1fr auto", gap: "0.5rem 2rem", alignItems: "center" }}>
+                      {lettersFiltered.map((vol) => (
+                        <React.Fragment key={vol.slug}>
+                          <div
+                            onClick={() => router.push("/read/${vol.slug}")}
+                            className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)]"
+                          >
+                            {vol.title}
+                          </div>
+                          <div
+                            onClick={() => router.push("/read/${vol.slug}")}
+                            className="text-sm text-[rgba(255,244,223,0.6)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)] text-right"
+                          >
+                            {vol.years}
+                          </div>
+                        </React.Fragment>
+                      ))}
+                  </div>
+                  {/* Mobile: Cards */}
+                  <div className="w-full mb-[3.5rem] md:hidden grid grid-cols-1 gap-4" style={{ marginTop: "1rem" }}>
+                    {lettersFiltered.map((vol) => (
+                      <div
+                        key={vol.slug}
+                        onClick={() => router.push("/read/${vol.slug}")}
+                        className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all"
+                      >
+                        <div className="font-semibold text-[var(--primary)] mb-1">{vol.title}</div>
+                        <div className="text-sm text-[rgba(255,244,223,0.6)]">{vol.years}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null;
+            })()}
 
 
             {([
@@ -636,35 +695,60 @@ export default function TheCompleteWorksPage() {
               { heading: 'Essays &amp; Speeches',        data: essaysSpeechs   },
               { heading: 'Reference &amp; Biography',    data: referenceBio    },
               { heading: 'News &amp; Contemporary Accounts', data: newsAccounts },
-            ] as { heading: string; data: WorkEntry[] }[]).map(({ heading, data }) => (
-              <React.Fragment key={heading}>
-                <h2 className="text-text-100 mt-5 -mb-1 text-[1.3rem] font-bold" dangerouslySetInnerHTML={{ __html: heading }} />
-                <div className="overflow-x-auto w-full mb-[3.5rem]">
-                  <table className="min-w-full border-collapse text-md leading-[1.7] whitespace-normal">
-                    <thead className="text-left">
-                      <tr>
-                        <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Title</th>
-                        <th scope="col" className="text-text-100 border-b-0.5 border-border-300/60 py-2 pr-4 align-top font-bold">Year</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.map((work) => {
-                        const dest = work.href ?? `/read/${work.slug}`;
+            ] as { heading: string; data: WorkEntry[] }[]).map(({ heading, data }) => {
+              const filtered = data.filter(work => work.title.toLowerCase().includes(searchQuery.toLowerCase()));
+              return filtered.length > 0 ? (
+                <React.Fragment key={heading}>
+                  <h2 className="text-text-100 font-bold" style={{ marginTop: '1rem', fontSize: '2rem' }} dangerouslySetInnerHTML={{ __html: heading }} />
+
+                  {/* Desktop: Table-style grid | Mobile: Cards */}
+                  <div className="w-full mb-[3.5rem] hidden md:grid" style={{ marginTop: "1rem", gridTemplateColumns: "1fr auto", gap: "0.5rem 2rem", alignItems: "center" }}>
+                      {filtered.map((work) => {
+                        const dest = work.href ?? "/read/${work.slug}";
                         return (
-                          <tr key={dest} className="hover:bg-[rgba(217,163,74,0.03)] cursor-pointer transition-colors" onClick={() => router.push(dest)}>
-                            <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top font-semibold text-[var(--primary)]">
+                          <React.Fragment key={dest}>
+                            <div
+                              onClick={() => router.push(dest)}
+                              className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)]"
+                            >
                               {work.title}
-                              {work.posthumoristic && <span className="ml-2 inline-block px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-xs text-amber-300">POSTHUMORISTIC</span>}
-                            </td>
-                            <td className="border-b-0.5 border-border-300/30 py-2.5 pr-4 align-top">{work.year}</td>
-                          </tr>
+                            </div>
+                            <div
+                              onClick={() => router.push(dest)}
+                              className="cursor-pointer hover:opacity-80 transition-opacity py-2 border-b border-[rgba(217,163,74,0.1)] text-right flex items-center gap-2 justify-end"
+                            >
+                              {work.posthumoristic && <span className="px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-xs text-amber-300">POSTHUM.</span>}
+                              <div className="text-sm text-[rgba(255,244,223,0.6)]">{work.year}</div>
+                            </div>
+                          </React.Fragment>
                         );
                       })}
-                    </tbody>
-                  </table>
-                </div>
-              </React.Fragment>
-            ))}
+                  </div>
+
+                  {/* Mobile: Cards */}
+                  <div className="w-full mb-[3.5rem] md:hidden grid grid-cols-1 gap-4" style={{ marginTop: "1rem" }}>
+                    {filtered.map((work) => {
+                      const dest = work.href ?? "/read/${work.slug}";
+                      return (
+                        <div
+                          key={dest}
+                          onClick={() => router.push(dest)}
+                          className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all"
+                        >
+                          <div className="font-semibold text-[var(--primary)] mb-1">
+                            {work.title}
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            {work.posthumoristic && <span className="px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-xs text-amber-300">POSTHUM.</span>}
+                            <div className="text-sm text-[rgba(255,244,223,0.6)]">{work.year}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </React.Fragment>
+              ) : null;
+            })}
 
 
           </div>
@@ -674,3 +758,5 @@ export default function TheCompleteWorksPage() {
     </div>
   );
 }
+
+

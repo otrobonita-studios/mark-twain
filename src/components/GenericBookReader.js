@@ -203,6 +203,27 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
     localStorage.setItem('eves-diary-theme', theme);
   }, [theme]);
 
+  // Scroll to nearest H1 when Traditional Read button is clicked
+  const scrollToNearestH1 = () => {
+    setTimeout(() => {
+      const h1Elements = document.querySelectorAll('.book-text-content h1');
+      if (h1Elements.length === 0) return;
+
+      let nearestH1 = h1Elements[0];
+      let minDistance = Math.abs(h1Elements[0].getBoundingClientRect().top);
+
+      for (let h1 of h1Elements) {
+        const distance = Math.abs(h1.getBoundingClientRect().top);
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestH1 = h1;
+        }
+      }
+
+      nearestH1.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  };
+
   // Monitor page scroll progress directly on DOM to prevent re-renders
   useEffect(() => {
     const handleScroll = () => {
@@ -432,6 +453,9 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
                           setIsTocOpen(!isTocOpen);
                         } else {
                           setExperience(exp.id);
+                          if (exp.id === 'traditional') {
+                            scrollToNearestH1();
+                          }
                         }
                       }}
                       className={`experience-card ${isCardActive ? 'active' : ''} ${exp.supported ? '' : 'opacity-40 cursor-not-allowed'}`}

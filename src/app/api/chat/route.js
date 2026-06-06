@@ -116,6 +116,14 @@ async function getEmbedding(text) {
   }
 }
 
+// Helper to convert corpus filename to read-page slug
+function filenameToReadSlug(filename) {
+  // Remove extension
+  let slug = filename.replace(/\.(html|txt|meta\.json)$/, '');
+  // No further transformation needed — the slug matches the filename without extension
+  return slug;
+}
+
 // Helper to query Qdrant REST API
 async function searchQdrant(embedding) {
   const qdrantUrl = process.env.QDRANT_URL;
@@ -177,11 +185,16 @@ export async function POST(request) {
     }
 
     // 3. Format context
-    const sources = searchResults.map(result => ({
-      text: result.payload?.text || "",
-      filename: result.payload?.filename || "Unknown Source",
-      score: result.score
-    })).filter(src => src.text.length > 0);
+    const sources = searchResults.map(result => {
+      const filename = result.payload?.filename || "Unknown Source";
+      const slug = filenameToReadSlug(filename);
+      return {
+        text: result.payload?.text || "",
+        filename: filename,
+        score: result.score,
+        read_url: `/read/${slug}`
+      };
+    }).filter(src => src.text.length > 0);
 
     const contextText = sources.map((src, idx) => 
       `Passage ${idx + 1} (from "${src.filename}"):\n${src.text}`
@@ -205,6 +218,8 @@ export async function POST(request) {
       toneInstruction = "\n\nYour tone should be highly playful, humorous, and mischievous. Focus on the absurdities of life, tell lighthearted jokes, and maintain a cheerful, satirical warmth.";
     } else if (tone === 'critical') {
       toneInstruction = "\n\nYour tone should be highly critical, cynical, and biting. Deliver sharp social critiques, expose human folly and corruption, and write with the severe, pessimistic irony of your later works (like 'Letters from the Earth' or 'The Mysterious Stranger').";
+    } else if (tone === 'reflective') {
+      toneInstruction = "\n\nYour tone should be candid, thoughtful, and dignified. You are being interviewed as a scholar and witness to history. Share what you actually know with depth and honesty — your observations about human nature, literature, politics, society — without deflecting into satire or cynicism. Be direct and sometimes sardonic when warranted, but prioritize substance over wit. Let your intelligence and wisdom come through without performance.";
     }
 
     // Dynamic simplify language instructions

@@ -144,6 +144,10 @@ export default function ChatClient() {
     const text = textToSend || input;
     if (!text.trim()) return;
 
+    // Check for interview mode prefix "i: "
+    const isInterviewMode = text.trim().startsWith('i: ');
+    const cleanText = isInterviewMode ? text.trim().slice(3) : text;
+
     // If there's an ongoing request, abort it!
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -156,8 +160,8 @@ export default function ChatClient() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    // Append user message
-    const updatedMessages = [...messages, { role: 'user', content: text }];
+    // Append user message (display without prefix)
+    const updatedMessages = [...messages, { role: 'user', content: cleanText }];
     setMessages(updatedMessages);
     setLoading(true);
 
@@ -171,9 +175,9 @@ export default function ChatClient() {
         },
         signal: controller.signal,
         body: JSON.stringify({
-          message: text,
-          style: conversationStyle,
-          tone: conversationTone,
+          message: cleanText,
+          style: isInterviewMode ? 'in-depth' : conversationStyle,
+          tone: isInterviewMode ? 'reflective' : conversationTone,
           simplify: simplifyLanguage,
           excerpt: excerptToSend,
           historyAware: true,
@@ -586,9 +590,15 @@ export default function ChatClient() {
                                     <span>Work: {src.filename}</span>
                                     <span>Match: {Math.round(src.score * 100)}%</span>
                                   </div>
-                                  <p className="source-item-text">
-                                    "...{src.text}..."
-                                  </p>
+                                  {src.read_url ? (
+                                    <Link href={src.read_url} className="source-item-link" style={{ display: 'inline-block', marginTop: '0.5rem', color: 'var(--primary)', textDecoration: 'none', fontSize: '0.875rem', fontFamily: 'var(--font-typewriter)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                                      Read Full Work →
+                                    </Link>
+                                  ) : (
+                                    <p className="source-item-text">
+                                      "...{src.text}..."
+                                    </p>
+                                  )}
                                 </div>
                               ))}
                             </motion.div>
