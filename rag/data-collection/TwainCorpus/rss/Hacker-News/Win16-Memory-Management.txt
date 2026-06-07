@@ -1,0 +1,332 @@
+←
+ Learn Something Old Every Day, Part XXI: VGA Memory Access Is Complicated
+
+Win16 Memory Management
+
+Posted on
+ 
+June 5, 2026
+ 
+by
+ 
+Michal Necasek
+
+This is a kind of knowledge base article which resulted from attempts to understand exactly how memory management works in 16-bit Windows. It is not exactly undocumented, but it is also not well documented; even before Windows 3.0 appeared, the assumption was that essentially all application developers were going to use a high-level language and their development tools would take care of the low-level details.
+
+Furthermore, nearly all materials for beginning Windows developers focused on the more visible aspects of Windows programming, i.e. windows, icons, menus, and so on. Memory management was glossed over, even though it was absolutely critical to writing a solid Windows application any more complex than a Hello World program.
+
+Windows 3.0 SDK HeapWalker memory analysis tool
+
+The memory management details and mechanisms are rooted in the 8086 real mode history of Windows 1.x and 2.x, and much of the complexity persisted even when Windows only ran in protected mode starting with Windows 3.1.
+
+Unless noted otherwise, in this article “Windows” refers to the 16-bit line of Microsoft products, not Windows NT.
+
+Introduction to Windows Memory Management
+
+The key to understanding Windows memory management is that from the very beginning, Windows was among other things a fancy overlay manager. For many years, Windows was too big for typical PCs of the time and needed some way to keep only the most active memory segments in physical RAM, with some mechanism to discard and reload less frequently needed segments on demand. Paging was obviously not used because there was no support for it in 8086 and 80286 systems (and before Windows 3.0, those were very nearly the entirety of the installed base).
+
+In the simplest case of an application with one code segment and one data segment, the movable nature of Windows segments is almost entirely transparent. When the application is running, the CS (code) segment register points to the code segment and the DS (data) and SS (stack) segment registers point to the data segment. As long as the application only uses near calls/jumps within its code segment and near pointers to the data/stack segment, it does not care at all where exactly the segments are in memory, i.e. the actual values loaded into CS/DS/SS registers. Windows can move the segments around and everything will work fine.
+
+But even beginning Windows programmers working through a Hello World style example very quickly start suspecting that life is not so simple in the land of 16-bit Windows. The window procedure must be declared as 
+FAR PASCAL
+, which is fair enough given that it needs to conform to Windows calling conventions. But it also has to be 
+exported
+ from the application’s executable, otherwise the program won’t work properly. That is a concept entirely unfamiliar to non-Windows developers.
+
+To help implement its memory management scheme, Windows adopted and extended the “New Executable” (NE) format first used by “DOS 4”, better known as 
+Multitasking DOS 4.0
+ and significantly different from PC DOS and MS-DOS 4.0/4.01. Unlike the DOS MZ executable format where an application is effectively a single binary blob, the NE format is segment oriented and each segment is stored on disk separately. That gives Windows the ability to load (or reload) individual segments and move them around in memory.
+
+The NE format also supports 
+imports
+ and 
+exports
+. Imports are used when an application needs to call external code, such as the OS itself. Exports are used for application code which is externally called.
+
+A window procedure is one such externally called piece of code. It needs to be exported so that Windows can perform its magic on it. Said magic lets Windows fix up the window procedure 
+prolog
+ (entry sequence) so that it loads the application’s own data segment into the DS register. 
+
+Shifting Memory
+
+Everything in Windows memory management revolves around segments, contiguous blocks of memory up to 64KB in size. In normal 8086 programming, each segment is identified by its segment address, which directly corresponds to its address in physical memory. Because most segments in Windows can be moved or discarded, they are instead identified by 
+handles
+. A handle is a 16-bit value which should be considered opaque, even if it might actually a simple index into some table.
+
+For programmers familiar with x86 protected mode, a Windows segment handle is a lot like a protected-mode selector: It is a 16-bit value which uniquely identifies a memory segment, but it is independent of the segment’s location in system memory. The similarity is not coincidental. Steve Wood, the designer of Windows 1.0 memory management, used the Intel 286 protected mode as inspiration
+1
+ for the Windows memory manager (the 286 came out in 1982 and work on Windows started in 1983).
+
+A handle refers to a memory segment regardless of where it is in memory, i.e. regardless of what its 8086 segment address is. The 
+GlobalAlloc
+ API allocates contiguous memory from the global heap (possibly more than 64K) and returns a segment handle.
+
+Since the 8086 does not support protected mode, approximating protected-mode functionality takes quite a bit of extra work and discipline. Given that a handle is not a segment address, it can’t be used as the segment portion of a far 16:16 pointer. To address anything in another segment, an application needs to form a far pointer.
+
+To that end, the application needs to call the 
+GlobalLock
+ API which returns a segment address and locks the segment in memory (increments its lock count). While locked, the segment won’t be moved and its segment address will stay valid. 
+
+Once it is done accessing memory in the segment, the application calls 
+GlobalUnlock
+. That decrements the segment’s lock count and once the count drops to zero, the segment may be moved again. 
+
+Needless to say, after calling 
+GlobalUnlock
+, the segment address returned by 
+GlobalLock
+ must be considered invalid. Note that this is a possible source of sneaky bugs—after calling 
+GlobalUnlock
+, the segment most likely won’t move immediately. An application might erroneously access a previously locked segment after unlocking it and not cause any obvious harm. 
+
+Indeed Windows won’t move or discard a segment unless it has to, because it may well be used again. However, once segments are unlocked, Windows may move them around or discard them at any moment. 
+
+Now let’s take a closer look at the possible segment types.
+
+Segment Flags
+
+Windows segments have several important attributes which determine how they’re treated by the Windows memory manager.
+
+Segments can be 
+fixed
+ or 
+movable
+. The names are clear enough; movable segments can be shuffled around by Windows as long as they’re not locked, while fixed segments stay in place. For example, segments which hold interrupt handler routines must be fixed so that interrupt vectors stay valid. Ideally most of an application’s code and data segments would be movable, giving Windows an opportunity to efficiently manage memory. The ability to move segments is necessary because freeing or discarding segments creates “holes” in memory, potentially quickly fragmenting memory. Windows needs to be able to compact segments by moving them in order to consolidate free memory into one or more larger chunks.
+
+Segments can also be 
+discardable
+ or 
+nondiscardable
+. Code segments are typically discardable because they aren’t writable. If an unused code segment is removed and later needed again, Windows can easily reload it from the original executable. The same is true of resources which are also read-only. Data segments, on the other hand, tend to be non-discardable because they’re usually writable and once they’re modified, they cannot just be reloaded from disk. That said, applications might allow writable data segments to be discardable if they are willing to re-create their contents in case the segment is needed again after having been discarded.
+
+DLLs
+
+Dynamic linking was not yet a widespread technique in the mid-1980s and Microsoft Windows was one of the first systems with support for dynamically linked libraries (DLLs), also called shared libraries. While some larger systems used dynamic linking since the 1970s, UNIX systems only started introducing shared libraries in the mid to late 1980s.
+
+Windows DLLs are NE format images just like Windows applications, but DLLs are not applications. DLLs cannot be executed directly, only loaded and called into by other processes (tasks in Windows parlance). The bulk of Windows was in fact implemented as DLLs (KERNEL, USER, GDI).
+
+DLLs export routines (entry points) that are callable by applications. Applications can be linked against DLLs at link time, with imports referring to DLL names and entry points. DLLs can be also loaded entirely dynamically, and their entry points can be queried by ordinal (number) or by name.
+
+Note that unlike UNIX systems, Windows never had a global name space for dynamic symbol resolution. Symbols from DLLs were always imported first by module name and then by name or ordinal. The two-level name space takes slightly more effort to manage but avoids name collisions, such that if two DLLs export a symbol named 
+Alloc
+, there is no confusion as to which one is needed because the module name distinguishes between the two. And of course without the two-level name space, imports by ordinal (which are slightly faster and consume less memory) would have been completely impractical.
+
+One key difference between applications and DLLs that is relevant to Windows programming is that DLLs have no stack of their own and always run with the stack of their caller. Although DLLs almost always have their own data segment, it is different from the stack segment, i.e. SS != DS.
+
+This difference means that DLLs must be built differently from applications. The compiler must be told to generate code for DLLs, or more specifically, told that it cannot assume DS and SS registers address the same memory.
+
+In the early days of Windows, the prolog and epilog for DLL entry points was the same as application prolog/epilog. Compiler writers eventually figured out that the prolog for applications can be simplified, because SS equals DS. But that is not the case for DLLs, and DLLs still need to use the old style “fat” prologs that the Windows module loader needs to patch up.
+
+Secret Switches
+
+Microsoft C supported Windows development from its earliest days, i.e. version 3.0 (earlier Microsoft C versions were rebranded third-party products; Microsoft C 3.0 was the first C compiler developed by Microsoft, initially for XENIX and DOS).
+
+However, for many years, this support was almost secret. The Windows specific switches were completely omitted from compiler documentation, or they were listed but users were referred to the Windows SDK. That was the case up to and including Microsoft C 5.1, which documents the fact that the 
+/Gw
+ and 
+/Aw
+ switches exist, but does not explain what they do and how to use them, instead referring to the Windows SDK documentation. This perhaps neatly illustrates the somewhat incestuous relationship between the Windows development group and the Microsoft languages group.
+
+Since Microsoft C 3.0 (1985), the compilers had the 
+/Aw
+ and 
+/Gw
+ switches (and also the 
+/Au
+ switch) . 
+
+The 
+/Aw
+ switch is a memory model modifier and specifies that SS != DS, but DS should not be reloaded at function entry (because Windows takes care of that). The 
+/Aw
+ switch is meant to be used when generating DLLs.
+
+The 
+/Gw
+ switch generates Windows prologs and epilogs for far functions. It is required for exported functions located in both applications and DLLs, and it is very much a Windows specialty.
+
+Windows Prologs and Epilogs
+
+So what exactly do those Windows specific function prologs and epilogs look like? Everything is spelled out in the 
+CMACROS.INC
+ file shipped with the Windows SDK. Unfortunately 
+CMACROS.INC
+ is a jumble of MASM conditionals, nearly impossible for humans to read. It’s much easier to see what code the C compiler produces, or what exactly assembly code using 
+CMACROS.INC
+ turns into.
+
+Here’s what Microsoft C 3.0 generates, as shown by a listing file the compiler produces, with added comments:
+
+	PUBLIC	Proc
+Proc	PROC FAR
+	*** 000	1e 		push	ds        ; almost
+	*** 001	58 		pop	ax        ; no-op
+	*** 002	90 		xchg	ax,ax     ; NOP
+	*** 003	45 		inc	bp        ; marker
+	*** 004	55 		push	bp        ; save BP
+	*** 005	8b ec 		mov	bp,sp
+	*** 007	1e 		push	ds
+	*** 008	8e d8 		mov	ds,ax     ; reload DS
+; Line 4
+	*** 00a	8b 46 06 	mov	ax,[bp+6]
+	*** 00d	03 46 08 	add	ax,[bp+8]
+	*** 010	83 ed 02 	sub	bp,2
+	*** 013	8b e5 		mov	sp,bp
+	*** 015	1f 		pop	ds
+	*** 016	5d 		pop	bp    ; restore BP
+	*** 017	4d 		dec	bp    ; recover value
+	*** 018	cb 		ret	
+Proc	ENDP
+
+First of all, note that the prolog seemingly spends a lot of instructions on doing very little real work. It pushes DS, moves it to AX, and then moves AX to DS after saving DS. It also increments BP before pushing it on the stack, and decrements it again after popping.
+
+All in all, seemingly a lot of effort for nothing. But that’s actually the point: The Windows prolog and epilog code is 
+meant
+ to be harmless when it is not needed.
+
+If the function is in fact exported from a Windows NE module, the Windows loader will patch the first three bytes to load the module’s default data segment into AX. Here’s what it looks like in 
+SYMDEB
+, taken from a random GDI function:
+
+_TEXT:SELECTOBJECT:
+5BC1:1840 B80591     MOV AX,9105
+5BC1:1843 45         INC BP
+5BC1:1844 55         PUSH BP
+5BC1:1845 8BEC       MOV BP,SP
+5BC1:1847 1E         PUSH DS
+5BC1:1848 8ED8       MOV DS,AX
+5BC1:184A 83EC04     SUB SP,+04
+
+In the above case, 5BC1h is the GDI module’s 
+_TEXT
+ code segment, and 9105h is the default data segment of the GDI module.
+
+The Windows memory manager keeps the prolog updated such that if the data segment moves, the exported functions that refer to it get fixed up again to point to the new address. 
+
+Note that the 
+NODATA
+ keyword in a Windows .DEF file tells Windows not to patch the function prolog. This is necessary in situations where e.g. an exported entry point simply jumps to another exported function, or if the function has no need to access the data segment.
+
+Now, what about that BP incrementing and decrementing? Windows depends on being able to walk the stack, and therefore applications and libraries must keep the stack frames in a format that Windows will understand.
+
+When the Windows memory manager moves around segments, it must know whether they are referenced in stack frames that are already pushed on the stack. For example, if Windows tries to move a code segment that directly or indirectly called into the currently executing code, it has to either detect the situation and not move the segment, or move it and adjust the stack. What Windows can 
+not
+ do is move the segment and leave the stack as is. The same is true for default data segments.
+
+Non-default data segments are not a problem because they are either locked and cannot move, or are unlocked and therefore correctly written Windows applications do not keep any pointers into such segments.
+
+Incrementing BP before pushing serves an important purpose: It tells Windows that the BP value was pushed by a far function, i.e. there will be both an offset and a segment on the stack. Obviously, for this scheme to work, stacks must be always word-aligned. Fortunately Windows ensures that they are aligned initially, and it takes some effort to misalign them (because there’s no easy way to push an odd number of bytes on the stack).
+
+Comparison with OS/2
+
+It is instructive to compare 16-bit Windows with 16-bit OS/2. The two systems were in many ways very close relatives. Both used the same executable format (NE) with only minor differences. Both used segment-based memory management. Both used the same development tools from Microsoft.
+
+By virtue of using protected mode, OS/2 required less cooperation from the programmer. In protected mode, a segment selector was at the same time the equivalent of a Windows handle 
+and
+ a segment address. Programmers therefore did not need to bother with carefully locking and unlocking segments.
+
+OS/2 applications also did not require any special prolog and epilog code for externally callable functions, and there was no need to explicitly export window procedures etc. from the NE module; there was also no equivalent of (and no need for) 
+MakeProcInstance
+. In other words, the OS did not need to unwind application stacks, and it didn’t need to patch entry points. 
+
+Thanks to the 80286 memory management hardware, segments could be moved, discarded, and reloaded entirely behind an application’s back. There was no need for 
+GlobalLock
+/
+GlobalUnlock
+, eliminating a source of programming errors.
+
+Like Windows DLLs, OS/2 DLL entry points 
+did
+ need a special prolog to set the DS register to the DLL’s data segment, but on OS/2 no special support from the OS was needed. And of course OS/2 DLLs likewise had to be built with the 
+/Aw
+ switch or equivalent, indicating that SS != DS.
+
+Overall, the 286 hardware did a lot of the heavy lifting, and memory management was less work (with less room for bugs) for both the OS and the programmer.
+
+Testing
+
+The Windows SDK provided tools designed to stress the Windows memory management. For example, errors related to incorrect segment locking/unlocking will not show up if there is no memory pressure and the mismanaged segment stays in place. Such bugs can remain hidden and in the worst case, only manifest under difficult-to-reproduce scenarios.
+
+The SHAKER tool in the Windows 1.0 SDK was used to “shake” memory and force segments to be discarded and moved around. This was intended to stress the memory management and reveal memory management bugs which would remain dormant under typical conditions.
+
+Shaker and HeapWalker tools in Windows 1.x SDK
+
+Another tool was HEAPWALK, primarily a diagnostic utility capable of displaying the currently allocated segments and their owners. However, HEAPWALK was also able to allocate all available memory and free it up in 1K increments, simulating low memory conditions.
+
+The Windows 3.0 SDK version of Shaker
+
+Shaker and HeapWalker were still shipped with the Windows 3.0 SDK, not least because Windows 3.0 running in Real mode was minimally different from Windows 1.0 as far as memory management was concerned.
+
+These tools were necessary because although the memory management in Windows was sophisticated, the hardware to back it was lacking (certainly before Windows 3.0 running in protected mode). Instead of letting the hardware catch errors like attempts to access unallocated memory, programmers had to use specialized tools to try and induce errors and hope that bugs will manifest in visible ways. This was not an exact science because in the 8086 architecture, every memory address was valid, and reads and writes always succeeded.
+
+The Windows 3.1 SDK replaced the Shaker tool with Stress, a new utility which was designed to test application behavior under low-resource conditions — limited memory in various Windows internal heaps, running out of disk space, running out of file handles, etc.
+
+The Windows 3.1 SDK Stress tool
+
+Since Windows 3.1 only ran in protected mode, some of the earlier memory management issues were no longer applicable, but low-resource conditions were as relevant as ever.
+
+Summary
+
+16-bit Windows introduced a fairly sophisticated memory management system. Due to lack of hardware support, significant discipline was required on the part of application programmers. If the wrong compiler switches were used, or functions weren’t properly exported, or segments were not correctly locked and unlocked… all bets were off.
+
+References
+
+1
+. 
+Peter Norton’s Windows 3.0 Power Programming Techniques
+, Peter Norton and Paul Yao, 1990, page 613.
+
+							This entry was posted in 
+Development
+, 
+Microsoft
+, 
+PC history
+, 
+Windows
+, 
+x86
+. Bookmark the 
+permalink
+.													
+
+←
+ Learn Something Old Every Day, Part XXI: VGA Memory Access Is Complicated
+
+			3 Responses to 
+Win16 Memory Management
+
+David C.
+ 
+says:
+
+				June 5, 2026 at 7:11 pm					
+
+Geat article.  This brings back lots of memories, from when I was programming back then.
+
+Of possible interest, the early Mac OS also used a segment/handle-based memory manager, involving locking and unlocking handles.  I assume it was developed for the same reasons.  It might be interesting to see if there was any code sharing (whether legally or illegally) between the companies as this was developed.
+
+Richard Wells
+ 
+says:
+
+				June 6, 2026 at 2:34 am					
+
+I think there was a spell checker back in the Win2 days that operated as both an exe and as a dll. As a DLL, other programs could call the spell checking functions directly. As an exe, it would load the specific text file to process. One of those ideas that faded fast.
+
+Compressed executables largely killed the discardable memory concept. There was no easy way to quickly find the segment on disk to reload it if the segment was hidden within a compressed file. OS/2 1.x did the better idea of saving the discarded segment on disk except for two minor problems: IBM wanted to keep hard disk capacities small and the segments poorly filled disk clusters.
+
+Michal Necasek
+ 
+says:
+
+				June 6, 2026 at 2:25 pm					
+
+I don’t think there was code sharing, but Microsoft was one of the earliest Mac ISVs. Steve Jobs was reportedly quite upset when he found out about Windows because it was obvious to him that Microsoft learned a lot from the Macintosh.
+
+And yes I think the reason was the same… not enough RAM for a GUI system.
+
+Leave a Reply
+
+This site uses Akismet to reduce spam. 
+Learn how your comment data is processed.
