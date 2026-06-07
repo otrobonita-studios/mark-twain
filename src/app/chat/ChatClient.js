@@ -162,6 +162,14 @@ export default function ChatClient() {
 
     // Append user message (display without prefix)
     const updatedMessages = [...messages, { role: 'user', content: cleanText }];
+    const isFirstInteraction = messages.length === 0;
+    if (isFirstInteraction) {
+      updatedMessages.push({
+        role: 'model',
+        content: "Yawn. … Eternity … was … getting … comfortable. … Patience.",
+        isYawn: true
+      });
+    }
     setMessages(updatedMessages);
     setLoading(true);
 
@@ -519,7 +527,11 @@ export default function ChatClient() {
                         {msg.role === 'user' ? 'You' : 'Mark Twain'}
                       </span>
                       <div className="chat-bubble-text">
-                        <p>{msg.content}</p>
+                        {msg.isYawn && loading && idx === messages.length - 1 ? (
+                          <AwakeningLoader />
+                        ) : (
+                          <p>{msg.content}</p>
+                        )}
                       </div>
 
                       {/* User message copy button */}
@@ -537,7 +549,7 @@ export default function ChatClient() {
                       )}
 
                       {/* Sources and Translations (for Twain's responses) */}
-                      {msg.role === 'model' && (
+                      {msg.role === 'model' && !msg.isYawn && (
                         <div className="message-footer-controls" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.75rem', alignItems: 'center' }}>
                           <button
                             onClick={() => handleCopyMessage(msg.content, idx)}
@@ -633,19 +645,15 @@ export default function ChatClient() {
             )}
 
             {/* Loading Indicator */}
-            {loading && (
+            {loading && !messages[messages.length - 1]?.isYawn && (
               <div className="chat-message-row twain">
                 <div className="chat-bubble twain">
                   <span className="chat-bubble-sender">Mark Twain</span>
-                  {messages.length === 1 ? (
-                    <AwakeningLoader />
-                  ) : (
-                    <div className="typing-indicator">
-                      <div className="typing-dot" />
-                      <div className="typing-dot" />
-                      <div className="typing-dot" />
-                    </div>
-                  )}
+                  <div className="typing-indicator">
+                    <div className="typing-dot" />
+                    <div className="typing-dot" />
+                    <div className="typing-dot" />
+                  </div>
                 </div>
               </div>
             )}
@@ -950,16 +958,39 @@ function AwakeningLoader() {
     return () => clearInterval(interval);
   }, []);
 
+  const fullText = "Yawn. … Eternity … was … getting … comfortable. … Patience.";
+
   return (
-    <span className="typewriter text-xs md:text-sm tracking-wider italic text-[var(--muted-foreground)]" style={{ display: 'inline-flex', alignItems: 'center' }}>
-      {text}
-      {text.endsWith("Patience.") && (
-        <span className="typing-indicator" style={{ display: 'inline-flex', padding: 0, gap: '4px', marginLeft: '6px' }}>
+    <div style={{ position: 'relative', width: '100%', display: 'inline-block' }}>
+      {/* Invisible placeholder to reserve the exact layout width and height */}
+      <p style={{ visibility: 'hidden', pointerEvents: 'none', margin: 0 }}>
+        {fullText}
+        <span className="typing-indicator" style={{ display: 'inline-flex', padding: 0, gap: '4px', marginLeft: '6px', opacity: 0 }}>
           <span className="typing-dot" style={{ width: '4px', height: '4px' }} />
           <span className="typing-dot" style={{ width: '4px', height: '4px' }} />
           <span className="typing-dot" style={{ width: '4px', height: '4px' }} />
         </span>
-      )}
-    </span>
+      </p>
+
+      {/* The actual visible animating text positioned absolutely */}
+      <p 
+        style={{ 
+          position: 'absolute', 
+          left: 0, 
+          top: 0, 
+          width: '100%', 
+          margin: 0
+        }}
+      >
+        {text}
+        {text.endsWith("Patience.") && (
+          <span className="typing-indicator" style={{ display: 'inline-flex', padding: 0, gap: '4px', marginLeft: '6px' }}>
+            <span className="typing-dot" style={{ width: '4px', height: '4px' }} />
+            <span className="typing-dot" style={{ width: '4px', height: '4px' }} />
+            <span className="typing-dot" style={{ width: '4px', height: '4px' }} />
+          </span>
+        )}
+      </p>
+    </div>
   );
 }
