@@ -81,6 +81,7 @@ const books = [
   {
     title: "Sketches New and Old",
     filename: "Sketches-New-and-Old.txt",
+    cover: "/images/book-covers/Sketches-new-and-old.jpg",
     desc: "A comprehensive later collection of Twain's short stories and sketches, expanding upon his early humorous work.",
     status: "Modernized",
     genre: "Short Stories",
@@ -90,6 +91,7 @@ const books = [
   {
     title: "A True Story",
     filename: "A-True-Story.txt",
+    cover: "/images/book-covers/Book-cover-A-True-Story.jpg",
     desc: "A deeply moving, somber monologue by Aunt Rachel, an enslaved woman recounting the tragic separation of her family.",
     status: "Modernized",
     genre: "Fiction / Drama",
@@ -133,6 +135,16 @@ const books = [
     genre: "Travelogue",
     year: 1897,
     color: "from-[#1a382c] to-[#0d1c16]"
+  },
+  {
+    title: "A Tramp Abroad",
+    filename: "A-Tramp-Abroad.txt",
+    cover: "/images/book-covers/Book-cover-A-Tramp-Abroad.jpg",
+    desc: "A humorous record of Twain's pedestrian journey through Germany, Switzerland, and Italy, filled with hilarious observations on European culture.",
+    status: "Modernized",
+    genre: "Travelogue / Humor",
+    year: 1880,
+    color: "from-[#1d3d2d] to-[#0e1e16]"
   },
   {
     title: "A Connecticut Yankee in King Arthur's Court",
@@ -572,27 +584,31 @@ export default function TheCompleteWorksPage() {
                       transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                       zIndex: isActive ? 10 : 1
                     }}
-                    className={"relative rounded-lg border ${cardBorderClass} bg-[rgba(255,244,223,0.02)] shadow-md group text-left flex flex-col cursor-pointer snap-center"}
+                    className={`relative rounded-lg border ${cardBorderClass} bg-[rgba(255,244,223,0.02)] shadow-md group text-left flex flex-col cursor-pointer snap-center`}
                     onClick={() => {
-                      if (isActive) {
-                        if (book.href) {
-                          router.push(book.href);
-                        } else if (book.filename) {
-                          const slug = book.filename.replace(/\.txt$/, '');
-                          router.push(`/read/${slug}`);
-                        }
-                      } else {
-                        scrollToBook(i);
-                      }
+                      scrollToBook(i);
                     }}
                   >
                     {CardContent}
                     {(book.href || book.filename) && (
-                      <div className={"absolute inset-0 bg-gradient-to-t from-black/85 via-black/15 to-transparent transition-opacity duration-300 flex flex-col items-center justify-end pb-4 gap-1 rounded-lg pointer-events-none ${isActive ? 'opacity-100' : 'opacity-0'}"}>
-                        <BookOpen className="w-5 h-5 text-[var(--primary)]" />
-                        <span className="text-[9px] font-mono uppercase tracking-widest text-[#fff4df] font-semibold">
-                          Open
-                        </span>
+                      <div className={`absolute inset-0 bg-gradient-to-t from-black/85 via-black/15 to-transparent transition-opacity duration-300 flex flex-col items-center justify-end pb-4 rounded-lg pointer-events-none ${isActive ? 'opacity-100' : 'opacity-0'}`}>
+                        <button
+                          style={{ pointerEvents: 'auto', cursor: 'pointer', background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (book.href) {
+                              router.push(book.href);
+                            } else if (book.filename) {
+                              const slug = book.filename.replace(/\.txt$/, '');
+                              router.push(`/read/${slug}`);
+                            }
+                          }}
+                        >
+                          <BookOpen className="w-5 h-5 text-[var(--primary)]" />
+                          <span className="text-[9px] font-mono uppercase tracking-widest text-[#fff4df] font-semibold">
+                            Open
+                          </span>
+                        </button>
                       </div>
                     )}
                   </div>
