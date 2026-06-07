@@ -60,8 +60,7 @@ const books = [
   },
   {
     title: "The Celebrated Jumping Frog of Calaveras County, and Other Sketches",
-    filename: null,
-    href: "/read/Sketches-New-and-Old#frog",
+    filename: "The-Celebrated-Jumping-Frog.txt",
     cover: "/images/book-covers/Book-cover-The-Celebrated-jumping-Frog.png",
     desc: "Mark Twain's historic debut book, a collection of 27 early sketches that launched his literary career.",
     status: "Modernized",
@@ -268,7 +267,7 @@ const shortFiction: WorkEntry[] = [
   { title: "Some Rambling Notes of an Idle Excursion",          slug: "Rambling-Idle-Excursion",              year: 1878 },
   { title: "The Facts Concerning the Recent Carnival of Crime in Connecticut", slug: "Carnival-of-Crime-in-CT", year: 1876 },
   { title: "Sketches New and Old",                              slug: "Sketches-New-and-Old",                  year: 1875 },
-  { title: "The Celebrated Jumping Frog of Calaveras County, and Other Sketches", href: "/read/Sketches-New-and-Old#frog", year: 1867 },
+  { title: "The Celebrated Jumping Frog of Calaveras County, and Other Sketches", slug: "The-Celebrated-Jumping-Frog", year: 1867 },
   { title: "The Curious Republic of Gondour",                   slug: "Curious-Republic-of-Gondour",          year: 1875 },
   { title: "The Gilded Age",                                    slug: "A-Gilded-Age",                          year: 1873 },
   { title: "Mark Twain's Curious Dream",                        slug: "Mark-Twain's-Curious-Dream",           year: 1872 },
