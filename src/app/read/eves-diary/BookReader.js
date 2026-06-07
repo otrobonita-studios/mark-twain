@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Sun, Moon, BookOpen, X, Sparkles, Download, Clipboard, Check, Loader2, Play, Pause, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { youngReadersParagraphs, youngReadersGlossary, youngReadersNotes } from './YoungReadersText';
+import { soundtrack } from '@/data/soundtrack';
 
 export default function BookReader({ htmlContent, tocItems = [], initialExperience = 'traditional' }) {
   const router = useRouter();
@@ -23,11 +24,13 @@ export default function BookReader({ htmlContent, tocItems = [], initialExperien
   const [epubError, setEpubError] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(false);
 
-  // Open the global media player panel and switch to track 0 (Eve's Diary) when entering split experience (Sung Edition)
+  // Open the global media player panel and switch to Eve's Diary track when entering split experience (Sung Edition)
   useEffect(() => {
     if (experience === 'split') {
+      const trackIdx = soundtrack.findIndex(t => t.id === 'eves-diary');
+      const targetIndex = trackIdx !== -1 ? trackIdx : 0;
       window.dispatchEvent(new CustomEvent('media-player-open'));
-      window.dispatchEvent(new CustomEvent('media-player-select-track-request', { detail: { index: 0 } }));
+      window.dispatchEvent(new CustomEvent('media-player-select-track-request', { detail: { index: targetIndex } }));
       window.dispatchEvent(new CustomEvent('media-player-play-request'));
     }
   }, [experience]);

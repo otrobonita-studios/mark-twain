@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { Play, Pause, RotateCcw, Volume2, VolumeX, ListMusic, Minimize2, Maximize2, X } from 'lucide-react';
+import { soundtrack } from '@/data/soundtrack';
 
 const SpotifyIcon = ({ size = 16, className = "" }) => (
   <svg 
@@ -17,40 +18,7 @@ const SpotifyIcon = ({ size = 16, className = "" }) => (
   </svg>
 );
 
-const soundtrack = [
-  {
-    id: "eves-diary",
-    title: "Eve's Diary",
-    file: "/sounds/music/eves-diary-by-eve.mp3",
-    style: "Album: Mark Twain Reappears",
-    cover: "/images/eves-diary-the-scratched-experience-cover.jpg",
-    spotifyUrl: "https://open.spotify.com/album/4TA8m9s8x1rq127gt8Nj5n"
-  },
-  {
-    id: "original-theme",
-    title: "Mark Twain Reappears: Original Theme",
-    file: "/sounds/music/mark-twain-reappears.mp3",
-    style: "Album: Mark Twain Reappears",
-    spotifyUrl: "https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S"
-  },
-  {
-    id: "telephonic-conversation",
-    title: "A Telephonic Conversation",
-    file: "/sounds/music/a-telephonic-conversation.mp3",
-    style: "Album: Mark Twain Reappears",
-    spotifyUrl: "https://open.spotify.com/album/5PX3bNZYZmfxoHcR7iEg9S"
-  },
-  {
-    id: "what-is-man",
-    title: "What Is Man",
-    file: "/sounds/music/what-is-man.mp3",
-    style: "Album: Mark Twain Reappears",
-    cover: "/images/live-sepia.webp",
-    spotifyUrl: "https://open.spotify.com/track/3Bd0wJdOTlmRhEXpFYJFen"
-  }
-];
-
-export default function MediaPlayer() {
+export default function MusicDesk() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
@@ -94,9 +62,11 @@ export default function MediaPlayer() {
       if (typeof window !== 'undefined') {
         const path = window.location.pathname;
         if (path.includes('/eves-diary')) {
-          setCurrentTrackIndex(0); // Eve's Diary Theme
+          const trackIdx = soundtrack.findIndex(t => t.id === 'eves-diary');
+          setCurrentTrackIndex(trackIdx !== -1 ? trackIdx : 0);
         } else if (path === '/' || path === '/home') {
-          setCurrentTrackIndex(1); // Original Theme on homepage
+          const trackIdx = soundtrack.findIndex(t => t.id === 'original-theme');
+          setCurrentTrackIndex(trackIdx !== -1 ? trackIdx : 1);
         }
       }
     }

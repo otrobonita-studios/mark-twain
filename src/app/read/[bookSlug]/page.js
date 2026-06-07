@@ -379,6 +379,7 @@ export default async function ReadPage({ params }) {
       htmlContent={processedHtmlContent} 
       tocItems={tocItems} 
       bookTitle={cleanTitle} 
+      bookSlug={decodedSlug}
     />
   );
 }

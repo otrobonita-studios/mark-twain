@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Sun, Moon, BookOpen, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import MarkTwainLetterCard from './MarkTwainLetterCard';
+import { soundtrack } from '@/data/soundtrack';
 
 function isLetterSegment(segment) {
   const recipientMatch = segment.match(/^\s*(?:<a[^>]*>[\s\S]*?<\/a>)?\s*(?:<div[^>]*>[\s\S]*?<\/div>)?\s*(?:<br\s*\/?>)?\s*(?:<p\b[^>]*>)?\s*(To\s+|From\s+|Fragment\s+(?:of|to)\s+a\s+letter\s+|Part\s+of\s+a\s+letter\s+|Letter\s+to\s+|Letters\s+to\s+|Telegram\s+to\s+|Telegrams\s+to\s+)/i);
@@ -112,13 +113,24 @@ function formatTocLabel(label) {
   }).join(' ');
 }
 
-export default function GenericBookReader({ htmlContent, tocItems = [], bookTitle = 'Read Book', showExperienceSelector = true, headerExtra = null }) {
+export default function GenericBookReader({ htmlContent, tocItems = [], bookTitle = 'Read Book', showExperienceSelector = true, headerExtra = null, bookSlug }) {
   const progressRef = useRef(null);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [experience, setExperience] = useState('traditional');
   const [selectedZoomImage, setSelectedZoomImage] = useState(null);
   const [isTocOpen, setIsTocOpen] = useState(false);
   const [activeId, setActiveId] = useState(null);
+
+  const trackIndex = soundtrack.findIndex(t => t.id.toLowerCase() === (bookSlug || "").toLowerCase());
+  const hasTrack = trackIndex !== -1;
+
+  useEffect(() => {
+    if (experience === 'split' && hasTrack) {
+      window.dispatchEvent(new CustomEvent('media-player-open'));
+      window.dispatchEvent(new CustomEvent('media-player-select-track-request', { detail: { index: trackIndex } }));
+      window.dispatchEvent(new CustomEvent('media-player-play-request'));
+    }
+  }, [experience, hasTrack, trackIndex]);
 
   const isLetters = bookTitle.toLowerCase().includes('letter');
 
@@ -183,7 +195,7 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
     { id: 'traditional', label: 'Traditional Read', description: 'Original text and illustrations as published.', supported: true },
     { id: 'voice', label: 'E-Ink and Kindle', description: 'Optimal formatting for e-paper. (Unavailable)', supported: false },
     { id: 'chat', label: 'Dramatized Excerpt', description: 'Audio drama script. (Unavailable)', supported: false },
-    { id: 'split', label: 'Sung Edition', description: 'Hear the book set to music. (Unavailable)', supported: false },
+    { id: 'split', label: 'Sung Edition', description: hasTrack ? 'Hear the book set to music.' : 'Hear the book set to music. (Unavailable)', supported: hasTrack },
     { id: 'child', label: 'Young Readers', description: 'Simplified text and glossary. (Unavailable)', supported: false }
   ];
 

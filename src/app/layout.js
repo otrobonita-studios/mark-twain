@@ -1,6 +1,6 @@
 import "./globals.css";
 import Navigation from "@/components/Navigation";
-import MediaPlayer from "@/components/MediaPlayer";
+import MusicDesk from "@/components/MusicDesk";
 
 export const metadata = {
   metadataBase: new URL("https://mark.otrobonita.com"),
@@ -39,7 +39,7 @@ export default function RootLayout({ children }) {
       <body>
         <Navigation />
         {children}
-        <MediaPlayer />
+        <MusicDesk />
       </body>
     </html>
   );

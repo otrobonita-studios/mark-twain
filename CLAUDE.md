@@ -80,3 +80,8 @@ Fill in the exact sung words of whichever clip you use as `REF_TEXT` in `clone_t
 4. Chunked long-form pipeline: text → sentence/paragraph chunks → clone per chunk → concatenate.
 5. Eval harness: WER (Whisper/Qwen3-ASR diff) + predicted MOS + signal hygiene (~−18 to −20 LUFS).
 6. Later: word/sentence timestamps for read-along sync.
+
+## How to add a song to the Music Desk (Audio player)
+1. Save the audio file in the folder `public/sounds/music/` (e.g. `public/sounds/music/my-song.mp3`).
+2. Add the track metadata to the `soundtrack` array in `src/data/soundtrack.js`. Ensure that the `id` of the track matches the `bookSlug` of the book (e.g. `my-song`) if you want the "Sung Edition" to be automatically enabled for that book.
+
