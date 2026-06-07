@@ -324,6 +324,7 @@ const shortFiction: WorkEntry[] = [
   { title: "Journalism in Tennessee",                           slug: "Journalism-in-Tennessee",               year: 1871 },
   { title: "A Ghost Story",                                     slug: "A-Ghost-Story",                         year: 1870 },
   { title: "A Burlesque Autobiography",                         slug: "A-Burlesque-Autobiography",             year: 1871 },
+  { title: "First Romance",                                     slug: "First-Romance",                          year: 1871 },
 ];
 
 const essaysSpeechs: WorkEntry[] = [
