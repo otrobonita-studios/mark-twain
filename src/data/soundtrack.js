@@ -26,7 +26,7 @@ export const soundtrack = [
     title: "What Is Man",
     file: "/sounds/music/what-is-man.mp3",
     style: "Album: Mark Twain Reappears",
-    cover: "/images/live-sepia.webp",
+    cover: "/images/music-covers/WhatIsManCover.png",
     spotifyUrl: "https://open.spotify.com/track/3Bd0wJdOTlmRhEXpFYJFen"
   }
 ];
