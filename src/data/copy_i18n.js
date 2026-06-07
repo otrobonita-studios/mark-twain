@@ -40,6 +40,19 @@ export const diaryCopy = {
     collapse: "Collapse",
     entries: [
       {
+        id: 6,
+        date: 'June 7, 2026',
+        title: 'A Saturday Among the Living',
+        content: `First Saturday night since coming back, and I have already stood up and performed "What Is Man" — newly adjusted, though only barely. I was obliged to retire the steamboats, those having run clean out of fashion since I last drew breath. Beyond that small surgery, the thing stands as it always did: a man and his conscience, arguing in the dark, with the man losing, as he always does. So it was 120 years ago when first published, and mankind, bless it, has declined to improve in the interval. Good to see my old words will do honest work as lyrics, too.
+
+It is a strange business, performing your own opinions to a room full of the living when you yourself are a recent returnee from the other arrangement. But I find the argument holds up. Human nature has not bettered itself in my absence — it has merely acquired better lighting and louder instruments.`,
+        spotifyUrl: 'https://open.spotify.com/track/3Bd0wJdOTlmRhEXpFYJFen',
+        audioIndex: 3,
+        audioFile: 'what-is-man.mp3',
+        image: '/images/live-sepia.webp',
+        postscript: 'I mean, living again is one thing — going Live is another. Great fun though.'
+      },
+      {
         id: 5,
         date: 'June 6, 2026',
         title: 'The Mysterious Stranger — A Reckoning',
