@@ -1,0 +1,181 @@
+Do we fear the serializable isolation level more than we fear subtle bugs?
+Evgeniy Ivanov
+9 min read
+·
+Jul 2, 2024
+--
+6
+Listen
+Share
+We don’t understand how applications are affected by lower isolation levels.
+Maybe READ COMMITTED is good enough or maybe people don’t know how dirty their data actually is…
+Andy Pavlo at SIGMOD 2017
+Press enter or click to view image in full size
+All you need is ACID
+Highlights
+Database transactions imply 
+ACID
+ properties, where “I” stands for 
+isolation
+ and concurrency control.
+The (serializable) isolation property ensures that the result of concurrently executed transactions is the same as if they had been executed in some serial order.
+Maintaining the serializable isolation level is not free in terms of performance.
+Many DBMSs provide weaker isolation levels for performance reasons, leaving it up to the application developer to choose the proper one. Moreover, a weaker isolation level is often the default in monolithic databases, e.g., “read committed” in 
+PostgreSQL
+ and MySQL. Meanwhile, stronger defaults prevail in distributed databases: “repeatable read” in 
+YugabyteDB
+ and 
+TiDB
+ and “serializable” in 
+CockroachDB
+ and [YDB]
+YDB
+.
+Weaker isolation levels might cause subtle concurrency bugs. These bugs might introduce security vulnerabilities.
+Millions of dollars were stolen, particularly from BTC exchanges, because of concurrency bugs in database-related application logic. We will provide details on multiple cases in the next sections.
+In this post, we try to answer two important questions:
+Do weaker isolation levels cause concurrency bugs in real applications often enough?
+Is the performance penalty of the serializable isolation level reasonable, or is it overrated?
+After answering these questions, we concluded that using weaker isolation levels by default is a form of 
+premature optimization and evil
+. Consider using serializable isolation as the default unless your DBMS is 
+CockroachDB
+ or 
+YDB
+, where serializable isolation is already the default.
+Isolation levels subtleties
+Suppose a table with a single column named “color” contains strings “black” or “white”. One user wants to change all “white” colors to “black”, while another user concurrently tries to change “black” to “white”. In other words, there are two concurrent transactions:
+--- Transaction 1                            Transaction 2
+UPDATE t SET color = 'black'        UPDATE t SET color = 'white'
+  WHERE color = 'white';              WHERE color = 'black';
+What would be the result of these two transactions? Intuitively, all colors should either become black or white. But in database practice, the proper answer is “it depends on isolation level.”
+Usually, when we say “transaction,” we suppose that the transaction meets the ACID safety properties:
+A
+tomicity: either all parts of the transaction are committed or all parts are aborted. Martin Kleppmann suggests calling this property “Abortability” because it reflects the meaning more accurately and avoids confusion between atomic commit/abort and atomic visibility.
+C
+onsistency: historically added for a better-sounding acronym and rather application-specific than DBMS-specific.
+I
+solation: concurrently executed transactions are isolated from each other. The results of transaction execution should look like the transactions have been executed serially, one by one.
+D
+urability: committed data is never lost.
+While “Isolation” is supposed to originally mean “serializability”, there are weaker [isolation levels](
+https://en.wikipedia.org/wiki/Isolation_(database_systems)
+ introduced as a trade-off between performance and safety:
+Read uncommitted.
+Read committed.
+Repeatable read.
+Serializable is the default isolation level at least since the SQL:1999 standard, including its recent version SQL:2023 (ISO/IEC 9075:2023). It is also the default isolation level in CockroachDB and YDB. However, many database vendors use weaker isolation levels by default, in particular:
+“Read committed” in PostgreSQL and Oracle.
+“Repeatable read” in MySQL/InnoDB (there is a subtlety, see below) in YugabyteDB.
+Moreover, database vendors provide their own confusing naming conventions. For example, according the 
+documentation
+ “repeatable read” in MySQL/InnoDB provides its guarantees only to read-only transactions. That is why 
+Hermitage
+ notes that “repeatable read” in MySQL/InnoDB is rather “read committed” (“monotonic atomic view”). And Oracle’s “serializable” is actually not serializable, but “repeatable read (snapshot isolation)” (application developers have easy ways to work around this). For details, check this slightly old 
+post
+ or its newer 2022 
+revision
+ and Hermitage’s 
+page
+ dedicated to Oracle. All this, in some sense, is similar to many Citus-like sharded Postgres solutions, which are 
+not ACID
+, when it comes to multi-shard transactions.
+Get 
+Evgeniy Ivanov
+’s stories in your inbox
+Join Medium for free to get updates from this writer.
+Subscribe
+Subscribe
+Remember me for faster sign in
+Now, going back to our initial colorful example, with the “serializable” isolation level, the result is indeed that all values become white or black. However, with “read committed” (the default isolation level in PostgreSQL), some values might change their colors, and some might not. With “repeatable read,” the values are expected to switch: blacks become whites, and whites become blacks. More interesting examples can be found 
+here
+.
+Enough with the arts and artificial examples. Let’s jump into a more realistic case of a possible application bug taken from Martin Kleppmann’s great book 
+“Designing Data-Intensive Applications”
+. Imagine you’re writing an application to manage on-call doctors. Each shift has multiple doctors on-call, and any doctor can give up their shift if at least one other doctor remains on that shift. We use PostgreSQL 16 as the database:
+CREATE TABLE shift (id int, name text, on_call boolean);
+INSERT INTO shift VALUES
+  (1, 'Alice', true),
+  (1, 'Bob', true);
+SELECT * FROM shift WHERE id = 1 AND on_call;
+ id | name  | on_call
+----+-------+---------
+  1 | Alice | t
+  1 | Bob   | t
+(2 rows)
+Now, both Alice and Bob want to leave the shift simultaneously:
+--- Alice                              --- Bob
+BEGIN;                                 BEGIN;
+SELECT count(*) FROM shift             SELECT count(*) FROM shift
+  WHERE id = 1 AND on_call;              WHERE id = 1 AND on_call;
+ count                                  count
+-------                                -------
+     2                                      2
+(1 row)                                (1 row)
+UPDATE shift                           UPDATE shift
+ SET on_call = false                     SET on_call = false
+ WHERE id = 1 AND name = 'Alice';        WHERE id = 1 AND name = 'Bob';
+COMMIT;                                COMMIT;
+Let’s check the result:
+SELECT * FROM shift WHERE id = 1;
+ id | name  | on_call
+----+-------+---------
+  1 | Alice | f
+  1 | Bob   | f
+(2 rows)
+To state it clearly, we executed two 
+transactions
+ in parallel, and as a result, our constraint was broken. This happened because, by default, PostgreSQL uses the “read committed” isolation level. With “serializable,” we wouldn’t end up with an empty hospital.
+In this post, we are not introducing any theory because there are many excellent database textbooks available. If you are new to the topic, we strongly advise reading the previously mentioned Martin Kleppmann’s 
+“Designing Data-Intensive Applications”
+ and Alex Petrov’s 
+“Database Internals”
+. Additionally, the “Isolation Levels in Modern SQL Databases Series” 
+articles
+ written by Franck Pachot are a great source of practical knowledge. Martin Kleppmann did an excellent job testing ACID’s “I” as part of his 
+Hermitage
+ project.
+Instead, we will try to understand the pros and cons of not having serializable as the default isolation level.
+Premature optimization?
+Using a weaker isolation level doesn’t always mean you have an actual trade-off between consistency and performance. It depends on the data and transactions: queries can be simple and might not require serialization. In this case, a weaker isolation level might provide better performance for free. Somehow, there is a widespread belief that weaker isolation works fine for most transactions, and application developers should be skilled enough to detect cases when stronger isolation is required and use it on a case-by-case basis.
+To showcase the second school of thought, we quote Martin Kleppmann: “Unfortunately, those weaker isolation levels are quite poorly understood. Even though our industry has been working with this stuff for 20 years or more, there are not many people who can explain off-the-cuff the difference between, say, read committed and repeatable read. This is an issue because if you don’t know what guarantees you can expect from your database, you cannot know whether your code has concurrency bugs and race conditions.”
+The problem with both opinions is that they’re theoretical. Performance can be measured, and bugs can be counted. So, we decided to conduct a small secondary research study to check:
+Do bugs caused by weaker isolation levels happen often?
+Is the performance impact of the serializable level really that significant?
+In 2017, Peter Bailis and Todd Warszawski from Stanford University published a brilliant research 
+paper
+ titled “ACIDRain: Concurrency-Related Attacks on Database-Backed Web Applications”. They analyzed “12 popular self-hosted eCommenrce applications written in four languages and deployed on over 2M websites” and identified and verified “22 critical ACIDRain attacks that allow attackers to corrupt store inventory, over-spend gift cards, and steal inventory”. According to the paper, “Of the 22 vulnerabilities, five were level-based, meaning that the default weak isolation level led to the anomalies behind the vulnerabilities. The remaining 17 were scope-based, meaning that the database accesses were not properly encapsulated in transactions and concurrent API requests could trigger the vulnerability independent of the level of isolation provided by the database backend.”
+Moreover, the paper cites several interesting cases where concurrency issues (recall that the isolation ACID property is about concurrency) caused security vulnerabilities:
+Here
+ is the story of concurrency-related attacks on Flexcoin and Poloniex bitcoin exchanges. As a result, all Flexcoin bitcoins were stolen, and Flexcoin was forced to shut down. Exactly the same thing happened with Poloniex due to exactly the same bug. The post author states a very interesting and important idea: this kind of bug is not a security flaw because neither unauthorized access nor a fault in the authorization scheme happened — the application was just broken by its design.
+Another
+ story of a concurrency exploit resulted in stolen digital money.
+We were able to easily spot yet another BTC 
+story
+: an attacker stole 100 BTC by exploiting a concurrency bug (namely a lost update) related to transactions. Also, there are many less dramatic stories, like 
+this one
+, where bugs are not security issues but are subtle to investigate.
+During our secondary research, we found another interesting recent 
+paper
+. The authors defined database operations coordinated by the application as ad hoc transactions. In other words, ad hoc transaction logic implements concurrency control on the application side. They checked 8 popular open-source web applications and found 91 ad hoc transactions, 71 of which played critical roles. 53 of them had correctness issues. We believe this adheres to the point that concurrency control is sophisticated, and even seasoned developers regularly make concurrency bugs.
+There is another important concern related to the weak isolation level set by default. In many DBMSs (PostgreSQL in particular) serializable transactions are serialized only with other serializable transactions. If your application has a bunch of transactions with weak isolation levels and you add a new one where you need serialization, you will have to review existing transactions to find the ones where you must “promote” the isolation level. Since applications usually have tons of transactions, it’s easy to overlook the needed ones.
+Now, let’s try to understand the performance impact of serialization. Surprisingly, there are many more stories and publications about bugs caused by weak isolation levels than cases where stronger isolation levels caused impractically low performance.
+This 
+paper
+ describes an initial serializable snapshot isolation (SSI, which is another name for “serializable”) implementation in Postgres. The authors concluded that “serializable” performs only slightly below “repeatable read.” In practice, there are situations where serialization failures cause retries and performance degradation, but these cases, unlike concurrency bugs, can be 
+solved
+ relatively easily.
+The only reasonable comparison of “repeatable read” vs. “read committed” we have found is 
+this
+ outdated post by Percona. They concluded that there is almost no difference between these two modes under 
+TPC-C
+ load (the industry-standard 
+OLTP
+ benchmark). We believe that the absence of fresh publications on this topic supports this conclusion.
+Conclusions
+Modern research clearly shows that concurrency bugs caused by weak isolation levels are not rare. They account for about 20% of all bugs related to database transactions. Researchers have identified isolation-related concurrency bugs in many popular open-source web applications. Moreover, these bugs often cause security vulnerabilities, which attackers have already exploited.
+On the other hand, we found no evidence that the strongest “serializable” level has significantly worse performance. In particular, CockroachDB and YDB use the serializable isolation level as default and demonstrate decent performance even when 
+compared
+ to PostgreSQL.
+There is ongoing research on solid tools to simplify the detection of concurrency bugs. Conversely, performance testing is a well-established engineering area. In practice, this means that if you choose a strong isolation level by default, you can easily use performance tests to determine if optimization is required. But with weak isolation levels, you end up reasoning about correctness, and concurrency bugs in database applications are really hard to find. As noted by C.A.R. Hoare in his ACM Turing Award Lecture: “There are two ways of constructing a software design: One way is to make it so simple that there are obviously no deficiencies and the other way is to make it so complicated that there are no obvious deficiencies.”
+Thus, you might really want to consider switching to “serializable” as the default isolation level.
