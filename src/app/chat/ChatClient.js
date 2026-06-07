@@ -166,7 +166,7 @@ export default function ChatClient() {
     if (isFirstInteraction) {
       updatedMessages.push({
         role: 'model',
-        content: "Yawn. … Eternity … was … getting … comfortable. … Patience.",
+        content: "Yawn…Eternity…was…getting…comfortable…Patience",
         isYawn: true
       });
     }
@@ -419,9 +419,9 @@ export default function ChatClient() {
               <div className="mobile-settings-drawer-inner">
                 {/* Settings Switches */}
                 <div className="drawer-grid-container">
-                  {/* Answer Size Row */}
+                  {/* Answer Row */}
                   <span className="typewriter text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
-                    Answer Size:
+                    Answer:
                   </span>
                   <span className="typewriter text-[10px] text-right" style={{ color: conversationStyle === 'brief' ? 'var(--primary)' : 'var(--muted-foreground)' }}>Brief</span>
                   <div className="flex items-center justify-center">
@@ -513,7 +513,7 @@ export default function ChatClient() {
                     className="voice-of-mark-btn"
                   >
                     {isVoicePlaying ? <Pause size={13.2} fill="currentColor" /> : <Play size={13.2} fill="currentColor" />}
-                    <span>Hear the voice</span>
+                    <span>Hear my voice</span>
                   </button>
                 </div>
               </div>
@@ -608,7 +608,7 @@ export default function ChatClient() {
                                     <span>Match: {Math.round(src.score * 100)}%</span>
                                   </div>
                                   {src.read_url ? (
-                                    <Link href={src.read_url} className="source-item-link" style={{ display: 'inline-block', marginTop: '0.5rem', color: 'var(--primary)', textDecoration: 'none', fontSize: '0.875rem', fontFamily: 'var(--font-typewriter)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                                    <Link href={src.read_url} className="source-item-link" style={{ display: 'inline-block', marginTop: '0.5rem', color: 'var(--primary)', textDecoration: 'none', fontSize: '0.675rem', fontFamily: 'var(--font-typewriter)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
                                       Read Full Work →
                                     </Link>
                                   ) : (
@@ -935,17 +935,17 @@ function AwakeningLoader() {
 
   useEffect(() => {
     const sequence = [
-      "Yawn.",
-      "Yawn. …",
-      "Yawn. … Eternity",
-      "Yawn. … Eternity …",
-      "Yawn. … Eternity … was",
-      "Yawn. … Eternity … was …",
-      "Yawn. … Eternity … was … getting",
-      "Yawn. … Eternity … was … getting …",
-      "Yawn. … Eternity … was … getting … comfortable.",
-      "Yawn. … Eternity … was … getting … comfortable. …",
-      "Yawn. … Eternity … was … getting … comfortable. … Patience."
+      "Yawn",
+      "Yawn…",
+      "Yawn…Eternity",
+      "Yawn…Eternity…",
+      "Yawn…Eternity…was",
+      "Yawn…Eternity…was…",
+      "Yawn…Eternity…was…getting",
+      "Yawn…Eternity…was…getting…",
+      "Yawn…Eternity…was…getting…comfortable",
+      "Yawn…Eternity…was…getting…comfortable…",
+      "Yawn…Eternity…was…getting…comfortable…Patience"
     ];
 
     let currentIndex = 0;
@@ -963,7 +963,7 @@ function AwakeningLoader() {
     return () => clearInterval(interval);
   }, []);
 
-  const fullText = "Yawn. … Eternity … was … getting … comfortable. … Patience.";
+  const fullText = "Yawn…Eternity…was…getting…comfortable…Patience";
 
   return (
     <div style={{ position: 'relative', width: '100%', display: 'inline-block' }}>
