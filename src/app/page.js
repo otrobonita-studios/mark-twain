@@ -398,7 +398,7 @@ export default function Home() {
                   )}
 
                   {(selectedEntry.spotifyUrl || selectedEntry.audioIndex !== undefined) && (
-                    <div className="modal-audio-controls flex flex-wrap gap-4 justify-center items-center my-6 p-4 rounded-lg bg-[rgba(217,163,74,0.05)] border border-[rgba(217,163,74,0.15)]">
+                    <div className="modal-audio-controls flex flex-wrap gap-4 justify-center items-center my-6 p-4">
                       {selectedEntry.audioIndex !== undefined && (
                         <button
                           onClick={() => {

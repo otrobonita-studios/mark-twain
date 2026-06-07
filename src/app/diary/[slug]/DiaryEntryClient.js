@@ -74,37 +74,32 @@ export default function DiaryEntryClient({ entry }) {
 
           {/* Optional Audio / Spotify Controls */}
           {(entry.spotifyUrl || entry.audioIndex !== undefined) && (
-            <div className="my-8 p-6 rounded-lg bg-[rgba(217,163,74,0.04)] border border-[rgba(217,163,74,0.15)] flex flex-col items-center gap-4 justify-center">
-              <span className="font-mono text-[10px] tracking-widest text-[var(--muted-foreground)] uppercase">
-                Multimedia Attachments
-              </span>
-              <div className="flex flex-wrap gap-4 justify-center items-center w-full">
-                {entry.audioIndex !== undefined && (
-                  <button
-                    onClick={handlePlayAudio}
-                    className="flex items-center gap-2 px-5 py-3 rounded bg-[var(--primary)] text-black hover:bg-[var(--primary-hover)] transition-all font-sans font-semibold text-xs tracking-wider uppercase shadow-md cursor-pointer"
-                  >
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" className="shrink-0">
-                      <path d="M8 5v14l11-7z"/>
-                    </svg>
-                    Listen on Audio Desk
-                  </button>
-                )}
-                
-                {entry.spotifyUrl && (
-                  <a
-                    href={entry.spotifyUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 px-5 py-3 rounded bg-[#1DB954] text-white hover:bg-[#1ed760] transition-all font-sans font-semibold text-xs tracking-wider uppercase shadow-md"
-                  >
-                    <svg viewBox="0 0 24 24" width="16" height="16" className="shrink-0" fill="currentColor">
-                      <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424c-.18.295-.563.387-.857.207-2.377-1.454-5.37-1.783-8.892-1.007-.336.074-.67-.14-.744-.476-.074-.336.14-.67.476-.744 3.856-.88 7.15-.506 9.81 1.127.295.18.387.563.207.857c-.001-.001-.001-.001 0 0zm1.225-2.72c-.226.367-.707.487-1.074.26-2.722-1.672-6.87-2.157-10.082-1.182-.413.125-.847-.107-.972-.52-.125-.413.107-.847.52-.972 3.676-1.116 8.243-.574 11.348 1.33.367.227.487.708.26 1.074v.01zm.106-2.833c-.273.447-.858.594-1.306.32-3.178-1.89-8.412-2.083-11.454-1.16-.503.152-1.037-.134-1.189-.637-.152-.502.135-1.036.637-1.188 3.633-1.102 9.404-.888 13.084 1.3 448.272.274.595.858.32 1.306v-.002z"/>
-                    </svg>
-                    Listen on Spotify
-                  </a>
-                )}
-              </div>
+            <div className="modal-audio-controls flex flex-wrap gap-4 justify-center items-center my-6 p-4">
+              {entry.audioIndex !== undefined && (
+                <button
+                  onClick={handlePlayAudio}
+                  className="flex items-center gap-2 px-5 py-3 rounded bg-[var(--primary)] text-black hover:bg-[var(--primary-hover)] transition-all font-sans font-semibold text-xs tracking-wider uppercase shadow-md cursor-pointer"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" className="shrink-0">
+                    <path d="M8 5v14l11-7z"/>
+                  </svg>
+                  Listen on Audio Desk
+                </button>
+              )}
+              
+              {entry.spotifyUrl && (
+                <a
+                  href={entry.spotifyUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-5 py-3 rounded bg-[#1DB954] text-white hover:bg-[#1ed760] transition-all font-sans font-semibold text-xs tracking-wider uppercase shadow-md"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" className="shrink-0" fill="currentColor">
+                    <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424c-.18.295-.563.387-.857.207-2.377-1.454-5.37-1.783-8.892-1.007-.336.074-.67-.14-.744-.476-.074-.336.14-.67.476-.744 3.856-.88 7.15-.506 9.81 1.127.295.18.387.563.207.857c-.001-.001-.001-.001 0 0zm1.225-2.72c-.226.367-.707.487-1.074.26-2.722-1.672-6.87-2.157-10.082-1.182-.413.125-.847-.107-.972-.52-.125-.413.107-.847.52-.972 3.676-1.116 8.243-.574 11.348 1.33.367.227.487.708.26 1.074v.01zm.106-2.833c-.273.447-.858.594-1.306.32-3.178-1.89-8.412-2.083-11.454-1.16-.503.152-1.037-.134-1.189-.637-.152-.502.135-1.036.637-1.188 3.633-1.102 9.404-.888 13.084 1.3 448.272.274.595.858.32 1.306v-.002z"/>
+                  </svg>
+                  Listen on Spotify
+                </a>
+              )}
             </div>
           )}
 
