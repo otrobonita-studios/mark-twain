@@ -229,7 +229,7 @@ const books = [
   {
     title: "The Prince and the Pauper",
     filename: "Prince-and-Pauper.txt",
-    cover: "/images/book-covers/Book-cover-Prince-and-Pauper.jpg",
+    cover: "/images/book-covers/Book-cover-Prince-and-Pauper.png",
     desc: "A royal prince and a beggar boy switch roles in Tudor London, exposing the dramatic class divides of England.",
     status: "Youth Edition",
     genre: "Historical Fiction",
