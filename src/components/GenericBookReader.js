@@ -116,6 +116,27 @@ function formatTocLabel(label) {
 export default function GenericBookReader({ htmlContent, tocItems = [], bookTitle = 'Read Book', showExperienceSelector = true, headerExtra = null, bookSlug }) {
   const progressRef = useRef(null);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
+  const [wordSetting, setWordSetting] = useState('original'); // 'original' | 'sanitized'
+
+  useEffect(() => {
+    const saved = localStorage.getItem('twain-word-setting');
+    if (saved) setWordSetting(saved);
+  }, []);
+
+  const handleWordSettingChange = (newSetting) => {
+    setWordSetting(newSetting);
+    localStorage.setItem('twain-word-setting', newSetting);
+  };
+
+  const resolvedHtmlContent = useMemo(() => {
+    const isOriginal = wordSetting === 'original';
+    return htmlContent
+      .replace(/{var_nword_possessive}/g, isOriginal ? "nigger's" : "slave's")
+      .replace(/{var_nwords}/g, isOriginal ? 'niggers' : 'slaves')
+      .replace(/{var_Nwords}/g, isOriginal ? 'Niggers' : 'Slaves')
+      .replace(/{var_nword}/g, isOriginal ? 'nigger' : 'slave')
+      .replace(/{var_Nword}/g, isOriginal ? 'Nigger' : 'Slave');
+  }, [htmlContent, wordSetting]);
   const [experience, setExperience] = useState('traditional');
   const [selectedZoomImage, setSelectedZoomImage] = useState(null);
   const [isTocOpen, setIsTocOpen] = useState(false);
@@ -138,7 +159,7 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
     if (!isLetters) return [];
 
     // Ensure all h2 headers and letter starting paragraphs start on their own segment by prefixing them with a virtual <hr />
-    const normalizedContent = htmlContent
+    const normalizedContent = resolvedHtmlContent
       .replace(/(?:\s*<hr\s*\/?>\s*)*\s*(<h2[^>]*>)/gi, '\n<hr />$1')
       .replace(/(?:\s*<hr\s*\/?>\s*)*\s*(<p\b[^>]*>\s*(?:To\s+|From\s+|Fragment\s+(?:of|to)\s+a\s+letter|Part\s+of\s+a\s+letter|Letter\s+to|Letters\s+to|Telegram\s+to|Telegrams\s+to))/gi, '\n<hr />$1');
     const parts = normalizedContent.split(/<hr\s*\/?>/gi);
@@ -188,7 +209,7 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
     }
 
     return segments;
-  }, [htmlContent, isLetters]);
+  }, [resolvedHtmlContent, isLetters]);
 
   const experiences = [
     { id: 'drama', label: 'Index', description: 'Navigate the story by Index.', supported: true },
@@ -367,7 +388,7 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
         container.removeEventListener('click', handleTocClick);
       }
     };
-  }, [htmlContent]);
+  }, [resolvedHtmlContent]);
 
   // Smooth scroll helper that offsets for the sticky header
   const scrollToId = (id) => {
@@ -439,14 +460,45 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
           className="book-page-parchment font-serif size-small"
           onClick={handleArticleClick}
         >
-          {/* Theme Selector (Floating inside parchment card) */}
-          <button 
-            onClick={() => setTheme(theme === 'parchment' ? 'charcoal' : 'parchment')}
-            className="book-control-btn theme-toggle parchment-theme-toggle"
-            title={`Switch to ${theme === 'parchment' ? 'Charcoal' : 'Parchment'} theme`}
-          >
-            {theme === 'parchment' ? <Moon size={16} /> : <Sun size={16} />}
-          </button>
+          {/* Floating controls inside parchment card */}
+          <div className="book-parchment-controls">
+            {/* Word list setting toggle */}
+            <button 
+              onClick={() => handleWordSettingChange(wordSetting === 'original' ? 'sanitized' : 'original')}
+              className="book-control-btn word-setting-toggle"
+              title={wordSetting === 'original' ? "Switch to Sanitized Text (e.g. 'slave')" : "Switch to Original Text"}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '0.62rem',
+                fontFamily: 'var(--font-mono, monospace)',
+                fontWeight: 'bold',
+                letterSpacing: '0.05em',
+                width: 'auto',
+                height: '2rem',
+                padding: '0 0.75rem',
+                borderRadius: '4px',
+                border: '1px solid var(--border)',
+                textTransform: 'uppercase',
+                transition: 'all 0.2s',
+                opacity: 0.75
+              }}
+              onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+              onMouseLeave={e => e.currentTarget.style.opacity = '0.75'}
+            >
+              {wordSetting === 'original' ? "Original Text" : "Sanitized"}
+            </button>
+
+            {/* Theme Selector */}
+            <button 
+              onClick={() => setTheme(theme === 'parchment' ? 'charcoal' : 'parchment')}
+              className="book-control-btn theme-toggle parchment-theme-toggle"
+              title={`Switch to ${theme === 'parchment' ? 'Charcoal' : 'Parchment'} theme`}
+            >
+              {theme === 'parchment' ? <Moon size={16} /> : <Sun size={16} />}
+            </button>
+          </div>
 
           {/* Reading Experience Selector */}
           {showExperienceSelector && (
@@ -510,7 +562,7 @@ export default function GenericBookReader({ htmlContent, tocItems = [], bookTitl
               })}
             </div>
           ) : (
-            <div className="book-text-content" dangerouslySetInnerHTML={{ __html: htmlContent }} />
+            <div className="book-text-content" dangerouslySetInnerHTML={{ __html: resolvedHtmlContent }} />
           )}
         </article>
       </main>
