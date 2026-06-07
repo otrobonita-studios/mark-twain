@@ -465,11 +465,11 @@ export default function TheCompleteWorksPage() {
   }, [theme, fontSize]);
 
   return (
-    <div className={"book-reader-container theme-${theme}"}>
+    <div className={`book-reader-container theme-${theme}`}>
       {/* Scroll Progress Bar */}
       <div
         className="reading-progress-bar"
-        style={{ width: "${scrollProgress}%" }}
+        style={{ width: `${scrollProgress}%` }}
       />
 
       {/* Top Left Logo (Back to Home Link) */}
@@ -488,12 +488,12 @@ export default function TheCompleteWorksPage() {
 
       {/* Reading Desk */}
       <main className="book-page-desk">
-        <article className={"book-page-parchment font-serif size-${fontSize}"}>
+        <article className={`book-page-parchment font-serif size-${fontSize}`}>
           {/* Theme Selector (Floating inside parchment card) */}
           <button
             onClick={() => setTheme(theme === 'parchment' ? 'charcoal' : 'parchment')}
             className="book-control-btn theme-toggle parchment-theme-toggle"
-            title={"Switch to ${theme === 'parchment' ? 'Charcoal' : 'Parchment'} theme"}
+            title={`Switch to ${theme === 'parchment' ? 'Charcoal' : 'Parchment'} theme`}
           >
             {theme === 'parchment' ? <Moon size={16} /> : <Sun size={16} />}
           </button>
@@ -534,7 +534,7 @@ export default function TheCompleteWorksPage() {
                     />
                   </div>
                 ) : (
-                  <div className={"w-full h-full bg-gradient-to-br ${book.color} flex flex-col justify-between p-4 relative shadow-inner overflow-hidden rounded-lg"}>
+                  <div className={`w-full h-full bg-gradient-to-br ${book.color} flex flex-col justify-between p-4 relative shadow-inner overflow-hidden rounded-lg`}>
                     <div className="absolute -right-8 -top-8 w-24 h-24 bg-[var(--primary)] opacity-5 rounded-full blur-xl group-hover:opacity-10 transition-opacity duration-300 pointer-events-none" />
                     <div className="absolute inset-2 border border-[rgba(217,163,74,0.12)] pointer-events-none rounded" />
                     
@@ -625,9 +625,9 @@ export default function TheCompleteWorksPage() {
               {books.map((_, idx) => (
                 <button
                   key={idx}
-                  className={"carousel-dot ${idx === active ? 'active' : ''}"}
+                  className={`carousel-dot ${idx === active ? 'active' : ''}`}
                   onClick={() => scrollToBook(idx)}
-                  aria-label={"Go to book ${idx + 1}"}
+                  aria-label={`Go to book ${idx + 1}`}
                   type="button"
                 />
               ))}

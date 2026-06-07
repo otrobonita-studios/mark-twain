@@ -28,8 +28,8 @@ export default function Navigation() {
   }, [isOpen]);
 
   const links = [
-    { href: '/', label: 'Home', icon: Home, desc: 'Writing Desk & Journal' },
-    { href: '/chat', label: 'Let us Talk', icon: MessageSquare, desc: 'Interactive AI Dialogue' },
+    { href: '/', label: 'Let us Talk', icon: MessageSquare, desc: 'Interactive AI Dialogue' },
+    { href: '/diary', label: 'My Diary', icon: BookOpen, desc: 'Extracts from my Diary' },
     { href: '/read/eves-diary', label: 'Eve\'s Diary', badge: 'Featured', icon: BookOpen, desc: 'Eve\'s Diary Multimedia Edition' },
     { href: '/complete-works', label: 'The Library', icon: Layers, desc: 'Books, Songs, Photos and Letters' },
     { href: '/about', label: 'About Me', icon: BookOpen, desc: 'Against My Better Judgment' }

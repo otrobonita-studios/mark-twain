@@ -380,23 +380,28 @@ export default function ChatClient() {
               />
             </Link>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }} className="desktop-only-control">
             <Link
-              href="/read/eves-diary"
-              className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors desktop-only-control"
-              style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--muted-foreground)' }}
+              href="/complete-works"
+              className="font-sans text-xs md:text-sm normal-case text-[var(--primary)] border border-[var(--primary)] px-4 py-1.5 hover:bg-[rgba(217,163,74,0.08)] transition-all"
+              style={{ textDecoration: 'none', borderRadius: '3rem' }}
             >
-              <BookOpen size={18} color="currentColor" />
-              Read Eve's Diary
+              The Library
             </Link>
-            <button 
-              onClick={() => setShowNotesModal(true)}
-              className="typewriter text-xs md:text-sm uppercase tracking-widest hover:text-[var(--primary)] transition-colors desktop-only-control"
-              style={{ background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: 'var(--muted-foreground)' }}
+            <Link
+              href="/rebuild-process"
+              className="font-sans text-xs md:text-sm normal-case text-[var(--primary)] border border-[var(--primary)] px-4 py-1.5 hover:bg-[rgba(217,163,74,0.08)] transition-all"
+              style={{ textDecoration: 'none', borderRadius: '3rem' }}
             >
-              <Info size={18} color="currentColor" />
-              The Rebuild Process
-            </button>
+              The Build
+            </Link>
+            <Link
+              href="/about"
+              className="font-sans text-xs md:text-sm normal-case text-[var(--primary)] border border-[var(--primary)] px-4 py-1.5 hover:bg-[rgba(217,163,74,0.08)] transition-all"
+              style={{ textDecoration: 'none', borderRadius: '3rem' }}
+            >
+              About Me
+            </Link>
           </div>
         </div>
 
