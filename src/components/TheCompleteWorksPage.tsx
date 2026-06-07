@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
@@ -59,14 +59,24 @@ const books = [
     color: "from-[#3d2a1f] to-[#1e150f]"
   },
   {
+    title: "The Celebrated Jumping Frog of Calaveras County, and Other Sketches",
+    filename: null,
+    href: "/read/Sketches-New-and-Old#frog",
+    cover: "/images/book-covers/Book-cover-The-Celebrated-jumping-Frog.png",
+    desc: "Mark Twain's historic debut book, a collection of 27 early sketches that launched his literary career.",
+    status: "Modernized",
+    genre: "Short Stories / Humor",
+    year: 1867,
+    color: "from-[#3f2024] to-[#201012]"
+  },
+  {
     title: "Sketches New and Old",
     filename: "Sketches-New-and-Old.txt",
-    cover: "/images/book-covers/Book-cover-The-Celebrated-jumping-Frog.png",
-    desc: "A collection of Twain's early short stories and sketches, including the legendary Jumping Frog of Calaveras County.",
+    desc: "A comprehensive later collection of Twain's short stories and sketches, expanding upon his early humorous work.",
     status: "Modernized",
     genre: "Short Stories",
     year: 1875,
-    color: "from-[#3f2024] to-[#201012]"
+    color: "from-[#4a1c1c] to-[#240e0e]"
   },
   {
     title: "Mark Twain's Curious Dream",
@@ -258,6 +268,7 @@ const shortFiction: WorkEntry[] = [
   { title: "Some Rambling Notes of an Idle Excursion",          slug: "Rambling-Idle-Excursion",              year: 1878 },
   { title: "The Facts Concerning the Recent Carnival of Crime in Connecticut", slug: "Carnival-of-Crime-in-CT", year: 1876 },
   { title: "Sketches New and Old",                              slug: "Sketches-New-and-Old",                  year: 1875 },
+  { title: "The Celebrated Jumping Frog of Calaveras County, and Other Sketches", href: "/read/Sketches-New-and-Old#frog", year: 1867 },
   { title: "The Curious Republic of Gondour",                   slug: "Curious-Republic-of-Gondour",          year: 1875 },
   { title: "The Gilded Age",                                    slug: "A-Gilded-Age",                          year: 1873 },
   { title: "Mark Twain's Curious Dream",                        slug: "Mark-Twain's-Curious-Dream",           year: 1872 },
