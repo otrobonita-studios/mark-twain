@@ -48,7 +48,7 @@ export default function DiaryEntryClient({ entry }) {
           {/* Optional Image */}
           {entry.image && (
             <div className="my-8 flex flex-col items-center">
-              <div className="relative w-full max-w-lg aspect-[4/3] rounded-lg overflow-hidden border border-[rgba(217,163,74,0.3)] shadow-[0_0_20px_rgba(217,163,74,0.15)]">
+              <div className="relative w-full max-w-lg aspect-[4/3] rounded-lg overflow-hidden">
                 <Image
                   src={entry.image}
                   alt={entry.title}

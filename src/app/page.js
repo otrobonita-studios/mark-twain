@@ -373,7 +373,7 @@ export default function Home() {
 
                   {selectedEntry.image && (
                     <div className="modal-rich-media my-6 flex flex-col items-center">
-                      <div className="relative w-full max-w-md aspect-[4/3] rounded-lg overflow-hidden border border-[rgba(217,163,74,0.3)] shadow-[0_0_15px_rgba(217,163,74,0.1)]">
+                      <div className="relative w-full max-w-md aspect-[4/3] rounded-lg overflow-hidden">
                         <Image
                           src={selectedEntry.image}
                           alt={selectedEntry.title}
