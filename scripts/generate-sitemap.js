@@ -48,6 +48,26 @@ function generateSitemap() {
     });
   }
 
+  // Add diary pages
+  const copyPath = path.join(__dirname, '../src/data/copy_i18n.js');
+  if (fs.existsSync(copyPath)) {
+    const copyContent = fs.readFileSync(copyPath, 'utf8');
+    const slugRegex = /slug:\s*['"](mark-twain-[-\d]+)['"]/g;
+    let match;
+    let diaryCount = 0;
+    while ((match = slugRegex.exec(copyContent)) !== null) {
+      const slug = match[2] || match[1];
+      urls.push({
+        loc: `${BASE_URL}/diary/${slug}`,
+        lastmod: new Date().toISOString(),
+        changefreq: 'monthly',
+        priority: '0.6'
+      });
+      diaryCount++;
+    }
+    console.log(`✓ Diary pages: ${diaryCount}`);
+  }
+
   // Generate XML
   let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
   xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';

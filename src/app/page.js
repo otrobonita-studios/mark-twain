@@ -8,6 +8,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
+import Link from 'next/link';
 import { db, isConfigured } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { Mail, ShieldAlert, Award, PenTool, X } from 'lucide-react';
@@ -422,14 +423,24 @@ export default function Home() {
                       {selectedEntry.postscript}
                     </p>
                   )}
-                  <div className="modal-signature-wrapper">
-                    <Image 
-                      src="/images/mark-twain-signature.png" 
-                      alt="Mark Twain Signature" 
-                      width={250}
-                      height={80}
-                      className="modal-signature-img"
-                    />
+                  <div className="flex justify-between items-center mt-6 pt-4 border-t border-[rgba(217,163,74,0.1)]">
+                    {selectedEntry.slug && (
+                      <Link
+                        href={`/diary/${selectedEntry.slug}`}
+                        className="font-mono text-[10px] uppercase tracking-widest text-[var(--primary)] hover:text-white transition-all flex items-center gap-1.5"
+                      >
+                        🔗 Share / Full Page
+                      </Link>
+                    )}
+                    <div className="modal-signature-wrapper mt-0 pt-0">
+                      <Image 
+                        src="/images/mark-twain-signature.png" 
+                        alt="Mark Twain Signature" 
+                        width={180}
+                        height={58}
+                        className="modal-signature-img"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
