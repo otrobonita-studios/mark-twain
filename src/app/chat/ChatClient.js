@@ -637,11 +637,15 @@ export default function ChatClient() {
               <div className="chat-message-row twain">
                 <div className="chat-bubble twain">
                   <span className="chat-bubble-sender">Mark Twain</span>
-                  <div className="typing-indicator">
-                    <div className="typing-dot" />
-                    <div className="typing-dot" />
-                    <div className="typing-dot" />
-                  </div>
+                  {messages.length === 1 ? (
+                    <AwakeningLoader />
+                  ) : (
+                    <div className="typing-indicator">
+                      <div className="typing-dot" />
+                      <div className="typing-dot" />
+                      <div className="typing-dot" />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -910,5 +914,52 @@ export default function ChatClient() {
         preload="auto"
       />
     </div>
+  );
+}
+
+function AwakeningLoader() {
+  const [text, setText] = useState('');
+
+  useEffect(() => {
+    const sequence = [
+      "Yawn.",
+      "Yawn. …",
+      "Yawn. … Eternity",
+      "Yawn. … Eternity …",
+      "Yawn. … Eternity … was",
+      "Yawn. … Eternity … was …",
+      "Yawn. … Eternity … was … getting",
+      "Yawn. … Eternity … was … getting …",
+      "Yawn. … Eternity … was … getting … comfortable.",
+      "Yawn. … Eternity … was … getting … comfortable. …",
+      "Yawn. … Eternity … was … getting … comfortable. … Patience."
+    ];
+
+    let currentIndex = 0;
+    setText(sequence[0]);
+
+    const interval = setInterval(() => {
+      currentIndex++;
+      if (currentIndex < sequence.length) {
+        setText(sequence[currentIndex]);
+      } else {
+        clearInterval(interval);
+      }
+    }, 900);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <span className="typewriter text-xs md:text-sm tracking-wider italic text-[var(--muted-foreground)]" style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {text}
+      {text.endsWith("Patience.") && (
+        <span className="typing-indicator" style={{ display: 'inline-flex', padding: 0, gap: '4px', marginLeft: '6px' }}>
+          <span className="typing-dot" style={{ width: '4px', height: '4px' }} />
+          <span className="typing-dot" style={{ width: '4px', height: '4px' }} />
+          <span className="typing-dot" style={{ width: '4px', height: '4px' }} />
+        </span>
+      )}
+    </span>
   );
 }
