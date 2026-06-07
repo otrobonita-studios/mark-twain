@@ -116,7 +116,7 @@ function formatTocLabel(label) {
 export default function GenericBookReader({ htmlContent, tocItems = [], bookTitle = 'Read Book', showExperienceSelector = true, headerExtra = null, bookSlug }) {
   const progressRef = useRef(null);
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
-  const [wordSetting, setWordSetting] = useState('original'); // 'original' | 'sanitized'
+  const [wordSetting, setWordSetting] = useState('sanitized'); // 'original' | 'sanitized'
 
   useEffect(() => {
     const saved = localStorage.getItem('twain-word-setting');
