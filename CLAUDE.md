@@ -19,6 +19,7 @@ neutral or corporate voice.
 - Firestore via client SDK — all config through NEXT_PUBLIC_ env vars.
 - Firebase initializes only client-side with checks (guarded using page level `useEffect` and `isConfigured` checks).
 - Firestore Security Rules restrict `subscribers` collection: anonymous users can only `create` entries, they cannot `read`, `update`, or `delete` (defined in `firestore.rules`).
+- Dev Server habit: Always ensure the development server (`npm run dev` or equivalent) is running and active, especially after executing git pushes or builds.
 
 ## What requires .env.local to work
 Firebase will silently fall back to localStorage if env vars are missing.
