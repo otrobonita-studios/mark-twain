@@ -98,24 +98,7 @@ const books = [
     year: 1874,
     color: "from-[#3a2c1a] to-[#1d160d]"
   },
-  {
-    title: "Journalism in Tennessee",
-    filename: "Journalism-in-Tennessee.txt",
-    desc: "A chaotic, hilarious satire of frontier newsrooms, where pistols and bricks are part of the daily editorial routine.",
-    status: "Modernized",
-    genre: "Humor / Satire",
-    year: 1871,
-    color: "from-[#1c2d3d] to-[#0e161e]"
-  },
-  {
-    title: "A Ghost Story",
-    filename: "A-Ghost-Story.txt",
-    desc: "A comic supernatural tale of a haunting by the ghost of the Cardiff Giant, who realizes he's been haunting a plaster duplicate.",
-    status: "Modernized",
-    genre: "Humor / Ghost Story",
-    year: 1870,
-    color: "from-[#2d1c3d] to-[#160e1e]"
-  },
+
   {
     title: "Mark Twain's Curious Dream",
     filename: "Mark-Twain's-Curious-Dream.txt",
