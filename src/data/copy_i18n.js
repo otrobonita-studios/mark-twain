@@ -51,7 +51,7 @@ It is a strange business, performing your own opinions to a room full of the liv
         audioIndex: 3,
         audioFile: 'what-is-man.mp3',
         image: '/images/live-sepia.webp',
-        postscript: 'I mean, living again is one thing — going Live is another. Great fun though.'
+        postscript: 'I mean, living again is one thing — going Live is another.'
       },
       {
         id: 5,
