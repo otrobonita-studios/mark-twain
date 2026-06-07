@@ -39,14 +39,14 @@ const books = [
     color: "from-[#202d3d] to-[#101720]"
   },
   {
-    title: "Personal Recollections of Joan of Arc (Volume II)",
-    filename: "Recollections-of-Joan-of-Arc-II.txt",
-    cover: "/images/book-covers/Book-cover-Joan-Of-Arc-Vol2.jpg",
-    desc: "The continuation of Joan's heroic journey, her triumphs on the battlefield, and her tragic trial.",
+    title: "What Is Man?",
+    filename: "What-Is-Man.txt",
+    cover: "/images/book-covers/Book-cover-WhatIsMan.jpg",
+    desc: "A thought-provoking philosophical dialogue between an Old Man and a Young Man, exploring free will, human nature, and determinism.",
     status: "Modernized",
-    genre: "Historical Fiction",
-    year: 1896,
-    color: "from-[#202d3d] to-[#101720]"
+    genre: "Philosophical Dialogue",
+    year: 1906,
+    color: "from-[#1d2d3d] to-[#0e161e]"
   },
   {
     title: "The Gilded Age",
@@ -66,6 +66,16 @@ const books = [
     status: "Modernized",
     genre: "Short Stories / Humor",
     year: 1867,
+    color: "from-[#3f2024] to-[#201012]"
+  },
+  {
+    title: "Roughing It",
+    filename: "Roughing-It.txt",
+    cover: "/images/book-covers/Book-cover-Roughing-It.jpg",
+    desc: "A wild and humorous account of Twain's stagecoach journey to Nevada and his search for silver in the frontier.",
+    status: "Modernized",
+    genre: "Travel / Humor",
+    year: 1872,
     color: "from-[#3f2024] to-[#201012]"
   },
   {
@@ -123,16 +133,6 @@ const books = [
     genre: "Travelogue",
     year: 1897,
     color: "from-[#1a382c] to-[#0d1c16]"
-  },
-  {
-    title: "Roughing It",
-    filename: "Roughing-It.txt",
-    cover: "/images/book-covers/Book-cover-Roughing-It.jpg",
-    desc: "A wild and humorous account of Twain's stagecoach journey to Nevada and his search for silver in the frontier.",
-    status: "Modernized",
-    genre: "Travel / Humor",
-    year: 1872,
-    color: "from-[#3f2024] to-[#201012]"
   },
   {
     title: "A Connecticut Yankee in King Arthur's Court",
@@ -243,6 +243,16 @@ const books = [
     genre: "Mystery",
     year: 1896,
     color: "from-[#3a351a] to-[#1d1a0d]"
+  },
+  {
+    title: "Personal Recollections of Joan of Arc (Volume II)",
+    filename: "Recollections-of-Joan-of-Arc-II.txt",
+    cover: "/images/book-covers/Book-cover-Joan-Of-Arc-Vol2.jpg",
+    desc: "The continuation of Joan's heroic journey, her triumphs on the battlefield, and her tragic trial.",
+    status: "Modernized",
+    genre: "Historical Fiction",
+    year: 1896,
+    color: "from-[#202d3d] to-[#101720]"
   }
 ];
 
