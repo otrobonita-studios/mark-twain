@@ -43,6 +43,14 @@ export default function DiaryEntryClient({ entry }) {
           {/* Content */}
           <div className="font-sans text-[15px] md:text-[16px] leading-relaxed whitespace-pre-line text-[rgba(255,244,223,0.9)] space-y-4 mb-8">
             {entry.content}
+            <Image 
+              src="/images/mark-twain-signature.png" 
+              alt="Mark Twain Signature" 
+              width={180}
+              height={58}
+              className="modal-signature-img block"
+              style={{ display: 'block', width: '180px', marginTop: '25px', marginBottom: '25px' }}
+            />
           </div>
 
           {/* Optional Image */}
@@ -102,16 +110,7 @@ export default function DiaryEntryClient({ entry }) {
 
 
 
-          {/* Signature */}
-          <footer className="mt-8 flex justify-end border-t border-[rgba(217,163,74,0.1)] pt-6">
-            <Image 
-              src="/images/mark-twain-signature.png" 
-              alt="Mark Twain Signature" 
-              width={160}
-              height={52}
-              className="opacity-80"
-            />
-          </footer>
+
         </article>
       </div>
     </div>

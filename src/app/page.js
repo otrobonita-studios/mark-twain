@@ -369,6 +369,14 @@ export default function Home() {
                   </div>
                   <p className="modal-text font-sans">
                     {selectedEntry.content}
+                    <Image 
+                      src="/images/mark-twain-signature.png" 
+                      alt="Mark Twain Signature" 
+                      width={180}
+                      height={58}
+                      className="modal-signature-img block"
+                      style={{ display: 'block', width: '180px', marginTop: '25px', marginBottom: '25px' }}
+                    />
                   </p>
 
                   {selectedEntry.image && (
@@ -424,25 +432,16 @@ export default function Home() {
                   )}
 
 
-                  <div className="flex justify-between items-center mt-6 pt-4 border-t border-[rgba(217,163,74,0.1)]">
-                    {selectedEntry.slug && (
+                  {selectedEntry.slug && (
+                    <div className="flex justify-start items-center mt-6 pt-4 border-t border-[rgba(217,163,74,0.1)]">
                       <Link
                         href={`/diary/${selectedEntry.slug}`}
                         className="font-mono text-[10px] uppercase tracking-widest text-[var(--primary)] hover:text-white transition-all flex items-center gap-1.5"
                       >
                         🔗 Share / Full Page
                       </Link>
-                    )}
-                    <div className="modal-signature-wrapper mt-0 pt-0">
-                      <Image 
-                        src="/images/mark-twain-signature.png" 
-                        alt="Mark Twain Signature" 
-                        width={180}
-                        height={58}
-                        className="modal-signature-img"
-                      />
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             </motion.div>
