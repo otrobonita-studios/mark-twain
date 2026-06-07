@@ -381,6 +381,11 @@ export default function Home() {
                           className="object-cover"
                         />
                       </div>
+                      {selectedEntry.postscript && (
+                        <p className="modal-text font-sans mt-4 text-center italic opacity-90 max-w-md text-[var(--primary)]">
+                          {selectedEntry.postscript}
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -418,11 +423,7 @@ export default function Home() {
                     </div>
                   )}
 
-                  {selectedEntry.postscript && (
-                    <p className="modal-text font-sans mt-4 italic opacity-90">
-                      {selectedEntry.postscript}
-                    </p>
-                  )}
+
                   <div className="flex justify-between items-center mt-6 pt-4 border-t border-[rgba(217,163,74,0.1)]">
                     {selectedEntry.slug && (
                       <Link

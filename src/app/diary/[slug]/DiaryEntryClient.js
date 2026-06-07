@@ -56,6 +56,11 @@ export default function DiaryEntryClient({ entry }) {
                   className="object-cover"
                 />
               </div>
+              {entry.postscript && (
+                <p className="font-sans text-center mt-4 text-sm italic opacity-90 max-w-lg text-[var(--primary)]">
+                  {entry.postscript}
+                </p>
+              )}
             </div>
           )}
 
@@ -95,11 +100,7 @@ export default function DiaryEntryClient({ entry }) {
             </div>
           )}
 
-          {entry.postscript && (
-            <p className="font-sans italic opacity-80 mt-6 border-t border-[rgba(217,163,74,0.1)] pt-4 text-[14px]">
-              {entry.postscript}
-            </p>
-          )}
+
 
           {/* Signature */}
           <footer className="mt-8 flex justify-end border-t border-[rgba(217,163,74,0.1)] pt-6">
