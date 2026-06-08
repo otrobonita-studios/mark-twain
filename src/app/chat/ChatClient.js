@@ -389,11 +389,11 @@ export default function ChatClient() {
               The Library
             </Link>
             <Link
-              href="/rebuild-process"
+              href="/diary"
               className="font-sans text-xs md:text-sm normal-case text-[var(--primary)] border border-[var(--primary)] px-4 py-1.5 hover:bg-[rgba(217,163,74,0.08)] transition-all"
               style={{ textDecoration: 'none', borderRadius: '3rem' }}
             >
-              The Build
+              The Diary
             </Link>
             <Link
               href="/about"
