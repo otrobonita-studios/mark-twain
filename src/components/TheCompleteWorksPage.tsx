@@ -10,7 +10,7 @@ const books = [
   {
     title: "Life on the Mississippi",
     filename: "Life-on-the-Mississippi.txt",
-    cover: "/images/book-covers/Book-cover-Life-on-the-Mississippi.jpg",
+    cover: "/images/book-covers/Book-cover-Life-on-the-Mississippi.webp",
     desc: "Twain's evocative memoir of his pre-war days as a steamboat pilot, charting the river's changing landscape.",
     status: "Modernized",
     genre: "Memoir",
@@ -21,7 +21,7 @@ const books = [
     title: "Eve's Diary",
     filename: null,
     href: "/read/eves-diary",
-    cover: "/images/book-covers/book-cover-eves-diary.jpg",
+    cover: "/images/book-covers/book-cover-eves-diary.webp",
     desc: "Eve's exquisite, poetic account of life in Eden, her fascination with Adam, and the beauty of creation.",
     status: "Interactive, Voiced",
     genre: "Diary / Romance",
@@ -31,7 +31,7 @@ const books = [
   {
     title: "Personal Recollections of Joan of Arc (Volume I)",
     filename: "Recollections-of-Joan-of-Arc-I.txt",
-    cover: "/images/book-covers/Book-cover-Joan-Of-Arc-Vol1.jpg",
+    cover: "/images/book-covers/Book-cover-Joan-Of-Arc-Vol1.webp",
     desc: "Twain's ambitious historical novel detailing the life, trials, and martyrdom of Joan of Arc.",
     status: "Modernized",
     genre: "Historical Fiction",
@@ -41,7 +41,7 @@ const books = [
   {
     title: "What Is Man?",
     filename: "What-Is-Man.txt",
-    cover: "/images/book-covers/Book-cover-WhatIsMan.jpg",
+    cover: "/images/book-covers/Book-cover-WhatIsMan.webp",
     desc: "A thought-provoking philosophical dialogue between an Old Man and a Young Man, exploring free will, human nature, and determinism.",
     status: "Modernized",
     genre: "Philosophical Dialogue",
@@ -51,7 +51,7 @@ const books = [
   {
     title: "The Gilded Age",
     filename: "A-Gilded-Age.txt",
-    cover: "/images/book-covers/Book-cover-The-Gilded-Age.jpg",
+    cover: "/images/book-covers/Book-cover-The-Gilded-Age.webp",
     desc: "A biting satirical novel co-written with Charles Dudley Warner, exposing post-Civil War greed and corruption.",
     status: "Modernized",
     genre: "Satire / Fiction",
@@ -61,7 +61,7 @@ const books = [
   {
     title: "The Celebrated Jumping Frog of Calaveras County, and Other Sketches",
     filename: "The-Celebrated-Jumping-Frog.txt",
-    cover: "/images/book-covers/Book-cover-The-Celebrated-jumping-Frog.png",
+    cover: "/images/book-covers/Book-cover-The-Celebrated-jumping-Frog.webp",
     desc: "Mark Twain's historic debut book, a collection of 27 early sketches that launched his literary career.",
     status: "Modernized",
     genre: "Short Stories / Humor",
@@ -71,7 +71,7 @@ const books = [
   {
     title: "Roughing It",
     filename: "Roughing-It.txt",
-    cover: "/images/book-covers/Book-cover-Roughing-It.jpg",
+    cover: "/images/book-covers/Book-cover-Roughing-It.webp",
     desc: "A wild and humorous account of Twain's stagecoach journey to Nevada and his search for silver in the frontier.",
     status: "Modernized",
     genre: "Travel / Humor",
@@ -81,7 +81,7 @@ const books = [
   {
     title: "Sketches New and Old",
     filename: "Sketches-New-and-Old.txt",
-    cover: "/images/book-covers/Sketches-new-and-old.jpg",
+    cover: "/images/book-covers/Sketches-new-and-old.webp",
     desc: "A comprehensive later collection of Twain's short stories and sketches, expanding upon his early humorous work.",
     status: "Modernized",
     genre: "Short Stories",
@@ -91,18 +91,17 @@ const books = [
   {
     title: "A True Story",
     filename: "A-True-Story.txt",
-    cover: "/images/book-covers/Book-cover-A-True-Story.jpg",
+    cover: "/images/book-covers/Book-cover-A-True-Story.webp",
     desc: "A deeply moving, somber monologue by Aunt Rachel, an enslaved woman recounting the tragic separation of her family.",
     status: "Modernized",
     genre: "Fiction / Drama",
     year: 1874,
     color: "from-[#3a2c1a] to-[#1d160d]"
   },
-
   {
     title: "Mark Twain's Curious Dream",
     filename: "Mark-Twain's-Curious-Dream.txt",
-    cover: "/images/book-covers/Book-cover-Curious-Dream.jpg",
+    cover: "/images/book-covers/Book-cover-Curious-Dream.webp",
     desc: "A humorous and satirical story of a dreamer encountering spirits of the deceased who complain about their graveyard.",
     status: "Modernized",
     genre: "Humor / Satire",
@@ -112,7 +111,7 @@ const books = [
   {
     title: "Following the Equator",
     filename: "Following-The-Equator.txt",
-    cover: "/images/book-covers/Book-cover-Following-The-Equator.jpg",
+    cover: "/images/book-covers/Book-cover-Following-The-Equator.webp",
     desc: "A witty, critical record of Twain's worldwide lecture tour across Australia, India, and South Africa.",
     status: "Modernized",
     genre: "Travelogue",
@@ -122,7 +121,7 @@ const books = [
   {
     title: "A Tramp Abroad",
     filename: "A-Tramp-Abroad.txt",
-    cover: "/images/book-covers/Book-cover-A-Tramp-Abroad.jpg",
+    cover: "/images/book-covers/Book-cover-A-Tramp-Abroad.webp",
     desc: "A humorous record of Twain's pedestrian journey through Germany, Switzerland, and Italy, filled with hilarious observations on European culture.",
     status: "Modernized",
     genre: "Travelogue / Humor",
@@ -132,7 +131,7 @@ const books = [
   {
     title: "A Connecticut Yankee in King Arthur's Court",
     filename: "Connecticut-Yankee.txt",
-    cover: "/images/book-covers/Book-cover-Connecticut-Yankee.jpg",
+    cover: "/images/book-covers/Book-cover-Connecticut-Yankee.webp",
     desc: "An ingenious Yankee mechanic is transported to 6th-century England and uses modern science to reform Camelot.",
     status: "Modernized",
     genre: "Satire / Sci-Fi",
@@ -142,7 +141,7 @@ const books = [
   {
     title: "The Innocents Abroad",
     filename: "The-Innocents-Abroad.txt",
-    cover: "/images/book-covers/Book-cover-The-Innocents-Abroad.jpg",
+    cover: "/images/book-covers/Book-cover-The-Innocents-Abroad.webp",
     desc: "Twain's highly popular travel book charting his journey to Europe and the Holy Land on a steamship cruise.",
     status: "Modernized",
     genre: "Travelogue",
@@ -152,7 +151,7 @@ const books = [
   {
     title: "The American Claimant",
     filename: "The-American-Claimant.txt",
-    cover: "/images/book-covers/Book-cover-The-American-Claimant.jpg",
+    cover: "/images/book-covers/Book-cover-The-American-Claimant.webp",
     desc: "A comedy of errors involving an eccentric American inventor claiming a British earldom and swapping lives.",
     status: "Modernized",
     genre: "Satire",
@@ -162,7 +161,7 @@ const books = [
   {
     title: "The $30,000 Bequest and Others",
     filename: "The-30000-Bequest-and-Others.txt",
-    cover: "/images/book-covers/Book-cover-The-30000-Bequest-and-Others.jpg",
+    cover: "/images/book-covers/Book-cover-The-30000-Bequest-and-Others.webp",
     desc: "A rich anthology of Twain's late short fiction, highlighting his biting satire and deep irony.",
     status: "Modernized",
     genre: "Short Stories",
@@ -172,7 +171,7 @@ const books = [
   {
     title: "The Tragedy of Pudd'nhead Wilson",
     filename: "Tragedy-of-Pudd'nhead-Wilson.txt",
-    cover: "/images/book-covers/Book-cover-Tragedy-of-Puddnhead-Wilson.jpg",
+    cover: "/images/book-covers/Book-cover-Tragedy-of-Puddnhead-Wilson.webp",
     desc: "A tense story of switched infants, legal drama, racial identity, and early forensics in a Missouri town.",
     status: "Modernized",
     genre: "Mystery",
@@ -182,7 +181,7 @@ const books = [
   {
     title: "The Mysterious Stranger",
     filename: "Mysterious-Stranger.txt",
-    cover: "/images/book-covers/Book-cover-Mysterious-Stranger.jpg",
+    cover: "/images/book-covers/Book-cover-Mysterious-Stranger.webp",
     desc: "Twain's dark, profound posthumous fable set in medieval Austria, questioning the nature of human existence.",
     status: "Modernized",
     genre: "Philosophical",
@@ -192,7 +191,7 @@ const books = [
   {
     title: "The Adventures of Tom Sawyer",
     filename: "Adventures-of-Tom-Sawyer.txt",
-    cover: "/images/book-covers/Book-cover-Adventures-of-Tom-Sawyer.jpg",
+    cover: "/images/book-covers/Book-cover-Adventures-of-Tom-Sawyer.webp",
     desc: "The classic tale of childhood escapades, whitewashed fences, and puppy love in St. Petersburg, Missouri.",
     status: "Youth Edition",
     genre: "Fiction",
@@ -202,7 +201,7 @@ const books = [
   {
     title: "Adventures of Huckleberry Finn",
     filename: "Huckleberry-Finn.txt",
-    cover: "/images/book-covers/Book-cover-Huckleberry-Finn.jpg",
+    cover: "/images/book-covers/Book-cover-Huckleberry-Finn.webp",
     desc: "The legendary journey of Huck and Jim escaping civilization down the Mississippi, tackling race, freedom, and friendship.",
     status: "Youth Edition",
     genre: "Fiction",
@@ -212,7 +211,7 @@ const books = [
   {
     title: "The Prince and the Pauper",
     filename: "Prince-and-Pauper.txt",
-    cover: "/images/book-covers/Book-cover-Prince-and-Pauper.png",
+    cover: "/images/book-covers/Book-cover-Prince-and-Pauper.webp",
     desc: "A royal prince and a beggar boy switch roles in Tudor London, exposing the dramatic class divides of England.",
     status: "Youth Edition",
     genre: "Historical Fiction",
@@ -222,7 +221,7 @@ const books = [
   {
     title: "Tom Sawyer Abroad",
     filename: "Tom-Sawyer-Abroad.txt",
-    cover: "/images/book-covers/Book-cover-Tom-Sawyer-Abroad.jpg",
+    cover: "/images/book-covers/Book-cover-Tom-Sawyer-Abroad.webp",
     desc: "Tom Sawyer, Huck Finn, and Jim drift across the Atlantic in a balloon and explore the Sahara Desert.",
     status: "Modernized",
     genre: "Adventure",
@@ -232,7 +231,7 @@ const books = [
   {
     title: "Tom Sawyer, Detective",
     filename: "Tom-Sawyer-Detective.txt",
-    cover: "/images/book-covers/Book-cover-Tom-Sawyer-Detective.jpg",
+    cover: "/images/book-covers/Book-cover-Tom-Sawyer-Detective.webp",
     desc: "Tom Sawyer turns detective to solve a mysterious murder and gem theft in the backwoods of Arkansas.",
     status: "Modernized",
     genre: "Mystery",
@@ -242,7 +241,7 @@ const books = [
   {
     title: "Personal Recollections of Joan of Arc (Volume II)",
     filename: "Recollections-of-Joan-of-Arc-II.txt",
-    cover: "/images/book-covers/Book-cover-Joan-Of-Arc-Vol2.jpg",
+    cover: "/images/book-covers/Book-cover-Joan-Of-Arc-Vol2.webp",
     desc: "The continuation of Joan's heroic journey, her triumphs on the battlefield, and her tragic trial.",
     status: "Modernized",
     genre: "Historical Fiction",
