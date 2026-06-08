@@ -767,7 +767,6 @@ export default function TheCompleteWorksPage() {
                               onClick={() => router.push(dest)}
                               className="cursor-pointer hover:opacity-80 transition-opacity py-2 text-right flex items-center gap-2 justify-end"
                             >
-                              {work.posthumoristic && <span className="px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-xs text-amber-300">POSTHUM.</span>}
                               <div className="text-sm text-[rgba(255,244,223,0.6)]">{work.year}</div>
                             </div>
                           </React.Fragment>
@@ -789,7 +788,6 @@ export default function TheCompleteWorksPage() {
                             {work.title}
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            {work.posthumoristic && <span className="px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-xs text-amber-300">POSTHUM.</span>}
                             <div className="text-sm text-[rgba(255,244,223,0.6)]">{work.year}</div>
                           </div>
                         </div>

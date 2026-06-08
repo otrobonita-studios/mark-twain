@@ -27,6 +27,18 @@ export default function Navigation() {
     };
   }, [isOpen]);
 
+  // Listen for custom trigger event from integrated header menus
+  useEffect(() => {
+    const handleToggle = () => setIsOpen(prev => !prev);
+    const handleClose = () => setIsOpen(false);
+    window.addEventListener('toggle-global-nav', handleToggle);
+    window.addEventListener('close-global-nav', handleClose);
+    return () => {
+      window.removeEventListener('toggle-global-nav', handleToggle);
+      window.removeEventListener('close-global-nav', handleClose);
+    };
+  }, []);
+
   const links = [
     { href: '/', label: 'Let us Talk', icon: MessageSquare, desc: 'Interactive AI Dialogue' },
     { href: '/diary', label: 'My Diary', icon: BookOpen, desc: 'Extracts from my Diary' },
@@ -35,16 +47,20 @@ export default function Navigation() {
     { href: '/about', label: 'About Me', icon: BookOpen, desc: 'Against My Better Judgment' }
   ];
 
+  const isReaderPage = pathname?.startsWith('/read/');
+
   return (
     <>
       {/* Hamburger Trigger Button */}
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className={`global-nav-trigger ${isOpen ? 'open' : ''}`}
-        aria-label="Toggle Navigation Menu"
-      >
-        {isOpen ? <X size={20} /> : <Menu size={20} />}
-      </button>
+      {(!isReaderPage || isOpen) && (
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className={`global-nav-trigger ${isOpen ? 'open' : ''}`}
+          aria-label="Toggle Navigation Menu"
+        >
+          {isOpen ? <X size={20} /> : <Menu size={20} />}
+        </button>
+      )}
 
       {/* Navigation Drawer Overlay */}
       <AnimatePresence>
@@ -67,8 +83,8 @@ export default function Navigation() {
               exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 220 }}
             >
-              <div className="global-nav-header">
-                <span className="typewriter text-[10px] uppercase tracking-widest text-[var(--primary)]">
+              <div className="global-nav-header font-sans">
+                <span className="text-[10px] uppercase tracking-widest text-[var(--primary)] font-semibold">
                   Navigation Desk
                 </span>
                 <div className="nav-decor-line" />
@@ -153,8 +169,8 @@ export default function Navigation() {
                 </motion.div>
               </div>
 
-              <div className="global-nav-footer">
-                <p className="typewriter text-[9px] text-[var(--muted-foreground)]">
+              <div className="global-nav-footer font-sans">
+                <p className="text-[9px] text-[var(--muted-foreground)]">
                   &copy;2026  Otrobonita AI Labs
                 </p>
               </div>

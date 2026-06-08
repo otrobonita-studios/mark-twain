@@ -40,7 +40,7 @@ const titleBlockHtml = `
 <div class="book-title-block">
   <h1>${cleanTitle.toUpperCase()}</h1>
   <h2>BY MARK TWAIN</h2>
-  <h2>(Samuel Langhorne Clemens)</h2>
+  
 </div>
 <hr />
 `;
@@ -52,7 +52,7 @@ const bodyStart = cleaned.indexOf('<body>');
 const bodyEnd = cleaned.lastIndexOf('</body>');
 if (bodyStart !== -1 && bodyEnd !== -1) {
   let bodyContent = cleaned.substring(bodyStart + 6, bodyEnd);
-  
+
   // Strip out old duplicate title/author/illustrated headers near the top (before chapter 1 or TOC)
   // Let's strip h1, h2, h3 that contain title or by mark twain
   const titleRegexPart = cleanTitle.replace(/['’]/g, '.');
@@ -61,7 +61,7 @@ if (bodyStart !== -1 && bodyEnd !== -1) {
   bodyContent = bodyContent.replace(/<h2>\s*By\s*Mark\s*Twain\s*<\/h2>/gi, '');
   bodyContent = bodyContent.replace(/<h2>\s*by\s*Mark\s*Twain\s*<\/h2>/gi, '');
   bodyContent = bodyContent.replace(/<h2>\s*A\s*DOG'S\s*TALE,\s*By\s*Mark\s*Twain\s*<\/h2>/gi, '');
-  
+
   // Reconstruct body
   cleaned = cleaned.substring(0, bodyStart + 6) + '\n' + titleBlockHtml + bodyContent + cleaned.substring(bodyEnd);
 }
@@ -127,13 +127,13 @@ if (figures.length > 0) {
   const hasIllustrationList = /illustrations/i.test(bodyContent.substring(0, 3000));
   if (hasIllustrationList) {
     console.log('Illustrations specifically listed! Moving figures to the bottom gallery...');
-    
+
     // Remove all figures from bodyContent
     bodyContent = bodyContent.replace(figureRegex, '');
-    
+
     // Clean up empty lines/spacing left behind by figures
     bodyContent = bodyContent.replace(/<p>\s*(?:<br\s*\/?>\s*)*<\/p>/gi, '');
-    
+
     // Construct the gallery
     const galleryHtml = `
 <hr />
@@ -152,7 +152,7 @@ bodyContent = bodyContent.replace(/<p>([\s\S]*?)<\/p>/gi, (match, pContent) => {
   const trimmed = pContent.trim();
   const startsWithQuote = /^(“|&ldquo;|&#8220;|"|&quot;|&#34;)/.test(trimmed);
   const endsWithQuote = /(”|&rdquo;|&#8221;|"|&quot;|&#34;|”[\.\!\?]|&rdquo;[\.\!\?]|"[\.\!\?])\s*$/.test(trimmed);
-  
+
   if (startsWithQuote && endsWithQuote) {
     dialogueCount++;
     return `<p class="conversation-line">${pContent}</p>`;

@@ -99,7 +99,7 @@ stories.forEach(story => {
 <div class="book-title-block">
   <h1>${story.title}</h1>
   <h2>BY MARK TWAIN</h2>
-  <h2>(Samuel Langhorne Clemens)</h2>
+  
 </div>
 <hr />
 <div class="book-text-content">

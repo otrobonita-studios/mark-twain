@@ -33,7 +33,7 @@ Each book starts with a standardized title card matching the aesthetic style of 
   <div class="book-title-block">
     <h1>[BOOK TITLE]</h1>
     <h2>BY MARK TWAIN</h2>
-    <h2>(Samuel Langhorne Clemens)</h2>
+    
   </div>
   <hr />
   ```

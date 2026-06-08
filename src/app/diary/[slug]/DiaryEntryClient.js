@@ -44,12 +44,12 @@ export default function DiaryEntryClient({ entry }) {
           <div className="font-sans text-[15px] md:text-[16px] leading-relaxed whitespace-pre-line text-[rgba(255,244,223,0.9)] space-y-4 mb-8">
             {entry.content}
             <Image 
-              src="/images/mark-twain-signature.png" 
+              src="/images/mark-twain-signature.webp" 
               alt="Mark Twain Signature" 
-              width={180}
-              height={58}
+              width={3848}
+              height={755}
               className="modal-signature-img block"
-              style={{ display: 'block', width: '180px', marginTop: '25px', marginBottom: '25px' }}
+              style={{ display: 'block', width: '220px', height: 'auto', marginTop: '25px', marginBottom: '25px' }}
             />
           </div>
 

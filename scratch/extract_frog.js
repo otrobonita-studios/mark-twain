@@ -80,7 +80,7 @@ const wrapper = `<!DOCTYPE html>
 <div class="book-title-block">
   <h1>THE CELEBRATED JUMPING FROG OF CALAVERAS COUNTY</h1>
   <h2>BY MARK TWAIN</h2>
-  <h2>(Samuel Langhorne Clemens)</h2>
+  
 </div>
 <hr />
 <div class="book-text-content">

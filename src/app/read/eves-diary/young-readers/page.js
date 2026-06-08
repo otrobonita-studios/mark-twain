@@ -1,5 +1,6 @@
-import { getDiaryData } from '../getDiaryData';
-import BookReader from '../BookReader';
+import fs from 'fs';
+import path from 'path';
+import GenericBookReader from '@/components/GenericBookReader';
 
 export const metadata = {
   title: "Eve's Diary (Young Readers Edition) — Read Book",
@@ -7,13 +8,14 @@ export const metadata = {
 };
 
 export default async function YoungReadersPage() {
-  const { htmlContent, tocItems } = getDiaryData();
+  const jsonPath = path.join(process.cwd(), 'src/data/books/json/Eves-Diary-young-readers.json');
+  const doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  
   return (
-    <BookReader 
-      htmlContent={htmlContent} 
-      tocItems={tocItems} 
-      initialExperience="child" 
-      initialSubExperience="young" 
+    <GenericBookReader 
+      document={doc} 
+      bookSlug="Eves-Diary-young-readers" 
+      defaultExperience="child" 
     />
   );
 }

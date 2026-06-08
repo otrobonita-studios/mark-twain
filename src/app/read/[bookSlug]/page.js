@@ -6,53 +6,25 @@ function findBookFile(slug) {
   const baseDir = process.cwd();
   const decodedSlug = decodeURIComponent(slug);
   
-  // 1. Check in src/data/books/
+  // Only check in src/data/books/
   let htmlPath = path.join(baseDir, 'src/data/books', `${decodedSlug}.html`);
   if (fs.existsSync(htmlPath)) return { path: htmlPath, type: 'html' };
   
   let txtPath = path.join(baseDir, 'src/data/books', `${decodedSlug}.txt`);
   if (fs.existsSync(txtPath)) return { path: txtPath, type: 'txt' };
 
-  // 2. Check in rag/data-collection/TwainCorpus/converted/
-  htmlPath = path.join(baseDir, 'rag', 'data-collection', 'TwainCorpus', 'converted', `${decodedSlug}.html`);
-  if (fs.existsSync(htmlPath)) return { path: htmlPath, type: 'html' };
-
-  // 3. Check for .txt in project-gutenberg/Works/
-  txtPath = path.join(baseDir, 'rag', 'data-collection', 'TwainCorpus', 'project-gutenberg', 'Works', `${decodedSlug}.txt`);
-  if (fs.existsSync(txtPath)) return { path: txtPath, type: 'txt' };
-
-  // 4. Check in rag/data-collection/
-  txtPath = path.join(baseDir, 'rag', 'data-collection', `${decodedSlug}.txt`);
-  if (fs.existsSync(txtPath)) return { path: txtPath, type: 'txt' };
-
   return null;
 }
 
 export async function generateStaticParams() {
-  const dirs = [
-    path.join(process.cwd(), 'src/data/books'),
-    path.join(process.cwd(), 'rag/data-collection/TwainCorpus/converted')
-  ];
+  const dir = path.join(process.cwd(), 'src/data/books');
   const slugs = new Set();
   
-  for (const dir of dirs) {
-    if (fs.existsSync(dir)) {
-      const files = fs.readdirSync(dir);
-      for (const file of files) {
-        if (file.endsWith('.html') || file.endsWith('.txt')) {
-          slugs.add(file.replace(/\.(html|txt)$/, ''));
-        }
-      }
-    }
-  }
-  
-  // Add other known slugs from Gutenberg works if directories exist
-  const worksDir = path.join(process.cwd(), 'rag/data-collection/TwainCorpus/project-gutenberg/Works');
-  if (fs.existsSync(worksDir)) {
-    const files = fs.readdirSync(worksDir);
+  if (fs.existsSync(dir)) {
+    const files = fs.readdirSync(dir);
     for (const file of files) {
-      if (file.endsWith('.txt')) {
-        slugs.add(file.replace(/\.txt$/, ''));
+      if (file.endsWith('.html') || file.endsWith('.txt')) {
+        slugs.add(file.replace(/\.(html|txt)$/, ''));
       }
     }
   }
@@ -155,12 +127,33 @@ export async function generateMetadata({ params }) {
 export default async function ReadPage({ params }) {
   const { bookSlug } = await params;
   const decodedSlug = decodeURIComponent(bookSlug);
+
+  // Check if compiled JSON document exists
+  const jsonPath = path.join(process.cwd(), 'src/data/books/json', `${decodedSlug}.json`);
+  let doc = null;
+  if (fs.existsSync(jsonPath)) {
+    try {
+      doc = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    } catch (e) {
+      console.error(`Failed to load compiled JSON for ${decodedSlug}:`, e);
+    }
+  }
+
+  if (doc) {
+    return (
+      <GenericBookReader 
+        document={doc}
+        bookSlug={decodedSlug}
+      />
+    );
+  }
+
   const fileInfo = findBookFile(decodedSlug);
 
   if (!fileInfo) {
     return (
       <div style={{ padding: '2rem', fontFamily: 'monospace', color: '#ff5555', backgroundColor: '#15110d', minHeight: '100vh' }}>
-        Error: Book "{decodedSlug}" not found.
+        Error: Book &ldquo;{decodedSlug}&rdquo; not found.
       </div>
     );
   }

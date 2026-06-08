@@ -21,7 +21,7 @@ function modernizeBook(filePath) {
   const filename = path.basename(filePath);
   console.log(`Processing: ${filename}`);
   let html = fs.readFileSync(filePath, 'utf8');
-  
+
   // 1. Clean Gutenberg pre/div blocks containing boilerplate or license safely
   html = html.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (match, content) => {
     if (content.length < 20000 && /project\s*gutenberg|gutenberg\.org|legal\s*notice/i.test(content)) {
@@ -73,7 +73,7 @@ function modernizeBook(filePath) {
 <div class="book-title-block">
   <h1>${cleanTitle.toUpperCase()}</h1>
   <h2>BY MARK TWAIN</h2>
-  <h2>(Samuel Langhorne Clemens)</h2>
+  
 </div>
 <hr />
 `;
@@ -143,10 +143,10 @@ function modernizeBook(filePath) {
       figures.push(match);
       return ''; // remove inline
     });
-    
+
     if (figures.length > 0) {
       console.log(`  Moved ${figures.length} figures to bottom illustrations grid gallery`);
-      
+
       // Remove original List of Illustrations block to avoid duplication
       bodyContent = bodyContent.replace(
         /(<h2>\s*(?:LIST OF ILLUSTRATIONS|Illustrations|ILLUSTRATIONS)\s*<\/h2>|LIST OF ILLUSTRATIONS|ILLUSTRATIONS)([\s\S]{0,100}?)(<table[^>]*>[\s\S]*?<\/table>)/gi,
@@ -173,17 +173,17 @@ function modernizeBook(filePath) {
   let dialogueCount = 0;
   bodyContent = bodyContent.replace(/<p([^>]*)>([\s\S]*?)<\/p>/gi, (match, attrs, content) => {
     const trimmed = content.trim();
-    
+
     // Strip tags first to get pure text content for checking quotes
     const textContent = trimmed.replace(/<[^>]+>/g, '').trim();
-    
+
     const startsWithQuote = /^(“|&ldquo;|&#8220;|"|&quot;|&#34;|‘|&lsquo;|&#8216;)/.test(textContent);
     const endsWithQuote = /(”|&rdquo;|&#8221;|"|&quot;|&#34;|’|&rsquo;|&#8217;|”[\.\!\?]|&rdquo;[\.\!\?]|"[\.\!\?]|’[\.\!\?]|&rsquo;[\.\!\?])\s*$/.test(textContent);
-    
+
     if (attrs.includes('conversation-line')) {
       return match;
     }
-    
+
     if (startsWithQuote && endsWithQuote) {
       dialogueCount++;
       let newAttrs = attrs;
@@ -217,7 +217,7 @@ function main() {
         console.log(`Skipping specialized Eve's Diary file: ${file}`);
         continue;
       }
-      
+
       const fullPath = path.join(booksDir, file);
       modernizeBook(fullPath);
       count++;

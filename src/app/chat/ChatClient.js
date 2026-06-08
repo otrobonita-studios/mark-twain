@@ -500,12 +500,12 @@ export default function ChatClient() {
                   I have returned to discover whether mankind has improved
                 </h2>
                 <Image
-                  src="/images/mark-twain-signature.png"
+                  src="/images/mark-twain-signature.webp"
                   alt="Mark Twain Signature"
-                  width={250}
-                  height={80}
+                  width={3848}
+                  height={755}
                   className="modal-signature-img empty-state-signature"
-                  style={{ marginTop: '1.5rem' }}
+                  style={{ marginTop: '1.5rem', height: 'auto' }}
                 />
                 <div className="voice-of-mark-container">
                   <button
