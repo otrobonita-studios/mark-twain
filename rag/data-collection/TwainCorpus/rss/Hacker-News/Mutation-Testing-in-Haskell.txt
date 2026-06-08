@@ -1,0 +1,440 @@
+Announcing Mutation Testing in Haskell
+
+ERT
+
+5 min
+
+Date
+
+2026-06-03
+
+mutation testing
+
+testing
+
+haskell
+
+Mutation testing is now generally available in 
+sydtest
+. This is a major step towards a saner development workflow in the age of AI-generated code.
+
+What is mutation testing?
+Mutation testing aims to improve a test suite by automatically mutating code and asserting that the tests start failing.
+Alternatively:
+Mutation testing is like a type-system for your tests. It asserts that the tests test the code thoroughly.
+Example
+Consider this simple function:
+canCastFireball ::
+ 
+Int
+ 
+->
+ 
+Int
+ 
+->
+ 
+Bool
+
+canCastFireball level mana 
+=
+
+  level 
+>=
+ 
+5
+
+&&
+ mana 
+>=
+ 
+10
+with a corresponding test suite:
+spec ::
+ 
+Spec
+
+spec 
+=
+ 
+do
+
+  describe 
+"canCastFireball"
+ 
+$
+ 
+do
+
+    it 
+"allows powerful wizards"
+ 
+$
+
+      canCastFireball 
+10
+ 
+50
+ 
+`shouldBe`
+ 
+True
+
+    it 
+"rejects exhausted powerful wizards"
+ 
+$
+
+      canCastFireball 
+10
+ 
+0
+ 
+`shouldBe`
+ 
+False
+
+    it 
+"rejects weak wizards"
+ 
+$
+
+      canCastFireball 
+1
+ 
+10
+ 
+`shouldBe`
+ 
+False
+Would you say this is a good test suite for this code? How can you tell?
+We could argue that a good test suite catches more of the mistakes you make.
+Mutation testing consists of simulating making those mistakes and checking that the test suite would indeed catch the mistake.
+On this example, it might generate a mutation like this:
+canCastFireball :: Int -> Int -> Bool
+
+canCastFireball level mana =
+
+  level >= 5
+
+<     && mana >= 10
+
+---
+
+>     && mana > 10
+When we run the same test suite again, all of the tests still pass. This means that if you had made this exact mistake, your tests wouldn't have caught that. It is called a 
+surviving mutation
+ and it is 
+undesired
+.
+When a mutation survives, you can add a test to 
+cover
+ it. For example, this test could cover it:
+spec ::
+ 
+Spec
+
+spec 
+=
+ 
+do
+
+  describe 
+"canCastFireball"
+ 
+$
+ 
+do
+
+    it 
+"allows barely-energetic wizards"
+ 
+$
+
+      canCastFireball 
+8
+ 
+10
+ 
+`shouldBe`
+ 
+True
+Now when we run the test suite on the mutated code, this test will fail. This means that if you had made this exact mistake, the (new) test suite would have caught that. It is called a 
+killed mutation
+ and it is 
+desired
+. (Don't get me started on how confusing and violent this terminology is.)
+A mutation testing engine automatically generates mutations and runs (corresponding) tests. Ideally it would generate many mutations of which none survive.
+For maximum assurance, you would cover every mutation. Realistically you would disable some.
+Why start mutation testing now?
+I've been using a coding agent (Claude) for a while now and noticed that I have ever less confidence in the code it produces. This is not necessarily related to it being less intelligent than I am (it's often not), but rather to the sheer volume of code it can produce in the same amount of time.
+I have good instructions in place to have it write tests, regression tests, and property tests, but often it completely ignores my instructions or writes useless tests. The only thing that really saves me is a 
+non-AI-based CI system
+ that tells me when any of my checks fail.
+So my aim was to produce a check that would fail if a change were insufficiently tested, without relying on any subjective criterion for determining what "sufficient testing" means. Mutation testing lets me have a 
+completely objective
+ criterion that is 
+independent of my project
+ defined in another repository so that my agent 
+cannot cheat
+.
+How can I try it?
+Mutation testing is now officially available as a part of 
+Sydtest
+.
+Nix Check
+You can add a mutation check to your 
+flake.nix
+'s 
+checks
+ like this:
+  checks
+.
+x86_64
+-
+linux
+.
+mutation = pkgs
+.
+haskellPackages
+.
+sydtest
+.
+mutationCheck 
+{
+
+name
+ 
+=
+ 
+"my-mutation-check"
+;
+
+packages
+ 
+=
+ 
+[
+
+"my-package"
+
+"my-other-package"
+
+];
+
+}
+;
+Sydtest takes care of the rest and produces nice reports. Both human-readable...
+and machine-readable:
+{
+
+"outcome"
+:
+ 
+"uncovered"
+,
+
+"mutation"
+:
+ 
+{
+
+"id"
+:
+ 
+[
+"Money.Amount"
+,
+ 
+"Cmp"
+,
+ 
+"801"
+,
+ 
+"79"
+,
+ 
+"92"
+,
+ 
+"<"
+,
+ 
+"1"
+ 
+]
+,
+
+"operator"
+:
+ 
+"Cmp"
+,
+
+"original"
+:
+ 
+">"
+,
+
+"replacement"
+:
+ 
+"<"
+,
+
+"module"
+:
+ 
+"Money.Amount"
+,
+
+"source_file"
+:
+ 
+"src/Money/Amount.hs"
+,
+
+"line"
+:
+ 
+801
+,
+
+"end_line"
+:
+ 
+801
+,
+
+"col_start"
+:
+ 
+79
+,
+
+"col_end"
+:
+ 
+92
+,
+
+"context_before"
+:
+ 
+[
+
+""
+,
+
+"-- | Validate that an 'Amount' is strictly positive. I.e. not 'zero'."
+,
+
+"validateStrictlyPositive :: Amount -> Validation"
+
+]
+,
+
+"source_lines"
+:
+ 
+[
+
+"validateStrictlyPositive amount = declare 
+\"
+The Amount is strictly positive
+\"
+ $ amount > zero"
+
+]
+,
+
+"mutated_lines"
+:
+ 
+[
+
+"validateStrictlyPositive amount = declare 
+\"
+The Amount is strictly positive
+\"
+ $ amount < zero"
+
+]
+,
+
+"context_after"
+:
+ 
+[]
+,
+
+"covering_tests"
+:
+ 
+{
+
+"really-safe-money-autodocodec-test"
+:
+ 
+[]
+,
+
+"really-safe-money-test"
+:
+ 
+[]
+
+},
+
+"timeout_micros"
+:
+ 
+30000000
+
+}
+
+}
+Disabling mutations
+Sometimes you don't care whether a piece of code is fully mutation tested. A good example (in my opinion) is debug logging:
+doAThing 
+=
+ 
+do
+
+    logDebug 
+"Doing a thing"
+
+    doTheThing
+Removing the 
+logDebug
+ line is a valid mutation, but I just don't care to test it.
+In this case I can add an annotation:
+{-# ANN doAThing ("DisableMutationsFor logDebug" :: String) #-}
+
+doAThing 
+=
+ 
+do
+
+    logDebug 
+"Doing a thing"
+
+    doTheThing
+There are other annotations available to disable mutations per-module, per-mutation, or per-binding.
+Conclusion
+Mutation testing in Haskell is ready to try out. I'm already using it in 
+NixCI
+ and the latest version of 
+really-safe-money
+ is already fully mutation tested.
+Please let me know if you end up trying it. I'd love to nerd out about this.
+
+Looking for a lead engineer?
+
+Hire me
+
+Next
+
+I got to the front page of Hackernews and was underwhelmed by the traffic
