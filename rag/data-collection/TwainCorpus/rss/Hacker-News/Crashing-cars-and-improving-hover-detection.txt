@@ -1,0 +1,248 @@
+I'm going to show you an effect that you'll recognise immediately, perhaps without ever having paid it much attention.
+
+Take any collection of elements that react to hover: a list of menu items, swatches in a colour picker, squares in a grid. Now quickly swipe your cursor across them:
+
+In real life, your hand moves across your desk, or your finger across the screen, in a continuous, unbroken motion. But this isn't reflected in the example above. Here, lights in the path of motion are switched on seemingly at random. Move slower, and you'll see that every element lights up, and the faster you swipe, the more elements are skipped.
+
+Now run your mouse over this version. Swipe it as fast as you like: every cell you cross lights up, with nothing skipped.
+
+Honestly when I created this second example I couldn't stop playing with it. It is weird how responsive it feels, why doesn't it always work like this? By the end of this post you'll know why, and how to build this improved hover yourself.
+
+Surprisingly, this is the exact same problem that video game engines encounter when deciding whether a car has crashed, or any other type of collision has taken place. As such, a solution to our skipped elements was invented decades ago.
+
+Discrete vs continuous motion
+
+CSS selectors like 
+:hover
+, Motion events like 
+onHoverStart
+, and JS events like 
+pointerenter
+ are all afflicted by this skipped element problem.
+
+The reason being, pointer position is sampled discretely, rather than continuously. Streamed as a series of points, via events, to the browser and then by the browser to our code.
+
+To illustrate, lets imagine a row of elements, with a pointer moving slowly across them. The pointer events always come in at the same rate, so with slower motion these events are closer together. Meaning that it's more likely at least one pointer event lands on each element, triggering its hover state:
+
+Faster movement means the gaps between these events increases. Which means any elements lying in these gaps are completely skipped.
+
+If you've ever written a physics engine, this'll feel familiar, because it's a textbook collision detection problem with a specific name: 
+tunnelling
+.
+
+Physics engines run a loop. Every iteration, they calculate the next position of objects based on their position and velocity. Then, they check which objects hit which. It's similar to pointer events in sense that you're checking discrete snapshots of positions rather than continuous motion (the latter essentially requiring infinite computation).
+
+Picture a car driving towards a thin wall. During Animation Frame A it's just short of the wall, and then as it drives a little further, in Frame B it's overlapping the wall. The engine spots the overlap and registers a hit.
+
+In a game, it will probably do something like move the car back outside the wall and trigger a crashing animation, so they appear to impact.
+
+But now, imagine a car that's moving even faster. It's moving so fast that, in 
+Frame B,
+ it's already out the other side of the wall. In no single frame does the car overlap the wall, so the collision check, which only ever looks once per frame, sees nothing. The car sails straight through.
+
+This is tunnelling, and it's the exact same problem as our pointer sampling. The pointer is the fast object, each hover target a thin wall.
+
+The fix
+
+Games fix tunnelling by, instead of asking "where is the object 
+this frame
+, and does that overlap anything?", you ask "what path did the object take 
+since last frame
+, and did that path cross anything?".
+
+Rather than test a point, you test a line.
+
+For pointers, that line is easy to calculate. You can measure the pointer's position this frame, and look back at where it was in the previous frame. Draw a line between the two and you've got the route the cursor took. So instead of checking which element contains the current point, you check which elements the 
+line intersects
+.
+
+Building it with Motion
+
+To actually implement this, we need to:
+
+Get the pointer's previous and current position.
+
+Measure the elements we wish to check against.
+
+Perform a cheap geometric test.
+
+Reading the pointer
+
+In this post, we're going to be using Motion APIs and concepts, but the basic procedure is of course replicable in plain JavaScript.
+
+Motion+
+ ships a 
+usePointerPosition
+ hook that gives you pointer positions as 
+motion values
+, in 
+viewport-relative coordinates
+.
+
+const
+ pointer
+ =
+ usePointerPosition
+()
+
+The reason I default to 
+usePointerPosition
+ is that it's extremely composable. No matter how many components call it, it only ever registers a single pointer listener and a single pair of motion values. Likewise, motion values are easy to pass straight through our compositional hooks like 
+useTransform
+, 
+useSpring
+ and 
+useVelocity
+.
+
+However, for this use case, the nice thing about motion values is they remember their final set value in the previous animation frame. 
+pointer.x.get()
+ returns the current position and 
+pointer.x.getPrevious()
+ is where it was left the frame before. There's our line: previous position to current position.
+
+Measuring the element
+
+We want to test every element's bounding box against the line each frame. 
+Element.getBoundingClientRect()
+ is the browser's built-in API for measuring the bounding box (and like 
+usePointerPosition
+, this method also returns coordinates relative to the viewport).
+
+We can schedule this measurement using 
+Motion's frame loop
+'s 
+read
+ step, which is like 
+requestAnimationFrame
+ but removes 
+layout and style thrashing
+ by grouping all the reads before any writes within each animation frame.
+
+frame
+.
+read
+(
+measureElement
+,
+ true
+)
+
+Testing the geometry
+
+For each element, we want to answer one question: does the pointer's path cross it? We have a cheap solution in the form of the 
+slab method
+.
+
+The idea behind the slab method is to stop thinking of the rectangle as a shape and start thinking of it as the overlap between two infinite bands, called 
+slabs
+.
+
+Slab X fills the gap between the left and right edges, and Slab Y fills the gap between the top and bottom. Self-evidently, a point is inside the rectangle only when it's inside 
+both
+ slabs at once.
+
+To figure this out, we can measure whether the line is inside each slab independently. So for the x-axis alone we ask: at what fraction (running from 
+0
+ at the start of the line and 
+1
+ at the end) of the way does the path 
+enter
+ the vertical slab, and at what fraction does it 
+leave
+?
+
+For instance, in the following diagram 
+enterX
+ would be something like 
+0.33
+ and 
+exitX
+ something like 
+0.66
+.
+
+We can tell if a line is fully outside a slab, and therefore outside the box, if 
+enterX
+ (or 
+Y
+) is more than 
+1
+, which means the line is fully to the left of the slab. Likewise, if 
+exitX
+ is less than 
+0
+ then the line is fully to the right of the slab.
+
+If the line does intersect Slab X then we can do exactly the same for Slab Y.
+
+Finally, we know the line isn't inside the element unless it is inside both slabs 
+at the same time
+.
+
+We know it doesn't 
+enter
+ the bounding box until we've crossed both 
+enterX
+ and 
+enterY
+. Or, 
+enter = max(enterX, enterY)
+.
+
+Likewise, the path will 
+exit
+ the bounding box when it leaves either 
+exitX
+ or 
+exitY
+. Or, 
+exit = min(exitX, exitY)
+.
+
+Finally, with final 
+enter
+ and 
+exit
+ values in hand, we can quickly calculate whether the line was within both slabs 
+at the same time
+ 
+by checking whether 
+enter < exit
+.
+
+A path can pass through both slabs and still miss the element, as long as it isn't inside both 
+at the same time
+. Here the line crosses Slab X below the element, leaves it, and only then crosses Slab Y to its right. The two crossings never overlap, so the highest 
+enter
+ is larger than the smallest 
+exit
+.
+
+See it run
+
+Here's the same grid again, this time wired up with our collision detection instead of 
+onPointerEnter
+. Every cell the pointer crosses lights up, so even a fast flick leaves an unbroken trail with nothing missed.
+
+Next steps
+
+There are (probably?) good reasons browsers hit-test a single point rather than running this algorithm on every element, on every site. Clearly this feels better than the native implementation but it's certainly more expensive. Although there are plenty of avenues for optimisation (caching measurements, algorithmic improvements), what we have is good enough for most things.
+
+However, we're not about "good enough", we're looking for something more. So for isolated showcase UIs this is a technique you can keep in mind.
+
+You can take it further, too. In this post we've concentrated specifically on producing a "is hover" boolean check. But, the slab method gives us some valuable extra information, including 
+where
+ along the path the hit happened.
+
+There are some fun additional effects you could produce with this information that I'll leave to the imagination. But, one idea is triggering an animation with a negative 
+delay
+ based on this progress value. This ensures elements colliding with the cursor don't all animate as a batch but with a subtle offset that reflects when they were "really" hovered.
+
+Our new 
+Bobble Hover
+ example does exactly this, with each tile rippling in the order the cursor hit them, each launched with the speed it was struck at - all built on the same slab method we've just explored.
+
+Would you like to see this kind of collision detection API in Motion? You know where to 
+let us know
+.
