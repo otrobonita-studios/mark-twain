@@ -24,6 +24,7 @@ export default function GenericBookReader({
 }) {
   const progressRef = useRef(null);
   const readerRef = useRef(null);
+  const chatInputRef = useRef(null);
 
   // Normalize document prop or fallback to htmlContent
   const documentModel = useMemo(() => {
@@ -327,23 +328,15 @@ export default function GenericBookReader({
     return () => window.removeEventListener('scroll', handleScrollProgress);
   }, []);
 
-  // Header auto-hiding scroll logic
+  // Auto-focus chat input when drawer opens
   useEffect(() => {
-    const handleScrollHeader = () => {
-      const currentScrollY = window.scrollY;
-      if (currentScrollY < 80) {
-        setIsHeaderVisible(true);
-      } else if (currentScrollY > lastScrollY.current) {
-        setIsHeaderVisible(false);
-      } else {
-        setIsHeaderVisible(true);
-      }
-      lastScrollY.current = currentScrollY;
-    };
-
-    window.addEventListener('scroll', handleScrollHeader);
-    return () => window.removeEventListener('scroll', handleScrollHeader);
-  }, []);
+    if (isMkiiChatOpen && chatInputRef.current) {
+      const timer = setTimeout(() => {
+        chatInputRef.current.focus();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isMkiiChatOpen]);
 
   const getFirstVisibleElementId = () => {
     const elements = window.document.querySelectorAll('.book-text-content [id]');
@@ -1328,7 +1321,7 @@ export default function GenericBookReader({
         {isMkiiChatOpen && (
           <>
             <motion.div className="toc-backdrop fixed inset-0 bg-black/40 z-45" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsMkiiChatOpen(false)} />
-            <motion.div className="toc-drawer fixed top-0 right-0 bottom-0 w-[420px] max-w-[95vw] bg-[#15110d] border-l border-[var(--border)] flex flex-col z-50 text-[var(--foreground)] font-sans" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'tween', duration: 0.3 }}>
+            <motion.div className="toc-drawer fixed top-0 right-0 bottom-0 w-[420px] max-w-[95vw] bg-[#15110d] border-l border-[var(--border)] flex flex-col z-50 text-[var(--foreground)] font-sans" style={{ left: 'auto', right: 0 }} initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} transition={{ type: 'tween', duration: 0.3 }}>
               <div className="p-5 border-b border-[rgba(255,244,223,0.08)] flex items-center justify-between bg-[#181411] font-sans">
                 <div className="flex items-center gap-2 font-sans">
                   <h3 className="font-sans font-bold text-lg m-0">Ask Mark</h3>
@@ -1415,12 +1408,14 @@ export default function GenericBookReader({
               <div className="p-4 border-t border-[rgba(255,244,223,0.08)] bg-[#181411] font-sans">
                 <div className="flex gap-2 font-sans">
                   <input 
+                    ref={chatInputRef}
                     type="text" 
                     value={chatInput} 
                     onChange={e => setChatInput(e.target.value)} 
                     onKeyDown={e => e.key === 'Enter' && handleSendChatMessage()}
                     placeholder="Spit it out..."
                     className="flex-1 py-2 px-3 bg-[#1c1814] border border-[var(--border)] rounded text-xs outline-none text-[var(--foreground)] font-sans"
+                    autoFocus
                   />
                   <button onClick={() => handleSendChatMessage()} disabled={chatLoading || !chatInput.trim()} className="btn-gold px-3.5 py-2 rounded flex items-center justify-center font-sans">
                     <Send size={14} />
