@@ -241,7 +241,10 @@ export default function ChatClient() {
 
   // Keyboard-first focus retention: focus textarea whenever messages or loading state changes
   useEffect(() => {
-    if (chatInputRef.current) {
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const shouldFocus = !isMobile || messages.length > 0;
+
+    if (shouldFocus && chatInputRef.current) {
       const timer = setTimeout(() => {
         if (document.activeElement !== chatInputRef.current) {
           chatInputRef.current.focus();
@@ -695,7 +698,6 @@ export default function ChatClient() {
             <textarea
               ref={chatInputRef}
               id="chat-input-textarea"
-              autoFocus
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {

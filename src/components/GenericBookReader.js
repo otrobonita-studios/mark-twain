@@ -327,8 +327,23 @@ export default function GenericBookReader({
     return () => window.removeEventListener('scroll', handleScrollProgress);
   }, []);
 
-  // Header auto-hiding logic disabled (always visible)
-  // isHeaderVisible is initialized to true and remains true.
+  // Header auto-hiding scroll logic
+  useEffect(() => {
+    const handleScrollHeader = () => {
+      const currentScrollY = window.scrollY;
+      if (currentScrollY < 80) {
+        setIsHeaderVisible(true);
+      } else if (currentScrollY > lastScrollY.current) {
+        setIsHeaderVisible(false);
+      } else {
+        setIsHeaderVisible(true);
+      }
+      lastScrollY.current = currentScrollY;
+    };
+
+    window.addEventListener('scroll', handleScrollHeader);
+    return () => window.removeEventListener('scroll', handleScrollHeader);
+  }, []);
 
   const getFirstVisibleElementId = () => {
     const elements = window.document.querySelectorAll('.book-text-content [id]');
