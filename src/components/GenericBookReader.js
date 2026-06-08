@@ -112,6 +112,7 @@ export default function GenericBookReader({
   const [bookmarks, setBookmarks] = useState([]);
   const [collapsedNotes, setCollapsedNotes] = useState({});
   const [activeId, setActiveId] = useState(null);
+  const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, text: '' });
 
   // Layout drawers
   const [isTocOpen, setIsTocOpen] = useState(false);
@@ -685,7 +686,7 @@ export default function GenericBookReader({
           font-size: 0.75rem;
           white-space: normal;
           width: max-content;
-          max-width: 260px;
+          max-width: 600px;
           z-index: 50;
           box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
           pointer-events: none;
@@ -1342,15 +1343,10 @@ export default function GenericBookReader({
               <div className="flex-1 p-5 overflow-y-auto custom-scrollbar flex flex-col gap-4 font-sans">
                 {chatMessages.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full text-center py-8 font-sans">
-                    <p className="font-sans text-xs text-[var(--muted-foreground)] tracking-widest max-w-[280px] leading-relaxed mb-4">
+                    <p className="font-sans text-xs text-[var(--muted-foreground)] tracking-widest max-w-[600px] leading-relaxed mb-4">
                       Ask me about the page in front of you, or about anything the years have taught me.
                     </p>
-                    <div className="flex flex-col gap-2 w-full max-w-[320px] font-sans">
-                      {['Why did you write this text?', 'What do you mean by that first chapter?', 'Explain the historical context'].map((p, idx) => (
-                        <button key={idx} onClick={() => handleSendChatMessage(p)} className="text-left text-xs p-2.5 rounded bg-[rgba(255,244,223,0.02)] border border-[var(--border)] hover:bg-[rgba(255,244,223,0.05)] hover:border-[var(--primary)] transition-all cursor-pointer text-[var(--muted-foreground)] hover:text-white font-sans">
-                          {p}
-                        </button>
-                      ))}
+                    <div className="flex flex-col gap-2 w-full max-w-[600px] font-sans">
                     </div>
                   </div>
                 ) : (

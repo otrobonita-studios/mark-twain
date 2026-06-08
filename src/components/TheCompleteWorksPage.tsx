@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Moon, Sun, Sparkles, Mic, Map, BookOpen, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Moon, Sun, Sparkles, Mic, Map, BookOpen, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const books = [
@@ -364,6 +364,7 @@ const newsAccounts: WorkEntry[] = [
 export default function TheCompleteWorksPage() {
   const router = useRouter();
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
+  const [loadingBook, setLoadingBook] = useState<number | null>(null);
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [scrollProgress, setScrollProgress] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
@@ -429,6 +430,16 @@ export default function TheCompleteWorksPage() {
       }
     }
   }, [active]);
+
+  useEffect(() => {
+    const handleRouteChange = () => {
+      setLoadingBook(null);
+    };
+    router.events.on('routeChangeComplete', handleRouteChange);
+    return () => {
+      router.events.off('routeChangeComplete', handleRouteChange);
+    };
+  }, [router.events]);
 
   useEffect(() => {
     return () => {
@@ -579,6 +590,7 @@ export default function TheCompleteWorksPage() {
                           style={{ pointerEvents: 'auto', cursor: 'pointer', background: 'none', border: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}
                           onClick={(e) => {
                             e.stopPropagation();
+                            setLoadingBook(i);
                             if (book.href) {
                               router.push(book.href);
                             } else if (book.filename) {
@@ -587,7 +599,11 @@ export default function TheCompleteWorksPage() {
                             }
                           }}
                         >
-                          <BookOpen className="w-5 h-5 text-[var(--primary)]" />
+                          {loadingBook === i ? (
+                             <Loader2 className="w-5 h-5 animate-spin text-[var(--primary)]" />
+                           ) : (
+                             <BookOpen className="w-5 h-5 text-[var(--primary)]" />
+                           )}
                           <span className="text-[9px] font-mono uppercase tracking-widest text-[#fff4df] font-semibold">
                             Open
                           </span>
@@ -642,19 +658,36 @@ export default function TheCompleteWorksPage() {
               This is the material I lean on when we talk. Read it your own way if you wish. Don't bet on my holding the line the analysts have drawn over the decades – I have a habit of moving. Whether that is evolving or merely revolving, I leave to wiser men than myself, of whom there is rumored to be a supply.
             </p>
 
-            {/* Global Search */}
-            <div style={{ marginBottom: '3rem', marginTop: '2rem' }}>
-              <input
-                type="text"
-                placeholder="Search all works..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full px-4 py-2 bg-[rgba(255,244,223,0.05)] border border-[rgba(217,163,74,0.3)] rounded text-[rgba(255,244,223,0.9)] placeholder-[rgba(255,244,223,0.4)] focus:outline-none focus:border-[var(--primary)]"
-                style={{ fontFamily: 'var(--font-typewriter)', fontSize: '0.875rem' }}
-              />
+            {/* Global Search and Bookmarks */}
+            <div className="flex items-start mb-8 space-x-4">
+              {/* Search Input (left half) */}
+              <div className="flex-1">
+                <input
+                  type="text"
+                  placeholder="Search all works..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full px-4 py-2 bg-[rgba(255,244,223,0.05)] border border-[rgba(217,163,74,0.3)] rounded text-[rgba(255,244,223,0.9)] placeholder-[rgba(255,244,223,0.4)] focus:outline-none focus:border-[var(--primary)]"
+                  style={{ fontFamily: 'var(--font-typewriter)', fontSize: '0.875rem' }}
+                />
+              </div>
+              {/* Bookmarks (right half) */}
+              <div className="w-64 max-h-48 overflow-y-auto bg-[rgba(255,244,223,0.03)] border border-[rgba(217,163,74,0.2)] rounded p-2">
+                <h3 className="text-text-100 font-semibold mb-2">Bookmarks</h3>
+                <ul className="space-y-1">
+                  {booksList.map((bm) => (
+                    <li key={bm.slug}>
+                      <button
+                        onClick={() => router.push(`/read/${bm.slug}`)}
+                        className="text-sm text-[var(--primary)] hover:opacity-80"
+                      >
+                        {bm.title}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
-
-
 
             {(() => {
               const booksFiltered = booksList.filter(book => book.title.toLowerCase().includes(searchQuery.toLowerCase()));
