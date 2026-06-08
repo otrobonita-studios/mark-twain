@@ -1,0 +1,278 @@
+120,000 Lines of Rust: Inside the Nosdesk Backend
+ 
+Published: 28 May 2026
+
+I 
+wrote before
+ about why I built Nosdesk, and somewhere in that story I said I chose the hard path with Rust and it paid off. That post was about the product. This one is about what powers it.
+ 
+What started as a handful of files has grown, over a year or so, into something close to 120,000 lines of Rust across roughly 260 modules, with around 1,030 tests holding it in place. It still ships as a single binary that comes up with one 
+docker compose up
+. The stack stayed deliberately small: Actix-web on top, Diesel over Postgres for storage, Redis for fan-out, Tokio running everything underneath.
+ 
+Three habits ended up shaping the work, and they run through everything below:
+ 
+Push the dangerous mistakes into the type system
+, so the wrong thing won’t compile instead of merely being discouraged.
+ 
+Split the pure logic from the I/O around it
+, so the tricky parts become functions you can test without a database or a socket.
+ 
+Make comments explain 
+why
+, not 
+what
+: the alternative I rejected, the RFC I’m honouring, the bug that taught me the lesson.
+ 
+Everything Is a Pipeline
+ 
+When a client connects to Nosdesk, the first thing it does is pull a full snapshot of everything it’s allowed to see (bootstrap sync), which on a real workspace is a lot of rows. Load that into a 
+Vec
+ and serialise it in one shot and you get a workspace-sized memory spike on every connection.
+ 
+So bootstrap is a stream. Rows are serialised as newline-delimited JSON and pushed through an 
+mpsc::channel(64)
+, so a slow reader back-pressures the producer instead of pinning the whole result set in RAM. Diesel is synchronous, which means the query side runs on 
+spawn_blocking
+ and the bytes come back through a 
+ReceiverStream
+. The whole snapshot lives inside one transaction, so the client sees a consistent point-in-time view even while other writes are landing.
+ 
+That shape repeats throughout the codebase: a bounded buffer, the blocking work pushed off the runtime, back-pressure as a feature. Once you see data flow as a pipeline where the producer can outrun its consumer, you stop writing code that falls over under load.
+ 
+Teaching Postgres to Push
+ 
+The sync engine is one append-only log doing three jobs. Every meaningful change in the system writes a single row into 
+sync_actions
+, and three independent consumers read from that one write: HTTP delta sync for clients catching up, a live push channel for clients already connected, and the audit trail. Collapsing it into one log means a client and an audit row can never disagree about what happened. If the write landed, every consumer sees the same canonical event in the same order. The cost is one extra row per business event, which on Postgres is essentially free.
+ 
+The harder of the three is the live push: how the server learns, in real time, that a row has just landed. Postgres has 
+LISTEN
+/
+NOTIFY
+ for this, but Diesel’s synchronous libpq client can’t surface async notifications cleanly, so I open a dedicated 
+tokio-postgres
+ connection outside the main pool, purely to listen. Its notification API is poll-based, which I wrap into a 
+Stream
+:
+ 
+let
+ mut
+ messages 
+=
+ stream
+::
+poll_fn
+(
+move
+ |
+cx
+|
+ conn
+.
+poll_message
+(cx));
+ 
+That one line bridges a callback-shaped C-style API to 
+async
+/
+await
+. Adapting awkward upstream APIs into the shape your system wants is most of what async Rust is.
+ 
+The decision that load-bears the whole subsystem is that the NOTIFY is intentionally empty. It carries no payload, no row id, no hint at what changed. Every wakeup means “drain anything new past my watermark”, and the listener runs 
+WHERE sync_id > last_seen
+ to find it.
+ 
+That choice looks wasteful for about thirty seconds, and then the failure modes it deletes start adding up. Fifty rows committed in one transaction collapse to one wakeup instead of fifty. A burst of writes debounces on its own. Most importantly, it stays correct under concurrent writers: a handler that trusted the payload and fetched “the row named in the notification” would silently miss the rows everyone else committed in the same window. The listener catches up on connect, drains in a loop when it hits a page cap, and reconnects with exponential backoff. The watermark lives in memory on purpose. SSE isn’t the only delivery path, so any gap a restart leaves behind gets covered by the client’s normal delta catch-up.
+ 
+The Live Layer
+ 
+The broadcast bus that fans the log out to connected browsers runs over Server-Sent Events. Each topic pairs a 
+tokio::sync::broadcast
+ sender for the live tail with a small ring buffer of recent events for replay, so a client that briefly drops its connection reconnects with the standard 
+Last-Event-ID
+ header and backfills the gap instead of resyncing from scratch.
+ 
+The per-client subscription is a hand-written 
+Stream
+ implementation that does four things at once: it merges every topic the client subscribed to, drains the replay buffer first and dedupes the overlap with the live tail, interleaves a 15-second heartbeat so proxies don’t quietly hang up, and closes any client that falls too far behind so one slow consumer can’t stall everyone else. The 
+Drop
+ impl deregisters the client, so there’s no manual teardown to forget.
+ 
+The concurrency vocabulary in this subsystem is deliberate. 
+DashMap
+ for the lazily-populated topic map. 
+tokio::broadcast
+ for fan-out with built-in lag detection. Bounded 
+mpsc
+ where I want back-pressure. 
+std::sync::RwLock
+ where no 
+await
+ crosses the critical section; 
+tokio::sync::RwLock
+ only where one does. 
+AtomicU64
+ for the sequence counter. Picking the wrong one is how you ship a deadlock or a 
+!Send
+ future that won’t compile.
+ 
+When the Library Can Panic
+ 
+Real-time collaborative editing of ticket notes runs on CRDTs via the 
+yrs
+ Rust port of Yjs, wired up as Actix actors, one per connection.
+ 
+Two design choices in here are worth pulling out.
+ 
+The first: the server derives its CRDT client ID deterministically from a hash of the document ID, masked to 53 bits so it fits inside a JavaScript safe integer. That sounds fussy until you hit the bug it prevents. If the server picked a random ID, every backend restart would look like a brand-new participant to every client, and reconnecting clients would see phantom divergence in their documents. A stable ID across restarts makes that whole class of bug disappear.
+ 
+The second: 
+yrs
+ can panic on malformed UTF-8 deep inside the library, and a panic in an actor would take down the connection in a way I don’t control. So every call into it goes through a 
+catch_unwind
+:
+ 
+fn
+ safe_get_fragment_string
+(fragment
+:
+ &
+XmlFragment
+, txn
+:
+ &
+Transaction
+) 
+->
+ Option
+<
+String
+> {
+
+    catch_unwind
+(
+AssertUnwindSafe
+(
+||
+ fragment
+.
+get_string
+(txn)))
+.
+ok
+()
+
+}
+ 
+I treat anything I don’t own the same way. Assume it can panic on input you didn’t expect, and isolate it so the failure stops at the call site instead of propagating into a downed connection.
+ 
+Building Things That Survive a Crash
+ 
+The email subsystem is about 14,000 lines, and email is where I learned to build for the unhappy path. Email is miserable. Servers go down, rate-limit you, accept a message and bounce it an hour later, or just hang. A queue that assumes the happy path will lose mail, and losing a customer’s support email is unforgivable.
+ 
+So it’s a durable queue built for the unhappy path:
+ 
+A circuit breaker
+, a hand-rolled closed/open/half-open state machine over a rolling window of recent failures. When a provider starts failing, the breaker opens and stops hammering it. The transition back to half-open is computed lazily when the state is next read, not from a background timer, so there’s no extra task to spawn and supervise.
+ 
+Full-jitter backoff
+ for retries, the formula from the AWS Builders’ Library, written as a pure function with careful overflow handling and a test that throws 99 attempts at it to prove it never panics. Retry math is the kind of thing that’s trivial to test once you pull it out of the I/O it usually hides inside.
+ 
+At-least-once delivery I can reason about.
+ Workers claim a batch with 
+FOR UPDATE SKIP LOCKED
+ under a five-minute lease, and every message gets a deterministic Message-ID stamped at enqueue time. If a worker dies mid-send, the lease expires and another worker retries, and receiving mail servers dedupe on the Message-ID. I’d rather send twice than drop once, and I made that trade-off explicit instead of pretending the queue was exactly-once.
+ 
+The channels are supervised actor-style: one long-lived task owns the registry, and HTTP handlers send it commands over a bounded channel instead of reaching into a shared map behind a lock. A panicking worker gets logged and left stopped, not auto-restarted into an infinite crash loop, because a worker that panics is a bug that wants my attention, not a blip to paper over.
+ 
+Making the Wrong Thing Impossible to Write
+ 
+This is where the first habit, pushing mistakes into the type system, gets concrete.
+ 
+Nosdesk is multi-tenant, so query scoping has to be a property of the system, not something a developer has to remember. Handlers don’t get a raw database connection at all. The only way to reach the pool is through one of two extractors: 
+TenantConn
+, which runs every query inside a transaction with the workspace context set so Postgres Row-Level Security filters rows automatically, or 
+PlatformConn
+, which elevates to a special role for the rare cross-tenant operation.
+ 
+The audit surface is the 
+function signature
+. A handler that takes a 
+PlatformConn
+ announces “I cross tenant boundaries” right there in its type, visible at code review, with no runtime way to switch modes inside the body. And if the context GUCs aren’t set, the RLS policy returns zero rows instead of everything. The failure mode is a loud bug, not a silent one.
+ 
+The same instinct shows up in the plugin system, which installs and runs signed third-party code. My favourite piece is a tiny type called 
+InstallToken
+: the function that inserts a plugin row 
+requires one as an argument
+, and the only way to construct one is private to the verified-install module. So the type system makes the signing-checked install pipeline the single path that can get a plugin into the database. There’s no allowlist loop to forget, because the shape of the code makes the check unskippable. (The signing itself is Ed25519 over a length-prefixed canonical digest with a domain-separation prefix, so a signature for one thing can’t be replayed as a signature for another, but that’s a post of its own.)
+ 
+Smaller Structural Defences
+ 
+A few more pieces from across the codebase, in roughly increasing order of paranoia:
+ 
+SSRF-safe outbound HTTP.
+ Instead of an 
+assert_safe(url)
+ helper that every call site has to remember (and that has a time-of-check/time-of-use hole anyway), I plugged a custom DNS resolver into the HTTP client so it filters addresses at the same resolution the connection uses. It hand-enumerates the non-routable ranges, including CGNAT and the IPv4-mapped-IPv6 trick so 
+::ffff:127.0.0.1
+ can’t smuggle a loopback past the v6 check, because 
+IpAddr::is_global()
+ is somehow still unstable.
+ 
+Equal-work login.
+ Every failed login path, whether it’s a nonexistent email, an SSO-only account, or a soft-deleted user, funnels onto one bcrypt verification against a dummy hash, with a prewarm so the very first real login doesn’t pay a one-time cost that reveals it was first. It’s a textbook user-enumeration-via-timing defence, but it only works if you do the equal work on every path.
+ 
+Encryption with domain separation.
+ AES-256-GCM via 
+ring
+, binding a context string into the auth tag so ciphertext sealed for one purpose can’t be opened for another even though they share a master key, with plaintext buffers zeroized on the way out.
+ 
+Keeping It Real
+ 
+Test. Revalidate. The ~1,030 tests cluster where the code is most likely to be wrong: manifest validation, IMAP parsing, email threading, HTML sanitisation, the plugin type layer. All pure functions, all runnable without a database or a socket. Coverage outside those clusters is thinner on purpose. Running through a stack of mocked DB calls usually proves only that the mocks work.
+ 
+Two parts of the suite do more work than the rest. Database tests run inside a transaction that rolls back on drop, so they leave nothing behind and run in parallel against one dedicated test DB. And there are 
+lint-as-tests
+: one test walks the repository layer, finds every write function, and 
+fails the build
+ unless that function emits a sync event or carries an explicit marker saying it doesn’t. That’s how the rule survives me forgetting about it at 1am six months from now.
+ 
+Before v1 Ships
+ 
+The work between here and v1:
+ 
+main.rs
+ is a ~1,900-line monolith.
+ Most of that is route registration that wants to move into per-domain 
+configure
+ functions. It works; it’s just not where it should live.
+ 
+Graceful shutdown is scaffolded but not wired.
+ A cancellation token is threaded into every background job and the scheduler honours it, but nothing fires it on SIGTERM yet, so workers and DB listeners get torn down abruptly on deploy. The hard part is built; the signal handler isn’t. Hard to test graceful shutdown on a project you never gracefully stop working on.
+ 
+One 
+unsafe impl Send/Sync
+ on the search service is almost certainly unnecessary on modern Tantivy, and worse, it would mask a genuinely unsafe field if I ever added one. It’s the line I trust least in the whole codebase.
+ 
+Error types degrade at a couple of seams.
+ Most of the code uses typed 
+thiserror
+ enums mapped to precise HTTP statuses, but the plugin proxy and the email worker’s SMTP-code handling fall back to stringly-typed errors. Those are the two places the clean typing frays.
+ 
+Each one has a planned fix. v1 doesn’t ship until they’re closed.
+ 
+Built Slow, Built Right
+ 
+If there’s one idea tying all of this together, it’s that I’d rather spend effort up front making a class of failure 
+unrepresentable
+ than spend it later debugging that failure in production. Sometimes that’s the type system. Sometimes it’s a back-pressured pipeline, or a circuit breaker, or a panic boundary around code I don’t control. The compiler made me earn it, the same way I 
+said it would
+. But a year of that taught me how to build systems that hold up where the easy path wouldn’t.
+ 
+I genuinely can’t imagine building Nosdesk in another language. Rust’s relentless precision is what holds the design together, and the compiler is the only reason a backend this size can be built honestly. I’d rather take the time to make something I’d defend than ship something bloated and forgettable.
+ 
+The 
+source is open
+ if you want to read it.

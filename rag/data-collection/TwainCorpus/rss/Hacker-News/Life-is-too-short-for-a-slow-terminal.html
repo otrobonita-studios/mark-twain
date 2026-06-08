@@ -1,0 +1,92 @@
+<main id="main-content">
+<h1 class="page-title">Life is too short for a slow terminal</h1>
+<p class="page-meta">June 6, 2026</p>
+<div class="page-content">
+<blockquote>
+<p><em>Update: a reader sent some great pushback on how I measured "fast" here, and on a couple of my recommendations. I wrote a <a href="/posts/what-i-got-wrong-about-fast-terminals/">follow-up</a> on benchmarking shells properly and where this post falls short.</em></p>
+</blockquote>
+<p>Practically all of my work happens inside a terminal. Git, kubectl, tmux, ssh'ing into a server, open practically the entire day. Something I use that much has to be fast. Any lag in opening a new tab, typing a character or hitting tab for a completion is something I feel hundreds of times a day. It's death by a thousand cuts.</p>
+<p>My shell starts in about 30 milliseconds:</p>
+<pre class="language-shell"><code class="language-shell">$ <span class="token keyword">for</span> <span class="token for-or-select variable">i</span> <span class="token keyword">in</span> <span class="token punctuation">{</span><span class="token number">1</span><span class="token punctuation">..</span><span class="token number">5</span><span class="token punctuation">}</span><span class="token punctuation">;</span> <span class="token keyword">do</span> /usr/bin/time <span class="token function">zsh</span> <span class="token parameter variable">-i</span> <span class="token parameter variable">-c</span> <span class="token builtin class-name">exit</span><span class="token punctuation">;</span> <span class="token keyword">done</span>
+<span class="token number">0.03</span> real  <span class="token number">0.02</span> user  <span class="token number">0.01</span> sys
+<span class="token number">0.03</span> real  <span class="token number">0.02</span> user  <span class="token number">0.01</span> sys
+<span class="token punctuation">..</span>.</code></pre>
+<p>That's a fully loaded interactive shell with completions, syntax highlighting, autosuggestions, fzf and direnv, in less time than a single frame at 30fps. A new tab is instant. There was never some big optimization project behind this either; I've just always kept my shell minimal and fast and over the years that turned into a habit. Here's how I go about it, and all of it can be found in <a href="https://github.com/mijndert/dotfiles">my dotfiles</a>.</p>
+<h2>No framework</h2>
+<p>The single biggest win is what's <em>not</em> there: no oh-my-zsh, no prezto or plugin manager. I've honestly never understood the appeal of these frameworks. People install oh-my-zsh with its hundreds of plugins and themes, end up using maybe 5% of what it offers, and then pay (with their time and compute resources) for the other 95% every single time they open a shell. And plugin managers add their own overhead on top of that.</p>
+<p>I use exactly three plugins, git-cloned once by my install script and sourced from <code>.zshrc</code>:</p>
+<pre class="language-shell"><code class="language-shell"><span class="token builtin class-name">source</span> ~/.zsh/fzf-tab/fzf-tab.plugin.zsh
+<span class="token builtin class-name">source</span> ~/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh
+<span class="token builtin class-name">source</span> ~/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh</code></pre>
+<p>There's no plugin manager doing dependency resolution at startup, and a <code>source</code> of a file that's already on disk is practically free.</p>
+<h2>Caching completions</h2>
+<p><code>compinit</code> is one of the most expensive things in a typical <code>.zshrc</code>. By default it does a security audit of every completion file, every single time you open a shell. The fix is to only do the full run if the cache (<code>.zcompdump</code>) is older than 24 hours, and otherwise skip the check with <code>-C</code>:</p>
+<pre class="language-shell"><code class="language-shell">autoload <span class="token parameter variable">-Uz</span> compinit
+<span class="token keyword">if</span> <span class="token punctuation">[</span><span class="token punctuation">[</span> <span class="token parameter variable">-n</span> ~/.zcompdump<span class="token punctuation">(</span><span class="token comment">#qNmh-24) ]]; then</span>
+  compinit <span class="token parameter variable">-C</span>
+<span class="token keyword">else</span>
+  compinit
+<span class="token keyword">fi</span></code></pre>
+<p>That glob qualifier (<code>#qNmh-24</code>) reads as "exists and was modified within the last 24 hours". So one full <code>compinit</code> per day, and cached reads the rest of the time.</p>
+<h2>Lazy-loading</h2>
+<p>nvm is probably the most notorious shell startup killer out there; sourcing it eagerly can easily add half a second. But I don't need nvm in every shell, I need it when I type <code>nvm</code>. So I wrap it in a function that replaces itself on first use:</p>
+<pre class="language-shell"><code class="language-shell"><span class="token builtin class-name">export</span> <span class="token assign-left variable">NVM_DIR</span><span class="token operator">=</span><span class="token string">"<span class="token environment constant">$HOME</span>/.nvm"</span>
+<span class="token function-name function">nvm</span><span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+  <span class="token builtin class-name">unset</span> <span class="token parameter variable">-f</span> nvm
+  <span class="token punctuation">[</span> <span class="token parameter variable">-s</span> <span class="token string">"/opt/homebrew/opt/nvm/nvm.sh"</span> <span class="token punctuation">]</span> <span class="token operator">&amp;&amp;</span> <span class="token punctuation">\</span>. <span class="token string">"/opt/homebrew/opt/nvm/nvm.sh"</span> --no-use
+  <span class="token punctuation">[</span> <span class="token parameter variable">-s</span> <span class="token string">"/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"</span> <span class="token punctuation">]</span> <span class="token operator">&amp;&amp;</span> <span class="token punctuation">\</span>. <span class="token string">"/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"</span>
+  nvm <span class="token string">"<span class="token variable">$@</span>"</span>
+<span class="token punctuation">}</span></code></pre>
+<p>The first <code>nvm</code> call deletes the stub, sources the real thing (with <code>--no-use</code> so it doesn't resolve a node version either), and forwards the arguments.</p>
+<p>Same idea for kubectl completions, which shell out to the <code>kubectl</code> binary to generate the completion script. I only load them after the first time I actually run kubectl:</p>
+<pre class="language-shell"><code class="language-shell"><span class="token function-name function">kubectl</span><span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+    <span class="token builtin class-name">command</span> kubectl <span class="token string">"<span class="token variable">$@</span>"</span>
+    <span class="token builtin class-name">local</span> <span class="token assign-left variable">ret</span><span class="token operator">=</span><span class="token variable">$?</span>
+    <span class="token keyword">if</span> <span class="token punctuation">[</span><span class="token punctuation">[</span> <span class="token parameter variable">-z</span> <span class="token variable">$KUBECTL_COMPLETE</span> <span class="token punctuation">]</span><span class="token punctuation">]</span><span class="token punctuation">;</span> <span class="token keyword">then</span>
+        <span class="token builtin class-name">source</span> <span class="token operator">&lt;</span><span class="token punctuation">(</span><span class="token builtin class-name">command</span> kubectl completion <span class="token function">zsh</span><span class="token punctuation">)</span>
+        <span class="token assign-left variable">KUBECTL_COMPLETE</span><span class="token operator">=</span><span class="token number">1</span>
+    <span class="token keyword">fi</span>
+    <span class="token builtin class-name">return</span> <span class="token variable">$ret</span>
+<span class="token punctuation">}</span></code></pre>
+<p>This pattern works for a lot of things: anything that tells you to put <code>eval "$(tool init zsh)"</code> in your <code>.zshrc</code> is a candidate for lazy loading, because each of those forks a process and evaluates its output at startup. I keep <code>direnv</code> and <code>fzf</code> eager because they're fast and I use them constantly. Be strict about what you actually use a lot.</p>
+<h2>A non-blocking prompt</h2>
+<p>A prompt that runs <code>git status</code> synchronously will lag in any decently sized repo. That's the kind of lag you feel on every single Enter press, which is arguably worse than a slow startup. I use <a href="https://github.com/sindresorhus/pure">pure</a>, which renders the prompt immediately and fills in the git info asynchronously when it's ready. I briefly tried replacing it with zsh's built-in <code>vcs_info</code>, but pure's async behavior is just... better. You can do async git status in your own prompt as well, but pure wraps it rather nicely for my use-case.</p>
+<h2>The terminal itself</h2>
+<p>Shell startup is only half the story, because the emulator adds its own input latency. I use <a href="https://ghostty.org">Ghostty</a>, which is GPU-accelerated and native, and my config is just seven lines long. Combined with a <code>tmux new -A -s main</code> alias (<code>t</code>), a fresh terminal window drops me right back into my existing session.</p>
+<h2>Measuring your own shell performance</h2>
+<p>You don't have to take my word for any of this, you can measure where the time goes in your own terminal. There are three kinds of lag to look for: startup time, prompt lag, and input latency.</p>
+<p>Run this a few times (the first run is always slower because of cold caches):</p>
+<pre class="language-shell"><code class="language-shell"><span class="token function">time</span> <span class="token function">zsh</span> <span class="token parameter variable">-i</span> <span class="token parameter variable">-c</span> <span class="token builtin class-name">exit</span></code></pre>
+<p>I think anything under 100ms is fine, and under 50ms is great. If you're seeing 500ms or more you have some work to do.</p>
+<p>For proper statistics, use <a href="https://github.com/sharkdp/hyperfine">hyperfine</a>:</p>
+<pre class="language-shell"><code class="language-shell">hyperfine <span class="token parameter variable">--warmup</span> <span class="token number">3</span> <span class="token string">'zsh -i -c exit'</span></code></pre>
+<p>Zsh also ships with a profiler. Put this at the very top of your <code>.zshrc</code>:</p>
+<pre class="language-shell"><code class="language-shell">zmodload zsh/zprof</code></pre>
+<p>and this at the very bottom:</p>
+<pre class="language-shell"><code class="language-shell">zprof</code></pre>
+<p>Open a new shell and you get a sorted table of exactly where the time went. The top entries are usually <code>compinit</code>, an <code>nvm.sh</code> source, or some <code>eval "$(...)"</code>. Fix the top one, re-run, repeat. Remove both lines when you're done.</p>
+<p>If zprof isn't granular enough, you can trace the whole startup with timestamps:</p>
+<pre class="language-shell"><code class="language-shell"><span class="token function">zsh</span> <span class="token parameter variable">-ixc</span> <span class="token builtin class-name">exit</span> <span class="token operator"><span class="token file-descriptor important">2</span>&gt;</span><span class="token file-descriptor important">&amp;1</span> <span class="token operator">|</span> ts <span class="token parameter variable">-i</span> <span class="token string">'%.s'</span> <span class="token operator">|</span> <span class="token function">sort</span> <span class="token parameter variable">-rn</span> <span class="token operator">|</span> <span class="token function">head</span> <span class="token parameter variable">-20</span></code></pre>
+
+<p>Or set <code>PS4='+%D{%s.%6.}: '</code> and run <code>zsh -ixc exit 2&gt; startup.log</code>, then look for the big jumps between lines.</p>
+<p>Startup can be fast while every prompt redraw is slow. <code>cd</code> into your biggest git repo and press Enter; if there's a delay before the next prompt appears, your prompt is doing synchronous work slowing it down. You can either switch to using an async prompt, or opt to strip out the Git functionality.</p>
+<h2>Wrapping up</h2>
+<p>Most of these optimizations are about leaving stuff out. It's about being intentional and only adding things you're going to use. Every one of the dozens of sessions I open per day is instant, and my terminal feels like an extension of my brain instead of an application I'm waiting on. For a tool I use the entire day that's non-negotiable for me.</p>
+<p>All of the above lives in <a href="https://github.com/mijndert/dotfiles">my dotfiles repo</a> if you want to steal anything.</p>
+</div>
+<div class="related-posts">
+<h2 class="section-label">Related posts</h2>
+<div class="projects-grid">
+<a class="proj-card" href="/posts/what-i-got-wrong-about-fast-terminals/">
+<h3 class="proj-name">What I got wrong about fast terminals</h3>
+<div class="proj-desc">A reader pushed back on my fast-terminal post, and they were right about more than I'd like. On benchmarking shells properly, modern zsh, and the difference between a shell that is fast and one that feels fast.</div>
+<span class="proj-link">Read post</span>
+</a>
+<a class="proj-card" href="/posts/remote-working-protips/">
+<h3 class="proj-name">Pro tips for remote working</h3>
+<div class="proj-desc">Practical remote work tips from two years of working from home, covering focus time, breaks, workspace setup, and staying productive</div>
+<span class="proj-link">Read post</span>
+</a>
+</div>
+</div>
+</main>
