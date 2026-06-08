@@ -339,7 +339,7 @@ export default function ChatClient() {
       <Link href="/" className="hero-panel" style={{ display: 'flex', textDecoration: 'none' }}>
         <div className="hero-bg-wrapper">
           <Image
-            src="/images/MarkTwainWithPen.jpg"
+            src="/images/MarkTwainWithPen.webp"
             alt="Mark Twain holding a pen"
             fill
             priority
@@ -348,7 +348,7 @@ export default function ChatClient() {
             style={{ objectPosition: 'center 20%' }}
           />
           <Image
-            src="/images/MarkTwainWithPen.jpg"
+            src="/images/MarkTwainWithPen.webp"
             alt="Mark Twain holding a pen (Square)"
             fill
             priority
