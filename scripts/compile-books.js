@@ -235,6 +235,39 @@ function parseHTMLToBlocks(htmlSegment, blockIdPrefix) {
   return blocks;
 }
 
+function getBalancedDivContent(html, startIndex) {
+  const openMatch = /<div\b/i.exec(html.substring(startIndex));
+  if (!openMatch) return null;
+  
+  const divStart = startIndex + openMatch.index;
+  const tagEnd = html.indexOf('>', divStart);
+  if (tagEnd === -1) return null;
+  
+  let depth = 1;
+  let i = tagEnd + 1;
+  
+  const divTagRegex = /<\/?div\b/gi;
+  divTagRegex.lastIndex = i;
+  
+  let match;
+  while ((match = divTagRegex.exec(html)) !== null) {
+    const matchedTag = match[0].toLowerCase();
+    if (matchedTag === '<div') {
+      depth++;
+    } else if (matchedTag === '</div') {
+      depth--;
+      if (depth === 0) {
+        return {
+          start: divStart,
+          end: match.index + 6,
+          content: html.substring(tagEnd + 1, match.index)
+        };
+      }
+    }
+  }
+  return null;
+}
+
 function compileBook(filePath) {
   const filename = path.basename(filePath);
   const rawHtml = fs.readFileSync(filePath, 'utf8');
@@ -397,29 +430,45 @@ function compileBook(filePath) {
 
     if (hasChapterDivs) {
       let sectionCount = 0;
-      const chapterRegex = /<div\b[^>]*class=["']chapter["'][^>]*>([\s\S]*?)<\/div>/gi;
-      let match;
+      let searchIndex = 0;
       
-      while ((match = chapterRegex.exec(bodyContent)) !== null) {
+      while (true) {
+        const chapterRegex = /<div\b[^>]*class=["']chapter["'][^>]*>/gi;
+        chapterRegex.lastIndex = searchIndex;
+        const match = chapterRegex.exec(bodyContent);
+        if (!match) break;
+        
+        const startIdx = match.index;
+        const balanced = getBalancedDivContent(bodyContent, startIdx);
+        if (!balanced) {
+          searchIndex = startIdx + match[0].length;
+          continue;
+        }
+        
         sectionCount++;
         const sectionId = `chapter-${sectionCount}`;
-        const content = match[1];
+        const content = balanced.content;
         
         // Search for first h2 as title
-        const h2Match = content.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
-        let sectionTitle = h2Match ? h2Match[1].replace(/<[^>]+>/g, '').trim() : `Chapter ${sectionCount}`;
+        const h2Match = content.match(/<h2\b([^>]*)>([\s\S]*?)<\/h2>/i);
+        let sectionTitle = h2Match ? h2Match[2].replace(/<[^>]+>/g, '').trim() : `Chapter ${sectionCount}`;
+        const slugMatch = h2Match && h2Match[1].match(/data-canonical-slug=(?:"([^"]*)"|'((?:[^']|'(?=\w))*)')/i);
+        const canonicalSlug = slugMatch ? (slugMatch[1] || slugMatch[2]) : null;
         
         const blocks = parseHTMLToBlocks(content, sectionId);
         
         doc.sections.push({
           id: sectionId,
           title: sectionTitle,
+          canonicalSlug: canonicalSlug || null,
           blocks
         });
+        
+        searchIndex = balanced.end;
       }
     } else {
-      // Split by <h2> tags
-      const parts = bodyContent.split(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi);
+      // Split by <h2> tags with attributes and inner content
+      const parts = bodyContent.split(/<h2\b([^>]*)>([\s\S]*?)<\/h2>/gi);
       
       // The first part is prologue/intro if it doesn't start with h2
       if (parts[0].trim()) {
@@ -427,20 +476,26 @@ function compileBook(filePath) {
         doc.sections.push({
           id: 'prologue',
           title: 'Prologue',
+          canonicalSlug: null,
           blocks
         });
       }
       
-      for (let i = 1; i < parts.length; i += 2) {
-        const sectionTitle = parts[i].replace(/<[^>]+>/g, '').trim();
-        const content = parts[i + 1] || '';
-        const sectionCount = Math.floor(i / 2) + 1;
+      for (let i = 1; i < parts.length; i += 3) {
+        const attrs = parts[i] || '';
+        const sectionTitle = parts[i + 1].replace(/<[^>]+>/g, '').trim();
+        const content = parts[i + 2] || '';
+        const sectionCount = Math.floor(i / 3) + 1;
         const sectionId = `chapter-${sectionCount}`;
+        
+        const slugMatch = attrs.match(/data-canonical-slug=(?:"([^"]*)"|'((?:[^']|'(?=\w))*)')/i);
+        const canonicalSlug = slugMatch ? (slugMatch[1] || slugMatch[2]) : null;
         
         const blocks = parseHTMLToBlocks(content, sectionId);
         doc.sections.push({
           id: sectionId,
           title: sectionTitle,
+          canonicalSlug: canonicalSlug || null,
           blocks
         });
       }

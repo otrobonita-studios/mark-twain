@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { Moon, Sun, Sparkles, Mic, Map, BookOpen, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { Moon, Sun, Sparkles, Mic, Map, BookOpen, ChevronLeft, ChevronRight, Loader2, Bookmark, ChevronDown, X } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const books = [
@@ -159,7 +159,7 @@ const books = [
     color: "from-[#1e3d30] to-[#0f1e18]"
   },
   {
-    title: "The $30,000 Bequest and Others",
+    title: "The $30,000 Bequest, and Other Stories",
     filename: "The-30000-Bequest-and-Others.txt",
     cover: "/images/book-covers/Book-cover-The-30000-Bequest-and-Others.webp",
     desc: "A rich anthology of Twain's late short fiction, highlighting his biting satire and deep irony.",
@@ -257,7 +257,7 @@ interface WorkEntry { title: string; slug?: string; href?: string; year: number;
 const booksList: BookListEntry[] = [
   { title: "The Mysterious Stranger: Manuscripts",             slug: "Mysterious-Stranger-Manuscripts",            year: 1969, posthumoristic: true },
   { title: "The Mysterious Stranger (1916 Paine Edition)",     slug: "Mysterious-Stranger",                        year: 1916, posthumoristic: true },
-  { title: "The $30,000 Bequest and Others",                   slug: "The-30000-Bequest-and-Others",               year: 1906, posthumoristic: true },
+  { title: "The $30,000 Bequest, and Other Stories",           slug: "The-30000-Bequest-and-Others",               year: 1906, posthumoristic: true },
   { title: "Following the Equator",                            slug: "Following-The-Equator",                      year: 1897 },
   { title: "Tom Sawyer, Detective",                            slug: "Tom-Sawyer-Detective",                       year: 1896 },
   { title: "Personal Recollections of Joan of Arc (Volume I)", slug: "Recollections-of-Joan-of-Arc-I",             year: 1896 },
@@ -286,17 +286,10 @@ const lettersList: LetterEntry[] = [
 const shortFiction: WorkEntry[] = [
   { title: "Extract from Captain Stormfield's Visit to Heaven", slug: "Captain-Stormfield's-Vist-to-Heaven",  year: 1909 },
   { title: "A Horse's Tale",                                    slug: "A-Horse's-Tale",                       year: 1907 },
-  { title: "Eve's Diary",                                       href: "/read/eves-diary",                     year: 1906 },
-  { title: "Alonzo Fitz and Other Stories",                     slug: "The-Loves-of-Alonzo-Fitz",             year: 1906, posthumoristic: true },
-  { title: "A Dog's Tale",                                      slug: "A-Dog's-Tale",                         year: 1904 },
-  { title: "A Double Barrelled Detective Story",                slug: "The-Double-Barrelled-Detective",        year: 1902 },
-  { title: "The Man That Corrupted Hadleyburg and Other Stories",slug: "Hadleyberg-Stories-et-al",            year: 1900 },
+  { title: "The Man That Corrupted Hadleyburg, and Other Stories and Sketches",slug: "Hadleyberg-Stories-et-al",            year: 1900 },
   { title: "The Man That Corrupted Hadleyburg",                 slug: "The-Man-who-Corrupted-Hadleyburg",     year: 1899 },
   { title: "Those Extraordinary Twins",                         slug: "Those-Extraordinary-Twins",            year: 1894 },
-  { title: "The Stolen White Elephant",                         slug: "The-Stolen-White-Elephant",            year: 1882 },
   { title: "1601",                                              slug: "1601",                                  year: 1880 },
-  { title: "Some Rambling Notes of an Idle Excursion",          slug: "Rambling-Idle-Excursion",              year: 1878 },
-  { title: "The Facts Concerning the Recent Carnival of Crime in Connecticut", slug: "Carnival-of-Crime-in-CT", year: 1876 },
   { title: "Sketches New and Old",                              slug: "Sketches-New-and-Old",                  year: 1875 },
   { title: "A True Story, Repeated Word for Word as I Heard It", slug: "A-True-Story",                        year: 1874 },
   { title: "The Celebrated Jumping Frog of Calaveras County, and Other Sketches", slug: "The-Celebrated-Jumping-Frog", year: 1867 },
@@ -307,6 +300,29 @@ const shortFiction: WorkEntry[] = [
   { title: "A Ghost Story",                                     slug: "A-Ghost-Story",                         year: 1870 },
   { title: "A Burlesque Autobiography",                         slug: "A-Burlesque-Autobiography",             year: 1871 },
   { title: "First Romance",                                     slug: "First-Romance",                          year: 1871 },
+];
+
+const otherStories: WorkEntry[] = [
+  { title: "Eve's Diary",                                       href: "/read/eves-diary",                     year: 1906 },
+  { title: "A Dog's Tale",                                      slug: "A-Dog's-Tale",                         year: 1904 },
+  { title: "A Double Barrelled Detective Story",                slug: "The-Double-Barrelled-Detective",        year: 1902 },
+  { title: "The Loves of Alonzo Fitz Clarence and Rosannah Ethelton", slug: "The-Loves-of-Alonzo-Fitz",       year: 1878 },
+  { title: "On the Decay of the Art of Lying",                  slug: "On-the-Decay-of-the-Art-of-Lying",     year: 1882 },
+  { title: "About Magnanimous-Incident Literature",             slug: "About-Magnanimous-Incident-Literature",year: 1882 },
+  { title: "Punch, Brothers, Punch",                            slug: "Punch-Brothers-Punch",                 year: 1878 },
+  { title: "The Great Revolution in Pitcairn",                  slug: "The-Great-Revolution-in-Pitcairn",     year: 1882 },
+  { title: "The Canvasser's Tale",                              slug: "The-Canvassers-Tale",                  year: 1882 },
+  { title: "An Encounter with an Interviewer",                  slug: "An-Encounter-with-an-Interviewer",     year: 1882 },
+  { title: "Paris Notes",                                       slug: "Paris-Notes",                          year: 1882 },
+  { title: "Legend of Sagenfeld, in Germany",                  slug: "Legend-of-Sagenfeld",                  year: 1882 },
+  { title: "Speech on the Babies",                              slug: "Speech-on-the-Babies",                 year: 1882 },
+  { title: "Speech on the Weather",                             slug: "Speech-on-the-Weather",                year: 1882 },
+  { title: "Concerning the American Language",                  slug: "Concerning-the-American-Language",      year: 1882 },
+  { title: "Rogers",                                            slug: "Rogers",                               year: 1882 },
+  { title: "A Telephonic Conversation",                         slug: "A-Telephonic-Conversation",            year: 1880 },
+  { title: "The Stolen White Elephant",                         slug: "The-Stolen-White-Elephant",            year: 1882 },
+  { title: "Some Rambling Notes of an Idle Excursion",          slug: "Rambling-Idle-Excursion",              year: 1878 },
+  { title: "The Facts Concerning the Recent Carnival of Crime in Connecticut", slug: "Carnival-of-Crime-in-CT", year: 1876 },
 ];
 
 const essaysSpeechs: WorkEntry[] = [
@@ -329,7 +345,7 @@ const essaysSpeechs: WorkEntry[] = [
   { title: "Concerning Tobacco",                     slug: "Concerning-Tobacco",                   year: 1906 },
   { title: "The Bee",                                slug: "The-Bee",                              year: 1906 },
   { title: "Taming the Bicycle",                     slug: "Taming-the-Bicycle",                   year: 1906 },
-  { title: "How to Tell a Story and Others",         slug: "How-to-Tell-a-Story",                  year: 1897 },
+  { title: "How to Tell a Story and Other Essays",         slug: "How-to-Tell-a-Story",                  year: 1897 },
   { title: "Essays on Paul Bourget",                 slug: "Essays-on-Paul-Bourget",               year: 1895 },
   { title: "Fenimore Cooper's Literary Offences",    slug: "Fennimore-Cooper-Offences",            year: 1895 },
   { title: "In Defense of Harriet Shelley",          slug: "Defence-of-Harriet-Shelley",           year: 1894 },
@@ -369,6 +385,81 @@ export default function TheCompleteWorksPage() {
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
   const [scrollProgress, setScrollProgress] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
+
+  const [isSelectOpen, setIsSelectOpen] = useState(false);
+  const [bookmarkSearchQuery, setBookmarkSearchQuery] = useState('');
+  const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
+  const selectRef = useRef<HTMLDivElement | null>(null);
+
+  // Close bookmarks select dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (selectRef.current && !selectRef.current.contains(event.target as Node)) {
+        setIsSelectOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Load bookmarks on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('twain-book-bookmarks');
+    if (saved) {
+      setBookmarkedIds(JSON.parse(saved));
+    } else {
+      // Default set of popular works
+      const defaults = [
+        'Mysterious-Stranger',
+        'Huckleberry-Finn',
+        'Connecticut-Yankee',
+        'Taming-the-Bicycle',
+        'Volume-1'
+      ];
+      setBookmarkedIds(defaults);
+      localStorage.setItem('twain-book-bookmarks', JSON.stringify(defaults));
+    }
+  }, []);
+
+  const toggleBookmark = (id: string) => {
+    let next;
+    if (bookmarkedIds.includes(id)) {
+      next = bookmarkedIds.filter(x => x !== id);
+    } else {
+      next = [...bookmarkedIds, id];
+    }
+    setBookmarkedIds(next);
+    localStorage.setItem('twain-book-bookmarks', JSON.stringify(next));
+  };
+
+  const getWorkDetails = (id: string) => {
+    let found = booksList.find(b => b.slug === id);
+    if (found) return { title: found.title, href: `/read/${found.slug}`, year: String(found.year) };
+
+    let foundLetter = lettersList.find(l => l.slug === id);
+    if (foundLetter) return { title: foundLetter.title, href: `/read/${foundLetter.slug}`, year: foundLetter.years };
+
+    let foundSF = shortFiction.find(sf => (sf.slug === id || sf.href === id));
+    if (foundSF) return { title: foundSF.title, href: foundSF.href || `/read/${foundSF.slug}`, year: String(foundSF.year) };
+
+    let foundOS = otherStories.find(os => (os.slug === id || os.href === id));
+    if (foundOS) return { title: foundOS.title, href: foundOS.href || `/read/${foundOS.slug}`, year: String(foundOS.year) };
+
+    let foundES = essaysSpeechs.find(es => (es.slug === id || es.href === id));
+    if (foundES) return { title: foundES.title, href: foundES.href || `/read/${foundES.slug}`, year: String(foundES.year) };
+
+    let foundRef = referenceBio.find(r => (r.slug === id || r.href === id));
+    if (foundRef) return { title: foundRef.title, href: foundRef.href || `/read/${foundRef.slug}`, year: String(foundRef.year) };
+
+    let foundNews = newsAccounts.find(n => (n.slug === id || n.href === id));
+    if (foundNews) return { title: foundNews.title, href: foundNews.href || `/read/${foundNews.slug}`, year: String(foundNews.year) };
+
+    return { title: id, href: id, year: '' };
+  };
+
+  const filteredBookmarks = bookmarkedIds
+    .map(id => ({ id, ...getWorkDetails(id) }))
+    .filter(bm => bm.title.toLowerCase().includes(bookmarkSearchQuery.toLowerCase()));
 
   const [active, setActive] = useState(4);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -654,8 +745,8 @@ export default function TheCompleteWorksPage() {
             </p>
 
             {/* Global Search and Bookmarks */}
-            <div className="flex items-start mb-8 space-x-4">
-              {/* Search Input (left half) */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-start mb-8 gap-4 text-left">
+              {/* Search Input */}
               <div className="flex-1">
                 <input
                   type="text"
@@ -666,21 +757,98 @@ export default function TheCompleteWorksPage() {
                   style={{ fontFamily: 'var(--font-typewriter)', fontSize: '0.875rem' }}
                 />
               </div>
-              {/* Bookmarks (right half) */}
-              <div className="w-64 max-h-48 overflow-y-auto bg-[rgba(255,244,223,0.03)] border border-[rgba(217,163,74,0.2)] rounded p-2">
-                <h3 className="text-text-100 font-semibold mb-2">Bookmarks</h3>
-                <ul className="space-y-1">
-                  {booksList.map((bm) => (
-                    <li key={bm.slug}>
-                      <button
-                        onClick={() => router.push(`/read/${bm.slug}`)}
-                        className="text-sm text-[var(--primary)] hover:opacity-80"
-                      >
-                        {bm.title}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+              {/* Bookmarks Dropdown */}
+              <div ref={selectRef} className="relative w-full sm:w-72">
+                <button
+                  type="button"
+                  onClick={() => setIsSelectOpen(!isSelectOpen)}
+                  className="w-full py-2 px-4 bg-[rgba(255,244,223,0.05)] border border-[rgba(217,163,74,0.3)] rounded text-[rgba(255,244,223,0.9)] focus:outline-none focus:border-[var(--primary)] flex items-center justify-between gap-2 hover:bg-[rgba(255,244,223,0.08)] hover:border-[var(--primary)] transition-all duration-200"
+                  style={{ fontFamily: 'var(--font-typewriter)', fontSize: '0.875rem' }}
+                >
+                  <span className="flex items-center gap-2">
+                    <Bookmark size={14} className="text-[var(--primary)] fill-current" />
+                    <span>Bookmarks ({bookmarkedIds.length})</span>
+                  </span>
+                  <ChevronDown size={14} className={`text-[var(--primary)] transition-transform duration-200 ${isSelectOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {isSelectOpen && (
+                  <div
+                    className={`absolute z-30 right-0 mt-2 w-full rounded border p-3 ${
+                      theme === 'parchment'
+                        ? 'bg-[#fdfaf2] border-[#2c1f11]/20 shadow-[0_4px_20px_rgba(44,31,17,0.15)]'
+                        : 'bg-[#101720] border-[rgba(255,244,223,0.12)] shadow-[0_4px_20px_rgba(0,0,0,0.5)]'
+                    }`}
+                    style={{ minWidth: '280px' }}
+                  >
+                    {/* Inner filter input */}
+                    <input
+                      type="text"
+                      placeholder="Type to filter bookmarks..."
+                      value={bookmarkSearchQuery}
+                      onChange={(e) => setBookmarkSearchQuery(e.target.value)}
+                      className={`w-full px-3 py-1.5 rounded text-xs placeholder-[rgba(255,244,223,0.4)] focus:outline-none focus:border-[var(--primary)] mb-3 ${
+                        theme === 'parchment'
+                          ? 'bg-[#ebe1cd]/40 border-[#2c1f11]/30 text-[#2c1f11]'
+                          : 'bg-[rgba(255,244,223,0.05)] border-[rgba(217,163,74,0.3)] text-[rgba(255,244,223,0.9)]'
+                      }`}
+                      style={{ fontFamily: 'var(--font-typewriter)' }}
+                      onClick={(e) => e.stopPropagation()}
+                      autoFocus
+                    />
+
+                    {/* Scrollable list */}
+                    <div className="max-h-60 overflow-y-auto space-y-1 custom-scrollbar pr-1">
+                      {filteredBookmarks.length > 0 ? (
+                        filteredBookmarks.map((bm) => (
+                          <div
+                            key={bm.id}
+                            className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded transition-all group/bm-item ${
+                              theme === 'parchment'
+                                ? 'hover:bg-[rgba(44,31,17,0.05)]'
+                                : 'hover:bg-[rgba(255,244,223,0.08)]'
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsSelectOpen(false);
+                                setBookmarkSearchQuery('');
+                                router.push(bm.href);
+                              }}
+                              className={`flex-1 text-left text-xs font-serif truncate ${
+                                theme === 'parchment' ? 'text-[#2c1f11]' : 'text-[rgba(255,244,223,0.85)]'
+                              }`}
+                            >
+                              {bm.title}
+                            </button>
+                            
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <span className="text-[10px] opacity-45 font-mono">{bm.year}</span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleBookmark(bm.id);
+                                }}
+                                className="text-red-500/60 hover:text-red-500 p-0.5 rounded transition-colors"
+                                title="Remove Bookmark"
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className={`text-xs italic py-4 text-center ${
+                          theme === 'parchment' ? 'text-[#2c1f11]/60' : 'text-[rgba(255,244,223,0.4)]'
+                        }`}>
+                          {bookmarkedIds.length === 0 ? 'No bookmarks saved yet.' : 'No matching bookmarks.'}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -693,11 +861,27 @@ export default function TheCompleteWorksPage() {
                   <div className="w-full mb-[3.5rem] hidden md:grid" style={{ marginTop: "1rem", gridTemplateColumns: "1fr auto", gap: "0.5rem 2rem", alignItems: "center" }}>
                       {booksFiltered.map((book) => (
                         <React.Fragment key={book.slug}>
-                          <div
-                            onClick={() => router.push(`/read/${book.slug}`)}
-                            className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2"
-                          >
-                            {book.title}
+                          <div className="flex items-center gap-2 py-2 group/item text-left">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleBookmark(book.slug);
+                              }}
+                              className="text-[rgba(255,244,223,0.3)] hover:text-[var(--primary)] transition-colors"
+                              title={bookmarkedIds.includes(book.slug) ? "Remove Bookmark" : "Add Bookmark"}
+                            >
+                              <Bookmark 
+                                size={14} 
+                                className={bookmarkedIds.includes(book.slug) ? "fill-current text-[var(--primary)]" : "opacity-0 group-hover/item:opacity-100 transition-opacity"} 
+                              />
+                            </button>
+                            <span
+                              onClick={() => router.push(`/read/${book.slug}`)}
+                              className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity"
+                            >
+                              {book.title}
+                            </span>
                           </div>
                           <div
                             onClick={() => router.push(`/read/${book.slug}`)}
@@ -714,10 +898,25 @@ export default function TheCompleteWorksPage() {
                       <div
                         key={book.slug}
                         onClick={() => router.push(`/read/${book.slug}`)}
-                        className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all"
+                        className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all relative"
                       >
-                        <div className="font-semibold text-[var(--primary)] mb-1">{book.title}</div>
-                        <div className="text-sm text-[rgba(255,244,223,0.6)]">{book.year}</div>
+                        <div className="flex justify-between items-start mb-1">
+                          <div className="font-semibold text-[var(--primary)] pr-8 text-left">{book.title}</div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleBookmark(book.slug);
+                            }}
+                            className="text-[var(--primary)] absolute top-4 right-4"
+                          >
+                            <Bookmark 
+                              size={16} 
+                              className={bookmarkedIds.includes(book.slug) ? "fill-current" : "opacity-40"} 
+                            />
+                          </button>
+                        </div>
+                        <div className="text-sm text-[rgba(255,244,223,0.6)] text-left">{book.year}</div>
                       </div>
                     ))}
                   </div>
@@ -734,11 +933,27 @@ export default function TheCompleteWorksPage() {
                   <div className="w-full mb-[3.5rem] hidden md:grid" style={{ marginTop: "1rem", gridTemplateColumns: "1fr auto", gap: "0.5rem 2rem", alignItems: "center" }}>
                       {lettersFiltered.map((vol) => (
                         <React.Fragment key={vol.slug}>
-                          <div
-                            onClick={() => router.push(`/read/${vol.slug}`)}
-                            className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2"
-                          >
-                            {vol.title}
+                          <div className="flex items-center gap-2 py-2 group/item text-left">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleBookmark(vol.slug);
+                              }}
+                              className="text-[rgba(255,244,223,0.3)] hover:text-[var(--primary)] transition-colors"
+                              title={bookmarkedIds.includes(vol.slug) ? "Remove Bookmark" : "Add Bookmark"}
+                            >
+                              <Bookmark 
+                                size={14} 
+                                className={bookmarkedIds.includes(vol.slug) ? "fill-current text-[var(--primary)]" : "opacity-0 group-hover/item:opacity-100 transition-opacity"} 
+                              />
+                            </button>
+                            <span
+                              onClick={() => router.push(`/read/${vol.slug}`)}
+                              className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity"
+                            >
+                              {vol.title}
+                            </span>
                           </div>
                           <div
                             onClick={() => router.push(`/read/${vol.slug}`)}
@@ -755,10 +970,25 @@ export default function TheCompleteWorksPage() {
                       <div
                         key={vol.slug}
                         onClick={() => router.push(`/read/${vol.slug}`)}
-                        className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all"
+                        className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all relative"
                       >
-                        <div className="font-semibold text-[var(--primary)] mb-1">{vol.title}</div>
-                        <div className="text-sm text-[rgba(255,244,223,0.6)]">{vol.years}</div>
+                        <div className="flex justify-between items-start mb-1">
+                          <div className="font-semibold text-[var(--primary)] pr-8 text-left">{vol.title}</div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleBookmark(vol.slug);
+                            }}
+                            className="text-[var(--primary)] absolute top-4 right-4"
+                          >
+                            <Bookmark 
+                              size={16} 
+                              className={bookmarkedIds.includes(vol.slug) ? "fill-current" : "opacity-40"} 
+                            />
+                          </button>
+                        </div>
+                        <div className="text-sm text-[rgba(255,244,223,0.6)] text-left">{vol.years}</div>
                       </div>
                     ))}
                   </div>
@@ -769,26 +999,53 @@ export default function TheCompleteWorksPage() {
 
             {([
               { heading: 'Short Fiction',                data: shortFiction    },
+              { 
+                heading: 'Other Stories &amp; Sketches', 
+                data: otherStories,
+                desc: 'These pieces first reached print in my own volumes — among them The Stolen White Elephant (1882) and The $30,000 Bequest (1906) — and live there yet. I have merely given each a door of its own.'
+              },
               { heading: 'Essays &amp; Speeches',        data: essaysSpeechs   },
               { heading: 'Reference &amp; Biography',    data: referenceBio    },
               { heading: 'News &amp; Contemporary Accounts', data: newsAccounts },
-            ] as { heading: string; data: WorkEntry[] }[]).map(({ heading, data }) => {
+            ] as { heading: string; data: WorkEntry[]; desc?: string }[]).map(({ heading, data, desc }) => {
               const filtered = data.filter(work => work.title.toLowerCase().includes(searchQuery.toLowerCase()));
               return filtered.length > 0 ? (
                 <React.Fragment key={heading}>
                   <h2 className="text-text-100 font-bold" style={{ marginTop: '1rem', fontSize: '2rem' }} dangerouslySetInnerHTML={{ __html: heading }} />
+                  {desc && (
+                    <p className="text-sm italic text-left max-w-3xl" style={{ marginTop: '0.25rem', marginBottom: '1.5rem', opacity: 0.8, lineHeight: '1.6' }}>
+                      {desc}
+                    </p>
+                  )}
 
                   {/* Desktop: Table-style grid | Mobile: Cards */}
                   <div className="w-full mb-[3.5rem] hidden md:grid" style={{ marginTop: "1rem", gridTemplateColumns: "1fr auto", gap: "0.5rem 2rem", alignItems: "center" }}>
                       {filtered.map((work) => {
+                        const id = work.slug || work.href || work.title;
                         const dest = work.href ?? `/read/${work.slug}`;
                         return (
                           <React.Fragment key={dest}>
-                            <div
-                              onClick={() => router.push(dest)}
-                              className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity py-2"
-                            >
-                              {work.title}
+                            <div className="flex items-center gap-2 py-2 group/item text-left">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleBookmark(id);
+                                }}
+                                className="text-[rgba(255,244,223,0.3)] hover:text-[var(--primary)] transition-colors"
+                                title={bookmarkedIds.includes(id) ? "Remove Bookmark" : "Add Bookmark"}
+                              >
+                                <Bookmark 
+                                  size={14} 
+                                  className={bookmarkedIds.includes(id) ? "fill-current text-[var(--primary)]" : "opacity-0 group-hover/item:opacity-100 transition-opacity"} 
+                                />
+                              </button>
+                              <span
+                                onClick={() => router.push(dest)}
+                                className="font-semibold text-[var(--primary)] cursor-pointer hover:opacity-80 transition-opacity"
+                              >
+                                {work.title}
+                              </span>
                             </div>
                             <div
                               onClick={() => router.push(dest)}
@@ -804,18 +1061,32 @@ export default function TheCompleteWorksPage() {
                   {/* Mobile: Cards */}
                   <div className="w-full mb-[3.5rem] md:hidden grid grid-cols-1 gap-4" style={{ marginTop: "1rem" }}>
                     {filtered.map((work) => {
+                      const id = work.slug || work.href || work.title;
                       const dest = work.href ?? `/read/${work.slug}`;
                       return (
                         <div
                           key={dest}
                           onClick={() => router.push(dest)}
-                          className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all"
+                          className="p-4 border border-[rgba(217,163,74,0.2)] rounded hover:border-[var(--primary)] hover:bg-[rgba(217,163,74,0.05)] cursor-pointer transition-all relative"
                         >
-                          <div className="font-semibold text-[var(--primary)] mb-1">
-                            {work.title}
+                          <div className="flex justify-between items-start mb-1">
+                            <div className="font-semibold text-[var(--primary)] pr-8 text-left">{work.title}</div>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleBookmark(id);
+                              }}
+                              className="text-[var(--primary)] absolute top-4 right-4"
+                            >
+                              <Bookmark 
+                                size={16} 
+                                className={bookmarkedIds.includes(id) ? "fill-current" : "opacity-40"} 
+                              />
+                            </button>
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div className="text-sm text-[rgba(255,244,223,0.6)]">{work.year}</div>
+                            <div className="text-sm text-[rgba(255,244,223,0.6)] text-left">{work.year}</div>
                           </div>
                         </div>
                       );

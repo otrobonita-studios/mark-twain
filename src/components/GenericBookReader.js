@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import MarkTwainLetterCard from './MarkTwainLetterCard';
 import { soundtrack } from '@/data/soundtrack';
 import { youngReadersParagraphs, youngReadersGlossary, youngReadersNotes } from '@/app/read/eves-diary/YoungReadersText';
+import { storyProvenance } from '@/data/provenance';
 
 export default function GenericBookReader({ 
   document: propDocument, 
@@ -18,7 +19,7 @@ export default function GenericBookReader({
   headerExtra = null,
   defaultTypeface = 'georgia',
   defaultTheme = 'charcoal',
-  customFonts = ['georgia', 'newsreader', 'fraunces'],
+  customFonts = ['georgia', 'inter'],
   customThemes = null,
   defaultExperience = 'traditional'
 }) {
@@ -171,11 +172,8 @@ export default function GenericBookReader({
 
   // Resolve font-family property for typography scoping
   const activeFontFamily = useMemo(() => {
-    if (typeface === 'newsreader') return "'Newsreader', Georgia, serif";
-    if (typeface === 'fraunces') return "'Fraunces', Georgia, serif";
+    if (typeface === 'inter') return "'Inter', system-ui, -apple-system, sans-serif";
     if (typeface === 'georgia') return "Georgia, serif";
-    if (typeface === 'eb-garamond') return "'EB Garamond', Georgia, serif";
-    if (typeface === 'im-fell') return "'IM Fell DW Pica', Georgia, serif";
     return typeface;
   }, [typeface]);
 
@@ -192,9 +190,18 @@ export default function GenericBookReader({
     const savedCollapsed = localStorage.getItem(`twain-collapsed-${bookSlug}`);
 
     setTimeout(() => {
-      setTheme(savedTheme || defaultTheme);
+      let normalizedTheme = savedTheme;
+      if (savedTheme === 'light' || savedTheme === 'sepia') {
+        normalizedTheme = 'parchment';
+      }
+      setTheme(normalizedTheme || defaultTheme);
       if (savedSize) setTextSize(parseInt(savedSize));
-      setTypeface(savedTypeface || defaultTypeface);
+      
+      let normalizedTypeface = savedTypeface;
+      if (savedTypeface === 'newsreader' || savedTypeface === 'fraunces') {
+        normalizedTypeface = 'inter';
+      }
+      setTypeface(normalizedTypeface || defaultTypeface);
       if (savedContrast) setContrast(savedContrast);
       if (savedWord) setWordSetting(savedWord);
       if (savedExperience) setExperience(savedExperience);
@@ -633,6 +640,66 @@ export default function GenericBookReader({
     return null;
   };
 
+  const renderProvenanceAlert = (slug) => {
+    if (!slug) return null;
+    const info = storyProvenance[slug] || Object.entries(storyProvenance).find(([k]) => k.toLowerCase() === slug.toLowerCase())?.[1];
+    if (!info) return null;
+
+    const currentBookSlug = bookSlug;
+    const otherAppearances = (info.reprints || []).filter(rep => rep.slug.toLowerCase() !== currentBookSlug.toLowerCase());
+
+    const isCanonicalSelf = info.canonical.slug && info.canonical.slug.toLowerCase() === currentBookSlug.toLowerCase();
+
+    return (
+      <div 
+        className={`provenance-alert-banner ${
+          theme === 'parchment' 
+            ? 'bg-[#ebe1cd]/30 border border-[#2c1f11]/15 text-[#2c1f11]' 
+            : 'bg-[rgba(217,163,74,0.05)] border border-[#d9a34a]/30 text-[rgba(255,244,223,0.95)]'
+        } rounded p-4 my-6 text-xs text-left max-w-2xl mx-auto leading-relaxed font-sans`}
+      >
+        <div className="flex items-start gap-2.5">
+          <span className="text-sm select-none" style={{ color: theme === 'parchment' ? '#8b5a2b' : '#d9a34a' }}>📖</span>
+          <div>
+            <p className="margin-0 font-bold uppercase tracking-wider mb-1" style={{ color: theme === 'parchment' ? '#8b5a2b' : '#d9a34a', fontSize: '10px' }}>
+              Publishing Provenance
+            </p>
+            <p className="m-0 mb-1.5 font-sans">
+              This {info.genre} was canonically published in{' '}
+              {info.canonical.slug && !isCanonicalSelf ? (
+                <Link href={`/read/${info.canonical.slug}`} className="underline font-bold hover:opacity-85 transition-opacity" style={{ color: 'inherit' }}>
+                  {info.canonical.title}
+                </Link>
+              ) : (
+                <strong>{info.canonical.title}</strong>
+              )}
+              {' '}({info.canonical.year}).
+            </p>
+            {otherAppearances.length > 0 && (
+              <p className="m-0 opacity-80 font-sans">
+                Also appears in:{' '}
+                {otherAppearances.map((app, index) => (
+                  <span key={app.slug}>
+                    {index > 0 && ", "}
+                    <Link href={`/read/${app.slug}`} className="underline hover:opacity-85 transition-opacity" style={{ color: 'inherit' }}>
+                      {app.title}
+                    </Link>
+                  </span>
+                ))}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const bookProvenance = useMemo(() => {
+    if (!bookSlug) return null;
+    const info = storyProvenance[bookSlug] || Object.entries(storyProvenance).find(([k]) => k.toLowerCase() === bookSlug.toLowerCase())?.[1];
+    return info || null;
+  }, [bookSlug]);
+
   return (
     <div className={`book-reader-container theme-${theme} ${isTocOpen ? 'toc-sidebar-open' : ''}`}>
       <style jsx>{`
@@ -755,21 +822,35 @@ export default function GenericBookReader({
             <AnimatePresence>
               {isBookmarkMenuOpen && (
                 <motion.div 
-                  className="absolute right-0 mt-2 w-64 bg-[#1c1814] border border-[rgba(255,244,223,0.08)] shadow-lg rounded p-4 z-50 text-[var(--foreground)] font-sans"
+                  className={`absolute right-0 mt-2 w-64 rounded shadow-lg p-4 z-50 text-[var(--foreground)] font-sans border ${
+                    theme === 'parchment'
+                      ? 'bg-[#fdfaf2] border-[#2c1f11]/15'
+                      : 'bg-[#1c1814] border-[rgba(255,244,223,0.08)]'
+                  }`}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 10 }}
                 >
-                  <button onClick={handleToggleBookmark} className="w-full text-center py-2 px-3 bg-[var(--primary)] text-[#15110d] rounded text-xs font-semibold mb-3 font-sans">
+                  <button onClick={handleToggleBookmark} className="w-full text-center py-2 px-3 bg-[var(--primary)] text-[#15110d] rounded text-xs font-semibold mb-3 font-sans hover:bg-[var(--primary-hover)] transition-colors">
                     {bookmarks.includes(activeId) ? 'Remove Bookmark Here' : 'Bookmark this Spot'}
                   </button>
-                  <div className="border-t border-[rgba(255,244,223,0.06)] pt-2 max-h-40 overflow-y-auto custom-scrollbar font-sans">
+                  <div className={`border-t pt-2 max-h-40 overflow-y-auto custom-scrollbar font-sans ${
+                    theme === 'parchment' ? 'border-[#2c1f11]/10' : 'border-[rgba(255,244,223,0.06)]'
+                  }`}>
                     <span className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] block mb-1 font-sans">Your Bookmarks</span>
                     {bookmarks.length === 0 ? (
                       <span className="text-xs text-[var(--muted-foreground)] italic font-sans">No bookmarks saved</span>
                     ) : (
                       bookmarks.map(id => (
-                        <button key={id} onClick={() => { scrollToId(id); setIsBookmarkMenuOpen(false); }} className="block w-full text-left py-1.5 px-2 hover:bg-[rgba(255,244,223,0.04)] text-xs text-[rgba(255,244,223,0.85)] truncate border-none bg-transparent font-sans">
+                        <button 
+                          key={id} 
+                          onClick={() => { scrollToId(id); setIsBookmarkMenuOpen(false); }} 
+                          className={`block w-full text-left py-1.5 px-2 text-xs truncate border-none bg-transparent font-sans rounded transition-colors ${
+                            theme === 'parchment'
+                              ? 'text-[#2c1f11] hover:bg-[rgba(44,31,17,0.04)]'
+                              : 'text-[rgba(255,244,223,0.85)] hover:bg-[rgba(255,244,223,0.04)]'
+                          }`}
+                        >
                           {getElementSnippet(id)}
                         </button>
                       ))
@@ -802,16 +883,30 @@ export default function GenericBookReader({
       <AnimatePresence>
         {isDisplayMenuOpen && (
           <div className="fixed inset-0 z-40" onClick={() => setIsDisplayMenuOpen(false)}>
-            <div className="absolute right-6 top-16 w-80 bg-[#1c1814] border border-[rgba(255,244,223,0.08)] shadow-2xl rounded-lg p-5 text-[var(--foreground)] font-sans" onClick={e => e.stopPropagation()}>
-              <h3 className="font-sans text-lg font-bold mb-4 border-b border-[rgba(255,244,223,0.06)] pb-2">Display</h3>
+            <div className={`absolute right-6 top-16 w-80 rounded-lg p-5 text-[var(--foreground)] font-sans border shadow-2xl ${
+              theme === 'parchment'
+                ? 'bg-[#fdfaf2] border-[#2c1f11]/15'
+                : 'bg-[#1c1814] border-[rgba(255,244,223,0.08)]'
+            }`} onClick={e => e.stopPropagation()}>
+              <h3 className={`font-sans text-lg font-bold mb-4 border-b pb-2 ${
+                theme === 'parchment' ? 'border-[#2c1f11]/10' : 'border-[rgba(255,244,223,0.06)]'
+              }`}>Display</h3>
               
               {/* Themes */}
               <div className="mb-4 font-sans">
                 <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Theme</span>
-                <div className="grid grid-cols-3 gap-2">
-                  {['light', 'sepia', 'charcoal'].map(t => (
-                    <button key={t} onClick={() => { setTheme(t); savePref('twain-pref-theme', t); }} className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${theme === t ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-white'}`}>
-                      {t.charAt(0).toUpperCase() + t.slice(1)}
+                <div className="grid grid-cols-2 gap-2">
+                  {['parchment', 'charcoal'].map(t => (
+                    <button 
+                      key={t} 
+                      onClick={() => { setTheme(t); savePref('twain-pref-theme', t); }} 
+                      className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
+                        theme === t 
+                          ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
+                          : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
+                      }`}
+                    >
+                      {t === 'parchment' ? 'Light' : 'Dark'}
                     </button>
                   ))}
                 </div>
@@ -822,7 +917,15 @@ export default function GenericBookReader({
                 <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Text Size</span>
                 <div className="flex justify-between items-center gap-1.5 font-sans">
                   {[1, 2, 3].map(s => (
-                    <button key={s} onClick={() => { setTextSize(s); savePref('twain-pref-size', s); }} className={`size-8 rounded-full border flex items-center justify-center font-sans transition-colors ${textSize === s ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-white'}`}>
+                    <button 
+                      key={s} 
+                      onClick={() => { setTextSize(s); savePref('twain-pref-size', s); }} 
+                      className={`size-8 rounded-full border flex items-center justify-center font-sans transition-colors ${
+                        textSize === s 
+                          ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
+                          : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
+                      }`}
+                    >
                       {s === 1 ? 'A' : s === 2 ? 'A+' : 'A++'}
                     </button>
                   ))}
@@ -834,7 +937,15 @@ export default function GenericBookReader({
                 <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Typeface</span>
                 <div className="grid grid-cols-2 gap-2 font-sans">
                   {customFonts.map(f => (
-                    <button key={f} onClick={() => { setTypeface(f); savePref('twain-pref-typeface', f); }} className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${typeface === f ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-white'}`}>
+                    <button 
+                      key={f} 
+                      onClick={() => { setTypeface(f); savePref('twain-pref-typeface', f); }} 
+                      className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
+                        typeface === f 
+                          ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
+                          : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
+                      }`}
+                    >
                       {f.charAt(0).toUpperCase() + f.slice(1).replace('-', ' ')}
                     </button>
                   ))}
@@ -846,7 +957,15 @@ export default function GenericBookReader({
                 <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Contrast / Weight</span>
                 <div className="grid grid-cols-3 gap-2 font-sans">
                   {['soft', 'normal', 'high'].map(c => (
-                    <button key={c} onClick={() => { setContrast(c); savePref('twain-pref-contrast', c); }} className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${contrast === c ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-white'}`}>
+                    <button 
+                      key={c} 
+                      onClick={() => { setContrast(c); savePref('twain-pref-contrast', c); }} 
+                      className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
+                        contrast === c 
+                          ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
+                          : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
+                      }`}
+                    >
                       {c.charAt(0).toUpperCase() + c.slice(1)}
                     </button>
                   ))}
@@ -855,7 +974,9 @@ export default function GenericBookReader({
 
               {/* Sanitization toggle */}
               {hasSanitization && (
-                <div className="flex items-center justify-between mt-3 pt-3 border-t border-[rgba(255,244,223,0.06)] font-sans">
+                <div className={`flex items-center justify-between mt-3 pt-3 border-t font-sans ${
+                  theme === 'parchment' ? 'border-[#2c1f11]/10' : 'border-[rgba(255,244,223,0.06)]'
+                }`}>
                   <div>
                     <span className="text-[11px] font-sans font-bold block">Sanitization Toggle</span>
                     <span className="text-[10px] text-[var(--muted-foreground)] block mt-0.5 leading-tight font-sans">Original Mark Twain text vs. sanitized replacement phrases.</span>
@@ -931,6 +1052,7 @@ export default function GenericBookReader({
           {/* Render layout views based on experience */}
           {experience === 'traditional' || experience === 'split' ? (
             <div className="book-text-content">
+               {bookProvenance && renderProvenanceAlert(bookSlug)}
               {propDocument ? (
                 documentModel.sections.map((section) => {
                   const metaBlock = section.blocks.find(b => b.kind === 'meta');
@@ -957,9 +1079,12 @@ export default function GenericBookReader({
                   return (
                     <div key={section.id} id={section.id} className="book-section mb-12">
                       {section.title && !section.title.startsWith('Introductory Note') && !section.title.startsWith('Prologue') && (
-                        <h2 id={`${section.id}-title`} className="chapter-heading text-center font-bold font-serif mb-6 text-[var(--primary)] mt-12">
-                          {resolveText(section.title)}
-                        </h2>
+                        <>
+                          <h2 id={`${section.id}-title`} className="chapter-heading text-center font-bold font-serif mb-6 text-[var(--primary)] mt-12">
+                            {resolveText(section.title)}
+                          </h2>
+                          {section.canonicalSlug && section.canonicalSlug.toLowerCase() !== bookSlug.toLowerCase() && renderProvenanceAlert(section.canonicalSlug)}
+                        </>
                       )}
                       {section.blocks.map(block => renderBlock(block))}
                     </div>
@@ -1292,7 +1417,7 @@ export default function GenericBookReader({
                   value={searchQuery}
                   onChange={e => handleSearch(e.target.value)}
                   placeholder="Find in this text..."
-                  className="w-full py-2 pl-3 pr-8 bg-[#1c1814] border border-[var(--border)] rounded text-xs outline-none text-[var(--foreground)] font-sans"
+                  className="w-full py-2 pl-3 pr-8 bg-[var(--input-bg)] border border-[var(--border)] rounded text-xs outline-none text-[var(--foreground)] font-sans"
                 />
                 {searchQuery && (
                   <button onClick={() => handleSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 bg-transparent border-none text-[var(--muted-foreground)] hover:text-white p-0">
@@ -1352,7 +1477,11 @@ export default function GenericBookReader({
                 ) : (
                   chatMessages.map((msg, idx) => (
                     <div key={idx} className="flex flex-col font-sans" style={{ alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                      <div className={`max-w-[85%] rounded p-3 text-xs leading-relaxed font-sans ${msg.role === 'user' ? 'bg-[rgba(217,163,74,0.1)] text-[var(--foreground)] rounded-tr-none' : 'bg-[rgba(255,244,223,0.02)] text-[var(--foreground)] border border-[rgba(255,244,223,0.05)] rounded-tl-none'}`}>
+                      <div className={`max-w-[85%] rounded p-3 text-xs leading-relaxed font-sans ${
+                        msg.role === 'user' 
+                          ? 'bg-[rgba(217,163,74,0.1)] text-[var(--foreground)] rounded-tr-none' 
+                          : `${theme === 'parchment' ? 'bg-[rgba(44,31,17,0.03)] border-[rgba(44,31,17,0.08)]' : 'bg-[rgba(255,244,223,0.02)] border-[rgba(255,244,223,0.05)]'} text-[var(--foreground)] border rounded-tl-none`
+                      }`}>
                         <span className="text-[9px] font-sans font-semibold text-[var(--primary)] uppercase tracking-wider block mb-1">
                           {msg.role === 'user' ? 'You' : 'Mark Twain · MkII'}
                         </span>
@@ -1389,7 +1518,9 @@ export default function GenericBookReader({
 
                 {chatLoading && (
                   <div className="flex items-start font-sans">
-                    <div className="bg-[rgba(255,244,223,0.02)] border border-[rgba(255,244,223,0.05)] rounded rounded-tl-none p-3 text-xs font-sans">
+                    <div className={`p-3 text-xs font-sans rounded rounded-tl-none border ${
+                      theme === 'parchment' ? 'bg-[rgba(44,31,17,0.03)] border-[rgba(44,31,17,0.08)]' : 'bg-[rgba(255,244,223,0.02)] border-[rgba(255,244,223,0.05)]'
+                    }`}>
                       <span className="text-[9px] font-sans font-semibold text-[var(--primary)] uppercase tracking-wider block mb-1">Mark Twain · MkII</span>
                       <div className="flex items-center gap-1.5 py-1">
                         <span className="w-1.5 h-1.5 bg-[var(--primary)] rounded-full animate-bounce" />
@@ -1410,7 +1541,7 @@ export default function GenericBookReader({
                     onChange={e => setChatInput(e.target.value)} 
                     onKeyDown={e => e.key === 'Enter' && handleSendChatMessage()}
                     placeholder="Spit it out..."
-                    className="flex-1 py-2 px-3 bg-[#1c1814] border border-[var(--border)] rounded text-xs outline-none text-[var(--foreground)] font-sans"
+                    className="flex-1 py-2 px-3 bg-[var(--input-bg)] border border-[var(--border)] rounded text-xs outline-none text-[var(--foreground)] font-sans"
                     autoFocus
                   />
                   <button onClick={() => handleSendChatMessage()} disabled={chatLoading || !chatInput.trim()} className="btn-gold px-3.5 py-2 rounded flex items-center justify-center font-sans">

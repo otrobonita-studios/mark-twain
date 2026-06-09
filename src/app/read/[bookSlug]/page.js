@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import GenericBookReader from '@/components/GenericBookReader';
+import { storyProvenance } from '@/data/provenance';
 
 function findBookFile(slug) {
   const baseDir = process.cwd();
@@ -113,9 +114,19 @@ export async function generateMetadata({ params }) {
     // Remove "COMPLETE" suffix for cleaner titles
     const titleClean = cleanTitle.replace(/,?\s*COMPLETE\s*$/i, '').trim();
 
+    const alternates = {
+      canonical: `https://mark.otrobonita.com/read/${decodedSlug}`
+    };
+
+    const provRecord = storyProvenance[decodedSlug] || Object.entries(storyProvenance).find(([k]) => k.toLowerCase() === decodedSlug.toLowerCase())?.[1];
+    if (provRecord && provRecord.canonical.slug && provRecord.canonical.slug.toLowerCase() !== decodedSlug.toLowerCase()) {
+      alternates.canonical = `https://mark.otrobonita.com/read/${provRecord.canonical.slug}`;
+    }
+
     return {
       title: `The Mark Twain Experience: ${titleClean} — Multimedia Editions from Otrobonita Labs`,
-      description: `Read ${cleanTitle} by Mark Twain in the complete Mark Twain Reappears archive.`
+      description: `Read ${cleanTitle} by Mark Twain in the complete Mark Twain Reappears archive.`,
+      alternates
     };
   } catch (e) {
     return {
@@ -127,6 +138,12 @@ export async function generateMetadata({ params }) {
 export default async function ReadPage({ params }) {
   const { bookSlug } = await params;
   const decodedSlug = decodeURIComponent(bookSlug);
+
+  const provRecord = storyProvenance[decodedSlug] || Object.entries(storyProvenance).find(([k]) => k.toLowerCase() === decodedSlug.toLowerCase())?.[1];
+  let canonicalSlug = decodedSlug;
+  if (provRecord && provRecord.canonical.slug) {
+    canonicalSlug = provRecord.canonical.slug;
+  }
 
   // Check if compiled JSON document exists
   const jsonPath = path.join(process.cwd(), 'src/data/books/json', `${decodedSlug}.json`);
@@ -141,10 +158,29 @@ export default async function ReadPage({ params }) {
 
   if (doc) {
     return (
-      <GenericBookReader 
-        document={doc}
-        bookSlug={decodedSlug}
-      />
+      <>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "Book",
+              "@id": `https://mark.otrobonita.com/read/${canonicalSlug}`,
+              "url": `https://mark.otrobonita.com/read/${canonicalSlug}`,
+              "name": doc.meta.title,
+              "author": {
+                "@type": "Person",
+                "name": "Mark Twain"
+              },
+              "inLanguage": "en"
+            })
+          }}
+        />
+        <GenericBookReader 
+          document={doc}
+          bookSlug={decodedSlug}
+        />
+      </>
     );
   }
 
@@ -368,11 +404,30 @@ export default async function ReadPage({ params }) {
   );
 
   return (
-    <GenericBookReader 
-      htmlContent={processedHtmlContent} 
-      tocItems={tocItems} 
-      bookTitle={cleanTitle} 
-      bookSlug={decodedSlug}
-    />
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "Book",
+            "@id": `https://mark.otrobonita.com/read/${canonicalSlug}`,
+            "url": `https://mark.otrobonita.com/read/${canonicalSlug}`,
+            "name": cleanTitle,
+            "author": {
+              "@type": "Person",
+              "name": "Mark Twain"
+            },
+            "inLanguage": "en"
+          })
+        }}
+      />
+      <GenericBookReader 
+        htmlContent={processedHtmlContent} 
+        tocItems={tocItems} 
+        bookTitle={cleanTitle} 
+        bookSlug={decodedSlug}
+      />
+    </>
   );
 }
