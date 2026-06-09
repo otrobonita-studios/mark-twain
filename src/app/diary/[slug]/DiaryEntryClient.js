@@ -1,9 +1,59 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { db, isConfigured } from '@/lib/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
-export default function DiaryEntryClient({ entry }) {
+export default function DiaryEntryClient({ staticEntry, slug }) {
+  const [entry, setEntry] = useState(staticEntry);
+  const [loading, setLoading] = useState(!staticEntry);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    if (staticEntry) return;
+    if (!isConfigured) {
+      setError(true);
+      setLoading(false);
+      return;
+    }
+
+    const fetchEntry = async () => {
+      try {
+        const q = query(collection(db, 'diary'), where('slug', '==', slug));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          setEntry(snap.docs[0].data());
+        } else {
+          setError(true);
+        }
+      } catch (err) {
+        console.error('Error fetching diary entry:', err);
+        setError(true);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchEntry();
+  }, [staticEntry, slug]);
+
+  if (error) {
+    notFound();
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#15110d] text-[rgba(255,244,223,0.88)] flex flex-col items-center justify-center py-12 px-4">
+        <div className="animate-pulse font-mono text-xs uppercase tracking-widest text-[var(--primary)]">
+          Retrieving journal entry...
+        </div>
+      </div>
+    );
+  }
+
   const handlePlayAudio = () => {
     if (entry.audioIndex !== undefined) {
       window.dispatchEvent(new CustomEvent('media-player-select-track-request', { 

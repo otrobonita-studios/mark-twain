@@ -23,9 +23,5 @@ export default async function DiaryEntryPage({ params }) {
   const { slug } = await params;
   const entry = diaryCopy.en.entries.find((e) => e.slug === slug);
   
-  if (!entry) {
-    notFound();
-  }
-
-  return <DiaryEntryClient entry={entry} />;
+  return <DiaryEntryClient staticEntry={entry} slug={slug} />;
 }

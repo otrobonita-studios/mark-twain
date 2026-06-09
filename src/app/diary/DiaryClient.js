@@ -1,17 +1,46 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
 import { X } from 'lucide-react';
 import { diaryCopy, footerCopy } from '@/data/copy_i18n';
+import { db, isConfigured } from '@/lib/firebase';
+import { collection, onSnapshot } from 'firebase/firestore';
 
 export default function DiaryClient() {
   const [selectedEntry, setSelectedEntry] = useState(null);
+  const [firebaseEntries, setFirebaseEntries] = useState([]);
 
   const diaryT = diaryCopy.en;
   const footerT = footerCopy.en;
+
+  useEffect(() => {
+    if (!isConfigured) return;
+    try {
+      const q = collection(db, 'diary');
+      const unsub = onSnapshot(q, (snap) => {
+        const list = [];
+        snap.forEach((doc) => {
+          list.push({ ...doc.data() });
+        });
+        setFirebaseEntries(list);
+      });
+      return () => unsub();
+    } catch (error) {
+      console.error('Error fetching diary from Firestore:', error);
+    }
+  }, []);
+
+  const combinedEntries = useMemo(() => {
+    const staticList = diaryT.entries || [];
+    return [...firebaseEntries, ...staticList].sort((a, b) => {
+      const idA = typeof a.id === 'number' ? a.id : Number(a.id) || 0;
+      const idB = typeof b.id === 'number' ? b.id : Number(b.id) || 0;
+      return idB - idA;
+    });
+  }, [firebaseEntries, diaryT.entries]);
 
   return (
     <div className="app-container">
@@ -85,7 +114,7 @@ export default function DiaryClient() {
           </div>
 
           <div className="diary-list">
-            {diaryT.entries.filter(entry => entry.id !== 2).map((entry) => (
+            {combinedEntries.filter(entry => entry.id !== 2).map((entry) => (
               <article
                 key={entry.id}
                 className="tactile-card diary-card"
