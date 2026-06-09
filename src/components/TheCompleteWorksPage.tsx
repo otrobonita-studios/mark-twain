@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { Moon, Sun, Sparkles, Mic, Map, BookOpen, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -363,6 +363,7 @@ const newsAccounts: WorkEntry[] = [
 
 export default function TheCompleteWorksPage() {
   const router = useRouter();
+  const pathname = usePathname();
   const [theme, setTheme] = useState('charcoal'); // 'parchment' | 'charcoal'
   const [loadingBook, setLoadingBook] = useState<number | null>(null);
   const [fontSize, setFontSize] = useState('small'); // 'small' | 'normal' | 'large'
@@ -432,14 +433,8 @@ export default function TheCompleteWorksPage() {
   }, [active]);
 
   useEffect(() => {
-    const handleRouteChange = () => {
-      setLoadingBook(null);
-    };
-    router.events.on('routeChangeComplete', handleRouteChange);
-    return () => {
-      router.events.off('routeChangeComplete', handleRouteChange);
-    };
-  }, [router.events]);
+    setLoadingBook(null);
+  }, [pathname]);
 
   useEffect(() => {
     return () => {
