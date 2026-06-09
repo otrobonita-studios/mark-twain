@@ -1,0 +1,869 @@
+graemeg
+
+/
+
+blaise
+
+Public
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Notifications
+
+You must be signed in to change notification settings
+
+Fork
+    
+7
+
+          Star
+
+209
+
+                Blaise v0.10.0 (alpha) — Mandatory 
+()
+, Native Backend, Threads & Incremental Compilation 🎉
+
+#82
+
+                      graemeg
+
+                  announced in
+                
+Announcements
+
+              Blaise v0.10.0 (alpha) — Mandatory `()`, Native Backend, Threads & Incremental Compilation 🎉
+
+#82
+
+          graemeg
+
+Jun 7, 2026
+
+·
+
+    3 comments
+      
+·
+
+      11 replies
+
+Return to top
+
+Discussion options
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Quote reply
+
+edited
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+graemeg
+
+Jun 7, 2026
+
+  Maintainer
+
+ -
+
+Hey everyone! We're thrilled to announce 
+Blaise v0.10.0
+ — our biggest release yet, packing in a native x86-64 backend, thread support, incremental separate compilation, and a language-level clarity win that makes Blaise code unambiguous at a glance.
+
+Let's dive in! 🚀
+
+🔧 Mandatory 
+()
+ on Zero-Argument Calls
+
+The headline language change: 
+Blaise now requires parentheses on every call, even with zero arguments.
+
+//
+ ✅ The Blaise way
+
+F := TFoo.Create();
+Obj.Free();
+X := GetCurrentDir();
+
+//
+ ❌ No longer accepted
+
+F := TFoo.Create;
+Obj.Free;
+X := GetCurrentDir;
+
+No more guessing whether 
+Foo
+ is a variable read or a function call — 
+Foo
+ is always a read, 
+Foo()
+ is always a call. This eliminates the classic Pascal ambiguity between Result assignment and recursion, makes 
+grep
+ a reliable way to find call sites, and let us delete the entire 
+IsNoArgFuncCall
+ machinery from the compiler internals. Three latent codegen bugs were flushed out in the process. 🐛→🦋
+
+We also added proper 
+procedure-field invocation
+: 
+Obj.Handler()
+ dispatches through the stored code pointer, while 
+Obj.Handler
+ reads the field value.
+
+For the full rationale, see the 
+separate announcement post
+.
+
+🖥️ Native x86-64 Backend
+
+Blaise now ships with a 
+direct x86-64 code generator
+ alongside the QBE backend. Milestones M1 through M8 are complete:
+
+Integer and float arithmetic, control flow, for/while/repeat loops
+
+Records, static arrays, dynamic arrays, open arrays
+
+Full class system: method dispatch, vtables, constructors, destructors
+
+ARC retain/release for strings, classes, and interfaces
+
+Interface dispatch through itab
+
+Exception handling (try/except/finally)
+
+String operations at parity with the QBE backend
+
+Var/out parameters and inherited calls
+
+Generics support (monomorphised classes, records, interfaces, free routines)
+
+For-in and case statements
+
+The native backend is invoked with 
+--backend native
+ or 
+--target linux-x86_64
+. It produces ELF 
+.o
+ files directly — no external assembler needed. 💪
+
+🧵 Thread Support
+
+Blaise gains first-class threading capabilities:
+
+threadvar
+ declarations for thread-local storage
+
+Atomic ARC
+ — reference counting is now thread-safe via atomic increment/decrement
+
+Mutex-protected weak reference table
+ — weak refs work correctly across threads
+
+Per-thread memory allocator
+ via threadvar — reduces lock contention
+
+Thread-local exception globals
+ — each thread gets its own exception frame chain
+
+TThread.Create(False)
+ now correctly joins on 
+Free()
+ via ARC
+
+All of this is exercised through e2e tests that spawn real threads. 🧪
+
+⚡ Incremental Separate Compilation
+
+The compiler now supports 
+incremental per-unit compilation
+, a major step towards fast rebuild cycles:
+
+.bif
+ (Blaise Interface File) format — a compact serialisation of a unit's public interface, embedded inside the 
+.o
+ file
+
+--incremental
+ flag: only recompile units whose source has changed; reuse cached 
+.o
+ + 
+.bif
+ for unchanged deps
+
+Parallel incremental compilation
+ via worker threads — multiple units build concurrently
+
+Warm incremental recompile resolves all 
+EImportError
+ crashes that previously occurred when reusing stale interface data
+
+The 
+.bif
+ format covers constants, types (simple, record, class, interface, generic templates), routines, global variables, inline bodies, and calling convention directives.
+
+📦 Language & Standard Library
+
+Diamond operator
+ — 
+var L: TList<Integer> := TList<>.Create()
+ infers the type argument from the left-hand side
+
+Exit(Value)
+ shorthand — 305 sites across the compiler dogfood this feature
+
+not
+ on integers
+ — bitwise complement for Integer, Byte, Word, SmallInt, Int64
+
+Set-valued constants
+ — 
+const X = [a, b]
+ and set literals as 
+set of
+ arguments
+
+out
+ parameter mode
+ tracked distinctly from 
+var
+
+Calling convention directives
+ (
+cdecl
+, 
+stdcall
+) preserved on routine declarations
+
+WriteLn
+ prints 
+True
+/
+False
+ for Boolean values
+
+Unsigned 32-bit values print correctly in 
+WriteLn
+
+TStringList.Text
+ / 
+LoadFromFile
+ preserve verbatim lines (no more trimming)
+
+🛠️ Compiler Improvements
+
+--dump-ast
+ flag — prints the fully resolved AST after semantic analysis, invaluable for diagnosing codegen issues
+
+Unit-prefix symbol mangling
+ — free routines, classes, and address-of expressions are mangled with their owning unit name, enabling true multi-unit builds without symbol collisions
+
+Per-unit symbol cache
+ for fast uses-chain retrieval
+
+Layered symbol lookup
+ — current-unit symbols shadow uses-chain, matching Delphi/FPC semantics
+
+🎯 Kanban Tool
+
+The built-in TUI Kanban board (
+tools/kanban/
+) gained several improvements:
+
+CLI mode for non-interactive task creation
+
+UTC datetime storage with local display
+
+External file change detection and merge
+
+Rounded box-drawing corners and coloured borders
+
+📊 By the Numbers
+
+2627 tests
+ passing ✅
+
+262,202 lines
+ of verified QBE IR at fixpoint
+
+130+ commits
+ since v0.9.0
+
+FIXPOINT_OK
+ — self-hosting verified ✅
+
+Grab the release from the 
+GitHub Releases page
+ and see the changelog for the full list of changes.
+
+We'd love to hear your thoughts — drop a comment, open an issue, or just say hello! 👋
+
+Onwards to v0.11.0! 🙌
+
+Built with ❤ for the Pascal community.
+
+Beta
+
+Was this translation helpful?
+
+Give feedback.
+
+5
+
+You must be logged in to vote
+
+👍
+
+5
+
+🎉
+
+3
+
+❤️
+
+1
+
+🚀
+
+1
+
+All reactions
+
+👍
+
+5
+
+🎉
+
+3
+
+❤️
+
+1
+
+🚀
+
+1
+
+Replies: 
+
+      3 comments
+
+·
+
+        11 replies
+
+Comment options
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Quote reply
+
+rchastain2
+
+Jun 7, 2026
+
+ -
+
+Thank you Graeme.
+
+I am currently playing with the compiler, in order to see how usable it already is. Many programs are compiled and work without issue. Congratulations!
+
+Are there functions to deal with UTF-8 strings like Lazarus 
+UTF8Copy
+, 
+UTF8Length
+ and so on?
+
+Beta
+
+Was this translation helpful?
+
+Give feedback.
+
+1
+
+You must be logged in to vote
+
+🎉
+
+1
+
+All reactions
+
+🎉
+
+1
+
+                    10 replies
+
+Comment options
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Quote reply
+
+edited
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+rchastain2
+
+Jun 7, 2026
+
+ -
+
+I notice that strings are not displayed correctly in terminal.
+
+Here is a test program. It computes the date of Easter (in french 
+la date de Pâques
+) and displays the result in the terminal.
+
+[roland@localhost blaise]$ make paques
+[roland@localhost blaise]$ ./paques 2026
+En 2026, le dimanche de PC3A2ques est l5 avril
+
+  Write(
+'
+En 
+'
+, LAnnee, 
+'
+, le dimanche de Pâques est le 
+'
+);
+  
+if
+ LAvril 
+then
+
+    WriteLn(LNombreOudin - 
+31
+, 
+'
+ avril
+'
+)
+  
+else
+
+    WriteLn(LNombreOudin, 
+'
+ mars
+'
+);
+
+paques.zip
+
+P.-S. Sorry 
+@Alexey-T
+, this isn't an answer to your comment.
+
+Beta
+
+Was this translation helpful?
+
+Give feedback.
+
+All reactions
+
+Comment options
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Quote reply
+
+graemeg
+
+Jun 7, 2026
+
+  Maintainer
+
+  Author
+
+ -
+
+Copy(s, 2, 4),does it copy 4 bytes or 4 utf8 chars which can be eg 4*3 bytes?
+
+Currently, it copies 4 bytes. Blaise does not have a 
+Char
+ datatype because Unicode doesn't support such a term anywhere in the Unicode specification. Unicode uses the term Codepoint. Both FPC and Delphi is flawed with their "char" type - even when the encoding is UTF-16.
+
+Here's the tricky part, explained with a few examples:
+
+é can be either 1 codepoint (U+00E9, precomposed) OR 2 codepoints (e + combining accent U+0301)
+
+Flag emoji 🇫🇷 = 2 codepoints (regional indicator F + regional indicator R)
+
+Family emoji 👨‍👩‍👧 = 5 codepoints joined by invisible zero-width joiners
+
+The only safe why to iterate such strings is by codepoint. What you perceive on-screen as "one character" could be one or more codepoints combined by the rendering engine.
+
+UTF-16 doesn't solve this either. A Word-sized "char" only covers the BMP range of Unicode. Anything outside the BMP range requires surrogate word values.
+
+I'm still planning string iteration for Blaise (for..in already iterates a string, but returns Byte), but these extended functions will probably all be based on codepoints.
+
+Beta
+
+Was this translation helpful?
+
+Give feedback.
+
+All reactions
+
+Comment options
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Quote reply
+
+graemeg
+
+Jun 7, 2026
+
+  Maintainer
+
+  Author
+
+ -
+
+I notice that strings are not displayed correctly in terminal.
+
+That bug has been fixed in the QBE and Native backends and landed as commit 
+dd2e5dd
+. Thanks for reporting it.
+
+Beta
+
+Was this translation helpful?
+
+Give feedback.
+
+👍
+
+1
+
+🚀
+
+1
+
+All reactions
+
+👍
+
+1
+
+🚀
+
+1
+
+Comment options
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Quote reply
+
+graemeg
+
+Jun 7, 2026
+
+  Maintainer
+
+  Author
+
+ -
+
+Hi everyone. Just landed in 'master'. Please see all the CodePointXXX() functions in the StrUtils.pas unit. For working with codepoints in a String.
+
+I've also extended the functionality of the 
+for-in
+ statement. Before, if you used for-in against a string, the loop variable had to be a Byte type, because it always returned bytes.
+
+Now, the 
+for-in
+ against a String, supports the loop-variable being a 
+Byte
+ or 
+Integer
+. The latter will trigger iteration over the string, but 
+return codepoints as integer values
+.  See the new e2e tests for code examples.
+
+Beta
+
+Was this translation helpful?
+
+Give feedback.
+
+👍
+
+1
+
+All reactions
+
+👍
+
+1
+
+Comment options
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Quote reply
+
+edited
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+rchastain2
+
+Jun 8, 2026
+
+ -
+
+That bug has been fixed in the QBE and Native backends and landed as commit 
+dd2e5dd
+.
+
+Test successful. Thank you.
+
+By the way, rebuilding the compiler is incredibly easy... and fast!
+
+Beta
+
+Was this translation helpful?
+
+Give feedback.
+
+👍
+
+1
+
+All reactions
+
+👍
+
+1
+
+Comment options
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Quote reply
+
+rchastain2
+
+Jun 8, 2026
+
+ -
+
+I notice that the 
+Format()
+ function doesn't work.
+
+uses
+
+  SysUtils;
+
+begin
+
+  WriteLn(Format(
+'
+%.2d
+'
+, [
+1
+]));
+  WriteLn(Format(
+'
+%.*d
+'
+, [
+2
+, 
+1
+]));
+
+end
+.
+
+$ fpc format1
+$ ./format1
+01
+01
+$ rm -f format1
+$ make format1
+$ ./format1
+%.2d
+%.*d
+
+format1.zip
+
+Beta
+
+Was this translation helpful?
+
+Give feedback.
+
+1
+
+You must be logged in to vote
+
+All reactions
+
+                    0 replies
+
+Comment options
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Quote reply
+
+Schmitty2005
+
+Jun 8, 2026
+
+ -
+
+I don't think the modifiers are allowed yet. Try just 
+%d
+ for now.
+
+Beta
+
+Was this translation helpful?
+
+Give feedback.
+
+1
+
+You must be logged in to vote
+
+👍
+
+1
+
+All reactions
+
+👍
+
+1
+
+                    1 reply
+
+Comment options
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Quote reply
+
+graemeg
+
+Jun 8, 2026
+
+  Maintainer
+
+  Author
+
+ -
+
+That's correct. It's on my list.
+
+Beta
+
+Was this translation helpful?
+
+Give feedback.
+
+👍
+
+1
+
+All reactions
+
+👍
+
+1
+
+Sign up for free
+
+to join this conversation on GitHub
+.
+    Already have an account?
+    
+Sign in to comment
+
+      Category
+
+📣
+
+      Announcements
+
+        Labels
+
+        None yet
+
+      4 participants
