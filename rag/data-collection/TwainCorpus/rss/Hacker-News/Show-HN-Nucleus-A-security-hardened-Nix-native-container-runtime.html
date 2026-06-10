@@ -1,0 +1,1656 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">Nucleus</h1></div>
+<p dir="auto"><a href="https://crates.io/crates/nucleus-container" rel="nofollow"></a>
+<a href="#license"></a></p>
+<p dir="auto"><strong>Extremely lightweight, security-hardened, declarative container runtime for agents and production services</strong></p>
+<p dir="auto">Nucleus is a minimalist container runtime for Linux. It provides isolated execution environments using Linux kernel primitives without the overhead of traditional container runtimes. For production services, it is designed around a fully declarative model: Nix builds the root filesystem, the NixOS module declares the service, and Nucleus mounts a pinned, reproducible closure at runtime.</p>
+<p dir="auto">Nucleus supports three operating modes:</p>
+<ul dir="auto">
+<li><strong>Agent mode</strong> (default) – ephemeral, fast-startup sandboxes for AI agent workloads</li>
+<li><strong>Strict agent mode</strong> – fail-closed isolation for ephemeral agent workloads without requiring production rootfs, health checks, sd_notify, or NixOS service semantics</li>
+<li><strong>Production mode</strong> – strict isolation for long-running, network-bound NixOS services with declarative configuration, reproducible Nix-built root filesystems, egress policy enforcement, health checks, and systemd integration</li>
+</ul>
+<p dir="auto">Production deployments are built to be:</p>
+<ul dir="auto">
+<li><strong>Fully declarative</strong> – service topology, runtime settings, and mounted rootfs are defined up front instead of assembled imperatively at deploy time</li>
+<li><strong>Nix-native</strong> – first-class NixOS module support plus <code>nucleus.lib.mkRootfs</code> for minimal service closures</li>
+<li><strong>Reproducible</strong> – flake-based builds, pinned store paths, and rootfs attestation keep runtime inputs stable and auditable</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Benchmarks</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Cold Start</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Runtime</th>
+<th>Startup Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Nucleus</strong></td>
+<td><strong>12 ms</strong></td>
+</tr>
+<tr>
+<td>Docker</td>
+<td>~500 ms</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">PostgreSQL 18 (pgbench, 8 clients, 60s, scale 50)</h3></div>
+<p dir="auto">In the native runtime, PostgreSQL stays near bare-metal performance under Nucleus
+isolation. In this harness, occasional wins over bare metal should be treated as
+benchmark noise rather than a guaranteed speedup.</p>
+<p dir="auto"><strong>SELECT-only (read-heavy)</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Environment</th>
+<th>I/O Method</th>
+<th>Avg TPS</th>
+<th>Avg Latency</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Baremetal</td>
+<td>worker</td>
+<td>100,222</td>
+<td>0.080 ms</td>
+</tr>
+<tr>
+<td>Baremetal</td>
+<td>io_uring</td>
+<td>84,895</td>
+<td>0.096 ms</td>
+</tr>
+<tr>
+<td><strong>Nucleus</strong></td>
+<td><strong>worker</strong></td>
+<td><strong>105,965</strong></td>
+<td><strong>0.075 ms</strong></td>
+</tr>
+<tr>
+<td><strong>Nucleus</strong></td>
+<td><strong>io_uring</strong></td>
+<td><strong>107,039</strong></td>
+<td><strong>0.074 ms</strong></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto"><strong>TPC-B (mixed read/write)</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Environment</th>
+<th>I/O Method</th>
+<th>Avg TPS</th>
+<th>Avg Latency</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Baremetal</td>
+<td>worker</td>
+<td>1,490</td>
+<td>5.38 ms</td>
+</tr>
+<tr>
+<td>Baremetal</td>
+<td>io_uring</td>
+<td>1,382</td>
+<td>5.79 ms</td>
+</tr>
+<tr>
+<td><strong>Nucleus</strong></td>
+<td><strong>worker</strong></td>
+<td><strong>1,757</strong></td>
+<td><strong>4.55 ms</strong></td>
+</tr>
+<tr>
+<td><strong>Nucleus</strong></td>
+<td><strong>io_uring</strong></td>
+<td><strong>1,585</strong></td>
+<td><strong>5.05 ms</strong></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<blockquote>
+<p dir="auto">Measured on Linux 6.18 x86_64. This benchmark uses the native runtime with a
+bind-mounted host <code>pgdata</code> directory and <code>--network host</code>, so it measures the
+steady-state cost of Nucleus isolation rather than VM or gVisor emulation
+overhead. Full results: <a href="/sig-id/nucleus/blob/main/benches/pg18_io/results"><code>benches/pg18_io/results/</code></a></p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Why Nucleus?</h2></div>
+<ul dir="auto">
+<li><strong>Declarative by default for services</strong> – Production deployments are defined in NixOS and TOML rather than stitched together with ad hoc runtime scripting</li>
+<li><strong>Deep Nix integration</strong> – First-class NixOS module, <code>mkRootfs</code>, and Nix store closures for minimal, locked-down service roots</li>
+<li><strong>Reproducible service builds</strong> – Flake-based packaging, pinned inputs, and rootfs attestation make runtime state auditable and repeatable</li>
+<li><strong>Zero-overhead isolation</strong> – Direct use of cgroups, namespaces, pivot_root, capabilities, seccomp, and Landlock</li>
+<li><strong>Memory-backed filesystems</strong> – Container disk mapped to tmpfs, pre-populated with agent context</li>
+<li><strong>gVisor integration</strong> – Optional application kernel for enhanced security, including networked service mode</li>
+<li><strong>OCI runtime-spec subset for gVisor</strong> – Generates OCI bundle/config data for <code>runsc</code>, including process identity, mounts, namespaces, seccomp, hooks, and cgroup path wiring</li>
+<li><strong>Detached mode</strong> – Run containers in the background as systemd transient services with <code>--detach</code>, managed via <code>nucleus stop</code>/<code>logs</code>/<code>attach</code></li>
+<li><strong>Production service support</strong> – Declarative NixOS module, egress policies, health checks, secrets mounting, sd_notify, and journald integration</li>
+<li><strong>Explicit workload identity</strong> – Native and gVisor runtimes can drop to a configured <code>uid</code>/<code>gid</code> plus supplementary groups after privileged setup</li>
+<li><strong>Minimal rootfs</strong> – Replace host bind mounts with a purpose-built Nix store closure for production services</li>
+<li><strong>External security policies</strong> – Per-service seccomp profiles (JSON), capability policies (TOML), and Landlock rules (TOML) with SHA-256 pinning</li>
+<li><strong>Seccomp profile generation</strong> – Trace mode records syscalls, then <code>nucleus seccomp generate</code> creates a minimal allowlist profile</li>
+<li><strong>Multi-container topologies</strong> – Compose-equivalent TOML format with dependency DAG, reconciliation, and NixOS systemd integration</li>
+<li><strong>Integrity &amp; audit controls</strong> – Structured audit log, machine-readable lifecycle event streams, context hashing, rootfs attestation, seccomp deny logging, mount flag verification, and kernel lockdown assertions</li>
+<li><strong>Structured telemetry</strong> – Optional OpenTelemetry export for container lifecycle tracing</li>
+<li><strong>Linux-native</strong> – Runs on standard Linux and NixOS</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Relationship to Docker</h2></div>
+<p dir="auto">Nucleus is <strong>not</strong> a drop-in Docker replacement, nor a strict subset of Docker.
+The feature sets overlap, but each tool does things the other does not. Nucleus is
+a hardened sandbox runtime (closer in spirit to <code>runc</code>/<code>gVisor</code>) that also does
+lightweight, declarative single-host orchestration. It drops the image-and-distribution
+half of Docker in exchange for deeper isolation, policy, and reproducibility.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Docker</th>
+<th>Nucleus</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Root filesystem</td>
+<td>Layered image (union mount)</td>
+<td>tmpfs directory (agent) or Nix closure (production)</td>
+</tr>
+<tr>
+<td>Images / Dockerfile / registry</td>
+<td>Yes</td>
+<td>No — no images, layers, <code>pull</code>/<code>push</code>, or OCI <em>image</em> spec</td>
+</tr>
+<tr>
+<td>Persistent storage</td>
+<td>Named volumes + storage drivers</td>
+<td>Ephemeral tmpfs; persistence only via explicit <code>--volume</code> binds</td>
+</tr>
+<tr>
+<td>Architecture</td>
+<td><code>dockerd</code> daemon + socket API</td>
+<td>Single binary, direct fork/exec; detached = systemd transient unit</td>
+</tr>
+<tr>
+<td>Networking</td>
+<td>CNI plugins, overlay networks</td>
+<td><code>none</code> / <code>host</code> / <code>bridge</code> only</td>
+</tr>
+<tr>
+<td>Orchestration</td>
+<td>Compose, Swarm</td>
+<td><code>nucleus compose</code> (single-host TOML DAG over systemd)</td>
+</tr>
+<tr>
+<td>Default egress</td>
+<td>Allow-all outbound</td>
+<td>Deny-by-default; allow per CIDR/domain via namespace iptables</td>
+</tr>
+<tr>
+<td>Filesystem ACLs</td>
+<td>AppArmor/SELinux profiles</td>
+<td>Landlock LSM, per-service, irreversible</td>
+</tr>
+<tr>
+<td>gVisor</td>
+<td>Optional add-on runtime</td>
+<td>First-class integrated runtime with explicit network modes</td>
+</tr>
+<tr>
+<td>Security policies</td>
+<td>Bundled defaults</td>
+<td>Externalized seccomp/caps/Landlock, SHA-256 pinned + trace-generated</td>
+</tr>
+<tr>
+<td>Reproducibility</td>
+<td>Image digests</td>
+<td>Nix closures, rootfs attestation, first-class NixOS module</td>
+</tr>
+<tr>
+<td>Verification</td>
+<td>—</td>
+<td>TLA+ specs + model-based tests across subsystems</td>
+</tr>
+<tr>
+<td>Default hardening</td>
+<td>~300 syscalls, some caps kept</td>
+<td>All caps dropped, small seccomp allowlist, up to 8 namespaces</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">If your mental model is "run my image instead of <code>docker run</code>," it will not fit:
+there are no images, no registry, and no persistent state. If it is "run untrusted
+or ephemeral workloads with stronger, auditable isolation," that is the target.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Architecture</h2></div>
+<p dir="auto">Nucleus leverages Linux kernel isolation primitives:</p>
+<ul dir="auto">
+<li><strong>Namespaces</strong> – PID, mount, network, UTS, IPC, user, cgroup, and optional time isolation</li>
+<li><strong>cgroups v2</strong> – Resource limits (CPU, memory, PIDs, I/O)</li>
+<li><strong>pivot_root</strong> – Filesystem isolation (chroot fallback available in agent mode only)</li>
+<li><strong>Capabilities</strong> – All capabilities dropped by default, or configured via TOML policy file (irreversible)</li>
+<li><strong>seccomp</strong> – Syscall whitelist filtering with per-service JSON profiles and trace-based generation (irreversible)</li>
+<li><strong>Landlock</strong> – Path-based filesystem access control via hardcoded defaults or TOML policy file (Linux 5.13+)</li>
+<li><strong>gVisor</strong> – Optional application kernel (runsc) with none, bridge handoff, and explicit gvisor-host network modes</li>
+<li><strong>OCI bundle generation</strong> – Emits OCI <code>config.json</code> plus bundle layout for gVisor, including <code>process.user</code>, lifecycle hooks, seccomp, resource limits, and namespace mappings</li>
+<li><strong>PID 1 init</strong> – Mini-init supervisor in production mode for zombie reaping and signal forwarding</li>
+<li><strong>In-memory secrets</strong> – Dedicated tmpfs at <code>/run/secrets</code> with volatile zeroing of source buffers</li>
+<li><strong>Mount audit</strong> – Post-setup verification of mount flags in production mode</li>
+</ul>
+<p dir="auto">Container filesystem is backed by tmpfs and either populated with context files (agent mode) or mounted from a pre-built Nix rootfs closure (production mode). That lets production services run from a declaratively built, reproducible root filesystem instead of inheriting mutable host state.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Platform Support</h2></div>
+<ul dir="auto">
+<li>Linux (kernel 6.x+) on <code>x86_64</code></li>
+<li>NixOS (first-class NixOS module support)</li>
+<li><strong>Not supported</strong>: macOS, Windows, BSDs, 32-bit Linux</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Installation</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo install nucleus-container" dir="auto"><pre>cargo install nucleus-container</pre></div>
+<p dir="auto">Or via Nix (recommended for reproducible builds and NixOS integration):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="nix run github:wiggum-cc/nucleus" dir="auto"><pre>nix run github:wiggum-cc/nucleus</pre></div>
+<p dir="auto">The Cargo package name is <code>nucleus-container</code>; it installs the <code>nucleus</code> binary. The repository itself is packaged as a Nix flake, so <code>nix run</code>, <code>nix build</code>, and the NixOS module all share the same pinned inputs.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Recent Features</h2></div>
+<ul dir="auto">
+<li><strong>Privilege drop for services</strong> – <code>--user</code>, <code>--group</code>, and <code>--additional-group</code> now apply a real post-setup workload identity in both the native runtime and gVisor.</li>
+<li><strong>Ownership-aware secrets and writable paths</strong> – Production secret staging and NixOS <code>createHostPath = true</code> defaults now align file ownership with the configured workload user/group.</li>
+<li><strong>OCI bundle identity support</strong> – Generated gVisor OCI configs now carry <code>process.user</code> including supplementary groups, alongside namespaces, mounts, resource limits, seccomp, hooks, and <code>cgroupsPath</code>.</li>
+<li><strong>Probe execution under workload identity</strong> – Exec-based health and readiness probes now run as the configured service account instead of implicitly as root.</li>
+<li><strong>Systemd/NixOS service integration improvements</strong> – The module exposes <code>user</code>, <code>group</code>, and <code>supplementaryGroups</code>, and packaged Nix usage includes <code>gvisor</code> in the flake/dev shell path.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Usage</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Agent Mode (default)</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Run agent in isolated container with pre-populated context
+nucleus run --context ./agent-context/ -- /usr/bin/agent
+
+# Specify resource limits
+nucleus run --memory 512M --cpus 2 --context ./ctx/ -- ./agent
+
+# Name your container
+nucleus run --name my-agent --context ./ctx/ -- ./agent
+
+# Use gVisor for enhanced isolation
+nucleus run --runtime gvisor --context ./ctx/ -- ./agent
+
+# Rootless mode
+nucleus run --rootless -- /bin/sh
+
+# Optional networking
+nucleus run --network host --allow-host-network -- curl https://example.com
+nucleus run --network bridge -p 8080:80 -- ./server
+nucleus run --network bridge -p 127.0.0.1:8080:80 -- ./server
+nucleus run --rootless --network bridge -- ./client
+nucleus run --network bridge --nat-backend userspace -- ./client
+
+# Context streaming (bind mount for instant access)
+nucleus run --context ./large-dir/ --context-mode bind -- ./agent
+
+# Integrity and audit hardening
+nucleus run --context ./ctx/ --verify-context-integrity --seccomp-log-denied -- ./agent
+
+# Environment variables
+nucleus run -e DEBUG=1 -- ./agent
+
+# Sensitive environment variables without argv exposure
+printf '{&quot;OPENAI_API_KEY&quot;:&quot;...&quot;}' | nucleus run --env-fd 3 3&lt;&amp;0 -- ./agent
+
+# Pass sensitive values via --secret (mounted in-memory at /run/secrets)
+nucleus run --secret /path/to/api-key:/run/secrets/api_key -- ./agent
+
+# Run a coding agent against a stable /workspace cwd
+nucleus run \
+  --workspace &quot;$PWD&quot; \
+  --workspace-mode bind-rw \
+  --workspace-exec \
+  -- ./agent
+
+# Mount provider CLI config under the private home directory
+nucleus run \
+  --provider-config-ro &quot;$HOME/.aws:.aws&quot; \
+  --provider-config-rw &quot;$HOME/.config/gh:.config/gh&quot; \
+  -- ./agent
+
+# Run an agent with a pinned provider/toolchain rootfs instead of host runtime binds
+nucleus run \
+  --service-mode mitos-agent \
+  --agent-toolchain-rootfs /nix/store/...-nucleus-agent-toolchain-rootfs \
+  --workspace &quot;$PWD&quot; \
+  --workspace-exec \
+  -- codex" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Run agent in isolated container with pre-populated context</span>
+nucleus run --context ./agent-context/ -- /usr/bin/agent
+
+<span class="pl-c"><span class="pl-c">#</span> Specify resource limits</span>
+nucleus run --memory 512M --cpus 2 --context ./ctx/ -- ./agent
+
+<span class="pl-c"><span class="pl-c">#</span> Name your container</span>
+nucleus run --name my-agent --context ./ctx/ -- ./agent
+
+<span class="pl-c"><span class="pl-c">#</span> Use gVisor for enhanced isolation</span>
+nucleus run --runtime gvisor --context ./ctx/ -- ./agent
+
+<span class="pl-c"><span class="pl-c">#</span> Rootless mode</span>
+nucleus run --rootless -- /bin/sh
+
+<span class="pl-c"><span class="pl-c">#</span> Optional networking</span>
+nucleus run --network host --allow-host-network -- curl https://example.com
+nucleus run --network bridge -p 8080:80 -- ./server
+nucleus run --network bridge -p 127.0.0.1:8080:80 -- ./server
+nucleus run --rootless --network bridge -- ./client
+nucleus run --network bridge --nat-backend userspace -- ./client
+
+<span class="pl-c"><span class="pl-c">#</span> Context streaming (bind mount for instant access)</span>
+nucleus run --context ./large-dir/ --context-mode <span class="pl-c1">bind</span> -- ./agent
+
+<span class="pl-c"><span class="pl-c">#</span> Integrity and audit hardening</span>
+nucleus run --context ./ctx/ --verify-context-integrity --seccomp-log-denied -- ./agent
+
+<span class="pl-c"><span class="pl-c">#</span> Environment variables</span>
+nucleus run -e DEBUG=1 -- ./agent
+
+<span class="pl-c"><span class="pl-c">#</span> Sensitive environment variables without argv exposure</span>
+<span class="pl-c1">printf</span> <span class="pl-s"><span class="pl-pds">'</span>{"OPENAI_API_KEY":"..."}<span class="pl-pds">'</span></span> <span class="pl-k">|</span> nucleus run --env-fd 3 <span class="pl-k">3&lt;</span><span class="pl-k">&amp;</span>0 -- ./agent
+
+<span class="pl-c"><span class="pl-c">#</span> Pass sensitive values via --secret (mounted in-memory at /run/secrets)</span>
+nucleus run --secret /path/to/api-key:/run/secrets/api_key -- ./agent
+
+<span class="pl-c"><span class="pl-c">#</span> Run a coding agent against a stable /workspace cwd</span>
+nucleus run \
+  --workspace <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$PWD</span><span class="pl-pds">"</span></span> \
+  --workspace-mode bind-rw \
+  --workspace-exec \
+  -- ./agent
+
+<span class="pl-c"><span class="pl-c">#</span> Mount provider CLI config under the private home directory</span>
+nucleus run \
+  --provider-config-ro <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$HOME</span>/.aws:.aws<span class="pl-pds">"</span></span> \
+  --provider-config-rw <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$HOME</span>/.config/gh:.config/gh<span class="pl-pds">"</span></span> \
+  -- ./agent
+
+<span class="pl-c"><span class="pl-c">#</span> Run an agent with a pinned provider/toolchain rootfs instead of host runtime binds</span>
+nucleus run \
+  --service-mode mitos-agent \
+  --agent-toolchain-rootfs /nix/store/...-nucleus-agent-toolchain-rootfs \
+  --workspace <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$PWD</span><span class="pl-pds">"</span></span> \
+  --workspace-exec \
+  -- codex</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Programmatic Launch Config</h3></div>
+<p dir="auto"><code>nucleus run</code> accepts the same command as <code>nucleus create</code>. Programmatic callers
+that need a stable launch contract can provide the whole request as JSON or TOML
+instead of constructing a long argv list:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="nucleus run --config ./agent.nucleus.toml
+nucleus run --config ./agent.nucleus.json
+nucleus run --config-fd 3 3&lt;./agent.nucleus.json" dir="auto"><pre>nucleus run --config ./agent.nucleus.toml
+nucleus run --config ./agent.nucleus.json
+nucleus run --config-fd 3 <span class="pl-k">3&lt;</span>./agent.nucleus.json</pre></div>
+<p dir="auto">Config mode owns the launch request: put the workload command and all sandbox
+options in the config document rather than mixing them with per-option CLI flags.
+The schema uses the long CLI option names converted to <code>snake_case</code>:</p>
+<div class="highlight highlight-source-toml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='name = "mitos-agent"
+workspace = "/home/dev/project"
+workspace_mode = "bind-rw"
+workspace_exec = true
+workdir = "/workspace"
+runtime = "gvisor"
+service_mode = "strict-agent"
+agent_toolchain_rootfs = "/nix/store/...-nucleus-agent-toolchain-rootfs"
+memory = "1G"
+cpus = 2.0
+pids = 512
+command = ["./agent", "--stdio"]
+
+env_vars = ["RUST_LOG=info"]
+seccomp_log_denied = true' dir="auto"><pre><span class="pl-smi">name</span> = <span class="pl-s"><span class="pl-pds">"</span>mitos-agent<span class="pl-pds">"</span></span>
+<span class="pl-smi">workspace</span> = <span class="pl-s"><span class="pl-pds">"</span>/home/dev/project<span class="pl-pds">"</span></span>
+<span class="pl-smi">workspace_mode</span> = <span class="pl-s"><span class="pl-pds">"</span>bind-rw<span class="pl-pds">"</span></span>
+<span class="pl-smi">workspace_exec</span> = <span class="pl-c1">true</span>
+<span class="pl-smi">workdir</span> = <span class="pl-s"><span class="pl-pds">"</span>/workspace<span class="pl-pds">"</span></span>
+<span class="pl-smi">runtime</span> = <span class="pl-s"><span class="pl-pds">"</span>gvisor<span class="pl-pds">"</span></span>
+<span class="pl-smi">service_mode</span> = <span class="pl-s"><span class="pl-pds">"</span>strict-agent<span class="pl-pds">"</span></span>
+<span class="pl-smi">agent_toolchain_rootfs</span> = <span class="pl-s"><span class="pl-pds">"</span>/nix/store/...-nucleus-agent-toolchain-rootfs<span class="pl-pds">"</span></span>
+<span class="pl-smi">memory</span> = <span class="pl-s"><span class="pl-pds">"</span>1G<span class="pl-pds">"</span></span>
+<span class="pl-smi">cpus</span> = <span class="pl-c1">2.0</span>
+<span class="pl-smi">pids</span> = <span class="pl-c1">512</span>
+<span class="pl-smi">command</span> = [<span class="pl-s"><span class="pl-pds">"</span>./agent<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>--stdio<span class="pl-pds">"</span></span>]
+
+<span class="pl-smi">env_vars</span> = [<span class="pl-s"><span class="pl-pds">"</span>RUST_LOG=info<span class="pl-pds">"</span></span>]
+<span class="pl-smi">seccomp_log_denied</span> = <span class="pl-c1">true</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Workspace</h3></div>
+<p dir="auto"><code>--workspace &lt;host-path&gt;</code> mounts the host project tree at <code>/workspace</code>. The
+process cwd defaults to <code>/workspace</code> via <code>--workdir /workspace</code>.</p>
+<p dir="auto"><code>--workspace-mode</code> accepts:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>bind-rw</code></td>
+<td>Bind mount the host path read-write at <code>/workspace</code> (default).</td>
+</tr>
+<tr>
+<td><code>bind-ro</code></td>
+<td>Bind mount the host path read-only at <code>/workspace</code>.</td>
+</tr>
+<tr>
+<td><code>copy-in-out</code></td>
+<td>Copy the host path into a private staging directory, run against that staged tree, then sync changes back after exit.</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Workspace mounts are <code>nosuid,nodev,noexec</code> by default and native Landlock denies
+execution from <code>/workspace</code>. Use <code>--workspace-exec</code> for agent-mode workflows
+that build and run test binaries from the workspace. Production mode rejects
+writable executable workspaces; use an immutable <code>--rootfs</code> and explicit policy
+files for production services.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Sandbox Home and Provider Config</h3></div>
+<p dir="auto">Nucleus creates a private tmpfs home at <code>/home/agent</code> by default and sets the
+workload <code>HOME</code> to that path. The home tmpfs is mounted <code>nosuid,nodev,noexec</code>
+with mode <code>0700</code> and is owned by the configured workload uid/gid. Use
+<code>--home &lt;container-path&gt;</code> to choose a different private home path; the path must
+be absolute and must not overlap <code>/workspace</code>.</p>
+<p dir="auto">Provider CLIs that require config under <code>$HOME</code> should use explicit provider
+config mounts instead of broad host bind mounts:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='nucleus run \
+  --home /home/agent \
+  --provider-config-ro "$HOME/.aws:.aws" \
+  --provider-config-ro "$HOME/.config/gcloud:.config/gcloud" \
+  --provider-config-rw "$HOME/.config/gh:.config/gh" \
+  -- ./agent' dir="auto"><pre>nucleus run \
+  --home /home/agent \
+  --provider-config-ro <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$HOME</span>/.aws:.aws<span class="pl-pds">"</span></span> \
+  --provider-config-ro <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$HOME</span>/.config/gcloud:.config/gcloud<span class="pl-pds">"</span></span> \
+  --provider-config-rw <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$HOME</span>/.config/gh:.config/gh<span class="pl-pds">"</span></span> \
+  -- ./agent</pre></div>
+<p dir="auto"><code>--provider-config-ro SOURCE:DEST</code> and <code>--provider-config-rw SOURCE:DEST</code> are
+repeatable. <code>DEST</code> may be absolute under the configured home, or relative to the
+home directory. Read-only mounts are preferred for cloud credentials; read-write
+mounts are intended only for tools that must refresh local tokens.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Agent Toolchain Rootfs</h3></div>
+<p dir="auto">Mitos-style provider launchers can avoid depending on mutable host <code>/bin</code>,
+<code>/usr</code>, <code>/lib</code>, or <code>/nix</code> binds by passing a pinned agent toolchain rootfs:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='nucleus run \
+  --service-mode strict-agent \
+  --agent-toolchain-rootfs /nix/store/...-nucleus-agent-toolchain-rootfs \
+  --workspace "$PWD" \
+  --workspace-exec \
+  -- claude' dir="auto"><pre>nucleus run \
+  --service-mode strict-agent \
+  --agent-toolchain-rootfs /nix/store/...-nucleus-agent-toolchain-rootfs \
+  --workspace <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$PWD</span><span class="pl-pds">"</span></span> \
+  --workspace-exec \
+  -- claude</pre></div>
+<p dir="auto">The dedicated flag is for <code>agent</code>, <code>strict-agent</code>, and <code>mitos-agent</code> modes. It
+uses the same read-only rootfs mount path as <code>--rootfs</code>, but is rejected in
+production mode so production services keep using <code>--rootfs</code> with attestation.</p>
+<p dir="auto">Build a rootfs with the Nix helper:</p>
+<div class="highlight highlight-source-nix notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="nucleus.lib.mkAgentToolchainRootfs {
+  inherit pkgs;
+  providerPackages = [
+    # Derivations that provide claude/codex/gemini executables.
+  ];
+  extraPackages = [
+    pkgs.rustc
+    pkgs.cargo
+  ];
+}" dir="auto"><pre><span class="pl-s1">nucleus</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">lib</span><span class="pl-kos">.</span><span class="pl-s1">mkAgentToolchainRootfs</span></span> <span class="pl-kos">{</span>
+  <span class="pl-k">inherit</span> <span class="pl-s1">pkgs</span><span class="pl-kos">;</span>
+  <span class="pl-c1"><span class="pl-s1">providerPackages</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span>
+    <span class="pl-c"># Derivations that provide claude/codex/gemini executables.</span>
+  <span class="pl-kos">]</span><span class="pl-kos">;</span>
+  <span class="pl-c1"><span class="pl-s1">extraPackages</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span>
+    <span class="pl-s1">pkgs</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">rustc</span></span>
+    <span class="pl-s1">pkgs</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">cargo</span></span>
+  <span class="pl-kos">]</span><span class="pl-kos">;</span>
+<span class="pl-kos">}</span></pre></div>
+<p dir="auto">The repository also exposes <code>packages.${system}.agent-toolchain-rootfs</code> as a
+default shell/Git/compiler/package-manager rootfs. Integrations that need exact
+provider CLIs should call <code>mkAgentToolchainRootfs</code> with pinned provider package
+derivations and pass the resulting store path to <code>--agent-toolchain-rootfs</code>.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Detached Mode</h3></div>
+<p dir="auto">Use <code>-d</code>/<code>--detach</code> to run a container in the background as a systemd transient service. The CLI prints the container ID and exits immediately; systemd supervises the container process.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Run a container in the background
+nucleus create -d --memory 512M -- /bin/sleep 3600
+# prints: a1b2c3d4e5f6...
+
+# All management commands work with detached containers
+nucleus state                        # list running containers
+nucleus logs &lt;container&gt;             # view stdout/stderr (from journald)
+nucleus logs -f &lt;container&gt;          # follow logs
+nucleus logs -n 50 &lt;container&gt;       # last 50 lines
+nucleus attach &lt;container&gt;           # exec into it
+nucleus stop &lt;container&gt;             # graceful SIGTERM → SIGKILL
+nucleus kill &lt;container&gt;             # send signal
+
+# Detach works with all create flags
+nucleus create -d \
+  --name my-service \
+  --memory 1G --cpus 2 \
+  --network bridge -p 8080:80 \
+  -- ./my-server
+
+# systemd unit is named nucleus-&lt;id-prefix&gt;
+systemctl status nucleus-a1b2c3d4e5f6
+journalctl -u nucleus-a1b2c3d4e5f6" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Run a container in the background</span>
+nucleus create -d --memory 512M -- /bin/sleep 3600
+<span class="pl-c"><span class="pl-c">#</span> prints: a1b2c3d4e5f6...</span>
+
+<span class="pl-c"><span class="pl-c">#</span> All management commands work with detached containers</span>
+nucleus state                        <span class="pl-c"><span class="pl-c">#</span> list running containers</span>
+nucleus logs <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>             <span class="pl-c"><span class="pl-c">#</span> view stdout/stderr (from journald)</span>
+nucleus logs -f <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>          <span class="pl-c"><span class="pl-c">#</span> follow logs</span>
+nucleus logs -n 50 <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>       <span class="pl-c"><span class="pl-c">#</span> last 50 lines</span>
+nucleus attach <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>           <span class="pl-c"><span class="pl-c">#</span> exec into it</span>
+nucleus stop <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>             <span class="pl-c"><span class="pl-c">#</span> graceful SIGTERM → SIGKILL</span>
+nucleus <span class="pl-c1">kill</span> <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>             <span class="pl-c"><span class="pl-c">#</span> send signal</span>
+
+<span class="pl-c"><span class="pl-c">#</span> Detach works with all create flags</span>
+nucleus create -d \
+  --name my-service \
+  --memory 1G --cpus 2 \
+  --network bridge -p 8080:80 \
+  -- ./my-server
+
+<span class="pl-c"><span class="pl-c">#</span> systemd unit is named nucleus-&lt;id-prefix&gt;</span>
+systemctl status nucleus-a1b2c3d4e5f6
+journalctl -u nucleus-a1b2c3d4e5f6</pre></div>
+<p dir="auto">The systemd transient service uses <code>KillMode=mixed</code> and <code>TimeoutStopSec=30</code>, so <code>systemctl stop</code> also works for graceful shutdown. The <code>--collect</code> flag ensures the unit is garbage-collected after the container exits.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Production Mode</h3></div>
+<p dir="auto">Production mode enforces strict security invariants:</p>
+<ul dir="auto">
+<li>Forbids <code>--allow-degraded-security</code>, <code>--allow-chroot-fallback</code>, and native <code>--network host</code></li>
+<li>Permits <code>--allow-host-network</code> only with <code>--network gvisor-host --runtime gvisor</code></li>
+<li>Requires explicit <code>--memory</code> limit</li>
+<li>Requires successful cgroup creation (no fallback to running without limits)</li>
+<li>Egress policy failures are fatal where Nucleus owns the network namespace; <code>gvisor-host</code> cannot use Nucleus egress policy</li>
+<li>Bridge DNS must be configured explicitly (no public resolver defaults)</li>
+</ul>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='# Run a long-running service with production hardening
+nucleus run \
+  --service-mode production \
+  --trust-level trusted \
+  --memory 1G --cpus 2 --pids 256 \
+  --rootfs /nix/store/...-my-service-rootfs \
+  --verify-rootfs-attestation \
+  --require-kernel-lockdown integrity \
+  --network bridge --dns 10.0.0.1 \
+  --egress-allow 10.0.0.0/8 \
+  --egress-domain api.example.com \
+  --egress-tcp-port 443 --egress-tcp-port 8443 \
+  --health-cmd "curl -sf http://localhost:8080/health" \
+  --health-interval 30 --health-retries 3 \
+  --secret /run/secrets/tls-cert:/etc/tls/cert.pem \
+  --systemd-credential db-url:/run/secrets/db-url \
+  --volume /var/lib/myservice:/var/lib/myservice:rw \
+  -e CONFIG_PATH=/etc/myservice/config.toml \
+  --sd-notify \
+  -p 127.0.0.1:8080:8080 \
+  -- /bin/my-service --config /etc/myservice/config.toml
+
+# gVisor with network access (sandbox network stack)
+nucleus run \
+  --service-mode production \
+  --runtime gvisor \
+  --gvisor-platform kvm \
+  --memory 512M \
+  --network bridge --dns 10.0.0.1 \
+  --rootfs /nix/store/...-proxy-rootfs \
+  -- /bin/proxy' dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Run a long-running service with production hardening</span>
+nucleus run \
+  --service-mode production \
+  --trust-level trusted \
+  --memory 1G --cpus 2 --pids 256 \
+  --rootfs /nix/store/...-my-service-rootfs \
+  --verify-rootfs-attestation \
+  --require-kernel-lockdown integrity \
+  --network bridge --dns 10.0.0.1 \
+  --egress-allow 10.0.0.0/8 \
+  --egress-domain api.example.com \
+  --egress-tcp-port 443 --egress-tcp-port 8443 \
+  --health-cmd <span class="pl-s"><span class="pl-pds">"</span>curl -sf http://localhost:8080/health<span class="pl-pds">"</span></span> \
+  --health-interval 30 --health-retries 3 \
+  --secret /run/secrets/tls-cert:/etc/tls/cert.pem \
+  --systemd-credential db-url:/run/secrets/db-url \
+  --volume /var/lib/myservice:/var/lib/myservice:rw \
+  -e CONFIG_PATH=/etc/myservice/config.toml \
+  --sd-notify \
+  -p 127.0.0.1:8080:8080 \
+  -- /bin/my-service --config /etc/myservice/config.toml
+
+<span class="pl-c"><span class="pl-c">#</span> gVisor with network access (sandbox network stack)</span>
+nucleus run \
+  --service-mode production \
+  --runtime gvisor \
+  --gvisor-platform kvm \
+  --memory 512M \
+  --network bridge --dns 10.0.0.1 \
+  --rootfs /nix/store/...-proxy-rootfs \
+  -- /bin/proxy</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Strict Agent Mode</h3></div>
+<p dir="auto">Strict agent mode (<code>--service-mode strict-agent</code>, <code>--service-mode mitos-agent</code>, or <code>--strict-agent</code>) keeps agent-style execution while making isolation setup fail closed:</p>
+<ul dir="auto">
+<li>Forbids <code>--allow-degraded-security</code>, <code>--allow-chroot-fallback</code>, and native <code>--network host</code></li>
+<li>Permits <code>--allow-host-network</code> only with <code>--network gvisor-host --runtime gvisor</code></li>
+<li>Requires successful cgroup creation and successful application of configured limits</li>
+<li>Requires <code>pivot_root</code> in native mode; no <code>chroot</code> fallback</li>
+<li>Requires seccomp enforcement; <code>--seccomp-mode trace</code> is rejected</li>
+<li>Requires Landlock enforcement for native runtime</li>
+<li>Requires user namespace UID/GID mapping when running as host root or rootless</li>
+<li>Keeps network mode <code>none</code> by default; bridge mode requires explicit <code>--dns</code></li>
+</ul>
+<p dir="auto">Strict agent mode does <strong>not</strong> require a production Nix rootfs, rootfs attestation, health checks, readiness probes, sd_notify, systemd transient services, or NixOS module deployment.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Run an ephemeral agent with fail-closed native isolation
+nucleus run \
+  --service-mode strict-agent \
+  --runtime native \
+  --trust-level trusted \
+  --memory 1G --cpus 2 \
+  --context ./ctx \
+  -- ./agent" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Run an ephemeral agent with fail-closed native isolation</span>
+nucleus run \
+  --service-mode strict-agent \
+  --runtime native \
+  --trust-level trusted \
+  --memory 1G --cpus 2 \
+  --context ./ctx \
+  -- ./agent</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Security Policy Files</h3></div>
+<p dir="auto">Nix defines the service and the root filesystem; separate files define security policy (what the process is allowed to do at the kernel level). This separation keeps deployments declarative, security config auditable, and runtime inputs reproducible without coupling policy changes to application rebuilds.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Run with external security policies
+nucleus run \
+  --service-mode production \
+  --rootfs /nix/store/...-my-service-rootfs \
+  --memory 512M --cpus 1 \
+  --seccomp-profile ./config/my-service.seccomp.json \
+  --seccomp-profile-sha256 abc123... \
+  --caps-policy ./config/my-service.caps.toml \
+  --landlock-policy ./config/my-service.landlock.toml \
+  -- /bin/my-service" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Run with external security policies</span>
+nucleus run \
+  --service-mode production \
+  --rootfs /nix/store/...-my-service-rootfs \
+  --memory 512M --cpus 1 \
+  --seccomp-profile ./config/my-service.seccomp.json \
+  --seccomp-profile-sha256 abc123... \
+  --caps-policy ./config/my-service.caps.toml \
+  --landlock-policy ./config/my-service.landlock.toml \
+  -- /bin/my-service</pre></div>
+<p dir="auto"><strong>Seccomp profile</strong> (JSON – OCI-native format, tooling emits it directly):</p>
+<div class="highlight highlight-source-json notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='{
+  "defaultAction": "SCMP_ACT_KILL_PROCESS",
+  "architectures": ["SCMP_ARCH_X86_64"],
+  "syscalls": [
+    {
+      "names": ["read", "write", "close", "openat", "fstat",
+                "mmap", "munmap", "brk", "futex", "clock_gettime"],
+      "action": "SCMP_ACT_ALLOW"
+    }
+  ]
+}' dir="auto"><pre>{
+  <span class="pl-ent">"defaultAction"</span>: <span class="pl-s"><span class="pl-pds">"</span>SCMP_ACT_KILL_PROCESS<span class="pl-pds">"</span></span>,
+  <span class="pl-ent">"architectures"</span>: [<span class="pl-s"><span class="pl-pds">"</span>SCMP_ARCH_X86_64<span class="pl-pds">"</span></span>],
+  <span class="pl-ent">"syscalls"</span>: [
+    {
+      <span class="pl-ent">"names"</span>: [<span class="pl-s"><span class="pl-pds">"</span>read<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>write<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>close<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>openat<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>fstat<span class="pl-pds">"</span></span>,
+                <span class="pl-s"><span class="pl-pds">"</span>mmap<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>munmap<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>brk<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>futex<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>clock_gettime<span class="pl-pds">"</span></span>],
+      <span class="pl-ent">"action"</span>: <span class="pl-s"><span class="pl-pds">"</span>SCMP_ACT_ALLOW<span class="pl-pds">"</span></span>
+    }
+  ]
+}</pre></div>
+<p dir="auto"><strong>Capability policy</strong> (TOML):</p>
+<div class="highlight highlight-source-toml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# config/my-service.caps.toml
+[bounding]
+keep = []          # empty = drop all
+
+[ambient]
+keep = []" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> config/my-service.caps.toml</span>
+[<span class="pl-en">bounding</span>]
+<span class="pl-smi">keep</span> = []          <span class="pl-c"><span class="pl-c">#</span> empty = drop all</span>
+
+[<span class="pl-en">ambient</span>]
+<span class="pl-smi">keep</span> = []</pre></div>
+<p dir="auto"><strong>Landlock policy</strong> (TOML):</p>
+<div class="highlight highlight-source-toml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='# config/my-service.landlock.toml
+min_abi = 3
+
+[[rules]]
+path = "/bin"
+access = ["read", "execute"]
+
+[[rules]]
+path = "/etc/myservice"
+access = ["read"]
+
+[[rules]]
+path = "/run/secrets"
+access = ["read"]
+
+[[rules]]
+path = "/tmp"
+access = ["read", "write", "create", "remove"]' dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> config/my-service.landlock.toml</span>
+<span class="pl-smi">min_abi</span> = <span class="pl-c1">3</span>
+
+[[<span class="pl-en">rules</span>]]
+<span class="pl-smi">path</span> = <span class="pl-s"><span class="pl-pds">"</span>/bin<span class="pl-pds">"</span></span>
+<span class="pl-smi">access</span> = [<span class="pl-s"><span class="pl-pds">"</span>read<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>execute<span class="pl-pds">"</span></span>]
+
+[[<span class="pl-en">rules</span>]]
+<span class="pl-smi">path</span> = <span class="pl-s"><span class="pl-pds">"</span>/etc/myservice<span class="pl-pds">"</span></span>
+<span class="pl-smi">access</span> = [<span class="pl-s"><span class="pl-pds">"</span>read<span class="pl-pds">"</span></span>]
+
+[[<span class="pl-en">rules</span>]]
+<span class="pl-smi">path</span> = <span class="pl-s"><span class="pl-pds">"</span>/run/secrets<span class="pl-pds">"</span></span>
+<span class="pl-smi">access</span> = [<span class="pl-s"><span class="pl-pds">"</span>read<span class="pl-pds">"</span></span>]
+
+[[<span class="pl-en">rules</span>]]
+<span class="pl-smi">path</span> = <span class="pl-s"><span class="pl-pds">"</span>/tmp<span class="pl-pds">"</span></span>
+<span class="pl-smi">access</span> = [<span class="pl-s"><span class="pl-pds">"</span>read<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>write<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>create<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>remove<span class="pl-pds">"</span></span>]</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Seccomp Profile Generation</h3></div>
+<p dir="auto">Profiles shouldn't be hand-written from scratch. Use trace mode to record actual syscall usage, then generate a minimal profile:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# 1. Run in trace mode – all syscalls allowed but logged
+nucleus run \
+  --seccomp-mode trace \
+  --seccomp-log ./trace.ndjson \
+  --rootfs /nix/store/...-my-service-rootfs \
+  --memory 512M \
+  -- /bin/my-service
+
+# 2. Generate minimal profile from trace
+nucleus seccomp generate ./trace.ndjson -o config/my-service.seccomp.json
+
+# 3. Review and tighten (remove anything surprising)
+# 4. Commit – Nix pins the SHA-256 hash
+# 5. Run in enforce mode
+nucleus run \
+  --seccomp-profile ./config/my-service.seccomp.json \
+  --seccomp-profile-sha256 &quot;$(sha256sum config/my-service.seccomp.json | cut -d' ' -f1)&quot; \
+  -- /bin/my-service" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> 1. Run in trace mode – all syscalls allowed but logged</span>
+nucleus run \
+  --seccomp-mode trace \
+  --seccomp-log ./trace.ndjson \
+  --rootfs /nix/store/...-my-service-rootfs \
+  --memory 512M \
+  -- /bin/my-service
+
+<span class="pl-c"><span class="pl-c">#</span> 2. Generate minimal profile from trace</span>
+nucleus seccomp generate ./trace.ndjson -o config/my-service.seccomp.json
+
+<span class="pl-c"><span class="pl-c">#</span> 3. Review and tighten (remove anything surprising)</span>
+<span class="pl-c"><span class="pl-c">#</span> 4. Commit – Nix pins the SHA-256 hash</span>
+<span class="pl-c"><span class="pl-c">#</span> 5. Run in enforce mode</span>
+nucleus run \
+  --seccomp-profile ./config/my-service.seccomp.json \
+  --seccomp-profile-sha256 <span class="pl-s"><span class="pl-pds">"</span><span class="pl-s"><span class="pl-pds">$(</span>sha256sum config/my-service.seccomp.json <span class="pl-k">|</span> cut -d<span class="pl-s"><span class="pl-pds">'</span> <span class="pl-pds">'</span></span> -f1<span class="pl-pds">)</span></span><span class="pl-pds">"</span></span> \
+  -- /bin/my-service</pre></div>
+<p dir="auto">Trace mode requires root or <code>CAP_SYSLOG</code> (reads <code>/dev/kmsg</code>). It is rejected in production mode – it is a development tool only.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Multi-Container Topologies</h3></div>
+<p dir="auto">Nucleus includes a Compose-equivalent for managing multi-container stacks using TOML configuration with dependency ordering.</p>
+<div class="highlight highlight-source-toml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='# topology.toml
+name = "myapp"
+
+[networks.internal]
+subnet = "10.42.0.0/24"
+
+[volumes.db-data]
+volume_type = "persistent"
+path = "/var/lib/nucleus/myapp/db"
+owner = "70:70"
+
+[volumes.cache]
+volume_type = "ephemeral"
+size = "128M"
+
+[services.postgres]
+rootfs = "/nix/store/...-postgres"
+command = ["postgres", "-D", "/var/lib/postgresql/data"]
+memory = "2G"
+cpus = 2.0
+networks = ["internal"]
+volumes = [
+  "db-data:/var/lib/postgresql/data",
+  "cache:/var/cache/postgresql"
+]
+health_check = "pg_isready -U myapp"
+
+[services.web]
+rootfs = "/nix/store/...-web"
+command = ["/bin/web-server"]
+memory = "512M"
+networks = ["internal"]
+nat_backend = "userspace"
+port_forwards = ["8443:8443"]
+egress_allow = ["10.42.0.0/24"]
+egress_domains = ["api.example.com"]
+
+[[services.web.depends_on]]
+service = "postgres"
+condition = "healthy"' dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> topology.toml</span>
+<span class="pl-smi">name</span> = <span class="pl-s"><span class="pl-pds">"</span>myapp<span class="pl-pds">"</span></span>
+
+[<span class="pl-en">networks</span>.<span class="pl-en">internal</span>]
+<span class="pl-smi">subnet</span> = <span class="pl-s"><span class="pl-pds">"</span>10.42.0.0/24<span class="pl-pds">"</span></span>
+
+[<span class="pl-en">volumes</span>.<span class="pl-en">db-data</span>]
+<span class="pl-smi">volume_type</span> = <span class="pl-s"><span class="pl-pds">"</span>persistent<span class="pl-pds">"</span></span>
+<span class="pl-smi">path</span> = <span class="pl-s"><span class="pl-pds">"</span>/var/lib/nucleus/myapp/db<span class="pl-pds">"</span></span>
+<span class="pl-smi">owner</span> = <span class="pl-s"><span class="pl-pds">"</span>70:70<span class="pl-pds">"</span></span>
+
+[<span class="pl-en">volumes</span>.<span class="pl-en">cache</span>]
+<span class="pl-smi">volume_type</span> = <span class="pl-s"><span class="pl-pds">"</span>ephemeral<span class="pl-pds">"</span></span>
+<span class="pl-smi">size</span> = <span class="pl-s"><span class="pl-pds">"</span>128M<span class="pl-pds">"</span></span>
+
+[<span class="pl-en">services</span>.<span class="pl-en">postgres</span>]
+<span class="pl-smi">rootfs</span> = <span class="pl-s"><span class="pl-pds">"</span>/nix/store/...-postgres<span class="pl-pds">"</span></span>
+<span class="pl-smi">command</span> = [<span class="pl-s"><span class="pl-pds">"</span>postgres<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>-D<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>/var/lib/postgresql/data<span class="pl-pds">"</span></span>]
+<span class="pl-smi">memory</span> = <span class="pl-s"><span class="pl-pds">"</span>2G<span class="pl-pds">"</span></span>
+<span class="pl-smi">cpus</span> = <span class="pl-c1">2.0</span>
+<span class="pl-smi">networks</span> = [<span class="pl-s"><span class="pl-pds">"</span>internal<span class="pl-pds">"</span></span>]
+<span class="pl-smi">volumes</span> = [
+  <span class="pl-s"><span class="pl-pds">"</span>db-data:/var/lib/postgresql/data<span class="pl-pds">"</span></span>,
+  <span class="pl-s"><span class="pl-pds">"</span>cache:/var/cache/postgresql<span class="pl-pds">"</span></span>
+]
+<span class="pl-smi">health_check</span> = <span class="pl-s"><span class="pl-pds">"</span>pg_isready -U myapp<span class="pl-pds">"</span></span>
+
+[<span class="pl-en">services</span>.<span class="pl-en">web</span>]
+<span class="pl-smi">rootfs</span> = <span class="pl-s"><span class="pl-pds">"</span>/nix/store/...-web<span class="pl-pds">"</span></span>
+<span class="pl-smi">command</span> = [<span class="pl-s"><span class="pl-pds">"</span>/bin/web-server<span class="pl-pds">"</span></span>]
+<span class="pl-smi">memory</span> = <span class="pl-s"><span class="pl-pds">"</span>512M<span class="pl-pds">"</span></span>
+<span class="pl-smi">networks</span> = [<span class="pl-s"><span class="pl-pds">"</span>internal<span class="pl-pds">"</span></span>]
+<span class="pl-smi">nat_backend</span> = <span class="pl-s"><span class="pl-pds">"</span>userspace<span class="pl-pds">"</span></span>
+<span class="pl-smi">port_forwards</span> = [<span class="pl-s"><span class="pl-pds">"</span>8443:8443<span class="pl-pds">"</span></span>]
+<span class="pl-smi">egress_allow</span> = [<span class="pl-s"><span class="pl-pds">"</span>10.42.0.0/24<span class="pl-pds">"</span></span>]
+<span class="pl-smi">egress_domains</span> = [<span class="pl-s"><span class="pl-pds">"</span>api.example.com<span class="pl-pds">"</span></span>]
+
+[[<span class="pl-en">services</span>.<span class="pl-en">web</span>.<span class="pl-en">depends_on</span>]]
+<span class="pl-smi">service</span> = <span class="pl-s"><span class="pl-pds">"</span>postgres<span class="pl-pds">"</span></span>
+<span class="pl-smi">condition</span> = <span class="pl-s"><span class="pl-pds">"</span>healthy<span class="pl-pds">"</span></span></pre></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Validate topology and show dependency order
+nucleus compose validate -f topology.toml
+
+# Bring up all services in dependency order
+nucleus compose up -f topology.toml
+
+# Show service status
+nucleus compose ps -f topology.toml
+
+# Tear down in reverse dependency order
+nucleus compose down -f topology.toml" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Validate topology and show dependency order</span>
+nucleus compose validate -f topology.toml
+
+<span class="pl-c"><span class="pl-c">#</span> Bring up all services in dependency order</span>
+nucleus compose up -f topology.toml
+
+<span class="pl-c"><span class="pl-c">#</span> Show service status</span>
+nucleus compose ps -f topology.toml
+
+<span class="pl-c"><span class="pl-c">#</span> Tear down in reverse dependency order</span>
+nucleus compose down -f topology.toml</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Container Management</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# List running containers
+nucleus ps
+
+# List all containers (including stopped)
+nucleus ps --all
+
+# Show resource usage statistics
+nucleus stats
+
+# View logs for a detached container (from systemd journal)
+nucleus logs &lt;container&gt;
+nucleus logs -f &lt;container&gt;          # follow output
+nucleus logs -n 100 &lt;container&gt;      # last 100 lines
+
+# Stop a container (SIGTERM, then SIGKILL after timeout)
+nucleus stop &lt;container&gt;
+nucleus stop --timeout 30 &lt;container&gt;
+
+# Kill a container with a specific signal
+nucleus kill &lt;container&gt;
+nucleus kill --signal TERM &lt;container&gt;
+
+# Remove a stopped container
+nucleus rm &lt;container&gt;
+nucleus rm --force &lt;container&gt;
+
+# Attach to a running container
+nucleus attach &lt;container&gt;
+nucleus attach &lt;container&gt; -- /bin/bash
+
+# Checkpoint a running container (requires root, CRIU)
+nucleus checkpoint &lt;container&gt; --output /path/to/checkpoint
+
+# Restore from checkpoint
+nucleus restore --input /path/to/checkpoint" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> List running containers</span>
+nucleus ps
+
+<span class="pl-c"><span class="pl-c">#</span> List all containers (including stopped)</span>
+nucleus ps --all
+
+<span class="pl-c"><span class="pl-c">#</span> Show resource usage statistics</span>
+nucleus stats
+
+<span class="pl-c"><span class="pl-c">#</span> View logs for a detached container (from systemd journal)</span>
+nucleus logs <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>
+nucleus logs -f <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>          <span class="pl-c"><span class="pl-c">#</span> follow output</span>
+nucleus logs -n 100 <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>      <span class="pl-c"><span class="pl-c">#</span> last 100 lines</span>
+
+<span class="pl-c"><span class="pl-c">#</span> Stop a container (SIGTERM, then SIGKILL after timeout)</span>
+nucleus stop <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>
+nucleus stop --timeout 30 <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>
+
+<span class="pl-c"><span class="pl-c">#</span> Kill a container with a specific signal</span>
+nucleus <span class="pl-c1">kill</span> <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>
+nucleus <span class="pl-c1">kill</span> --signal TERM <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>
+
+<span class="pl-c"><span class="pl-c">#</span> Remove a stopped container</span>
+nucleus rm <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>
+nucleus rm --force <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>
+
+<span class="pl-c"><span class="pl-c">#</span> Attach to a running container</span>
+nucleus attach <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span>
+nucleus attach <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span> -- /bin/bash
+
+<span class="pl-c"><span class="pl-c">#</span> Checkpoint a running container (requires root, CRIU)</span>
+nucleus checkpoint <span class="pl-k">&lt;</span>container<span class="pl-k">&gt;</span> --output /path/to/checkpoint
+
+<span class="pl-c"><span class="pl-c">#</span> Restore from checkpoint</span>
+nucleus restore --input /path/to/checkpoint</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">NixOS Module</h2></div>
+<p dir="auto">Nucleus provides a declarative NixOS module for running containers as systemd services. Each container is managed as a <code>nucleus-&lt;name&gt;.service</code> unit with journald logging, sd_notify readiness, and automatic restart.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Flake Setup</h3></div>
+<div class="highlight highlight-source-nix notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='{
+  inputs.nucleus.url = "github:wiggum-cc/nucleus";
+
+  outputs = { self, nixpkgs, nucleus, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        nucleus.nixosModules.default
+        ./configuration.nix
+      ];
+    };
+  };
+}' dir="auto"><pre><span class="pl-kos">{</span>
+  <span class="pl-c1"><span class="pl-s1">inputs</span><span class="pl-kos">.</span><span class="pl-s1">nucleus</span><span class="pl-kos">.</span><span class="pl-s1">url</span></span> <span class="pl-kos">=</span> <span class="pl-s">"github:wiggum-cc/nucleus"</span><span class="pl-kos">;</span>
+
+  <span class="pl-c1"><span class="pl-s1">outputs</span></span> <span class="pl-kos">=</span> <span class="pl-kos">{</span> <span class="pl-s1">self</span><span class="pl-kos">,</span> <span class="pl-s1">nixpkgs</span><span class="pl-kos">,</span> <span class="pl-s1">nucleus</span><span class="pl-kos">,</span> ... <span class="pl-kos">}</span>: <span class="pl-kos">{</span>
+    <span class="pl-c1"><span class="pl-s1">nixosConfigurations</span><span class="pl-kos">.</span><span class="pl-s1">myhost</span></span> <span class="pl-kos">=</span> <span class="pl-s1">nixpkgs</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">lib</span><span class="pl-kos">.</span><span class="pl-s1">nixosSystem</span></span> <span class="pl-kos">{</span>
+      <span class="pl-c1"><span class="pl-s1">system</span></span> <span class="pl-kos">=</span> <span class="pl-s">"x86_64-linux"</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">modules</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span>
+        <span class="pl-s1">nucleus</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">nixosModules</span><span class="pl-kos">.</span><span class="pl-s1">default</span></span>
+        <span class="pl-pds">./configuration.nix</span>
+      <span class="pl-kos">]</span><span class="pl-kos">;</span>
+    <span class="pl-kos">}</span><span class="pl-kos">;</span>
+  <span class="pl-kos">}</span><span class="pl-kos">;</span>
+<span class="pl-kos">}</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Service Configuration</h3></div>
+<div class="highlight highlight-source-nix notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='{ pkgs, nucleus, ... }:
+
+let
+  # Build a minimal rootfs containing only the packages your service needs.
+  # This replaces host bind mounts with a locked-down Nix closure.
+  proxyRootfs = nucleus.lib.mkRootfs {
+    inherit pkgs;
+    packages = [ my-proxy-pkg pkgs.cacert pkgs.curl ];
+  };
+in
+{
+  services.nucleus = {
+    enable = true;
+    package = nucleus.packages.x86_64-linux.default;
+
+    containers.sigid-proxy = {
+      enable = true;
+      command = [ "/bin/sigid-proxy" "--config" "/etc/sigid/proxy.toml" ];
+      rootfs = proxyRootfs;
+      user = "sigid-proxy";
+      group = "sigid-proxy";
+
+      # Resource limits (required in production mode)
+      memory = "1G";
+      cpus = 2.0;
+      pids = 256;
+
+      # Security policy files (separate from Nix, auditable by security engineers)
+      seccompProfile = {
+        path = ./config/sigid-proxy.seccomp.json;
+        sha256 = "abc123...";  # Nix verifies at build time
+      };
+      capsPolicy = ./config/sigid-proxy.caps.toml;
+      landlockPolicy = ./config/sigid-proxy.landlock.toml;
+
+      # Optional hardening toggles
+      verifyRootfsAttestation = true;
+      seccompLogDenied = true;
+      requireKernelLockdown = "integrity";
+
+      # Networking
+      network = "bridge";
+      natBackend = "auto";  # or "userspace" to force slirp4netns
+      dns = [ "10.0.0.1" ];  # internal resolver – no public DNS default
+      portForwards = [ "127.0.0.1:8080:8080" "127.0.0.1:8443:8443" ];
+
+      # Egress policy – audited outbound access
+      egressAllow = [ "10.0.0.0/8" ];
+      egressDomains = [ "api.example.com" ];
+      egressTcpPorts = [ 443 8443 ];
+
+      # Health checking
+      healthCheck = "curl -sf http://localhost:8080/health";
+      healthInterval = 30;
+      healthRetries = 3;
+      healthStartPeriod = 10;
+
+      # Secrets (mounted read-only)
+      secrets = [
+        { source = config.age.secrets.proxy-tls.path; dest = "/etc/tls/cert.pem"; }
+      ];
+
+      # systemd-creds integration
+      credentials = [
+        {
+          name = "proxy-key";
+          source = config.age.secrets.proxy-key.path;
+          dest = "/run/secrets/proxy-key";
+          encrypted = false;
+        }
+      ];
+
+      # Volumes (bind-mounted host paths)
+      volumes = [
+        {
+          source = "/var/lib/sigid-proxy";
+          dest = "/var/lib/sigid-proxy";
+          createHostPath = true;
+        }
+      ];
+
+      # Environment
+      environment = {
+        RUST_LOG = "info";
+        CONFIG_PATH = "/etc/sigid/proxy.toml";
+      };
+
+      # systemd integration
+      sdNotify = true;  # Type=notify, passes NOTIFY_SOCKET into container
+    };
+  };
+}' dir="auto"><pre><span class="pl-kos">{</span> <span class="pl-s1">pkgs</span><span class="pl-kos">,</span> <span class="pl-s1">nucleus</span><span class="pl-kos">,</span> ... <span class="pl-kos">}</span>:
+
+<span class="pl-k">let</span>
+  <span class="pl-c"># Build a minimal rootfs containing only the packages your service needs.</span>
+  <span class="pl-c"># This replaces host bind mounts with a locked-down Nix closure.</span>
+  <span class="pl-c1"><span class="pl-s1">proxyRootfs</span></span> <span class="pl-kos">=</span> <span class="pl-s1">nucleus</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">lib</span><span class="pl-kos">.</span><span class="pl-s1">mkRootfs</span></span> <span class="pl-kos">{</span>
+    <span class="pl-k">inherit</span> <span class="pl-s1">pkgs</span><span class="pl-kos">;</span>
+    <span class="pl-c1"><span class="pl-s1">packages</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span> <span class="pl-s1">my-proxy-pkg</span> <span class="pl-s1">pkgs</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">cacert</span></span> <span class="pl-s1">pkgs</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">curl</span></span> <span class="pl-kos">]</span><span class="pl-kos">;</span>
+  <span class="pl-kos">}</span><span class="pl-kos">;</span>
+<span class="pl-k">in</span>
+<span class="pl-kos">{</span>
+  <span class="pl-c1"><span class="pl-s1">services</span><span class="pl-kos">.</span><span class="pl-s1">nucleus</span></span> <span class="pl-kos">=</span> <span class="pl-kos">{</span>
+    <span class="pl-c1"><span class="pl-s1">enable</span></span> <span class="pl-kos">=</span> <span class="pl-s1">true</span><span class="pl-kos">;</span>
+    <span class="pl-c1"><span class="pl-s1">package</span></span> <span class="pl-kos">=</span> <span class="pl-s1">nucleus</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">packages</span><span class="pl-kos">.</span><span class="pl-s1">x86_64-linux</span><span class="pl-kos">.</span><span class="pl-s1">default</span></span><span class="pl-kos">;</span>
+
+    <span class="pl-c1"><span class="pl-s1">containers</span><span class="pl-kos">.</span><span class="pl-s1">sigid-proxy</span></span> <span class="pl-kos">=</span> <span class="pl-kos">{</span>
+      <span class="pl-c1"><span class="pl-s1">enable</span></span> <span class="pl-kos">=</span> <span class="pl-s1">true</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">command</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span> <span class="pl-s">"/bin/sigid-proxy"</span> <span class="pl-s">"--config"</span> <span class="pl-s">"/etc/sigid/proxy.toml"</span> <span class="pl-kos">]</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">rootfs</span></span> <span class="pl-kos">=</span> <span class="pl-s1">proxyRootfs</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">user</span></span> <span class="pl-kos">=</span> <span class="pl-s">"sigid-proxy"</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">group</span></span> <span class="pl-kos">=</span> <span class="pl-s">"sigid-proxy"</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># Resource limits (required in production mode)</span>
+      <span class="pl-c1"><span class="pl-s1">memory</span></span> <span class="pl-kos">=</span> <span class="pl-s">"1G"</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">cpus</span></span> <span class="pl-kos">=</span> <span class="pl-c1">2.0</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">pids</span></span> <span class="pl-kos">=</span> <span class="pl-c1">256</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># Security policy files (separate from Nix, auditable by security engineers)</span>
+      <span class="pl-c1"><span class="pl-s1">seccompProfile</span></span> <span class="pl-kos">=</span> <span class="pl-kos">{</span>
+        <span class="pl-c1"><span class="pl-s1">path</span></span> <span class="pl-kos">=</span> <span class="pl-pds">./config/sigid-proxy.seccomp.json</span><span class="pl-kos">;</span>
+        <span class="pl-c1"><span class="pl-s1">sha256</span></span> <span class="pl-kos">=</span> <span class="pl-s">"abc123..."</span><span class="pl-kos">;</span>  <span class="pl-c"># Nix verifies at build time</span>
+      <span class="pl-kos">}</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">capsPolicy</span></span> <span class="pl-kos">=</span> <span class="pl-pds">./config/sigid-proxy.caps.toml</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">landlockPolicy</span></span> <span class="pl-kos">=</span> <span class="pl-pds">./config/sigid-proxy.landlock.toml</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># Optional hardening toggles</span>
+      <span class="pl-c1"><span class="pl-s1">verifyRootfsAttestation</span></span> <span class="pl-kos">=</span> <span class="pl-s1">true</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">seccompLogDenied</span></span> <span class="pl-kos">=</span> <span class="pl-s1">true</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">requireKernelLockdown</span></span> <span class="pl-kos">=</span> <span class="pl-s">"integrity"</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># Networking</span>
+      <span class="pl-c1"><span class="pl-s1">network</span></span> <span class="pl-kos">=</span> <span class="pl-s">"bridge"</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">natBackend</span></span> <span class="pl-kos">=</span> <span class="pl-s">"auto"</span><span class="pl-kos">;</span>  <span class="pl-c"># or "userspace" to force slirp4netns</span>
+      <span class="pl-c1"><span class="pl-s1">dns</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span> <span class="pl-s">"10.0.0.1"</span> <span class="pl-kos">]</span><span class="pl-kos">;</span>  <span class="pl-c"># internal resolver – no public DNS default</span>
+      <span class="pl-c1"><span class="pl-s1">portForwards</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span> <span class="pl-s">"127.0.0.1:8080:8080"</span> <span class="pl-s">"127.0.0.1:8443:8443"</span> <span class="pl-kos">]</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># Egress policy – audited outbound access</span>
+      <span class="pl-c1"><span class="pl-s1">egressAllow</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span> <span class="pl-s">"10.0.0.0/8"</span> <span class="pl-kos">]</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">egressDomains</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span> <span class="pl-s">"api.example.com"</span> <span class="pl-kos">]</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">egressTcpPorts</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span> <span class="pl-c1">443</span> <span class="pl-c1">8443</span> <span class="pl-kos">]</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># Health checking</span>
+      <span class="pl-c1"><span class="pl-s1">healthCheck</span></span> <span class="pl-kos">=</span> <span class="pl-s">"curl -sf http://localhost:8080/health"</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">healthInterval</span></span> <span class="pl-kos">=</span> <span class="pl-c1">30</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">healthRetries</span></span> <span class="pl-kos">=</span> <span class="pl-c1">3</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">healthStartPeriod</span></span> <span class="pl-kos">=</span> <span class="pl-c1">10</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># Secrets (mounted read-only)</span>
+      <span class="pl-c1"><span class="pl-s1">secrets</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span>
+        <span class="pl-kos">{</span> <span class="pl-c1"><span class="pl-s1">source</span></span> <span class="pl-kos">=</span> <span class="pl-s1">config</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">age</span><span class="pl-kos">.</span><span class="pl-s1">secrets</span><span class="pl-kos">.</span><span class="pl-s1">proxy-tls</span><span class="pl-kos">.</span><span class="pl-s1">path</span></span><span class="pl-kos">;</span> <span class="pl-c1"><span class="pl-s1">dest</span></span> <span class="pl-kos">=</span> <span class="pl-s">"/etc/tls/cert.pem"</span><span class="pl-kos">;</span> <span class="pl-kos">}</span>
+      <span class="pl-kos">]</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># systemd-creds integration</span>
+      <span class="pl-c1"><span class="pl-s1">credentials</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span>
+        <span class="pl-kos">{</span>
+          <span class="pl-c1"><span class="pl-s1">name</span></span> <span class="pl-kos">=</span> <span class="pl-s">"proxy-key"</span><span class="pl-kos">;</span>
+          <span class="pl-c1"><span class="pl-s1">source</span></span> <span class="pl-kos">=</span> <span class="pl-s1">config</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">age</span><span class="pl-kos">.</span><span class="pl-s1">secrets</span><span class="pl-kos">.</span><span class="pl-s1">proxy-key</span><span class="pl-kos">.</span><span class="pl-s1">path</span></span><span class="pl-kos">;</span>
+          <span class="pl-c1"><span class="pl-s1">dest</span></span> <span class="pl-kos">=</span> <span class="pl-s">"/run/secrets/proxy-key"</span><span class="pl-kos">;</span>
+          <span class="pl-c1"><span class="pl-s1">encrypted</span></span> <span class="pl-kos">=</span> <span class="pl-s1">false</span><span class="pl-kos">;</span>
+        <span class="pl-kos">}</span>
+      <span class="pl-kos">]</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># Volumes (bind-mounted host paths)</span>
+      <span class="pl-c1"><span class="pl-s1">volumes</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span>
+        <span class="pl-kos">{</span>
+          <span class="pl-c1"><span class="pl-s1">source</span></span> <span class="pl-kos">=</span> <span class="pl-s">"/var/lib/sigid-proxy"</span><span class="pl-kos">;</span>
+          <span class="pl-c1"><span class="pl-s1">dest</span></span> <span class="pl-kos">=</span> <span class="pl-s">"/var/lib/sigid-proxy"</span><span class="pl-kos">;</span>
+          <span class="pl-c1"><span class="pl-s1">createHostPath</span></span> <span class="pl-kos">=</span> <span class="pl-s1">true</span><span class="pl-kos">;</span>
+        <span class="pl-kos">}</span>
+      <span class="pl-kos">]</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># Environment</span>
+      <span class="pl-c1"><span class="pl-s1">environment</span></span> <span class="pl-kos">=</span> <span class="pl-kos">{</span>
+        <span class="pl-c1"><span class="pl-s1">RUST_LOG</span></span> <span class="pl-kos">=</span> <span class="pl-s">"info"</span><span class="pl-kos">;</span>
+        <span class="pl-c1"><span class="pl-s1">CONFIG_PATH</span></span> <span class="pl-kos">=</span> <span class="pl-s">"/etc/sigid/proxy.toml"</span><span class="pl-kos">;</span>
+      <span class="pl-kos">}</span><span class="pl-kos">;</span>
+
+      <span class="pl-c"># systemd integration</span>
+      <span class="pl-c1"><span class="pl-s1">sdNotify</span></span> <span class="pl-kos">=</span> <span class="pl-s1">true</span><span class="pl-kos">;</span>  <span class="pl-c"># Type=notify, passes NOTIFY_SOCKET into container</span>
+    <span class="pl-kos">}</span><span class="pl-kos">;</span>
+  <span class="pl-kos">}</span><span class="pl-kos">;</span>
+<span class="pl-kos">}</span></pre></div>
+<p dir="auto">Writable bind volumes are automatically added to the generated systemd unit's <code>ReadWritePaths</code>. When <code>createHostPath = true</code>, the NixOS module creates the host directory with <code>systemd-tmpfiles</code> before the container starts. If the container declares a workload <code>user</code>/<code>group</code>, those become the default tmpfiles owner for new writable paths unless the volume overrides them.</p>
+<p dir="auto">Credentials declared via <code>credentials = [ ... ]</code> use systemd's credential pipeline (<code>LoadCredential</code> or <code>LoadCredentialEncrypted</code>) and are mounted into the container through Nucleus's secret path. The CLI flag <code>--systemd-credential NAME:DEST</code> resolves <code>NAME</code> from <code>CREDENTIALS_DIRECTORY</code> at runtime.</p>
+<p dir="auto">Set <code>user</code>, <code>group</code>, and optional <code>supplementaryGroups</code> on a NixOS container definition when the workload should run as a dedicated service account instead of root.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Topology Services</h3></div>
+<p dir="auto">Topologies can also be managed as systemd services:</p>
+<div class="highlight highlight-source-nix notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="{
+  services.nucleus = {
+    enable = true;
+    package = nucleus.packages.x86_64-linux.default;
+
+    topologies.myapp = {
+      enable = true;
+      configFile = ./topology.toml;
+    };
+  };
+}" dir="auto"><pre><span class="pl-kos">{</span>
+  <span class="pl-c1"><span class="pl-s1">services</span><span class="pl-kos">.</span><span class="pl-s1">nucleus</span></span> <span class="pl-kos">=</span> <span class="pl-kos">{</span>
+    <span class="pl-c1"><span class="pl-s1">enable</span></span> <span class="pl-kos">=</span> <span class="pl-s1">true</span><span class="pl-kos">;</span>
+    <span class="pl-c1"><span class="pl-s1">package</span></span> <span class="pl-kos">=</span> <span class="pl-s1">nucleus</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">packages</span><span class="pl-kos">.</span><span class="pl-s1">x86_64-linux</span><span class="pl-kos">.</span><span class="pl-s1">default</span></span><span class="pl-kos">;</span>
+
+    <span class="pl-c1"><span class="pl-s1">topologies</span><span class="pl-kos">.</span><span class="pl-s1">myapp</span></span> <span class="pl-kos">=</span> <span class="pl-kos">{</span>
+      <span class="pl-c1"><span class="pl-s1">enable</span></span> <span class="pl-kos">=</span> <span class="pl-s1">true</span><span class="pl-kos">;</span>
+      <span class="pl-c1"><span class="pl-s1">configFile</span></span> <span class="pl-kos">=</span> <span class="pl-pds">./topology.toml</span><span class="pl-kos">;</span>
+    <span class="pl-kos">}</span><span class="pl-kos">;</span>
+  <span class="pl-kos">}</span><span class="pl-kos">;</span>
+<span class="pl-kos">}</span></pre></div>
+<p dir="auto">This creates a <code>nucleus-topology-myapp.service</code> (Type=oneshot, RemainAfterExit) that runs <code>nucleus compose up</code> on start and <code>nucleus compose down</code> on stop.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">What the Module Generates</h3></div>
+<p dir="auto">For each enabled container, the module creates a systemd service:</p>
+<ul dir="auto">
+<li><strong>Unit</strong>: <code>nucleus-&lt;name&gt;.service</code>, ordered after <code>network-online.target</code></li>
+<li><strong>Type</strong>: <code>notify</code> (when <code>sdNotify = true</code>) or <code>simple</code></li>
+<li><strong>Restart</strong>: <code>on-failure</code> with 5s backoff</li>
+<li><strong>Logging</strong>: stdout/stderr captured to journald with <code>SyslogIdentifier=nucleus-&lt;name&gt;</code></li>
+<li><strong>Command</strong>: <code>nucleus run --service-mode production ...</code> with all configured options</li>
+<li><strong>Workload identity</strong>: Nucleus itself starts as root for setup, then drops the container workload to the configured <code>user</code> / <code>group</code> before exec</li>
+<li><strong>Hardening</strong>: <code>ProtectSystem=strict</code>, <code>ProtectHome=true</code> at the systemd level (defense-in-depth)</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Building a Rootfs</h3></div>
+<p dir="auto">Use <code>nucleus.lib.mkRootfs</code> to build a minimal, reproducible root filesystem:</p>
+<div class="highlight highlight-source-nix notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='nucleus.lib.mkRootfs {
+  inherit pkgs;
+  name = "my-service-rootfs";  # optional, defaults to "nucleus-rootfs"
+  packages = [
+    my-service-package
+    pkgs.cacert       # TLS certificates
+    pkgs.curl         # for health checks
+    pkgs.busybox      # minimal coreutils
+  ];
+}' dir="auto"><pre><span class="pl-s1">nucleus</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">lib</span><span class="pl-kos">.</span><span class="pl-s1">mkRootfs</span></span> <span class="pl-kos">{</span>
+  <span class="pl-k">inherit</span> <span class="pl-s1">pkgs</span><span class="pl-kos">;</span>
+  <span class="pl-c1"><span class="pl-s1">name</span></span> <span class="pl-kos">=</span> <span class="pl-s">"my-service-rootfs"</span><span class="pl-kos">;</span>  <span class="pl-c"># optional, defaults to "nucleus-rootfs"</span>
+  <span class="pl-c1"><span class="pl-s1">packages</span></span> <span class="pl-kos">=</span> <span class="pl-kos">[</span>
+    <span class="pl-s1">my-service-package</span>
+    <span class="pl-s1">pkgs</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">cacert</span></span>       <span class="pl-c"># TLS certificates</span>
+    <span class="pl-s1">pkgs</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">curl</span></span>         <span class="pl-c"># for health checks</span>
+    <span class="pl-s1">pkgs</span><span class="pl-kos">.</span><span class="pl-c1"><span class="pl-s1">busybox</span></span>      <span class="pl-c"># minimal coreutils</span>
+  <span class="pl-kos">]</span><span class="pl-kos">;</span>
+<span class="pl-kos">}</span></pre></div>
+<p dir="auto">This produces a Nix store path containing <code>/bin</code>, <code>/lib</code>, <code>/etc</code>, etc. from the specified packages. It is mounted read-only inside the container, replacing the host bind mounts used in agent mode.</p>
+<p dir="auto"><code>mkRootfs</code> also emits a <code>.nucleus-rootfs-sha256</code> manifest at the root of the closure. Use <code>--verify-rootfs-attestation</code> or <code>verifyRootfsAttestation = true;</code> to require that manifest to match the mounted rootfs at startup.</p>
+<p dir="auto">For ephemeral provider agents, use <code>nucleus.lib.mkAgentToolchainRootfs</code>
+instead. It layers a broad agent development toolchain on top of <code>mkRootfs</code>,
+keeps <code>/bin/sh</code> and <code>/usr/bin/env</code> compatibility paths available, and accepts
+provider CLI packages through <code>providerPackages</code>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Security Notes</h2></div>
+<p dir="auto"><strong>Do not pass secrets via <code>-e</code> / <code>--env</code>.</strong> Environment variables are visible in <code>/proc/&lt;pid&gt;/environ</code> to any process that can read it (mitigated by <code>hidepid=2</code> in production mode, but not in agent mode). Use <code>--secret</code> instead when a file works. If a provider CLI requires sensitive environment variables, use <code>--env-fd FD</code>; the fd carries a JSON object such as <code>{"OPENAI_API_KEY":"..."}</code> or a JSON array of <code>KEY=VALUE</code> strings so the values are not exposed through Nucleus argv.</p>
+<p dir="auto"><strong>Privilege dropping is explicit.</strong> Nucleus must start with elevated privileges to create namespaces, mount filesystems, and configure cgroups/networking. Use <code>--user</code> / <code>--group</code> (or the NixOS module's <code>user</code> / <code>group</code> options) so the workload itself does not continue running as root after setup. In production mode, staged secrets under <code>/run/secrets</code> are re-owned to that workload identity.</p>
+<p dir="auto"><strong>Agent mode is not hardened.</strong> By design, agent mode applies several security mechanisms on a best-effort basis: seccomp and Landlock failures are warn-and-continue (with <code>--allow-degraded-security</code>), chroot fallback is available (with <code>--allow-chroot-fallback</code>), bridge DNS defaults to public resolvers (<code>8.8.8.8</code>), and cgroup creation failures are non-fatal. Operators requiring strict isolation for ephemeral workloads should use <code>--service-mode strict-agent</code>; operators deploying long-running NixOS services should use production mode.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Service Modes</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Agent Mode</th>
+<th>Strict Agent Mode</th>
+<th>Production Mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Service mode</td>
+<td><code>--service-mode agent</code> (default)</td>
+<td><code>--service-mode strict-agent</code> (alias: <code>--service-mode mitos-agent</code>)</td>
+<td><code>--service-mode production</code></td>
+</tr>
+<tr>
+<td>Degraded security</td>
+<td>Allowed with flag</td>
+<td>Forbidden</td>
+<td>Forbidden</td>
+</tr>
+<tr>
+<td>Chroot fallback</td>
+<td>Allowed with flag</td>
+<td>Forbidden</td>
+<td>Forbidden</td>
+</tr>
+<tr>
+<td>Host networking</td>
+<td>Allowed with flag</td>
+<td>Native <code>host</code> forbidden; <code>gvisor-host</code> allowed with gVisor + explicit opt-in</td>
+<td>Native <code>host</code> forbidden; <code>gvisor-host</code> allowed with gVisor + explicit opt-in</td>
+</tr>
+<tr>
+<td>Cgroup limits</td>
+<td>Best-effort</td>
+<td>Required (fatal on create/apply failure)</td>
+<td>Required (fatal on create/apply failure)</td>
+</tr>
+<tr>
+<td>Bridge DNS</td>
+<td>Defaults to 8.8.8.8/8.8.4.4</td>
+<td>Must be configured explicitly</td>
+<td>Must be configured explicitly</td>
+</tr>
+<tr>
+<td>Rootfs</td>
+<td>Host bind mounts unless <code>--rootfs</code> or <code>--agent-toolchain-rootfs</code> is supplied</td>
+<td>Host bind mounts unless <code>--rootfs</code> or <code>--agent-toolchain-rootfs</code> is supplied</td>
+<td>Pre-built Nix closure (<code>--rootfs</code>)</td>
+</tr>
+<tr>
+<td>Workspace</td>
+<td>Optional <code>/workspace</code>; bind/copy-in-out for agents</td>
+<td>Optional <code>/workspace</code>; bind/copy-in-out for agents</td>
+<td>Optional, non-executable unless read-only or policy-specific</td>
+</tr>
+<tr>
+<td>Egress policy</td>
+<td>Optional</td>
+<td>Optional</td>
+<td>Deny-all default where enforceable; unavailable with <code>gvisor-host</code></td>
+</tr>
+<tr>
+<td>Memory limit</td>
+<td>Optional</td>
+<td>Optional</td>
+<td>Required</td>
+</tr>
+<tr>
+<td>PID 1 init</td>
+<td>Direct exec</td>
+<td>Direct exec</td>
+<td>Mini-init with zombie reaping + signal forwarding</td>
+</tr>
+<tr>
+<td>Workload uid/gid</td>
+<td>Root by default</td>
+<td>User namespace remapping required when running as host root</td>
+<td>Configurable post-setup drop via <code>--user</code> / <code>--group</code></td>
+</tr>
+<tr>
+<td>Secrets</td>
+<td>In-memory tmpfs</td>
+<td>In-memory tmpfs</td>
+<td>In-memory tmpfs with volatile zeroing</td>
+</tr>
+<tr>
+<td>/proc</td>
+<td>Mounted normally</td>
+<td>Mounted normally</td>
+<td><code>hidepid=2</code> (hides other processes)</td>
+</tr>
+<tr>
+<td>Mount audit</td>
+<td>Skipped</td>
+<td>Skipped</td>
+<td>Post-setup flag verification (fatal)</td>
+</tr>
+<tr>
+<td>Seccomp trace mode</td>
+<td>Allowed</td>
+<td>Forbidden</td>
+<td>Forbidden</td>
+</tr>
+<tr>
+<td>Landlock ABI</td>
+<td>Best-effort</td>
+<td>Full enforcement required on native</td>
+<td>V3 minimum required</td>
+</tr>
+<tr>
+<td>Health checks</td>
+<td>Optional</td>
+<td>Optional</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>sd_notify</td>
+<td>Optional</td>
+<td>Optional</td>
+<td>Optional</td>
+</tr>
+<tr>
+<td>Security policies</td>
+<td>Optional</td>
+<td>Optional</td>
+<td>Optional (recommended)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Egress Policy</h2></div>
+<p dir="auto">When production bridge mode runs without <code>--egress-allow</code> or <code>--egress-domain</code>, Nucleus installs a strict deny-all OUTPUT policy, including DNS.
+When <code>--egress-allow</code> or <code>--egress-domain</code> is specified, Nucleus applies iptables OUTPUT chain rules inside the container's network namespace:</p>
+<ol dir="auto">
+<li>Allow loopback traffic</li>
+<li>Allow established/related connections</li>
+<li>Allow DNS to configured resolvers</li>
+<li>Resolve permitted domains to IPv4 <code>/32</code> rules at startup</li>
+<li>Allow traffic to permitted CIDRs and resolved domain addresses (optionally restricted to specific ports)</li>
+<li>Log denied packets (rate-limited, <code>nucleus-egress-denied:</code> prefix)</li>
+<li>Drop everything else</li>
+</ol>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Allow outbound to internal network on HTTPS only
+nucleus run --network bridge --dns 10.0.0.1 \
+  --egress-allow 10.0.0.0/8 --egress-tcp-port 443 \
+  -- ./my-service
+
+# Allow outbound to a provider API domain on HTTPS only
+nucleus run --network bridge --dns 10.0.0.1 \
+  --egress-domain api.example.com --egress-tcp-port 443 \
+  -- ./provider-client
+
+# Production deny-all egress, including DNS
+nucleus run --service-mode production --network bridge --dns 10.0.0.1 \
+  -- ./isolated-service" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Allow outbound to internal network on HTTPS only</span>
+nucleus run --network bridge --dns 10.0.0.1 \
+  --egress-allow 10.0.0.0/8 --egress-tcp-port 443 \
+  -- ./my-service
+
+<span class="pl-c"><span class="pl-c">#</span> Allow outbound to a provider API domain on HTTPS only</span>
+nucleus run --network bridge --dns 10.0.0.1 \
+  --egress-domain api.example.com --egress-tcp-port 443 \
+  -- ./provider-client
+
+<span class="pl-c"><span class="pl-c">#</span> Production deny-all egress, including DNS</span>
+nucleus run --service-mode production --network bridge --dns 10.0.0.1 \
+  -- ./isolated-service</pre></div>
+<p dir="auto">Domain egress entries are exact DNS names, not wildcard or suffix rules. Nucleus resolves each domain with the supervisor host resolver before installing the namespace-local iptables policy, keeps only IPv4 answers, and fails startup if a domain has no IPv4 address. Long-running services that depend on provider IP rotation should restart after DNS changes, use provider-published CIDR ranges, or route traffic through a stable internal proxy and allow that proxy CIDR instead.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Native Bridge Backends</h2></div>
+<p dir="auto">For the native runtime, <code>--network bridge</code> now has two backends:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th><code>--nat-backend</code></th>
+<th>When used</th>
+<th>Implementation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>auto</code></td>
+<td>Default</td>
+<td>Kernel bridge/veth/iptables when privileged, <code>slirp4netns</code> userspace NAT when rootless</td>
+</tr>
+<tr>
+<td><code>kernel</code></td>
+<td>Explicit opt-in</td>
+<td>Kernel bridge + veth + iptables MASQUERADE/DNAT</td>
+</tr>
+<tr>
+<td><code>userspace</code></td>
+<td>Explicit opt-in</td>
+<td><code>slirp4netns</code> userspace NAT + API-socket port forwarding</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">This changes the native rootless behavior from "degrade to <code>none</code>" to a real userspace NAT path.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">gVisor Network Modes</h2></div>
+<p dir="auto">When using gVisor (<code>--runtime gvisor</code>), the network mode is selected explicitly:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Container <code>--network</code></th>
+<th>gVisor <code>--network</code> flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code></td>
+<td><code>none</code></td>
+<td>Fully isolated (default for agents)</td>
+</tr>
+<tr>
+<td><code>bridge</code></td>
+<td><code>host</code></td>
+<td>Nucleus prepares a bridge/userspace NAT namespace, then runsc inherits it</td>
+</tr>
+<tr>
+<td><code>gvisor-host</code></td>
+<td><code>host</code></td>
+<td>gVisor hostinet mode; omits the OCI network namespace and requires <code>--allow-host-network</code></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">The <code>gvisor-host</code> mode is intentionally separate from native <code>host</code> networking. Native <code>host</code> remains a direct host namespace mode. <code>gvisor-host</code> keeps the gVisor runtime boundary, but weakens network isolation by letting runsc hostinet use the host network stack. Because there is no Nucleus-owned network namespace in this mode, Nucleus egress policy is unavailable with <code>gvisor-host</code>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Terminal And Console Sockets</h2></div>
+<p dir="auto"><code>--terminal</code> runs the workload behind a pseudoterminal. Supplying
+<code>--console-socket &lt;path&gt;</code> implies terminal mode and follows the OCI console
+socket convention: the runtime connects to the AF_UNIX socket and sends the PTY
+master file descriptor with <code>SCM_RIGHTS</code>.</p>
+<p dir="auto">Native containers allocate the PTY directly. The workload process becomes a
+session leader, the PTY slave becomes its controlling TTY, and stdin/stdout/stderr
+all point at that slave. gVisor containers set <code>process.terminal = true</code> and
+<code>process.consoleSize</code> in the generated OCI config, then pass <code>--console-socket</code>
+through to <code>runsc</code>.</p>
+<p dir="auto">Console bytes are not decoded or rewritten by Nucleus. Clients such as
+mitos/libghostty are expected to parse and render the raw stream. Window resizing
+uses PTY window-size ioctls; foreground SIGWINCH is also forwarded to the
+container process.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">OCI Support</h2></div>
+<p dir="auto">Nucleus is not a generic external OCI runtime. For gVisor execution it generates an OCI bundle layout and <code>config.json</code> that follow the OCI runtime-spec fields Nucleus uses in practice.</p>
+<ul dir="auto">
+<li><code>process</code>: args, env, cwd, <code>noNewPrivileges</code>, terminal settings, rlimits, and <code>process.user</code> (<code>uid</code>, <code>gid</code>, <code>additionalGids</code>)</li>
+<li><code>root</code> and <code>mounts</code>: read-only rootfs plus bind, tmpfs, and secret mounts</li>
+<li><code>linux</code>: namespaces, cgroup path, resource limits, uid/gid mappings, masked paths, readonly paths, devices, seccomp, and sysctls</li>
+<li><code>hooks</code>: OCI lifecycle hooks with OCI state JSON on stdin</li>
+<li><code>annotations</code>: runtime metadata passed through to the bundle</li>
+</ul>
+<p dir="auto">That OCI path is the contract used with <code>runsc</code>. The native runtime uses Nucleus's direct Linux setup path rather than exposing a separate OCI CLI surface.</p>
+<p dir="auto">Lifecycle hooks execute host-side commands with supervisor privileges. They are not accepted in topology service definitions; use only explicit administrative <code>nucleus create --hooks</code> configuration for hooks.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Machine-Readable Events</h2></div>
+<p dir="auto">Use <code>--events-jsonl &lt;path&gt;</code> to write control-plane lifecycle events as JSON Lines, or <code>--events-fd &lt;fd&gt;</code> to write them to an inherited file descriptor. The stream is separate from workload stdout/stderr and PTY bytes; operators can consume it without parsing user process output. <code>--events-fd</code> rejects stdio descriptors and is not available with <code>--detach</code>; use <code>--events-jsonl</code> for detached containers.</p>
+<p dir="auto">Events include a container start record and a final summary record. The records carry the container ID, PID, cgroup path, workspace/context mount, network mode, seccomp mode, Landlock status, capability status, resource limits, exit status, resource stats, and whether cleanup succeeded.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Additional Hardening Flags</h2></div>
+<ul dir="auto">
+<li><code>--seccomp-profile &lt;path&gt;</code> loads a custom per-service seccomp profile (OCI JSON format).</li>
+<li><code>--seccomp-profile-sha256 &lt;hex&gt;</code> verifies the profile's SHA-256 hash before loading.</li>
+<li><code>--seccomp-mode trace|enforce</code> switches between trace (record all syscalls) and enforce (default).</li>
+<li><code>--seccomp-log &lt;path&gt;</code> writes NDJSON syscall trace when in trace mode.</li>
+<li><code>--caps-policy &lt;path&gt;</code> loads a TOML capability policy (replaces default drop-all).</li>
+<li><code>--caps-policy-sha256 &lt;hex&gt;</code> verifies the capability policy hash.</li>
+<li><code>--landlock-policy &lt;path&gt;</code> loads a TOML Landlock filesystem policy (replaces default rules).</li>
+<li><code>--landlock-policy-sha256 &lt;hex&gt;</code> verifies the Landlock policy hash.</li>
+<li><code>--verify-context-integrity</code> hashes the source context tree before launch and verifies the populated <code>/context</code> tree matches.</li>
+<li><code>--verify-rootfs-attestation</code> requires a <code>.nucleus-rootfs-sha256</code> manifest and verifies the mounted rootfs against it.</li>
+<li><code>--seccomp-log-denied</code> requests kernel logging for denied seccomp decisions when the host supports <code>SECCOMP_FILTER_FLAG_LOG</code>.</li>
+<li><code>--require-kernel-lockdown integrity|confidentiality</code> refuses startup unless <code>/sys/kernel/security/lockdown</code> satisfies the requested mode.</li>
+<li><code>--gvisor-platform systrap|kvm|ptrace</code> selects the runsc backend explicitly.</li>
+<li><code>--time-namespace</code> enables Linux time namespaces for native containers.</li>
+<li><code>--disable-cgroup-namespace</code> turns off cgroup namespace isolation when a workload needs the host cgroup view.</li>
+</ul>
+<p dir="auto">If <code>NUCLEUS_OTLP_ENDPOINT</code> or <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> is set, Nucleus exports lifecycle spans over OTLP in addition to normal local logging.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Development</h2></div>
+<p dir="auto">This project uses Nix flakes for reproducible builds:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Enter development shell
+nix develop
+
+# Build
+cargo build
+
+# Run tests
+cargo test
+
+# Run with Apalache installed (for TLA+ trace replay)
+cargo test -- --include-ignored
+
+# Build release binary
+cargo build --release
+
+# Clippy
+cargo clippy --all-targets -- --deny warnings
+
+# Host vs container runtime benchmarks (requires root)
+sudo -E cargo bench --bench container_runtime" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Enter development shell</span>
+nix develop
+
+<span class="pl-c"><span class="pl-c">#</span> Build</span>
+cargo build
+
+<span class="pl-c"><span class="pl-c">#</span> Run tests</span>
+cargo <span class="pl-c1">test</span>
+
+<span class="pl-c"><span class="pl-c">#</span> Run with Apalache installed (for TLA+ trace replay)</span>
+cargo <span class="pl-c1">test</span> -- --include-ignored
+
+<span class="pl-c"><span class="pl-c">#</span> Build release binary</span>
+cargo build --release
+
+<span class="pl-c"><span class="pl-c">#</span> Clippy</span>
+cargo clippy --all-targets -- --deny warnings
+
+<span class="pl-c"><span class="pl-c">#</span> Host vs container runtime benchmarks (requires root)</span>
+sudo -E cargo bench --bench container_runtime</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Project Structure</h3></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="nucleus/
+├── src/
+│   ├── container/      # Container orchestration, lifecycle, state, config
+│   ├── isolation/      # Namespace management, user mapping, attach
+│   ├── resources/      # cgroup v2 resource control, stats
+│   ├── filesystem/     # tmpfs, rootfs mounting, context population, secrets, attestation
+│   ├── security/       # Capabilities, seccomp, Landlock, gVisor, OCI, policy files
+│   │   ├── caps_policy.rs       # TOML capability policy loader
+│   │   ├── landlock_policy.rs   # TOML Landlock policy loader
+│   │   ├── seccomp_trace.rs     # Seccomp trace mode (syscall recording)
+│   │   ├── seccomp_generate.rs  # Profile generator from traces
+│   │   └── policy.rs            # Shared policy infrastructure (SHA-256, TOML/JSON loaders)
+│   ├── network/        # Networking (none/host/bridge), egress policy
+│   ├── topology/       # Multi-container topology (Compose equivalent)
+│   │   ├── config.rs   # TOML topology config (services, networks, volumes)
+│   │   ├── dag.rs      # Dependency DAG with topological sort
+│   │   ├── reconcile.rs # Diff running vs desired state, apply changes
+│   │   └── dns.rs      # Per-topology /etc/hosts DNS
+│   ├── checkpoint/     # CRIU checkpoint/restore
+│   ├── audit.rs        # Structured audit log (JSON events)
+│   └── error.rs        # Error types
+├── nix/
+│   └── module.nix      # NixOS module (containers + topologies)
+├── config/             # Security policy files (per-service)
+│   ├── *.seccomp.json  # Seccomp syscall allowlists (OCI format)
+│   ├── *.caps.toml     # Capability bounding set policies
+│   └── *.landlock.toml # Landlock filesystem access rules
+├── tests/
+│   ├── model_based_*   # Property-based tests from TLA+ specs
+│   └── tla_*           # tla-connect driver tests
+├── formal/tla/         # TLA+ formal specifications
+├── intent/             # Intent high-level specs
+└── flake.nix           # Nix flake (packages, modules, lib.mkRootfs)"><pre class="notranslate"><code>nucleus/
+├── src/
+│   ├── container/      # Container orchestration, lifecycle, state, config
+│   ├── isolation/      # Namespace management, user mapping, attach
+│   ├── resources/      # cgroup v2 resource control, stats
+│   ├── filesystem/     # tmpfs, rootfs mounting, context population, secrets, attestation
+│   ├── security/       # Capabilities, seccomp, Landlock, gVisor, OCI, policy files
+│   │   ├── caps_policy.rs       # TOML capability policy loader
+│   │   ├── landlock_policy.rs   # TOML Landlock policy loader
+│   │   ├── seccomp_trace.rs     # Seccomp trace mode (syscall recording)
+│   │   ├── seccomp_generate.rs  # Profile generator from traces
+│   │   └── policy.rs            # Shared policy infrastructure (SHA-256, TOML/JSON loaders)
+│   ├── network/        # Networking (none/host/bridge), egress policy
+│   ├── topology/       # Multi-container topology (Compose equivalent)
+│   │   ├── config.rs   # TOML topology config (services, networks, volumes)
+│   │   ├── dag.rs      # Dependency DAG with topological sort
+│   │   ├── reconcile.rs # Diff running vs desired state, apply changes
+│   │   └── dns.rs      # Per-topology /etc/hosts DNS
+│   ├── checkpoint/     # CRIU checkpoint/restore
+│   ├── audit.rs        # Structured audit log (JSON events)
+│   └── error.rs        # Error types
+├── nix/
+│   └── module.nix      # NixOS module (containers + topologies)
+├── config/             # Security policy files (per-service)
+│   ├── *.seccomp.json  # Seccomp syscall allowlists (OCI format)
+│   ├── *.caps.toml     # Capability bounding set policies
+│   └── *.landlock.toml # Landlock filesystem access rules
+├── tests/
+│   ├── model_based_*   # Property-based tests from TLA+ specs
+│   └── tla_*           # tla-connect driver tests
+├── formal/tla/         # TLA+ formal specifications
+├── intent/             # Intent high-level specs
+└── flake.nix           # Nix flake (packages, modules, lib.mkRootfs)
+</code></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Testing</h3></div>
+<p dir="auto">Nucleus uses spec-driven development with comprehensive testing:</p>
+<ul dir="auto">
+<li><strong>Unit tests</strong>: Individual component functionality</li>
+<li><strong>Model-based tests</strong>: Property-based tests verifying TLA+ specifications</li>
+<li><strong>tla-connect tests</strong>: TLA+ to Rust state machine mapping</li>
+<li><strong>Integration tests</strong>: Complete container lifecycle</li>
+</ul>
+<p dir="auto">All state machines are formally verified using TLA+ and the Apalache model checker.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Performance Benchmarks</h3></div>
+<p dir="auto"><code>benches/container_runtime.rs</code> compares the same workloads when run directly on the host vs inside a native Nucleus container. The matrix covers:</p>
+<ul dir="auto">
+<li>cold startup (<code>/bin/sh -lc ':'</code>)</li>
+<li>a CPU-bound shell arithmetic loop</li>
+<li>context-heavy file scans with both bind-mounted and copied context</li>
+<li>a constrained profile that applies the same cgroup limits to the direct host process and the containerized process</li>
+</ul>
+<p dir="auto">Because the benchmark creates namespaces and cgroups, it must run as root:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="sudo -E cargo bench --bench container_runtime" dir="auto"><pre>sudo -E cargo bench --bench container_runtime</pre></div>
+<p dir="auto">Criterion writes the comparison reports to <code>target/criterion/container_runtime/</code>.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">System-Level TLA+ Model</h3></div>
+<p dir="auto">A composed system model verifies cross-subsystem ordering, authorization, and end-to-end progress:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="apalache-mc check --config=formal/tla/Nucleus_System.cfg formal/tla/Nucleus_System.tla" dir="auto"><pre>apalache-mc check --config=formal/tla/Nucleus_System.cfg formal/tla/Nucleus_System.tla</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">Licensed under either of:</p>
+<ul dir="auto">
+<li>Apache License, Version 2.0 (<a href="/sig-id/nucleus/blob/main/LICENSE-APACHE">LICENSE-APACHE</a> or <a href="http://www.apache.org/licenses/LICENSE-2.0" rel="nofollow">http://www.apache.org/licenses/LICENSE-2.0</a>)</li>
+<li>MIT license (<a href="/sig-id/nucleus/blob/main/LICENSE-MIT">LICENSE-MIT</a> or <a href="http://opensource.org/licenses/MIT" rel="nofollow">http://opensource.org/licenses/MIT</a>)</li>
+</ul>
+<p dir="auto">at your option.</p>
+</article>
