@@ -1,0 +1,195 @@
+The Evolution of 'More Like This'
+Author: 
+Sergey Nikolaev
+Published: May 29, 2026 - 10 Min read
+In many search scenarios, the user does not start from an empty query box, but from an existing result.
+A user opens an article and wants to find related material. A buyer views a product card and looks for close alternatives. A support engineer investigates an incident and wants to see earlier cases with the same symptoms. In all these situations, the user already has a relevant document to start from.
+This scenario is traditionally called 
+More Like This (MLT)
+: a function for finding documents similar to the selected one. In this article, MLT means search that starts from a known document, not from a newly typed query.
+The classic MLT approach, or similar-document search, was based on comparing textual matches. Modern implementations increasingly use embeddings: numerical representations of documents. A search index stores embeddings as vectors, and the search system can find documents with close vector representations.
+Short glossary
+To avoid repeating definitions throughout the article, here are the main terms:
+Term
+Meaning in this article
+More Like This (MLT)
+search for documents similar to an already selected document
+embedding
+a numerical representation of text, a product, an image, or another object
+embedding vector
+a numerical representation of an object, such as text or a product, stored in the index to find similar objects by vector proximity
+KNN, nearest-neighbor search
+search for nearest neighbors, meaning objects with close vectors
+ANN, approximate nearest neighbors
+approximate nearest-neighbor search; it speeds up KNN on large datasets without scanning every vector
+RAG, Retrieval-Augmented Generation
+an approach where the search system retrieves context for a generative model
+hybrid search
+combining full-text search and vector search in one scenario
+reranking
+an additional sorting step for already retrieved candidates using a more precise model or rule
+What classic More Like This did
+Classic MLT was lexical. It answered a simple question: which documents use similar important words?
+The process usually looked like this:
+The search system took the source document.
+It analyzed its text.
+It selected informative terms.
+It built a query from those terms.
+It searched for documents with a similar set of words.
+It returned a list of similar documents.
+Internally, this used familiar full-text search mechanisms: TF-IDF or BM25, term frequency, stopwords, field boosts, and document-frequency limits. That is why older MLT implementations exposed parameters such as 
+min_term_freq
+, 
+min_doc_freq
+, 
+max_doc_freq
+, and 
+max_query_terms
+.
+This was not just an interface element, but a full search mechanism. MLT was used for related articles and products, duplicate detection, support-ticket matching, legal search, patent research, and internal knowledge bases.
+Where the lexical approach is still strong
+Lexical MLT works well when specific words, identifiers, and stable formulations matter.
+Examples:
+error codes;
+product SKUs;
+part numbers;
+function names;
+stack traces;
+legal wording;
+nearly identical product or ticket descriptions.
+The reason is that exact matching is critical here. If two incident reports contain the same error code or the same stack trace, full-text search sees a direct match. For example, when searching tickets with the code 
+ERR_404
+, lexical MLT quickly finds every mention of that code, while vector search may return tickets that describe similar but not identical problems.
+Lexical MLT had another advantage: it was cheap to run. The inverted index is already in the search engine. The analyzers are already configured. Ranking already works. There is no need to deploy separate search infrastructure just to support a “find similar” feature.
+The limitation is also clear. If two documents describe the same thing in different words, lexical MLT may fail to connect them. Synonyms work unevenly. Paraphrases are harder. Cross-lingual similarity is usually unavailable. For example, 
+memory leak
+ and 
+unbounded heap growth
+ may describe the same problem, but a standard analyzer sees different tokens.
+Lexical MLT efficiently finds documents with matching or similar wording. Semantic search helps when the meaning matches, not the words.
+What embeddings change
+Using
+
+embeddings
+
+— numerical representations of documents — changes the comparison principle: instead of words, the system compares vector representations.
+A document no longer has to be represented only as a set of weighted terms. It can be stored as a dense vector. Nearby vectors usually correspond to documents that are similar in meaning, even if they are written in different words.
+The lexical approach looks for matches by words and terms, while embedding search looks at the proximity of document vector representations. The first approach is optimal for exact matches such as error codes and SKUs. The second finds semantically close documents, even when they are phrased differently.
+This expands the scope of this kind of search. You can compare not only articles, but also products, images, code fragments, user events, or context fragments in a RAG system. In RAG, the search system first retrieves relevant context, and then the generative model uses that context to produce an answer.
+Lexical search does not disappear. Exact error codes, SKUs, names, statute references, and near duplicates are still better handled lexically. That is why production systems often use
+
+hybrid search
+
+: full-text search provides exact matches, vector search adds results by meaning, filters constrain the search space, and reranking refines the final order.
+As shown in our
+
+comparison of lexical and vector search
+
+, the former wins on precise strict matches, while the latter improves coverage of semantic relationships.
+MLT as lookup by a vector from the index
+If a vector representation has already been computed for a document and stored in the index, modern MLT can be described without a separate API example:
+Take the source document.
+Retrieve its precomputed vector representation from the index.
+Find the nearest vectors.
+Return the documents those vectors belong to.
+This is still More Like This: the user starts from one document and gets related results. Only the comparison method changes. Instead of extracting terms, the search system uses the vector representation of the source document.
+In Manticore Search, this operation can be performed directly at the search-engine level: the query specifies the ID of the source document, and Manticore takes its embedding vector from the index and runs KNN search. The application does not need to fetch the vector separately, serialize hundreds or thousands of numbers, and send them back in a second request.
+A minimal SQL example looks like this:
+SELECT
+ id, title, knn_dist()
+
+FROM
+ products
+
+WHERE
+ knn(embedding, 
+10
+, 
+123
+)
+
+LIMIT
+ 
+10
+;
+
+Here, 
+embedding
+ is the field with the precomputed embedding vector, 
+123
+ is the ID of the source document, and 
+10
+ is the number of nearest documents to return. The 
+knn_dist()
+ function returns the distance between vectors: a smaller value means greater semantic proximity to the source document. The same operation can be performed through the HTTP JSON API; the search logic does not change. The application passes the document ID, and Manticore performs lookup using that document’s vector from the index.
+For large datasets, KNN is usually implemented through an ANN index. This speeds up search through approximate computation and avoids scanning every vector. For the user, the important part is not the internal structure of the index, but the result: quickly finding documents that are close to the source in meaning.
+Why search is better handled in the engine
+You can implement this scenario in the application: first fetch the document, then extract its vector, then send a separate KNN query, and then combine the result with filters.
+That approach makes the system architecture more complex. The application has to:
+pass the vector between services;
+prevent accidental logging;
+check the embedding model version;
+keep data synchronized with the main index;
+apply the same filters used in normal search.
+When the search system performs the lookup itself, the path is shorter:
+The application passes the ID of the source document.
+The search system finds the precomputed vector representation in the index.
+The search system runs nearest-neighbor search (KNN) or its approximate variant (ANN).
+The search system returns the found documents with the same access filters and metadata.
+Benefits of this approach:
+fewer inter-service requests from the application;
+large vectors do not have to be sent through external APIs;
+filters stay close to search;
+the result is easier to reproduce and debug;
+the application does not need an additional layer for similarity calculation — everything runs inside the search engine.
+This will not fix poor embeddings or remove the need to tune ranking. But it reduces the number of interacting components in the search chain, which makes the system easier to maintain.
+Practical examples and the evolution of MLT
+Search from an existing object is especially useful when the user has already found a relevant starting point.
+Scenario
+Source object
+What to find
+Support
+ticket with an error
+past tickets with similar symptoms and related fixes
+Catalog
+product card
+close alternatives, similar models, or products from the same category
+RAG
+relevant fragment already found by the first search
+context expansion: neighboring sections of the same document, related documentation fragments, or similar discussions
+Developer tools
+stack trace, diff, or bug description
+related code changes, discussions, and past incidents
+In these examples, there is no need to type a new query manually. The system uses the source object as a reference point and finds documents similar to it lexically, semantically, or by both criteria.
+In the context of RAG, this is not about the primary search by the user’s query, but about subsequent context selection: the system has already found a relevant fragment and uses it as the reference object to collect surrounding context. This is useful when one fragment is too narrow: nearby content may include a term definition, a configuration example, a related discussion, or a neighboring section of the same guide.
+In systems with personalization or AI agents, it is important to clearly define which data is used for search: the system may consider the user’s search-query history, the context of previous interactions, or saved working notes. This makes it clear which data participates in retrieval and why the result is considered similar.
+The evolution of MLT can be described like this:
+Period
+What changed
+2000s
+MLT mostly relied on lexical analysis, TF-IDF, BM25, and term overlap.
+2010s
+Word2Vec and GloVe appeared and became widely used, making it possible to build semantic embeddings of words and texts.
+Early 2020s
+FAISS and similar ANN libraries made it possible to run vector search efficiently even on very large datasets.
+Mid-2020s
+RAG, recommendations, and search from an existing object made lookup by stored vectors a common product scenario.
+The evolution of MLT is a shift from lexical comparison to matching document vector representations. But the practical request stayed the same: find documents relevant to the source result.
+What to keep in mind
+Semantic MLT does not replace all search engineering.
+Production systems still need:
+exact search for identifiers, error codes, and other strict matches;
+embedding model metadata and versioning;
+ACL filters: rules for document access by roles or users;
+tenant filters: data isolation between customers or workspaces;
+hybrid search when both meaning and exact matches matter;
+reranking when result order is critical;
+search-quality monitoring: precision and recall metrics, false-positive frequency, and missed relevant documents caused by ANN-index approximation errors.
+Lexical MLT can miss documents that use different words. Vector search sometimes returns overly broad results, or false positives, and can miss relevant documents because of the approximate nature of ANN indexes. That is why the quality of this kind of search should be evaluated on real queries and real data.
+Conclusion
+More Like This has moved from purely lexical search to hybrid solutions that combine lexical, vector, and filtering mechanisms.
+The core concept remains the same: the user selects a source document, and the system finds materials relevant to it, taking both lexical and semantic similarity into account.
+Read also
+KNN early termination in Manticore Search
+How to Make xt850 Match xt 850
+How to Speed Up Phrase Search with bigram_index
