@@ -31,13 +31,14 @@ function isLetterSegment(segment) {
 
 function isSignatureText(text) {
   const cleanText = text.replace(/<[^>]+>/g, '').trim();
-  if (cleanText.length > 120) return false;
+  const collapsedText = cleanText.replace(/\s+/g, ' ');
+  if (collapsedText.length > 120) return false;
   const signaturePatterns = [
     /yours/i, /brother/i, /friend/i, /mark/i, /sam/i, /clemens/i, /ever/i, 
     /affectionately/i, /sinceres/i, /respectfully/i, /obedient/i, /devotedly/i, 
     /signing/i
   ];
-  return signaturePatterns.some(pat => pat.test(cleanText)) || cleanText.length < 50;
+  return signaturePatterns.some(pat => pat.test(collapsedText)) || collapsedText.length < 50;
 }
 
 function afterDateBlock(text) {
