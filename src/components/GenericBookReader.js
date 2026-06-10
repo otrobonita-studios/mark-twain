@@ -2,12 +2,33 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
-import { Sun, Moon, BookOpen, X, Search, Bookmark, MessageSquare, Send, Copy, Check, Loader2, Download, Clipboard, Menu } from 'lucide-react';
+import { Sun, Moon, BookOpen, X, Search, Bookmark, MessageSquare, Send, Copy, Check, Loader2, Download, Clipboard, Menu, Sliders } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import MarkTwainLetterCard from './MarkTwainLetterCard';
 import { soundtrack } from '@/data/soundtrack';
 import { youngReadersParagraphs, youngReadersGlossary, youngReadersNotes } from '@/app/read/eves-diary/YoungReadersText';
 import { storyProvenance } from '@/data/provenance';
+
+const isIndexSection = (title) => {
+  if (!title) return false;
+  const normalized = title.trim().toLowerCase().replace(/[.\s]/g, '');
+  return normalized === 'illustrations' || normalized === 'contents' || normalized === 'tableofcontents';
+};
+
+const isIndexBlock = (block) => {
+  if (block.kind === 'html' && (block.text || '').toLowerCase().includes('<table') && (block.text || '').includes('href="#')) {
+    return true;
+  }
+  return false;
+};
+
+const isAutomatedCaption = (caption) => {
+  if (!caption) return false;
+  const trimmed = caption.trim();
+  if (/^\d+$/.test(trimmed)) return true;
+  if (/\.(jpg|png|jpeg|gif|webp)/i.test(trimmed)) return true;
+  return false;
+};
 
 export default function GenericBookReader({ 
   document: propDocument, 
@@ -244,6 +265,10 @@ export default function GenericBookReader({
     }
     setBookmarks(newBookmarks);
     localStorage.setItem(`twain-bookmarks-${bookSlug}`, JSON.stringify(newBookmarks));
+
+    setTimeout(() => {
+      setIsBookmarkMenuOpen(false);
+    }, 1500);
   };
 
   const handleToggleNoteCollapse = (noteId) => {
@@ -273,13 +298,17 @@ export default function GenericBookReader({
 
   // Derived TOC items
   const tocItems = useMemo(() => {
-    if (propTocItems && propTocItems.length > 0) return propTocItems;
+    if (propTocItems && propTocItems.length > 0) {
+      return propTocItems.filter(item => !isIndexSection(item.label));
+    }
     if (!documentModel) return [];
-    return documentModel.sections.map(sec => ({
-      id: sec.id,
-      label: sec.title || sec.id,
-      type: sec.id.startsWith('day-') ? 'day' : 'section'
-    }));
+    return documentModel.sections
+      .filter(sec => !isIndexSection(sec.title))
+      .map(sec => ({
+        id: sec.id,
+        label: sec.title || sec.id,
+        type: sec.id.startsWith('day-') ? 'day' : 'section'
+      }));
   }, [propTocItems, documentModel]);
 
   const activeChapterTitle = useMemo(() => {
@@ -573,8 +602,15 @@ export default function GenericBookReader({
   }, [isEvesDiary, hasTrack]);
 
   // Render a structured block based on its kind
-  const renderBlock = (block) => {
+  const renderBlock = (block, sectionTitle) => {
+    if (isIndexBlock(block)) return null;
+
     if (block.kind === 'heading') {
+      const cleanBlockText = (block.text || '').replace(/[.\s]/g, '').toLowerCase();
+      const cleanSectionTitle = (sectionTitle || '').replace(/[.\s]/g, '').toLowerCase();
+      if (cleanBlockText === cleanSectionTitle && cleanBlockText.length > 0) {
+        return null;
+      }
       const Tag = block.level === 1 ? 'h1' : block.level === 2 ? 'h2' : 'h3';
       return (
         <Tag 
@@ -610,10 +646,11 @@ export default function GenericBookReader({
     if (block.kind === 'figure') {
       const activeStyle = block.styles.find(s => s.id === 'original') || block.styles[0];
       if (!activeStyle) return null;
+      const hasCleanCaption = block.caption && !isAutomatedCaption(block.caption);
       return (
         <div key={block.id} id={block.id} className="fig my-6 max-w-[60%] mx-auto text-center">
-          <img src={activeStyle.src} alt={block.caption || ''} className="w-full h-auto rounded border border-[var(--border)]" />
-          {block.caption && <span className="block text-xs text-[var(--muted-foreground)] mt-1.5">{block.caption}</span>}
+          <img src={activeStyle.src} alt={hasCleanCaption ? block.caption : ''} className="w-full h-auto rounded border border-[var(--border)]" />
+          {hasCleanCaption && <span className="block text-xs text-[var(--muted-foreground)] mt-1.5">{block.caption}</span>}
         </div>
       );
     }
@@ -806,8 +843,8 @@ export default function GenericBookReader({
           <Link href="/complete-works" className="text-xs uppercase tracking-wider text-[var(--primary)] font-sans decoration-none hover:text-white transition-colors" style={{ textDecoration: 'none' }}>
             ‹ The Library
           </Link>
-          <span className="text-xs text-[var(--muted-foreground)] select-none">|</span>
-          <span className="text-xs font-sans text-[var(--foreground)] font-semibold truncate max-w-[120px] md:max-w-[240px]">
+          <span className="text-xs text-[var(--muted-foreground)] select-none hidden md:inline">|</span>
+          <span className="text-xs font-sans text-[var(--foreground)] font-semibold truncate max-w-[120px] md:max-w-[240px] hidden md:inline">
             {documentModel.meta.title}
           </span>
         </div>
@@ -862,7 +899,7 @@ export default function GenericBookReader({
           </div>
           
           <button onClick={() => toggleMenu('display')} className="book-control-btn" title="Display Settings">
-            <span className="font-sans font-bold text-sm">Aa</span>
+            <Sliders size={16} />
           </button>
 
           <button onClick={() => toggleMenu('chat')} className="book-control-btn text-[var(--primary)]" title="Ask Mark MkII">
@@ -880,118 +917,157 @@ export default function GenericBookReader({
       </header>
 
       {/* Aa Settings Panel */}
+      {/* Aa Settings Panel Drawer */}
       <AnimatePresence>
         {isDisplayMenuOpen && (
-          <div className="fixed inset-0 z-40" onClick={() => setIsDisplayMenuOpen(false)}>
-            <div className={`absolute right-6 top-16 w-80 rounded-lg p-5 text-[var(--foreground)] font-sans border shadow-2xl ${
-              theme === 'parchment'
-                ? 'bg-[#fdfaf2] border-[#2c1f11]/15'
-                : 'bg-[#1c1814] border-[rgba(255,244,223,0.08)]'
-            }`} onClick={e => e.stopPropagation()}>
-              <h3 className={`font-sans text-lg font-bold mb-4 border-b pb-2 ${
-                theme === 'parchment' ? 'border-[#2c1f11]/10' : 'border-[rgba(255,244,223,0.06)]'
-              }`}>Display</h3>
+          <>
+            <motion.div 
+              className="fixed inset-0 bg-black/40 z-45" 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }} 
+              onClick={() => setIsDisplayMenuOpen(false)} 
+            />
+            <motion.div 
+              className={`fixed top-0 right-0 bottom-0 w-80 border-l p-6 z-50 text-[var(--foreground)] font-sans flex flex-col ${
+                theme === 'parchment'
+                  ? 'bg-[#fdfaf2] border-[#2c1f11]/15'
+                  : 'bg-[#15110d] border-[var(--border)]'
+              }`}
+              style={{ left: 'auto', right: 0 }}
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'tween', duration: 0.3 }}
+            >
+              <div className={`flex items-center justify-between border-b pb-4 mb-4 ${
+                theme === 'parchment' ? 'border-[#2c1f11]/10' : 'border-[rgba(255,244,223,0.08)]'
+              }`}>
+                <h3 className="font-sans font-bold text-lg m-0">Display</h3>
+                <button onClick={() => setIsDisplayMenuOpen(false)} className="book-control-btn border-none bg-transparent">
+                  <X size={18} />
+                </button>
+              </div>
               
-              {/* Themes */}
-              <div className="mb-4 font-sans">
-                <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Theme</span>
-                <div className="grid grid-cols-2 gap-2">
-                  {['parchment', 'charcoal'].map(t => (
-                    <button 
-                      key={t} 
-                      onClick={() => { setTheme(t); savePref('twain-pref-theme', t); }} 
-                      className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
-                        theme === t 
-                          ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
-                          : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
-                      }`}
-                    >
-                      {t === 'parchment' ? 'Light' : 'Dark'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Text Sizes */}
-              <div className="mb-4 font-sans">
-                <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Text Size</span>
-                <div className="flex justify-between items-center gap-1.5 font-sans">
-                  {[1, 2, 3].map(s => (
-                    <button 
-                      key={s} 
-                      onClick={() => { setTextSize(s); savePref('twain-pref-size', s); }} 
-                      className={`size-8 rounded-full border flex items-center justify-center font-sans transition-colors ${
-                        textSize === s 
-                          ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
-                          : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
-                      }`}
-                    >
-                      {s === 1 ? 'A' : s === 2 ? 'A+' : 'A++'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Typefaces */}
-              <div className="mb-4 font-sans">
-                <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Typeface</span>
-                <div className="grid grid-cols-2 gap-2 font-sans">
-                  {customFonts.map(f => (
-                    <button 
-                      key={f} 
-                      onClick={() => { setTypeface(f); savePref('twain-pref-typeface', f); }} 
-                      className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
-                        typeface === f 
-                          ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
-                          : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
-                      }`}
-                    >
-                      {f.charAt(0).toUpperCase() + f.slice(1).replace('-', ' ')}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Contrast */}
-              <div className="mb-4 font-sans">
-                <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Contrast / Weight</span>
-                <div className="grid grid-cols-3 gap-2 font-sans">
-                  {['soft', 'normal', 'high'].map(c => (
-                    <button 
-                      key={c} 
-                      onClick={() => { setContrast(c); savePref('twain-pref-contrast', c); }} 
-                      className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
-                        contrast === c 
-                          ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
-                          : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
-                      }`}
-                    >
-                      {c.charAt(0).toUpperCase() + c.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Sanitization toggle */}
-              {hasSanitization && (
-                <div className={`flex items-center justify-between mt-3 pt-3 border-t font-sans ${
-                  theme === 'parchment' ? 'border-[#2c1f11]/10' : 'border-[rgba(255,244,223,0.06)]'
-                }`}>
-                  <div>
-                    <span className="text-[11px] font-sans font-bold block">Sanitization Toggle</span>
-                    <span className="text-[10px] text-[var(--muted-foreground)] block mt-0.5 leading-tight font-sans">Original Mark Twain text vs. sanitized replacement phrases.</span>
+              <div className="flex-1 flex flex-col gap-5 overflow-y-auto custom-scrollbar pr-1">
+                {/* Themes */}
+                <div className="font-sans">
+                  <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Theme</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {['parchment', 'charcoal'].map(t => (
+                      <button 
+                        key={t} 
+                        onClick={() => { setTheme(t); savePref('twain-pref-theme', t); }} 
+                        className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
+                          theme === t 
+                            ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
+                            : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
+                        }`}
+                      >
+                        {t === 'parchment' ? 'Light' : 'Dark'}
+                      </button>
+                    ))}
                   </div>
-                  <button 
-                    onClick={() => handleWordSettingChange(wordSetting === 'original' ? 'sanitized' : 'original')}
-                    className="book-control-btn word-setting-toggle font-sans"
-                    style={{ fontSize: '0.62rem', fontWeight: 'bold', width: 'auto', height: '2rem', padding: '0 0.75rem', borderRadius: '4px', textTransform: 'uppercase' }}
-                  >
-                    {wordSetting === 'original' ? "Original" : "Sanitized"}
-                  </button>
                 </div>
-              )}
-            </div>
-          </div>
+
+                {/* Text Sizes */}
+                <div className="font-sans">
+                  <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Text Size</span>
+                  <div className="flex justify-between items-center gap-1.5 font-sans">
+                    {[1, 2, 3].map(s => (
+                      <button 
+                        key={s} 
+                        onClick={() => { setTextSize(s); savePref('twain-pref-size', s); }} 
+                        className={`size-8 rounded-full border flex items-center justify-center font-sans transition-colors ${
+                          textSize === s 
+                            ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
+                            : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
+                        }`}
+                      >
+                        {s === 1 ? 'A' : s === 2 ? 'A+' : 'A++'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Typefaces */}
+                <div className="font-sans">
+                  <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Typeface</span>
+                  <div className="grid grid-cols-2 gap-2 font-sans">
+                    {customFonts.map(f => (
+                      <button 
+                        key={f} 
+                        onClick={() => { setTypeface(f); savePref('twain-pref-typeface', f); }} 
+                        className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
+                          typeface === f 
+                            ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
+                            : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
+                        }`}
+                      >
+                        {f.charAt(0).toUpperCase() + f.slice(1).replace('-', ' ')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Contrast */}
+                <div className="font-sans">
+                  <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-2 font-sans">Contrast / Weight</span>
+                  <div className="grid grid-cols-3 gap-2 font-sans">
+                    {['soft', 'normal', 'high'].map(c => (
+                      <button 
+                        key={c} 
+                        onClick={() => { setContrast(c); savePref('twain-pref-contrast', c); }} 
+                        className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
+                          contrast === c 
+                            ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
+                            : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
+                        }`}
+                      >
+                        {c.charAt(0).toUpperCase() + c.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Sanitization toggle */}
+                {hasSanitization && (
+                  <div className={`flex flex-col gap-2 pt-3 border-t font-sans ${
+                    theme === 'parchment' ? 'border-[#2c1f11]/10' : 'border-[rgba(255,244,223,0.06)]'
+                  }`}>
+                    <div>
+                      <span className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] block mb-1 font-sans">Text Sanitization</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 font-sans">
+                      <button 
+                        onClick={() => handleWordSettingChange('original')}
+                        className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
+                          wordSetting === 'original' 
+                            ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
+                            : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
+                        }`}
+                      >
+                        Original
+                      </button>
+                      <button 
+                        onClick={() => handleWordSettingChange('sanitized')}
+                        className={`py-1.5 px-2 text-xs font-semibold rounded border transition-colors font-sans ${
+                          wordSetting === 'sanitized' 
+                            ? 'bg-[var(--primary)] text-[#15110d] border-[var(--primary)]' 
+                            : 'bg-transparent text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)] hover:border-[var(--primary)]'
+                        }`}
+                      >
+                        Sanitized
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-[var(--muted-foreground)] block mt-0.5 leading-tight font-sans">
+                      Compare the original, historically accurate text with modern, sanitized versions intended to mitigate the impact of inflammatory language.
+                    </span>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </>
         )}
       </AnimatePresence>
 
@@ -1078,7 +1154,7 @@ export default function GenericBookReader({
 
                   return (
                     <div key={section.id} id={section.id} className="book-section mb-12">
-                      {section.title && !section.title.startsWith('Introductory Note') && !section.title.startsWith('Prologue') && (
+                      {section.title && !section.title.startsWith('Introductory Note') && !section.title.startsWith('Prologue') && !isIndexSection(section.title) && (
                         <>
                           <h2 id={`${section.id}-title`} className="chapter-heading text-center font-bold font-serif mb-6 text-[var(--primary)] mt-12">
                             {resolveText(section.title)}
@@ -1086,7 +1162,7 @@ export default function GenericBookReader({
                           {section.canonicalSlug && section.canonicalSlug.toLowerCase() !== bookSlug.toLowerCase() && renderProvenanceAlert(section.canonicalSlug)}
                         </>
                       )}
-                      {section.blocks.map(block => renderBlock(block))}
+                      {section.blocks.map(block => renderBlock(block, section.title))}
                     </div>
                   );
                 })

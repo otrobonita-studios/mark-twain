@@ -147,7 +147,7 @@ export default function RestorationPage() {
                   </div>
                   <div className="p-4 flex items-center justify-between border-t border-[#d9a34a]/15 bg-black/25">
                     <div className="flex flex-col">
-                      <span className="font-serif font-bold text-sm text-[#d9a34a]">Original Drawing</span>
+                      <span className="font-serif font-bold text-sm text-[#d9a34a]">Original</span>
                       <span className="text-[11px] opacity-60 font-mono mt-0.5">{SLIDES[pos % 2 === 0 ? pos : pos - 1]?.stem}</span>
                     </div>
                     <span className="inline-block text-[10px] border border-amber-500/20 px-2 py-0.5 rounded text-amber-500/70 font-mono uppercase bg-amber-500/5">

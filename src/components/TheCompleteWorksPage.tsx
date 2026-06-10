@@ -585,14 +585,7 @@ export default function TheCompleteWorksPage() {
       {/* Reading Desk */}
       <main className="book-page-desk">
         <article className={`book-page-parchment font-serif size-${fontSize}`}>
-          {/* Theme Selector (Floating inside parchment card) */}
-          <button
-            onClick={() => setTheme(theme === 'parchment' ? 'charcoal' : 'parchment')}
-            className="book-control-btn theme-toggle parchment-theme-toggle"
-            title={`Switch to ${theme === 'parchment' ? 'Charcoal' : 'Parchment'} theme`}
-          >
-            {theme === 'parchment' ? <Moon size={16} /> : <Sun size={16} />}
-          </button>
+
 
           <h1 className="text-text-100 text-[2rem] font-bold text-center" style={{ marginBottom: '2rem' }}>
             What I have in Mind
@@ -777,7 +770,7 @@ export default function TheCompleteWorksPage() {
                     className={`absolute z-30 right-0 mt-2 w-full rounded border p-3 ${
                       theme === 'parchment'
                         ? 'bg-[#fdfaf2] border-[#2c1f11]/20 shadow-[0_4px_20px_rgba(44,31,17,0.15)]'
-                        : 'bg-[#101720] border-[rgba(255,244,223,0.12)] shadow-[0_4px_20px_rgba(0,0,0,0.5)]'
+                        : 'bg-[#3a2c1a] border-[rgba(255,244,223,0.12)] shadow-[0_4px_20px_rgba(0,0,0,0.5)]'
                     }`}
                     style={{ minWidth: '280px' }}
                   >
