@@ -22,6 +22,12 @@ const isIndexBlock = (block) => {
   return false;
 };
 
+const isRawWrapperBlock = (block) => {
+  if (!block || typeof block.id !== 'string') return false;
+  return block.id.includes('-p-raw-') || block.id.endsWith('-p-raw-end');
+};
+
+
 const isAutomatedCaption = (caption) => {
   if (!caption) return false;
   const trimmed = caption.trim();
@@ -604,6 +610,7 @@ export default function GenericBookReader({
   // Render a structured block based on its kind
   const renderBlock = (block, sectionTitle) => {
     if (isIndexBlock(block)) return null;
+    if (isRawWrapperBlock(block)) return null;
 
     if (block.kind === 'heading') {
       const cleanBlockText = (block.text || '').replace(/[.\s]/g, '').toLowerCase();
@@ -633,11 +640,15 @@ export default function GenericBookReader({
     }
 
     if (block.kind === 'p') {
+      const classes = [
+        block.conversation ? 'conversation-line' : '',
+        block.center ? 'text-center' : ''
+      ].filter(Boolean).join(' ');
       return (
         <p 
           key={block.id} 
           id={block.id} 
-          className={block.conversation ? 'conversation-line' : ''} 
+          className={classes || undefined} 
           dangerouslySetInnerHTML={{ __html: resolveText(block.text) }} 
         />
       );
@@ -1135,7 +1146,7 @@ export default function GenericBookReader({
                   if (metaBlock) {
                     // Reconstruct letter body html by joining blocks
                     const letterBodyHtml = section.blocks
-                      .filter(b => b.kind === 'p' && b.id !== `${section.id}-p-raw-end`)
+                      .filter(b => b.kind === 'p' && !isRawWrapperBlock(b))
                       .map(b => `<p class="${b.conversation ? 'conversation-line' : ''}">${resolveText(b.text)}</p>`)
                       .join('\n');
 

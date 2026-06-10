@@ -1,13 +1,13 @@
 # Restored-Text Linter Report
 
-* **Generated at:** 2026-06-10T07:05:32.806Z
+* **Generated at:** 2026-06-10T14:40:27.254Z
 * **Files scanned:** 111
-* **Total warnings:** 2312
+* **Total warnings:** 2310
 * **Total errors:** 1
 
 ## Summary of Findings
 
-### 📄 [BOOK] [1601.html](file:///E:/development/mark-twain/src/data/books/1601.html) (12 findings)
+### 📄 [BOOK] [1601.html](file:///e:/development/mark-twain/src/data/books/1601.html) (12 findings)
 *Title:* "1601"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "1601, by Mark Twain"
@@ -37,7 +37,7 @@
 
 ---
 
-### 📄 [BOOK] [1911-Encyclopædia-Britannica-Twain-Mark.html](file:///E:/development/mark-twain/src/data/books/1911-Encyclopædia-Britannica-Twain-Mark.html) (2 findings)
+### 📄 [BOOK] [1911-Encyclopædia-Britannica-Twain-Mark.html](file:///e:/development/mark-twain/src/data/books/1911-Encyclopædia-Britannica-Twain-Mark.html) (2 findings)
 *Title:* "1911 Encyclopædia Britannica/Twain, Mark"
 
 - ⚠️ **[Line 104]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "TWAIN"
@@ -47,7 +47,7 @@
 
 ---
 
-### 📄 [BOOK] [A-Burlesque-Autobiography.html](file:///E:/development/mark-twain/src/data/books/A-Burlesque-Autobiography.html) (23 findings)
+### 📄 [BOOK] [A-Burlesque-Autobiography.html](file:///e:/development/mark-twain/src/data/books/A-Burlesque-Autobiography.html) (23 findings)
 *Title:* "A BURLESQUE AUTOBIOGRAPHY"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "A BURLESQUE AUTOBIOGRAPHY by Mark Twain"
@@ -99,7 +99,7 @@
 
 ---
 
-### 📄 [BOOK] [A-Dog's-Tale.html](file:///E:/development/mark-twain/src/data/books/A-Dog's-Tale.html) (5 findings)
+### 📄 [BOOK] [A-Dog's-Tale.html](file:///e:/development/mark-twain/src/data/books/A-Dog's-Tale.html) (5 findings)
 *Title:* "A DOG'S TALE"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "A DOG'S TALE, By Twain"
@@ -115,7 +115,7 @@
 
 ---
 
-### 📄 [BOOK] [A-Ghost-Story.html](file:///E:/development/mark-twain/src/data/books/A-Ghost-Story.html) (1 findings)
+### 📄 [BOOK] [A-Ghost-Story.html](file:///e:/development/mark-twain/src/data/books/A-Ghost-Story.html) (1 findings)
 *Title:* "A GHOST STORY"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "A GHOST STORY, by Mark Twain"
@@ -123,7 +123,7 @@
 
 ---
 
-### 📄 [BOOK] [A-Gilded-Age.html](file:///E:/development/mark-twain/src/data/books/A-Gilded-Age.html) (48 findings)
+### 📄 [BOOK] [A-Gilded-Age.html](file:///e:/development/mark-twain/src/data/books/A-Gilded-Age.html) (48 findings)
 *Title:* "The Gilded Age: A Tale of Today"
 
 - ℹ️ **[Line 6]** [Typographic] Unhyphenated spelling: "today"
@@ -225,7 +225,7 @@
 
 ---
 
-### 📄 [BOOK] [A-Horse's-Tale.html](file:///E:/development/mark-twain/src/data/books/A-Horse's-Tale.html) (13 findings)
+### 📄 [BOOK] [A-Horse's-Tale.html](file:///e:/development/mark-twain/src/data/books/A-Horse's-Tale.html) (13 findings)
 *Title:* "A Horse's Tale"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "A Horse's Tale, by Mark Twain"
@@ -257,7 +257,7 @@
 
 ---
 
-### 📄 [BOOK] [A-Scrap-of-Curious-History.html](file:///E:/development/mark-twain/src/data/books/A-Scrap-of-Curious-History.html) (4 findings)
+### 📄 [BOOK] [A-Scrap-of-Curious-History.html](file:///e:/development/mark-twain/src/data/books/A-Scrap-of-Curious-History.html) (4 findings)
 *Title:* "A Scrap of Curious History"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "A Scrap of Curious History, by Mark Twain"
@@ -271,7 +271,7 @@
 
 ---
 
-### 📄 [BOOK] [A-Simplified-Alphabet.html](file:///E:/development/mark-twain/src/data/books/A-Simplified-Alphabet.html) (10 findings)
+### 📄 [BOOK] [A-Simplified-Alphabet.html](file:///e:/development/mark-twain/src/data/books/A-Simplified-Alphabet.html) (10 findings)
 *Title:* "A Simplified Alphabet"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "A Simplified Alphabet, by Mark Twain"
@@ -297,7 +297,7 @@
 
 ---
 
-### 📄 [BOOK] [A-Telephonic-Conversation.html](file:///E:/development/mark-twain/src/data/books/A-Telephonic-Conversation.html) (1 findings)
+### 📄 [BOOK] [A-Telephonic-Conversation.html](file:///e:/development/mark-twain/src/data/books/A-Telephonic-Conversation.html) (1 findings)
 *Title:* "A TELEPHONIC CONVERSATION"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "A TELEPHONIC CONVERSATION, By Twain"
@@ -305,7 +305,7 @@
 
 ---
 
-### 📄 [BOOK] [A-Tramp-Abroad.html](file:///E:/development/mark-twain/src/data/books/A-Tramp-Abroad.html) (41 findings)
+### 📄 [BOOK] [A-Tramp-Abroad.html](file:///e:/development/mark-twain/src/data/books/A-Tramp-Abroad.html) (41 findings)
 *Title:* "A Tramp Abroad"
 
 - ℹ️ **[Line 1715]** [Typographic] Unhyphenated spelling: "tomorrow"
@@ -393,7 +393,7 @@
 
 ---
 
-### 📄 [BOOK] [A-True-Story.html](file:///E:/development/mark-twain/src/data/books/A-True-Story.html) (7 findings)
+### 📄 [BOOK] [A-True-Story.html](file:///e:/development/mark-twain/src/data/books/A-True-Story.html) (7 findings)
 *Title:* "A TRUE STORY"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "A TRUE STORY, by Mark Twain"
@@ -415,7 +415,7 @@
 
 ---
 
-### 📄 [BOOK] [About-Magnanimous-Incident-Literature.html](file:///E:/development/mark-twain/src/data/books/About-Magnanimous-Incident-Literature.html) (1 findings)
+### 📄 [BOOK] [About-Magnanimous-Incident-Literature.html](file:///e:/development/mark-twain/src/data/books/About-Magnanimous-Incident-Literature.html) (1 findings)
 *Title:* "About Magnanimous-Incident Literature"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "About Magnanimous-Incident Literature, by Mark Twain"
@@ -423,7 +423,7 @@
 
 ---
 
-### 📄 [BOOK] [Adventures-of-Tom-Sawyer.html](file:///E:/development/mark-twain/src/data/books/Adventures-of-Tom-Sawyer.html) (23 findings)
+### 📄 [BOOK] [Adventures-of-Tom-Sawyer.html](file:///e:/development/mark-twain/src/data/books/Adventures-of-Tom-Sawyer.html) (23 findings)
 *Title:* "The Adventures of Tom Sawyer"
 
 - ℹ️ **[Line 957]** [Typographic] Unhyphenated spelling: "tomorrow"
@@ -475,7 +475,7 @@
 
 ---
 
-### 📄 [BOOK] [An-Encounter-with-an-Interviewer.html](file:///E:/development/mark-twain/src/data/books/An-Encounter-with-an-Interviewer.html) (1 findings)
+### 📄 [BOOK] [An-Encounter-with-an-Interviewer.html](file:///e:/development/mark-twain/src/data/books/An-Encounter-with-an-Interviewer.html) (1 findings)
 *Title:* "An Encounter with an Interviewer"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "An Encounter with an Interviewer, by Mark Twain"
@@ -483,7 +483,7 @@
 
 ---
 
-### 📄 [BOOK] [Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne.html](file:///E:/development/mark-twain/src/data/books/Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne.html) (1 findings)
+### 📄 [BOOK] [Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne.html](file:///e:/development/mark-twain/src/data/books/Appletons'-Cyclopædia-of-American-Biography-Clemens-Samuel-Langhorne.html) (1 findings)
 *Title:* "Appletons' Cyclopædia of American Biography/Clemens, Samuel Langhorne"
 
 - ⚠️ **[Line 114]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "CLEMENS"
@@ -491,7 +491,7 @@
 
 ---
 
-### 📄 [BOOK] [As-Concerns-Interpreting-the-Deity.html](file:///E:/development/mark-twain/src/data/books/As-Concerns-Interpreting-the-Deity.html) (1 findings)
+### 📄 [BOOK] [As-Concerns-Interpreting-the-Deity.html](file:///e:/development/mark-twain/src/data/books/As-Concerns-Interpreting-the-Deity.html) (1 findings)
 *Title:* "As Concerns Interpreting the Deity"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "As Concerns Interpreting the Deity, by Mark Twain"
@@ -499,7 +499,7 @@
 
 ---
 
-### 📄 [BOOK] [At-the-Shrine-of-St-Wagner.html](file:///E:/development/mark-twain/src/data/books/At-the-Shrine-of-St-Wagner.html) (1 findings)
+### 📄 [BOOK] [At-the-Shrine-of-St-Wagner.html](file:///e:/development/mark-twain/src/data/books/At-the-Shrine-of-St-Wagner.html) (1 findings)
 *Title:* "At the Shrine of St. Wagner"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "At the Shrine of St. Wagner, by Mark Twain"
@@ -507,17 +507,15 @@
 
 ---
 
-### 📄 [BOOK] [Captain-Stormfield's-Vist-to-Heaven.html](file:///E:/development/mark-twain/src/data/books/Captain-Stormfield's-Vist-to-Heaven.html) (2 findings)
+### 📄 [BOOK] [Captain-Stormfield's-Vist-to-Heaven.html](file:///e:/development/mark-twain/src/data/books/Captain-Stormfield's-Vist-to-Heaven.html) (1 findings)
 *Title:* "Extract from Captain Stormfield's Visit to Heaven"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Extract from Captain Stormfield's Visit to Heaven, by Mark Twain"
   - *Suggestion:* Clean it to: "Extract from Captain Stormfield's Visit to Heaven"
-- ⚠️ **[Line 154]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "BY"
-  - *Suggestion:* Verify against scan and restore to italic/roman mixed case (e.g. "*by*")
 
 ---
 
-### 📄 [BOOK] [Carnival-of-Crime-in-CT.html](file:///E:/development/mark-twain/src/data/books/Carnival-of-Crime-in-CT.html) (3 findings)
+### 📄 [BOOK] [Carnival-of-Crime-in-CT.html](file:///e:/development/mark-twain/src/data/books/Carnival-of-Crime-in-CT.html) (3 findings)
 *Title:* "The Facts Concerning the Recent Carnival of Crime in Connecticut, by Mark
     Twain"
 
@@ -530,7 +528,7 @@
 
 ---
 
-### 📄 [BOOK] [Christian-Science.html](file:///E:/development/mark-twain/src/data/books/Christian-Science.html) (33 findings)
+### 📄 [BOOK] [Christian-Science.html](file:///e:/development/mark-twain/src/data/books/Christian-Science.html) (33 findings)
 *Title:* "Christian Science"
 
 - ⚠️ **[Line 1]** [Provenance] Missing <div class="book-title-block"> at the start of the body.
@@ -602,7 +600,7 @@
 
 ---
 
-### 📄 [BOOK] [Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne.html](file:///E:/development/mark-twain/src/data/books/Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne.html) (3 findings)
+### 📄 [BOOK] [Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne.html](file:///e:/development/mark-twain/src/data/books/Collier's-New-Encyclopedia-1921-Clemens-Samuel-Langhorne.html) (3 findings)
 *Title:* "Collier's New Encyclopedia (1921)/Clemens, Samuel Langhorne"
 
 - ⚠️ **[Line 103]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "CLEMENS"
@@ -614,7 +612,7 @@
 
 ---
 
-### 📄 [BOOK] [Concerning-the-American-Language.html](file:///E:/development/mark-twain/src/data/books/Concerning-the-American-Language.html) (3 findings)
+### 📄 [BOOK] [Concerning-the-American-Language.html](file:///e:/development/mark-twain/src/data/books/Concerning-the-American-Language.html) (3 findings)
 *Title:* "Concerning the American Language"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Concerning the American Language, by Mark Twain"
@@ -626,7 +624,7 @@
 
 ---
 
-### 📄 [BOOK] [Concerning-Tobacco.html](file:///E:/development/mark-twain/src/data/books/Concerning-Tobacco.html) (1 findings)
+### 📄 [BOOK] [Concerning-Tobacco.html](file:///e:/development/mark-twain/src/data/books/Concerning-Tobacco.html) (1 findings)
 *Title:* "Concerning Tobacco"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Concerning Tobacco, by Mark Twain"
@@ -634,7 +632,7 @@
 
 ---
 
-### 📄 [BOOK] [Connecticut-Yankee.html](file:///E:/development/mark-twain/src/data/books/Connecticut-Yankee.html) (32 findings)
+### 📄 [BOOK] [Connecticut-Yankee.html](file:///e:/development/mark-twain/src/data/books/Connecticut-Yankee.html) (32 findings)
 *Title:* "A Connecticut Yankee in King Arthur's Court"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "A Connecticut Yankee in King Arthur's Court, by Mark Twain"
@@ -704,7 +702,7 @@
 
 ---
 
-### 📄 [BOOK] [Curious-Republic-of-Gondour.html](file:///E:/development/mark-twain/src/data/books/Curious-Republic-of-Gondour.html) (25 findings)
+### 📄 [BOOK] [Curious-Republic-of-Gondour.html](file:///e:/development/mark-twain/src/data/books/Curious-Republic-of-Gondour.html) (25 findings)
 *Title:* "The Curious Republic of Gondour and Other Whimsical Sketches, by Mark
     Twain"
 
@@ -761,7 +759,7 @@
 
 ---
 
-### 📄 [BOOK] [Defence-of-Harriet-Shelley.html](file:///E:/development/mark-twain/src/data/books/Defence-of-Harriet-Shelley.html) (5 findings)
+### 📄 [BOOK] [Defence-of-Harriet-Shelley.html](file:///e:/development/mark-twain/src/data/books/Defence-of-Harriet-Shelley.html) (5 findings)
 *Title:* "In Defense of Harriet Shelley"
 
 - ⚠️ **[Line 1]** [Provenance] Missing <div class="book-title-block"> at the start of the body.
@@ -777,7 +775,7 @@
 
 ---
 
-### 📄 [BOOK] [English-As-She-Is-Taught.html](file:///E:/development/mark-twain/src/data/books/English-As-She-Is-Taught.html) (31 findings)
+### 📄 [BOOK] [English-As-She-Is-Taught.html](file:///e:/development/mark-twain/src/data/books/English-As-She-Is-Taught.html) (31 findings)
 *Title:* "English As She Is Taught"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "English As She Is Taught, by Mark Twain"
@@ -845,7 +843,7 @@
 
 ---
 
-### 📄 [BOOK] [Essays-on-Paul-Bourget.html](file:///E:/development/mark-twain/src/data/books/Essays-on-Paul-Bourget.html) (22 findings)
+### 📄 [BOOK] [Essays-on-Paul-Bourget.html](file:///e:/development/mark-twain/src/data/books/Essays-on-Paul-Bourget.html) (22 findings)
 *Title:* "Essays on Paul Bourget"
 
 - ⚠️ **[Line 1]** [Provenance] Missing <div class="book-title-block"> at the start of the body.
@@ -895,7 +893,7 @@
 
 ---
 
-### 📄 [BOOK] [Eves-Diary.html](file:///E:/development/mark-twain/src/data/books/Eves-Diary.html) (54 findings)
+### 📄 [BOOK] [Eves-Diary.html](file:///e:/development/mark-twain/src/data/books/Eves-Diary.html) (54 findings)
 *Title:* "Eve's Diary"
 
 - ⚠️ **[Line 1]** [Provenance] Missing <div class="book-title-block"> at the start of the body.
@@ -1009,7 +1007,7 @@
 
 ---
 
-### 📄 [BOOK] [Fennimore-Cooper-Offences.html](file:///E:/development/mark-twain/src/data/books/Fennimore-Cooper-Offences.html) (1 findings)
+### 📄 [BOOK] [Fennimore-Cooper-Offences.html](file:///e:/development/mark-twain/src/data/books/Fennimore-Cooper-Offences.html) (1 findings)
 *Title:* "Fenimore Cooper's Literary Offences"
 
 - ⚠️ **[Line 1]** [Provenance] Missing <div class="book-title-block"> at the start of the body.
@@ -1017,7 +1015,7 @@
 
 ---
 
-### 📄 [BOOK] [First-Romance.html](file:///E:/development/mark-twain/src/data/books/First-Romance.html) (18 findings)
+### 📄 [BOOK] [First-Romance.html](file:///e:/development/mark-twain/src/data/books/First-Romance.html) (18 findings)
 *Title:* "AWFUL, TERRIBLE MEDIEVAL ROMANCE"
 
 - ⚠️ **[Line 6]** [Provenance] Title tag contains Gutenberg/author boilerplate: "AWFUL, TERRIBLE MEDIEVAL ROMANCE by Mark Twain"
@@ -1059,7 +1057,7 @@
 
 ---
 
-### 📄 [BOOK] [Following-The-Equator.html](file:///E:/development/mark-twain/src/data/books/Following-The-Equator.html) (18 findings)
+### 📄 [BOOK] [Following-The-Equator.html](file:///e:/development/mark-twain/src/data/books/Following-The-Equator.html) (18 findings)
 *Title:* "FOLLOWING THE EQUATOR, COMPLETE"
 
 - ℹ️ **[Line 1143]** [Typographic] Unhyphenated spelling: "today"
@@ -1101,7 +1099,7 @@
 
 ---
 
-### 📄 [BOOK] [Goldsmith's-Friend-Abroad-Again.html](file:///E:/development/mark-twain/src/data/books/Goldsmith's-Friend-Abroad-Again.html) (4 findings)
+### 📄 [BOOK] [Goldsmith's-Friend-Abroad-Again.html](file:///e:/development/mark-twain/src/data/books/Goldsmith's-Friend-Abroad-Again.html) (4 findings)
 *Title:* "Goldsmith's Friend Abroad Again"
 
 - ⚠️ **[Line 1]** [Provenance] Missing <div class="book-title-block"> at the start of the body.
@@ -1115,7 +1113,7 @@
 
 ---
 
-### 📄 [BOOK] [Hadleyberg-Stories-et-al.html](file:///E:/development/mark-twain/src/data/books/Hadleyberg-Stories-et-al.html) (275 findings)
+### 📄 [BOOK] [Hadleyberg-Stories-et-al.html](file:///e:/development/mark-twain/src/data/books/Hadleyberg-Stories-et-al.html) (274 findings)
 *Title:* "The Man That Corrupted Hadleyburg, and Other Stories and Sketches"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Man That Corrupted Hadleyburg, and Other Stories and Sketches, by Mark Twain"
@@ -1128,6 +1126,8 @@
   - *Suggestion:* Replace with period spelling: "to-day"
 - ℹ️ **[Line 13398]** [Typographic] Unhyphenated spelling: "farmhouse"
   - *Suggestion:* Replace with period spelling: "farm-house"
+- ℹ️ **[Line 1]** [Typographic] Inconsistent dash styles: found 62 double-hyphens ("--") and 1797 em-dashes ("—") in body.
+  - *Suggestion:* Standardize on either double-hyphens ("--") or em-dashes ("—") throughout.
 - ⚠️ **[Line 224]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "BE"
   - *Suggestion:* Verify against scan and restore to italic/roman mixed case (e.g. "*be*")
 - ⚠️ **[Line 224]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "UBLISHED"
@@ -1420,10 +1420,6 @@
   - *Suggestion:* Verify against scan and restore to italic/roman mixed case (e.g. "*exposed*")
 - ⚠️ **[Line 4122]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "GOD"
   - *Suggestion:* Verify against scan and restore to italic/roman mixed case (e.g. "*god*")
-- ⚠️ **[Line 4129]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "MAN"
-  - *Suggestion:* Verify against scan and restore to italic/roman mixed case (e.g. "*man*")
-- ⚠️ **[Line 4136]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "IDEA"
-  - *Suggestion:* Verify against scan and restore to italic/roman mixed case (e.g. "*idea*")
 - ⚠️ **[Line 4144]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "FIRST"
   - *Suggestion:* Verify against scan and restore to italic/roman mixed case (e.g. "*first*")
 - ⚠️ **[Line 4144]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "DEGREE"
@@ -1671,7 +1667,7 @@
 
 ---
 
-### 📄 [BOOK] [How-to-Make-History-Dates-Stick.html](file:///E:/development/mark-twain/src/data/books/How-to-Make-History-Dates-Stick.html) (5 findings)
+### 📄 [BOOK] [How-to-Make-History-Dates-Stick.html](file:///e:/development/mark-twain/src/data/books/How-to-Make-History-Dates-Stick.html) (5 findings)
 *Title:* "How to Make History Dates Stick"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "How to Make History Dates Stick, by Mark Twain"
@@ -1687,7 +1683,7 @@
 
 ---
 
-### 📄 [BOOK] [How-to-Tell-a-Story.html](file:///E:/development/mark-twain/src/data/books/How-to-Tell-a-Story.html) (9 findings)
+### 📄 [BOOK] [How-to-Tell-a-Story.html](file:///e:/development/mark-twain/src/data/books/How-to-Tell-a-Story.html) (9 findings)
 *Title:* "How to Tell a Story and Other Essays"
 
 - ⚠️ **[Line 1]** [Provenance] Missing <div class="book-title-block"> at the start of the body.
@@ -1711,7 +1707,7 @@
 
 ---
 
-### 📄 [BOOK] [Huckleberry-Finn.html](file:///E:/development/mark-twain/src/data/books/Huckleberry-Finn.html) (33 findings)
+### 📄 [BOOK] [Huckleberry-Finn.html](file:///e:/development/mark-twain/src/data/books/Huckleberry-Finn.html) (33 findings)
 *Title:* "Adventures of Huckleberry Finn"
 
 - ℹ️ **[Line 9584]** [Typographic] Unhyphenated spelling: "tomorrow"
@@ -1783,7 +1779,7 @@
 
 ---
 
-### 📄 [BOOK] [Journalism-in-Tennessee.html](file:///E:/development/mark-twain/src/data/books/Journalism-in-Tennessee.html) (3 findings)
+### 📄 [BOOK] [Journalism-in-Tennessee.html](file:///e:/development/mark-twain/src/data/books/Journalism-in-Tennessee.html) (3 findings)
 *Title:* "JOURNALISM IN TENNESSEE"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "JOURNALISM IN TENNESSEE, by Mark Twain"
@@ -1797,7 +1793,7 @@
 
 ---
 
-### 📄 [BOOK] [Legend-of-Sagenfeld.html](file:///E:/development/mark-twain/src/data/books/Legend-of-Sagenfeld.html) (1 findings)
+### 📄 [BOOK] [Legend-of-Sagenfeld.html](file:///e:/development/mark-twain/src/data/books/Legend-of-Sagenfeld.html) (1 findings)
 *Title:* "Legend of Sagenfeld, in Germany"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Legend of Sagenfeld, in Germany, by Mark Twain"
@@ -1805,7 +1801,7 @@
 
 ---
 
-### 📄 [BOOK] [Life-on-the-Mississippi.html](file:///E:/development/mark-twain/src/data/books/Life-on-the-Mississippi.html) (74 findings)
+### 📄 [BOOK] [Life-on-the-Mississippi.html](file:///e:/development/mark-twain/src/data/books/Life-on-the-Mississippi.html) (74 findings)
 *Title:* "Life on the Mississippi, Complete"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Life on the Mississippi, Complete, by Mark Twain"
@@ -1959,7 +1955,7 @@
 
 ---
 
-### 📄 [BOOK] [Mark-Twain's-Curious-Dream.html](file:///E:/development/mark-twain/src/data/books/Mark-Twain's-Curious-Dream.html) (8 findings)
+### 📄 [BOOK] [Mark-Twain's-Curious-Dream.html](file:///e:/development/mark-twain/src/data/books/Mark-Twain's-Curious-Dream.html) (8 findings)
 *Title:* "Mark Twain's Curious Dream"
 
 - ℹ️ **[Line 1]** [Typographic] Inconsistent dash styles: found 10 double-hyphens ("--") and 62 em-dashes ("—") in body.
@@ -1981,7 +1977,7 @@
 
 ---
 
-### 📄 [BOOK] [Mark-Twain's-Speeches.html](file:///E:/development/mark-twain/src/data/books/Mark-Twain's-Speeches.html) (97 findings)
+### 📄 [BOOK] [Mark-Twain's-Speeches.html](file:///e:/development/mark-twain/src/data/books/Mark-Twain's-Speeches.html) (97 findings)
 *Title:* "Mark Twain's Speeches"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Mark Twain's Speeches, by Mark Twain"
@@ -2181,7 +2177,7 @@
 
 ---
 
-### 📄 [BOOK] [Mark-Twain-at-railroad-feast.html](file:///E:/development/mark-twain/src/data/books/Mark-Twain-at-railroad-feast.html) (2 findings)
+### 📄 [BOOK] [Mark-Twain-at-railroad-feast.html](file:///e:/development/mark-twain/src/data/books/Mark-Twain-at-railroad-feast.html) (2 findings)
 *Title:* "Mark Twain at railroad feast"
 
 - ℹ️ **[Line 100]** [Typographic] Unhyphenated spelling: "tonight"
@@ -2191,7 +2187,7 @@
 
 ---
 
-### 📄 [BOOK] [Mark-Twain-here-with-H-H-Rogers.html](file:///E:/development/mark-twain/src/data/books/Mark-Twain-here-with-H-H-Rogers.html) (2 findings)
+### 📄 [BOOK] [Mark-Twain-here-with-H-H-Rogers.html](file:///e:/development/mark-twain/src/data/books/Mark-Twain-here-with-H-H-Rogers.html) (2 findings)
 *Title:* "Mark Twain here with H. H. Rogers"
 
 - ℹ️ **[Line 100]** [Typographic] Unhyphenated spelling: "tomorrow"
@@ -2201,7 +2197,7 @@
 
 ---
 
-### 📄 [BOOK] [Marooned-Mark-Twain.html](file:///E:/development/mark-twain/src/data/books/Marooned-Mark-Twain.html) (1 findings)
+### 📄 [BOOK] [Marooned-Mark-Twain.html](file:///e:/development/mark-twain/src/data/books/Marooned-Mark-Twain.html) (1 findings)
 *Title:* "Marooned Mark Twain"
 
 - ℹ️ **[Line 100]** [Typographic] Unhyphenated spelling: "tonight"
@@ -2209,7 +2205,7 @@
 
 ---
 
-### 📄 [BOOK] [Mysterious-Stranger-Manuscripts.html](file:///E:/development/mark-twain/src/data/books/Mysterious-Stranger-Manuscripts.html) (6 findings)
+### 📄 [BOOK] [Mysterious-Stranger-Manuscripts.html](file:///e:/development/mark-twain/src/data/books/Mysterious-Stranger-Manuscripts.html) (6 findings)
 *Title:* "The Mysterious Stranger: Manuscripts (Original Texts)"
 
 - ℹ️ **[Line 188]** [Typographic] Unhyphenated spelling: "today"
@@ -2227,7 +2223,7 @@
 
 ---
 
-### 📄 [BOOK] [Mysterious-Stranger.html](file:///E:/development/mark-twain/src/data/books/Mysterious-Stranger.html) (2 findings)
+### 📄 [BOOK] [Mysterious-Stranger.html](file:///e:/development/mark-twain/src/data/books/Mysterious-Stranger.html) (2 findings)
 *Title:* "The Mysterious Stranger and Other Stories"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Mysterious Stranger and Other Stories, by Mark Twain"
@@ -2237,7 +2233,7 @@
 
 ---
 
-### 📄 [BOOK] [On-the-Decay-of-the-Art-of-Lying.html](file:///E:/development/mark-twain/src/data/books/On-the-Decay-of-the-Art-of-Lying.html) (1 findings)
+### 📄 [BOOK] [On-the-Decay-of-the-Art-of-Lying.html](file:///e:/development/mark-twain/src/data/books/On-the-Decay-of-the-Art-of-Lying.html) (1 findings)
 *Title:* "On the Decay of the Art of Lying"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "On the Decay of the Art of Lying, by Mark Twain"
@@ -2245,7 +2241,7 @@
 
 ---
 
-### 📄 [BOOK] [Paris-Notes.html](file:///E:/development/mark-twain/src/data/books/Paris-Notes.html) (1 findings)
+### 📄 [BOOK] [Paris-Notes.html](file:///e:/development/mark-twain/src/data/books/Paris-Notes.html) (1 findings)
 *Title:* "Paris Notes"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Paris Notes, by Mark Twain"
@@ -2253,7 +2249,7 @@
 
 ---
 
-### 📄 [BOOK] [Prince-and-Pauper.html](file:///E:/development/mark-twain/src/data/books/Prince-and-Pauper.html) (6 findings)
+### 📄 [BOOK] [Prince-and-Pauper.html](file:///e:/development/mark-twain/src/data/books/Prince-and-Pauper.html) (6 findings)
 *Title:* "THE PRINCE AND THE PAUPER, COMPLETE"
 
 - ℹ️ **[Line 5862]** [Typographic] Unhyphenated spelling: "farmhouse"
@@ -2271,7 +2267,7 @@
 
 ---
 
-### 📄 [BOOK] [Punch-Brothers-Punch.html](file:///E:/development/mark-twain/src/data/books/Punch-Brothers-Punch.html) (2 findings)
+### 📄 [BOOK] [Punch-Brothers-Punch.html](file:///e:/development/mark-twain/src/data/books/Punch-Brothers-Punch.html) (2 findings)
 *Title:* "Punch, Brothers, Punch"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Punch, Brothers, Punch, by Mark Twain"
@@ -2281,7 +2277,7 @@
 
 ---
 
-### 📄 [BOOK] [Rambling-Idle-Excursion.html](file:///E:/development/mark-twain/src/data/books/Rambling-Idle-Excursion.html) (2 findings)
+### 📄 [BOOK] [Rambling-Idle-Excursion.html](file:///e:/development/mark-twain/src/data/books/Rambling-Idle-Excursion.html) (2 findings)
 *Title:* "Some Rambling Notes of an Idle Excursion"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Some Rambling Notes of an Idle Excursion, by Mark Twain"
@@ -2291,7 +2287,7 @@
 
 ---
 
-### 📄 [BOOK] [Recollections-of-Joan-of-Arc-I.html](file:///E:/development/mark-twain/src/data/books/Recollections-of-Joan-of-Arc-I.html) (86 findings)
+### 📄 [BOOK] [Recollections-of-Joan-of-Arc-I.html](file:///e:/development/mark-twain/src/data/books/Recollections-of-Joan-of-Arc-I.html) (86 findings)
 *Title:* "Personal Recollections of Joan Of Arc"
 
 - ℹ️ **[Line 1]** [Typographic] Inconsistent dash styles: found 91 double-hyphens ("--") and 808 em-dashes ("—") in body.
@@ -2469,7 +2465,7 @@
 
 ---
 
-### 📄 [BOOK] [Recollections-of-Joan-of-Arc-II.html](file:///E:/development/mark-twain/src/data/books/Recollections-of-Joan-of-Arc-II.html) (91 findings)
+### 📄 [BOOK] [Recollections-of-Joan-of-Arc-II.html](file:///e:/development/mark-twain/src/data/books/Recollections-of-Joan-of-Arc-II.html) (91 findings)
 *Title:* "Personal Recollections of Joan Of Arc"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Personal Recollections of Joan Of Arc, by Mark Twain"
@@ -2657,7 +2653,7 @@
 
 ---
 
-### 📄 [BOOK] [Rogers.html](file:///E:/development/mark-twain/src/data/books/Rogers.html) (1 findings)
+### 📄 [BOOK] [Rogers.html](file:///e:/development/mark-twain/src/data/books/Rogers.html) (1 findings)
 *Title:* "Rogers"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Rogers, by Mark Twain"
@@ -2665,7 +2661,7 @@
 
 ---
 
-### 📄 [BOOK] [Roughing-It.html](file:///E:/development/mark-twain/src/data/books/Roughing-It.html) (197 findings)
+### 📄 [BOOK] [Roughing-It.html](file:///e:/development/mark-twain/src/data/books/Roughing-It.html) (197 findings)
 *Title:* "Roughing It"
 
 - ℹ️ **[Line 17116]** [Typographic] Unhyphenated spelling: "farmhouse"
@@ -3065,7 +3061,7 @@
 
 ---
 
-### 📄 [BOOK] [San-Francisco-Call-1910-Mark-Twain-Called-by-Death.html](file:///E:/development/mark-twain/src/data/books/San-Francisco-Call-1910-Mark-Twain-Called-by-Death.html) (4 findings)
+### 📄 [BOOK] [San-Francisco-Call-1910-Mark-Twain-Called-by-Death.html](file:///e:/development/mark-twain/src/data/books/San-Francisco-Call-1910-Mark-Twain-Called-by-Death.html) (4 findings)
 *Title:* "San Francisco Call/1910/Mark Twain Called by Death"
 
 - ℹ️ **[Line 116]** [Typographic] Unhyphenated spelling: "tonight"
@@ -3079,7 +3075,7 @@
 
 ---
 
-### 📄 [BOOK] [Sketches-New-and-Old.html](file:///E:/development/mark-twain/src/data/books/Sketches-New-and-Old.html) (223 findings)
+### 📄 [BOOK] [Sketches-New-and-Old.html](file:///e:/development/mark-twain/src/data/books/Sketches-New-and-Old.html) (223 findings)
 *Title:* "SKETCHES NEW AND OLD, COMPLETE"
 
 - ⚠️ **[Line 483]** [Provenance] Heading contains modern editorial bracketed date: "
@@ -3573,7 +3569,7 @@
 
 ---
 
-### 📄 [BOOK] [Speech-on-the-Babies.html](file:///E:/development/mark-twain/src/data/books/Speech-on-the-Babies.html) (1 findings)
+### 📄 [BOOK] [Speech-on-the-Babies.html](file:///e:/development/mark-twain/src/data/books/Speech-on-the-Babies.html) (1 findings)
 *Title:* "Speech on the Babies"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Speech on the Babies, by Mark Twain"
@@ -3581,7 +3577,7 @@
 
 ---
 
-### 📄 [BOOK] [Speech-on-the-Weather.html](file:///E:/development/mark-twain/src/data/books/Speech-on-the-Weather.html) (1 findings)
+### 📄 [BOOK] [Speech-on-the-Weather.html](file:///e:/development/mark-twain/src/data/books/Speech-on-the-Weather.html) (1 findings)
 *Title:* "Speech on the Weather"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Speech on the Weather, by Mark Twain"
@@ -3589,7 +3585,7 @@
 
 ---
 
-### 📄 [BOOK] [Switzerland-The-Cradle-of-Liberty.html](file:///E:/development/mark-twain/src/data/books/Switzerland-The-Cradle-of-Liberty.html) (2 findings)
+### 📄 [BOOK] [Switzerland-The-Cradle-of-Liberty.html](file:///e:/development/mark-twain/src/data/books/Switzerland-The-Cradle-of-Liberty.html) (2 findings)
 *Title:* "Switzerland, The Cradle of Liberty"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Switzerland, The Cradle of Liberty, by Mark Twain"
@@ -3599,7 +3595,7 @@
 
 ---
 
-### 📄 [BOOK] [Taming-the-Bicycle.html](file:///E:/development/mark-twain/src/data/books/Taming-the-Bicycle.html) (12 findings)
+### 📄 [BOOK] [Taming-the-Bicycle.html](file:///e:/development/mark-twain/src/data/books/Taming-the-Bicycle.html) (12 findings)
 *Title:* "Taming the Bicycle"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Taming the Bicycle, by Mark Twain"
@@ -3629,7 +3625,7 @@
 
 ---
 
-### 📄 [BOOK] [The-30000-Bequest-and-Others.html](file:///E:/development/mark-twain/src/data/books/The-30000-Bequest-and-Others.html) (77 findings)
+### 📄 [BOOK] [The-30000-Bequest-and-Others.html](file:///e:/development/mark-twain/src/data/books/The-30000-Bequest-and-Others.html) (77 findings)
 *Title:* "The $30,000 Bequest, and Other Stories"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The $30,000 Bequest, and Other Stories, by Mark Twain"
@@ -3789,7 +3785,7 @@
 
 ---
 
-### 📄 [BOOK] [The-American-Claimant.html](file:///E:/development/mark-twain/src/data/books/The-American-Claimant.html) (30 findings)
+### 📄 [BOOK] [The-American-Claimant.html](file:///e:/development/mark-twain/src/data/books/The-American-Claimant.html) (30 findings)
 *Title:* "The American Claimant"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The American Claimant, by Mark Twain"
@@ -3855,7 +3851,7 @@
 
 ---
 
-### 📄 [BOOK] [The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne.html](file:///E:/development/mark-twain/src/data/books/The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne.html) (1 findings)
+### 📄 [BOOK] [The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne.html](file:///e:/development/mark-twain/src/data/books/The-American-Cyclopædia-1879-Clemens-Samuel-Langhorne.html) (1 findings)
 *Title:* "The American Cyclopædia (1879)/Clemens, Samuel Langhorne"
 
 - ⚠️ **[Line 103]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "CLEMENS"
@@ -3863,7 +3859,7 @@
 
 ---
 
-### 📄 [BOOK] [The-American-Novel-Chapter-7.html](file:///E:/development/mark-twain/src/data/books/The-American-Novel-Chapter-7.html) (2 findings)
+### 📄 [BOOK] [The-American-Novel-Chapter-7.html](file:///e:/development/mark-twain/src/data/books/The-American-Novel-Chapter-7.html) (2 findings)
 *Title:* "The American Novel/Chapter 7"
 
 - ⚠️ **[Line 1]** [Provenance] Missing <div class="book-title-block"> at the start of the body.
@@ -3873,7 +3869,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Bee.html](file:///E:/development/mark-twain/src/data/books/The-Bee.html) (1 findings)
+### 📄 [BOOK] [The-Bee.html](file:///e:/development/mark-twain/src/data/books/The-Bee.html) (1 findings)
 *Title:* "The Bee"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Bee, by Mark Twain"
@@ -3881,7 +3877,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Canvassers-Tale.html](file:///E:/development/mark-twain/src/data/books/The-Canvassers-Tale.html) (1 findings)
+### 📄 [BOOK] [The-Canvassers-Tale.html](file:///e:/development/mark-twain/src/data/books/The-Canvassers-Tale.html) (1 findings)
 *Title:* "The Canvasser's Tale"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Canvasser's Tale, by Mark Twain"
@@ -3889,7 +3885,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Celebrated-Jumping-Frog.html](file:///E:/development/mark-twain/src/data/books/The-Celebrated-Jumping-Frog.html) (3 findings)
+### 📄 [BOOK] [The-Celebrated-Jumping-Frog.html](file:///e:/development/mark-twain/src/data/books/The-Celebrated-Jumping-Frog.html) (3 findings)
 *Title:* "The Celebrated Jumping Frog of Calaveras County"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Celebrated Jumping Frog of Calaveras County, by Mark Twain"
@@ -3903,7 +3899,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Death-of-Jean.html](file:///E:/development/mark-twain/src/data/books/The-Death-of-Jean.html) (33 findings)
+### 📄 [BOOK] [The-Death-of-Jean.html](file:///e:/development/mark-twain/src/data/books/The-Death-of-Jean.html) (33 findings)
 *Title:* "The Death of Jean"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Death of Jean, by Mark Twain"
@@ -3975,7 +3971,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Double-Barrelled-Detective.html](file:///E:/development/mark-twain/src/data/books/The-Double-Barrelled-Detective.html) (11 findings)
+### 📄 [BOOK] [The-Double-Barrelled-Detective.html](file:///e:/development/mark-twain/src/data/books/The-Double-Barrelled-Detective.html) (11 findings)
 *Title:* "A Double Barrelled Detective Story"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "A Double Barrelled Detective Story, by Mark Twain"
@@ -4003,7 +3999,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne.html](file:///E:/development/mark-twain/src/data/books/The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne.html) (1 findings)
+### 📄 [BOOK] [The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne.html](file:///e:/development/mark-twain/src/data/books/The-Encyclopedia-Americana-1920-Clemens-Samuel-Langhorne.html) (1 findings)
 *Title:* "The Encyclopedia Americana (1920)/Clemens, Samuel Langhorne"
 
 - ⚠️ **[Line 103]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "CLEMENS"
@@ -4011,7 +4007,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Great-Revolution-in-Pitcairn.html](file:///E:/development/mark-twain/src/data/books/The-Great-Revolution-in-Pitcairn.html) (1 findings)
+### 📄 [BOOK] [The-Great-Revolution-in-Pitcairn.html](file:///e:/development/mark-twain/src/data/books/The-Great-Revolution-in-Pitcairn.html) (1 findings)
 *Title:* "The Great Revolution in Pitcairn"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Great Revolution in Pitcairn, by Mark Twain"
@@ -4019,7 +4015,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Innocents-Abroad.html](file:///E:/development/mark-twain/src/data/books/The-Innocents-Abroad.html) (134 findings)
+### 📄 [BOOK] [The-Innocents-Abroad.html](file:///e:/development/mark-twain/src/data/books/The-Innocents-Abroad.html) (134 findings)
 *Title:* "The Innocents Abroad, Complete"
 
 - ℹ️ **[Line 1799]** [Typographic] Unhyphenated spelling: "today"
@@ -4293,7 +4289,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Loves-of-Alonzo-Fitz.html](file:///E:/development/mark-twain/src/data/books/The-Loves-of-Alonzo-Fitz.html) (4 findings)
+### 📄 [BOOK] [The-Loves-of-Alonzo-Fitz.html](file:///e:/development/mark-twain/src/data/books/The-Loves-of-Alonzo-Fitz.html) (4 findings)
 *Title:* "The Loves of Alonzo Fitz Clarence and Rosannah Ethelton"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Loves of Alonzo Fitz Clarence and Rosannah Ethelton, by Mark Twain"
@@ -4307,7 +4303,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Man-who-Corrupted-Hadleyburg.html](file:///E:/development/mark-twain/src/data/books/The-Man-who-Corrupted-Hadleyburg.html) (41 findings)
+### 📄 [BOOK] [The-Man-who-Corrupted-Hadleyburg.html](file:///e:/development/mark-twain/src/data/books/The-Man-who-Corrupted-Hadleyburg.html) (41 findings)
 *Title:* "The Man that Corrupted Hadleyburg"
 
 - ⚠️ **[Line 186]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "TO"
@@ -4395,7 +4391,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Memorable-Assassination.html](file:///E:/development/mark-twain/src/data/books/The-Memorable-Assassination.html) (7 findings)
+### 📄 [BOOK] [The-Memorable-Assassination.html](file:///e:/development/mark-twain/src/data/books/The-Memorable-Assassination.html) (7 findings)
 *Title:* "The Memorable Assassination"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Memorable Assassination, by Mark Twain"
@@ -4415,7 +4411,7 @@
 
 ---
 
-### 📄 [BOOK] [The-New-International-Encyclopædia-Clemens-Samuel-Langhorne.html](file:///E:/development/mark-twain/src/data/books/The-New-International-Encyclopædia-Clemens-Samuel-Langhorne.html) (1 findings)
+### 📄 [BOOK] [The-New-International-Encyclopædia-Clemens-Samuel-Langhorne.html](file:///e:/development/mark-twain/src/data/books/The-New-International-Encyclopædia-Clemens-Samuel-Langhorne.html) (1 findings)
 *Title:* "The New International Encyclopædia/Clemens, Samuel Langhorne"
 
 - ⚠️ **[Line 104]** [Emphasis] Potential italics markup leakage (ALL-CAPS word): "CLEMENS"
@@ -4423,7 +4419,7 @@
 
 ---
 
-### 📄 [BOOK] [The-New-York-Times-Mark-Twain-is-Dead-at-74.html](file:///E:/development/mark-twain/src/data/books/The-New-York-Times-Mark-Twain-is-Dead-at-74.html) (1 findings)
+### 📄 [BOOK] [The-New-York-Times-Mark-Twain-is-Dead-at-74.html](file:///e:/development/mark-twain/src/data/books/The-New-York-Times-Mark-Twain-is-Dead-at-74.html) (1 findings)
 *Title:* "The New York Times/Mark Twain is Dead at 74"
 
 - ℹ️ **[Line 110]** [Typographic] Unhyphenated spelling: "tonight"
@@ -4431,7 +4427,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Stolen-White-Elephant.html](file:///E:/development/mark-twain/src/data/books/The-Stolen-White-Elephant.html) (5 findings)
+### 📄 [BOOK] [The-Stolen-White-Elephant.html](file:///e:/development/mark-twain/src/data/books/The-Stolen-White-Elephant.html) (5 findings)
 *Title:* "The Stolen White Elephant"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Stolen White Elephant, by Mark Twain"
@@ -4447,7 +4443,7 @@
 
 ---
 
-### 📄 [BOOK] [The-Turning-Point-of-My-Life.html](file:///E:/development/mark-twain/src/data/books/The-Turning-Point-of-My-Life.html) (21 findings)
+### 📄 [BOOK] [The-Turning-Point-of-My-Life.html](file:///e:/development/mark-twain/src/data/books/The-Turning-Point-of-My-Life.html) (21 findings)
 *Title:* "The Turning-Point of My Life"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Turning-Point of My Life, by Mark Twain"
@@ -4495,7 +4491,7 @@
 
 ---
 
-### 📄 [BOOK] [Those-Extraordinary-Twins.html](file:///E:/development/mark-twain/src/data/books/Those-Extraordinary-Twins.html) (6 findings)
+### 📄 [BOOK] [Those-Extraordinary-Twins.html](file:///e:/development/mark-twain/src/data/books/Those-Extraordinary-Twins.html) (6 findings)
 *Title:* "Those Extraordinary Twins"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Those Extraordinary Twins, by Mark Twain"
@@ -4513,7 +4509,7 @@
 
 ---
 
-### 📄 [BOOK] [Tom-Sawyer-Abroad.html](file:///E:/development/mark-twain/src/data/books/Tom-Sawyer-Abroad.html) (7 findings)
+### 📄 [BOOK] [Tom-Sawyer-Abroad.html](file:///e:/development/mark-twain/src/data/books/Tom-Sawyer-Abroad.html) (7 findings)
 *Title:* "Tom Sawyer Abroad"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Tom Sawyer Abroad, by Mark Twain"
@@ -4533,7 +4529,7 @@
 
 ---
 
-### 📄 [BOOK] [Tom-Sawyer-Detective.html](file:///E:/development/mark-twain/src/data/books/Tom-Sawyer-Detective.html) (2 findings)
+### 📄 [BOOK] [Tom-Sawyer-Detective.html](file:///e:/development/mark-twain/src/data/books/Tom-Sawyer-Detective.html) (2 findings)
 *Title:* "Tom Sawyer, Detective"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Tom Sawyer, Detective, by Mark Twain"
@@ -4543,7 +4539,7 @@
 
 ---
 
-### 📄 [BOOK] [Tragedy-of-Pudd'nhead-Wilson.html](file:///E:/development/mark-twain/src/data/books/Tragedy-of-Pudd'nhead-Wilson.html) (2 findings)
+### 📄 [BOOK] [Tragedy-of-Pudd'nhead-Wilson.html](file:///e:/development/mark-twain/src/data/books/Tragedy-of-Pudd'nhead-Wilson.html) (2 findings)
 *Title:* "The Tragedy of Pudd'nhead Wilson"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "The Tragedy of Pudd'nhead Wilson, by Mark Twain"
@@ -4553,7 +4549,7 @@
 
 ---
 
-### 📄 [COLLECTION] [Volume-1.html](file:///E:/development/mark-twain/src/data/books/Volume-1.html) (57 findings)
+### 📄 [COLLECTION] [Volume-1.html](file:///e:/development/mark-twain/src/data/books/Volume-1.html) (57 findings)
 *Title:* "Mark Twain's Letters--1853-1866"
 
 - ⚠️ **[Line 6]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Mark Twain's Letters--1853-1866, by Mark Twain"
@@ -4673,7 +4669,7 @@
 
 ---
 
-### 📄 [COLLECTION] [Volume-2.html](file:///E:/development/mark-twain/src/data/books/Volume-2.html) (86 findings)
+### 📄 [COLLECTION] [Volume-2.html](file:///e:/development/mark-twain/src/data/books/Volume-2.html) (86 findings)
 *Title:* "Mark Twain's Letters 1867-1875"
 
 - ⚠️ **[Line 6]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Mark Twain's Letters 1867-1875, by Mark Twain"
@@ -4851,7 +4847,7 @@
 
 ---
 
-### 📄 [COLLECTION] [Volume-3.html](file:///E:/development/mark-twain/src/data/books/Volume-3.html) (55 findings)
+### 📄 [COLLECTION] [Volume-3.html](file:///e:/development/mark-twain/src/data/books/Volume-3.html) (55 findings)
 *Title:* "Mark Twain's Letters 1876-1885"
 
 - ⚠️ **[Line 6]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Mark Twain's Letters 1876-1885, by Mark Twain"
@@ -4968,7 +4964,7 @@
 
 ---
 
-### 📄 [COLLECTION] [Volume-4.html](file:///E:/development/mark-twain/src/data/books/Volume-4.html) (56 findings)
+### 📄 [COLLECTION] [Volume-4.html](file:///e:/development/mark-twain/src/data/books/Volume-4.html) (56 findings)
 *Title:* "Mark Twain's Letters 1886-1900"
 
 - ⚠️ **[Line 6]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Mark Twain's Letters 1886-1900, by Mark Twain"
@@ -5086,7 +5082,7 @@
 
 ---
 
-### 📄 [COLLECTION] [Volume-5.html](file:///E:/development/mark-twain/src/data/books/Volume-5.html) (46 findings)
+### 📄 [COLLECTION] [Volume-5.html](file:///e:/development/mark-twain/src/data/books/Volume-5.html) (46 findings)
 *Title:* "Mark Twain's Letters 1901-1906"
 
 - ⚠️ **[Line 6]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Mark Twain's Letters 1901-1906, by Mark Twain"
@@ -5184,7 +5180,7 @@
 
 ---
 
-### 📄 [COLLECTION] [Volume-6.html](file:///E:/development/mark-twain/src/data/books/Volume-6.html) (5 findings)
+### 📄 [COLLECTION] [Volume-6.html](file:///e:/development/mark-twain/src/data/books/Volume-6.html) (5 findings)
 *Title:* "Mark Twain's Letters 1907-1910"
 
 - ⚠️ **[Line 6]** [Provenance] Title tag contains Gutenberg/author boilerplate: "Mark Twain's Letters 1907-1910, by Mark Twain"
@@ -5200,7 +5196,7 @@
 
 ---
 
-### 📄 [BOOK] [What-Is-Man.html](file:///E:/development/mark-twain/src/data/books/What-Is-Man.html) (13 findings)
+### 📄 [BOOK] [What-Is-Man.html](file:///e:/development/mark-twain/src/data/books/What-Is-Man.html) (13 findings)
 *Title:* "What is Man?"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "What is Man?, by Mark Twain"
@@ -5232,7 +5228,7 @@
 
 ---
 
-### 📄 [BOOK] [William-Dean-Howells.html](file:///E:/development/mark-twain/src/data/books/William-Dean-Howells.html) (5 findings)
+### 📄 [BOOK] [William-Dean-Howells.html](file:///e:/development/mark-twain/src/data/books/William-Dean-Howells.html) (5 findings)
 *Title:* "William Dean Howells"
 
 - ⚠️ **[Line 7]** [Provenance] Title tag contains Gutenberg/author boilerplate: "William Dean Howells, by Mark Twain"

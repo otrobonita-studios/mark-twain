@@ -1,12 +1,11 @@
 const fs = require('fs');
-const path = require('path');
+const content = fs.readFileSync('e:/development/mark-twain/src/data/books/Huckleberry-Finn.html', 'utf8');
 
-const filePath = path.join(__dirname, '../rag/data-collection/TwainCorpus/HTML/Eve\'s-Diary.html');
-const content = fs.readFileSync(filePath, 'utf8');
-const lines = content.split('\n');
-
-lines.forEach((line, idx) => {
-  if (line.includes('<i>') || line.includes('</i>')) {
-    console.log(`Line ${idx + 1}: ${line.trim()}`);
+const matches = [...content.matchAll(/<(i|em)>([\s\S]*?)<\/\1>/gi)];
+console.log(`Found ${matches.length} italicized blocks:`);
+matches.forEach((m, idx) => {
+  const text = m[2].trim();
+  if (text.toLowerCase().includes('ain') || text.toLowerCase().includes('ll')) {
+    console.log(`[${idx}] Line ${content.substring(0, m.index).split('\n').length}: ${m[0]}`);
   }
 });

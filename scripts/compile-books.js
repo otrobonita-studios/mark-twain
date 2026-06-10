@@ -10,6 +10,22 @@ if (!fs.existsSync(outputDir)) {
   fs.mkdirSync(outputDir, { recursive: true });
 }
 
+function decodeHtmlEntities(str) {
+  if (!str) return str;
+  return str
+    .replace(/&ldquo;/gi, '“')
+    .replace(/&rdquo;/gi, '”')
+    .replace(/&lsquo;/gi, '‘')
+    .replace(/&rsquo;/gi, '’')
+    .replace(/&mdash;/gi, '—')
+    .replace(/&ndash;/gi, '–')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&apos;/gi, "'");
+}
+
 function cleanTitleString(rawTitle, filename) {
   let title = rawTitle || filename.replace(/\.(html|txt)$/, '');
   title = title
@@ -21,7 +37,7 @@ function cleanTitleString(rawTitle, filename) {
     .replace(/\s*,\s*by\s*Mark\s*Twain\s*\(Samuel\s*Clemens\)/gi, '')
     .replace(/\s*by\s*Mark\s*Twain\s*\(Samuel\s*Clemens\)/gi, '')
     .trim();
-  return title;
+  return decodeHtmlEntities(title);
 }
 
 function isLetterSegment(segment) {
@@ -139,11 +155,13 @@ function parseHTMLToBlocks(htmlSegment, blockIdPrefix) {
     
     if (tagName === 'p') {
       const isConv = attrs.includes('conversation-line') || attrs.includes('conversation');
+      const isCenter = attrs.includes('text-center') || attrs.includes('center');
       blocks.push({
         kind: 'p',
         id: blockId,
         text: content.trim(),
-        ...(isConv ? { conversation: true } : {})
+        ...(isConv ? { conversation: true } : {}),
+        ...(isCenter ? { center: true } : {})
       });
     } else if (tagName === 'h1' || tagName === 'h2' || tagName === 'h3' || tagName === 'h4') {
       const level = parseInt(tagName.charAt(1));
@@ -396,7 +414,7 @@ function compileBook(filePath) {
         
         doc.sections.push({
           id: sectionId,
-          title: sectionTitle || `Letter ${sectionCount}`,
+          title: decodeHtmlEntities(sectionTitle) || `Letter ${sectionCount}`,
           blocks
         });
       } else {
@@ -446,13 +464,34 @@ function compileBook(filePath) {
           continue;
         }
         
-        sectionCount++;
-        const sectionId = `chapter-${sectionCount}`;
         const content = balanced.content;
         
         // Search for first h2 as title
         const h2Match = content.match(/<h2\b([^>]*)>([\s\S]*?)<\/h2>/i);
-        let sectionTitle = h2Match ? h2Match[2].replace(/<[^>]+>/g, '').trim() : `Chapter ${sectionCount}`;
+        let sectionTitle = h2Match ? h2Match[2].replace(/<[^>]+>/g, '').trim() : '';
+        
+        const preambleMap = {
+          'notice': 'notice',
+          'explanatory': 'explanatory',
+          'illustrations': 'illustrations',
+          'timeandplace': 'time-and-place',
+          'preface': 'preface',
+          'foreword': 'foreword',
+          'introduction': 'introduction'
+        };
+        
+        let sectionId;
+        const cleanTitle = sectionTitle.replace(/[.\s-]/g, '').toLowerCase();
+        if (preambleMap[cleanTitle]) {
+          sectionId = preambleMap[cleanTitle];
+        } else {
+          sectionCount++;
+          sectionId = `chapter-${sectionCount}`;
+          if (!sectionTitle) {
+            sectionTitle = `Chapter ${sectionCount}`;
+          }
+        }
+        
         const slugMatch = h2Match && h2Match[1].match(/data-canonical-slug=(?:"([^"]*)"|'((?:[^']|'(?=\w))*)')/i);
         const canonicalSlug = slugMatch ? (slugMatch[1] || slugMatch[2]) : null;
         
@@ -460,7 +499,7 @@ function compileBook(filePath) {
         
         doc.sections.push({
           id: sectionId,
-          title: sectionTitle,
+          title: decodeHtmlEntities(sectionTitle),
           canonicalSlug: canonicalSlug || null,
           blocks
         });
@@ -495,7 +534,7 @@ function compileBook(filePath) {
         const blocks = parseHTMLToBlocks(content, sectionId);
         doc.sections.push({
           id: sectionId,
-          title: sectionTitle,
+          title: decodeHtmlEntities(sectionTitle),
           canonicalSlug: canonicalSlug || null,
           blocks
         });

@@ -11,8 +11,8 @@ Each completed work gets its own report file named `[slug]-report.md`.
 
 | # | Title | Slug | Status |
 |---|-------|------|--------|
-| 1 | Adventures of Huckleberry Finn | Huckleberry-Finn | ⬜ |
-| 2 | Adventures of Tom Sawyer | Adventures-of-Tom-Sawyer | ⬜ |
+| 1 | Adventures of Huckleberry Finn | Huckleberry-Finn | ✅ |
+| 2 | Adventures of Tom Sawyer | Adventures-of-Tom-Sawyer | ✅ |
 | 3 | A Connecticut Yankee in King Arthur's Court | Connecticut-Yankee | ⬜ |
 | 4 | The Innocents Abroad | The-Innocents-Abroad | ⬜ |
 | 5 | Life on the Mississippi | Life-on-the-Mississippi | ⬜ |
@@ -41,8 +41,8 @@ Each completed work gets its own report file named `[slug]-report.md`.
 | 21 | 1601 | 1601 | ✅ |
 | 22 | A Burlesque Autobiography | A-Burlesque-Autobiography | ✅ |
 | 23 | First Romance | First-Romance | ✅ |
-| 24 | A Dog's Tale | A-Dog's-Tale | ⬜ |
-| 25 | A Ghost Story | A-Ghost-Story | ⬜ |
+| 24 | A Dog's Tale | A-Dog's-Tale | ✅ |
+| 25 | A Ghost Story | A-Ghost-Story | ✅ |
 | 26 | A Horse's Tale | A-Horse's-Tale | ⬜ |
 | 27 | Extract from Captain Stormfield's Visit to Heaven | Captain-Stormfield's-Vist-to-Heaven | ⬜ |
 | 28 | The Facts Concerning the Recent Carnival of Crime in CT | Carnival-of-Crime-in-CT | ⬜ |
@@ -51,13 +51,13 @@ Each completed work gets its own report file named `[slug]-report.md`.
 | 31 | Mark Twain's Curious Dream | Mark-Twain's-Curious-Dream | ⬜ |
 | 32 | Some Rambling Notes of an Idle Excursion | Rambling-Idle-Excursion | ⬜ |
 | 33 | Sketches New and Old | Sketches-New-and-Old | ⬜ |
-| 34 | The Celebrated Jumping Frog of Calaveras County | The-Celebrated-Jumping-Frog | ⬜ |
+| 34 | The Celebrated Jumping Frog of Calaveras County | The-Celebrated-Jumping-Frog | ✅ |
 | 35 | A Double Barrelled Detective Story | The-Double-Barrelled-Detective | ⬜ |
 | 36 | The Loves of Alonzo Fitz | The-Loves-of-Alonzo-Fitz | ⬜ |
 | 37 | The Man That Corrupted Hadleyburg | The-Man-who-Corrupted-Hadleyburg | ⬜ |
 | 38 | The Stolen White Elephant | The-Stolen-White-Elephant | ⬜ |
 | 39 | Those Extraordinary Twins | Those-Extraordinary-Twins | ⬜ |
-| 40 | Journalism in Tennessee | Journalism-in-Tennessee | ⬜ |
+| 40 | Journalism in Tennessee | Journalism-in-Tennessee | ✅ |
 | 41 | Goldsmith's Friend Abroad Again | Goldsmith's-Friend-Abroad-Again | ⬜ |
 
 ---
