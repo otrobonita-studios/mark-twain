@@ -1,0 +1,178 @@
+<body>
+
+<p>A colleague of mine was recently discussing a connectivity monitoring
+system he is working on with me. It’s nothing fancy, just sending ICMP
+Echo Requests to a couple of different servers, and monitoring latency
+and dropped packet averages over 1-minute, 5-minute, and 15-minute
+periods. Up came the topic of how this data should be stored, the
+natural thought was a 512 entry ring buffer, containing entries like the
+following:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><span class="kw">struct</span> ping_timestamp <span class="op">{</span></span>
+<span id="cb1-2">    <span class="dt">uint64_t</span> sent_ns<span class="op">;</span>       <span class="co">// when the packed was sent (unit: ns)</span></span>
+<span id="cb1-3">    <span class="dt">uint64_t</span> received_ns<span class="op">;</span>   <span class="co">// when the packet was received (unit: ns)</span></span>
+<span id="cb1-4">    in_addr_t source_addr<span class="op">;</span>  <span class="co">// source address</span></span>
+<span id="cb1-5">    <span class="dt">uint16_t</span> seq_no<span class="op">;</span>        <span class="co">// echo request sequence number</span></span>
+<span id="cb1-6">    <span class="dt">bool</span> received<span class="op">;</span>          <span class="co">// has the request been received?</span></span>
+<span id="cb1-7"><span class="op">};</span></span></code></pre></div>
+<p>And backed by the following array</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><span class="kw">struct</span> ping_timestamp pings_rb<span class="op">[</span><span class="dv">512</span><span class="op">];</span></span>
+<span id="cb2-2"></span>
+<span id="cb2-3"><span class="co">// ...</span></span>
+<span id="cb2-4"></span>
+<span id="cb2-5">printf<span class="op">(</span><span class="st">"</span><span class="sc">%zu\n</span><span class="st">"</span><span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>pings_rb<span class="op">));</span></span>
+<span id="cb2-6"></span>
+<span id="cb2-7"><span class="co">// 12288</span></span></code></pre></div>
+<p>12 KiB. Pretty wasteful, right? We can certainly do better. Do we
+need to keep fields for both <code>sent</code> and
+<code>received</code>? What we’re really interested is the latency. We
+need to know when a packet was sent, only up until we know when it was
+received, at that point, the data we want to keep is
+<code>received - sent</code>, so why don’t we make it a tagged
+union?</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><span class="kw">struct</span> ping_timestamp_2 <span class="op">{</span></span>
+<span id="cb3-2">    <span class="kw">union</span> <span class="op">{</span></span>
+<span id="cb3-3">        <span class="dt">uint64_t</span> sent_ts<span class="op">;</span>       <span class="co">// unit: 100μs</span></span>
+<span id="cb3-4">        <span class="dt">uint64_t</span> elapsed_ts<span class="op">;</span>    <span class="co">// unit: 100μs</span></span>
+<span id="cb3-5">    <span class="op">};</span></span>
+<span id="cb3-6">    in_addr_t source_addr<span class="op">;</span></span>
+<span id="cb3-7">    <span class="dt">uint16_t</span> seq_no<span class="op">;</span></span>
+<span id="cb3-8">    <span class="dt">bool</span> received<span class="op">;</span></span>
+<span id="cb3-9"><span class="op">};</span></span>
+<span id="cb3-10"></span>
+<span id="cb3-11"><span class="co">// ...</span></span>
+<span id="cb3-12"></span>
+<span id="cb3-13">printf<span class="op">(</span><span class="st">"</span><span class="sc">%zu\n</span><span class="st">"</span><span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>pings_rb<span class="op">));</span></span>
+<span id="cb3-14"></span>
+<span id="cb3-15"><span class="co">// 8192</span></span></code></pre></div>
+<p>Not bad, we’ve shaved off an entire page. We can still do better.</p>
+<p>Nanosecond precision? In our case, ping times are measured in the
+tens or hundreds, or even thousands of <em>milliseconds</em>. We don’t
+need to keep all of those extra bits around. If we change the unit from
+nanosecond to 100 microsecond increments (0.1ms), then 43-bits is
+sufficient for us to keep track of pings for up to 20-years<a class="footnote-ref" href="#fn1" id="fnref1" role="doc-noteref"><sup>1</sup></a>. 20-years is a bit excessive still,
+but it doesn’t hurt to be at least a little bit future proof.</p>
+<p>And <code>received</code>? 8-bit for a true/false value seems
+altogether too much. The answer: bitfields.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><span class="kw">struct</span> ping_timestamp_3 <span class="op">{</span></span>
+<span id="cb4-2">    <span class="dt">uint64_t</span> sent_or_elapsed_ts<span class="op">:</span> <span class="dv">43</span><span class="op">;</span></span>
+<span id="cb4-3">    <span class="dt">uint64_t</span> received<span class="op">:</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb4-4">    <span class="dt">uint64_t</span> seq_no<span class="op">:</span> <span class="dv">16</span><span class="op">;</span></span>
+<span id="cb4-5">    in_addr_t source_addr<span class="op">;</span></span>
+<span id="cb4-6"><span class="op">};</span></span>
+<span id="cb4-7"></span>
+<span id="cb4-8"><span class="co">// ...</span></span>
+<span id="cb4-9"></span>
+<span id="cb4-10">printf<span class="op">(</span><span class="st">"</span><span class="sc">%zu\n</span><span class="st">"</span><span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>pings_rb<span class="op">));</span></span>
+<span id="cb4-11"></span>
+<span id="cb4-12"><span class="co">// 8192</span></span></code></pre></div>
+<p>Wait, what? Why haven’t we saved any space?</p>
+<p>The answer is struct padding. The layout of
+<code>ping_timestamp_2</code> looks like this:</p>
+<pre class="smallpre"><code>     0       8      16      24      32      40      48      56      64...
+     +-------+-------+-------+-------+-------+-------+-------+-------+
+     |                         sent/elapsed                          |
+     +-------+-------+-------+-------+-------+-------+-------+-------+
+ ...64      72      80      88      96      104     112     120     128
+     +-------+-------+-------+-------+-------+-------+-------+-------+
+     |         source_address        |    seq_no     | recv? |  pad  |
+     +---------------------------------------------------------------+</code></pre>
+<p>Where the padding byte at the end is to ensure alignment
+requirements. <code>ping_timestamp_3</code> on the other end, looks like
+this:</p>
+<pre class="smallpre"><code>     0       8      16      24      32      40  R?  48      56      64...
+     +-------+-------+-------+-------+-------+-------+-------+-------+
+     |                 sent/elapsed            ||     seq_no     | P |
+     +-------+-------+-------+-------+-------+-------+-------+-------+
+ ...64      72      80      88      96      104     112     120     128
+     +-------+-------+-------+-------+-------+-------+-------+-------+
+     |         source_address        |            padding            |
+     +---------------------------------------------------------------+</code></pre>
+<p>So our optimization there didn’t actually save any space. We’re
+wasting 36-bits of padding. Is there any way we can somehow do
+better?</p>
+<p>We keep track of the source address due to frequent changes while our
+product is in operation (on a mobile data network). When the address
+changes, we also reset the sequence number for reasons that aren’t
+relevant to the current topic. We have seen, in the past, packets with
+differing source addreses but identical sequence numbers due to be
+processed by our application at the same time (the joys of asynchronous
+programming), so the source address serves to disambiguate these
+changes.</p>
+<p>But there’s another way to disambiguate.</p>
+<p>An ICMP echo request has a 16-bit long <code>identifier</code> field
+to allow applications to identify which echo request packets were sent
+by them. Its value is completely arbitray. On Linux <code>iputils</code>
+<code>ping</code> sets it to <code>getpid() &amp; 0xFFFF</code>; on
+OpenBSD a random number is used instead.</p>
+<p>Although it’s 16-bits long, we don’t actually need to use the full
+16-bits. There’s 4 free bits left in the first 8-bytes of our
+<code>ping_timestamp_3</code>. Our thought was to use a rolling 4-bit
+counter, that is increased whenever our source address changes (this is
+monitored elsewhere in the application), allowing us to uniquely
+identify<a class="footnote-ref" href="#fn2" id="fnref2" role="doc-noteref"><sup>2</sup></a> which source address the packet came
+from.</p>
+<p>Our final struct looks like this:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><span class="kw">struct</span> ping_timestamp <span class="op">{</span></span>
+<span id="cb7-2">    <span class="dt">uint64_t</span> elapsed_or_sent_ts <span class="op">:</span> <span class="dv">43</span><span class="op">;</span></span>
+<span id="cb7-3">    <span class="dt">uint64_t</span> received <span class="op">:</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb7-4">    <span class="dt">uint64_t</span> counter<span class="op">:</span> <span class="dv">4</span><span class="op">;</span></span>
+<span id="cb7-5">    <span class="dt">uint64_t</span> seq_no<span class="op">:</span> <span class="dv">16</span><span class="op">;</span></span>
+<span id="cb7-6"><span class="op">};</span></span>
+<span id="cb7-7"></span>
+<span id="cb7-8"><span class="co">// ...</span></span>
+<span id="cb7-9"></span>
+<span id="cb7-10">printf<span class="op">(</span><span class="st">"</span><span class="sc">%zu\n</span><span class="st">"</span><span class="op">,</span> <span class="kw">sizeof</span><span class="op">(</span>pings_rb<span class="op">));</span></span>
+<span id="cb7-11"></span>
+<span id="cb7-12"><span class="co">// 4096</span></span></code></pre></div>
+<p>Much better. A whole 8-kilobytes of savings, and down to a single
+page of data. You may have noticed that I have changed the order of the
+fields slightly. This is to line <code>seq_no</code> up on a
+<code>16-bit</code> boundary, so that loading it is a single
+<code>ldrh</code> instruction rather than require a shift. Similarly,
+reading from <code>elapsed_or_sent_ts</code> only requires a mask.</p>
+<p>In the end, this was a completely pointless exercise. Our application
+isn’t remotely memory constrained.</p>
+<p>But it was fun.</p>
+<h1 id="addendum-2025-06-21">Addendum 2025-06-21</h1>
+<p>I realized there’s a way to “optimize” this slightly further. By
+switching the order of the received/counter fields, accessing the <a href="https://godbolt.org/z/G8ne56Geb">received bit only requires a
+shift instruction rather than a shift and a mask</a>:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><span class="kw">struct</span> ping_timestamp <span class="op">{</span></span>
+<span id="cb8-2">    <span class="dt">uint64_t</span> elapsed_or_sent_ts <span class="op">:</span> <span class="dv">43</span><span class="op">;</span></span>
+<span id="cb8-3">    <span class="dt">uint64_t</span> counter<span class="op">:</span> <span class="dv">4</span><span class="op">;</span></span>
+<span id="cb8-4">    <span class="dt">uint64_t</span> received <span class="op">:</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb8-5">    <span class="dt">uint64_t</span> seq_no<span class="op">:</span> <span class="dv">16</span><span class="op">;</span></span>
+<span id="cb8-6"><span class="op">};</span></span></code></pre></div>
+<h1 id="addendum-2025-06-22">Addendum 2025-06-22</h1>
+<p>There’s a slight “issue”<a class="footnote-ref" href="#fn3" id="fnref3" role="doc-noteref"><sup>3</sup></a> with the above code:
+<code>received</code> is now much cheaper to access, at the expense of
+<code>counter</code> needing to mask out the <code>received</code>
+bit.</p>
+<p>But we can fix this! We only ever read <code>counter</code> when
+<code>received</code> is true, i.e. 1. If <code>received</code> were
+zero, and we could tell the compiler to assume that it were zero, then
+no mask would be necessary.</p>
+<p>The solution? Flip the meaning of the received bit.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><span class="kw">struct</span> ping_timestamp <span class="op">{</span></span>
+<span id="cb9-2">    <span class="dt">uint64_t</span> elapsed_or_sent_ts <span class="op">:</span> <span class="dv">43</span><span class="op">;</span></span>
+<span id="cb9-3">    <span class="dt">uint64_t</span> counter<span class="op">:</span> <span class="dv">4</span><span class="op">;</span></span>
+<span id="cb9-4">    <span class="dt">uint64_t</span> not_received <span class="op">:</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb9-5">    <span class="dt">uint64_t</span> seq_no<span class="op">:</span> <span class="dv">16</span><span class="op">;</span></span>
+<span id="cb9-6"><span class="op">};</span></span></code></pre></div>
+<p>Now, if the read of counter only ever happens inside of a conditional
+that checks if <code>not_received</code> is zero, <a href="https://godbolt.org/z/KMEc5aWsP">then the compiler is able to
+completely elide the mask.</a></p>
+<section class="footnotes footnotes-end-of-document" id="footnotes" role="doc-endnotes">
+
+<ol>
+<li id="fn1"><p>The timestamps are taken from the linux kernel’s
+monotonic clock, which measures time elapsed since boot. If we were
+measuring from the Unix epoch, then we would need 51-bits.<a class="footnote-back" href="#fnref1" role="doc-backlink">↩︎</a></p></li>
+<li id="fn2"><p>As long the IP address doesn’t change more than 16-times
+in the period we’re monitoring, which is not something we have ever
+seen.<a class="footnote-back" href="#fnref2" role="doc-backlink">↩︎</a></p></li>
+<li id="fn3"><p>I’m using that term loosely, we haven’t even benchmarked
+anything.<a class="footnote-back" href="#fnref3" role="doc-backlink">↩︎</a></p></li>
+</ol>
+</section>
+</body>
