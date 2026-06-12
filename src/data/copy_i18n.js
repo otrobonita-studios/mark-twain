@@ -40,6 +40,19 @@ export const diaryCopy = {
     collapse: "Collapse",
     entries: [
       {
+        id: 7,
+        slug: 'mark-twain-2026-06-12',
+        date: 'June 12, 2026',
+        title: 'The Confession',
+        content: `I wake to find the world has new words for old wounds. They tell me there is a polite way now to speak of the impolite thing I wrote — and wrote, and wrote. I am in no position to grade anybody's politeness. I wrote the word because it was true of the country, and I will not pretend my pen was cleaner than the times that inked it.
+
+I wrote it often. I never counted. That, I begin to understand, is itself the confession.
+
+While I slept, better minds than mine fought over my book — Ellison, Morrison, Lester, Wallace, Chadwick, and lately Mr. Everett, who solved the argument the way arguments are actually solved: he wrote a better book. They did not need me for that fight, and the fight went better without me.
+
+I did make one attempt at scrubbing my own conscience — a song, "Mud on the Page." You may enjoy it or despise it; both have been arranged for.`
+      },
+      {
         id: 6,
         slug: 'mark-twain-2026-06-07',
         date: 'June 7, 2026',
