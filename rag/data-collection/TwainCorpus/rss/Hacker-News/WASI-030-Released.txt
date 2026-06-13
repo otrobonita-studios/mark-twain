@@ -1,0 +1,658 @@
+WebAssembly
+
+/
+
+WASI
+
+Public
+
+Notifications
+
+You must be signed in to change notification settings
+
+Fork
+    
+324
+
+          Star
+
+5.7k
+
+v0.3.0
+
+Latest
+
+Latest
+
+Compare
+
+        Choose a tag to compare
+
+Sorry, something went wrong.
+
+        Filter
+
+Loading
+
+Sorry, something went wrong.
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+No results found
+
+View all tags
+
+ricochet
+
+    released this
+
+        11 Jun 17:06
+
+          ·
+
+            1 commit
+
+          to main
+          since this release
+
+                v0.3.0
+
+3ee2a59
+
+                This commit was created on GitHub.com and signed with GitHub’s 
+verified signature
+.
+
+GPG key ID: 
+B5690EEEBB952194
+
+Verified
+
+Learn about vigilant mode
+.
+
+WASI 0.3.0
+
+WASI 0.3 is official, and async is now native to WebAssembly Components.
+ The WASI Subgroup voted to ratify WASI 0.3.0, rebasing WASI onto the WebAssembly Component Model's async primitives.
+
+Most of the changes in the 0.3 interfaces are entirely mechanical. WASI 0.2 had to perform some acrobatics to make async work, but now that async is native to the component model we can write the same things we did before but much more ergonomically. Here is a overview of the patterns we were encoding in WASI 0.2 with the 
+wasi:io
+ package, and what those patterns now look like in 0.3 with Component Model async:
+
+WASI 0.2 (
+wasi:io
+)
+
+WASI 0.3 (Component Model)
+
+resource pollable
+
+future<T>
+
+resource input-stream
+
+stream<u8>
+
+resource output-stream
+
+stream<u8>
+ (written-to direction)
+
+poll(list<pollable>)
+
+await
+ on a future (runtime-handled)
+
+subscribe()
+ on resource
+
+return a 
+future<...>
+ from the call
+
+start-foo
+ / 
+finish-foo
+
+foo: async func(...)
+
+wasi:cli
+
+Structurally the files are the same (
+stdin.wit
+, 
+stdout.wit
+, 
+stderr.wit
+,
+
+run.wit
+, 
+exit.wit
+, 
+terminal.wit
+, 
+environment.wit
+). The interesting
+
+change is 
+stdio
+.
+
+// WASI 0.2
+
+interface
+ 
+stdin
+ {
+  
+use
+ 
+wasi
+:
+io
+/
+streams
+.
+{
+input-stream
+};
+  
+get-stdin
+:
+ 
+func
+() 
+->
+ 
+input-stream
+;
+}
+
+interface
+ 
+stdout
+ {
+  
+use
+ 
+wasi
+:
+io
+/
+streams
+.
+{
+output-stream
+};
+  
+get-stdout
+:
+ 
+func
+() 
+->
+ 
+output-stream
+;
+}
+
+// WASI 0.3
+
+interface
+ 
+stdin
+ {
+  
+use
+ 
+types
+.
+{
+error-code
+};
+  
+read-via-stream
+:
+ 
+func
+() 
+->
+ 
+tuple
+<
+stream
+<
+u8
+>, 
+future
+<
+result
+<
+_
+, 
+error-code
+>>>;
+}
+
+interface
+ 
+stdout
+ {
+  
+use
+ 
+types
+.
+{
+error-code
+};
+  
+write-via-stream
+:
+ 
+func
+(
+data
+:
+ 
+stream
+<
+u8
+>) 
+->
+ 
+future
+<
+result
+<
+_
+, 
+error-code
+>>;
+}
+
+Note the direction flip on stdout. WASI 0.2 handed you an 
+output-stream
+ that you wrote into imperatively. WASI 0.3 has you pass in a 
+stream<u8>
+ and get back a future that resolves when the write completes. A small new 
+wasi:cli/types
+ interface carries a shared 
+error-code
+ variant (
+io
+, 
+illegal-byte-sequence
+, 
+pipe
+).
+
+wasi:sockets
+
+The 
+network
+ resource is gone.
+ WASI 0.2 modeled network access as a capability resource threaded through every bind/connect/lookup call. WASI 0.3 removes it entirely; network access is granted via world imports.
+
+Every start/finish pair became one 
+async func
+.
+ The in-progress intermediate states (
+bind-in-progress
+, 
+connect-in-progress
+, 
+listen-in-progress
+) and the 
+subscribe() -> pollable
+ that drove them are gone:
+
+// WASI 0.2
+
+start-bind:     func(network: borrow<network>, local: ip-socket-address)
+                 -> result<_, error-code>;
+finish-bind:    func() -> result<_, error-code>;
+start-connect:  func(network: borrow<network>, remote: ip-socket-address)
+                 -> result<_, error-code>;
+finish-connect: func()
+                 -> result<tuple<input-stream, output-stream>, error-code>;
+
+// WASI 0.3
+
+bind:    async func(local-address: ip-socket-address)  -> result<_, error-code>;
+connect: async func(remote-address: ip-socket-address) -> result<_, error-code>;
+listen:  async func()                                  -> result<_, error-code>;
+accept:  async func()
+  -> result<tuple<tcp-socket, ip-socket-address>, error-code>;
+
+Note that WASI 0.2's 
+finish-connect
+ returned the TCP stream pair inline. In WASI 0.3 
+connect
+ returns nothing special; byte I/O lives on the socket resource's own stream methods.
+
+UDP got the same treatment. The incoming/outgoing datagram stream resources are gone, replaced by plain 
+async send
+ and 
+async receive
+. Error codes across TCP, UDP, and name-lookup were unified into a single 
+error-code
+ variant, with a new 
+connection-broken
+ case and an open-ended 
+other(option<string>)
+ tail.
+
+wasi:http
+ — unified 
+request
+/
+response
+ and 
+handler
+
+This is the most visible reorganization of the release.
+
+Resources collapsed from 8 to 2.
+ WASI 0.2 had a full matrix of resources for the incoming/outgoing × request/response/body space, plus two async-specific ones:
+
+incoming-request
+, 
+outgoing-request
+
+incoming-response
+, 
+outgoing-response
+
+incoming-body
+, 
+outgoing-body
+
+future-trailers
+, 
+future-incoming-response
+
+WASI 0.3 has just 
+request
+ and 
+response
+, with bodies represented as
+
+stream<u8>
+ directly and trailers as a 
+future<result<option<trailers>, error-code>>
+. 
+future-incoming-response
+ vanishes because a plain 
+future<result<response, error-code>>
+ does that job now.
+
+The handler is an async function.
+ WASI 0.2's 
+incoming-handler
+ used a 
+response-outparam
+ parameter to work around the lack of native async returns:
+
+// WASI 0.2
+
+interface
+ 
+incoming-handler
+ {
+  
+handle
+:
+ 
+func
+(
+request
+:
+ 
+incoming-request
+, 
+response-out
+:
+ 
+response-outparam
+);
+}
+
+// WASI 0.3
+
+interface
+ 
+handler
+ {
+  
+handle
+:
+ async 
+func
+(
+request
+:
+ 
+request
+) 
+->
+ 
+result
+<
+response
+, 
+error-code
+>;
+}
+
+The outgoing side mirrors it:
+
+interface
+ 
+client
+ {
+  
+send
+:
+ async 
+func
+(
+request
+:
+ 
+request
+) 
+->
+ 
+result
+<
+response
+, 
+error-code
+>;
+}
+
+New worlds for middleware.
+ The old 
+proxy
+ world is replaced by 
+service
+, plus a 
+middleware
+ world that both imports and exports 
+handler
+. That gives first-class support to components sitting in a request path:
+
+world
+ 
+service
+ {
+  
+include
+ 
+wasi
+:
+clocks
+/
+imports
+@
+0.3.0
+;
+  
+include
+ 
+wasi
+:
+random
+/
+imports
+@
+0.3.0
+;
+  
+import
+ 
+wasi
+:
+cli
+/
+stdout
+;
+  
+import
+ 
+wasi
+:
+cli
+/
+stderr
+;
+  
+import
+ 
+wasi
+:
+cli
+/
+stdin
+;
+  
+import
+ 
+client
+;
+  
+export
+ 
+handler
+;
+}
+
+world
+ 
+middleware
+ {
+  
+include
+ 
+service
+;
+  
+import
+ 
+handler
+;  // 
+upstream
+
+}
+
+wasi:filesystem
+
+Streaming reads/writes
+ switched to the stream-plus-future shape:
+
+// WASI 0.2
+
+read-via-stream:  func(offset: filesize) -> result<input-stream, error-code>;
+write-via-stream: func(offset: filesize) -> result<output-stream, error-code>;
+
+// WASI 0.3
+
+read-via-stream:  func(offset: filesize)
+  -> tuple<stream<u8>, future<result<_, error-code>>>;
+write-via-stream: func(data: stream<u8>, offset: filesize)
+  -> future<result<_, error-code>>;
+
+Directory iteration
+ switched from a resource-based iterator to a stream:
+
+// WASI 0.2
+
+read-directory: func() -> result<directory-entry-stream, error-code>;
+
+// plus: resource directory-entry-stream { read-directory-entry: func() -> ... }
+
+// WASI 0.3
+
+read-directory: func()
+  -> tuple<stream<directory-entry>, future<result<_, error-code>>>;
+
+wasi:clocks
+
+The 
+wasi:clocks
+ changes are, deliberately, mostly renames. Flagging them because the churn shows up in downstream suites.
+
+WASI#79 (Avoid nonstandard use of names for types)
+ moved the package onto conventional names: 
+wall-clock
+ became 
+system-clock
+, and 
+datetime
+ became 
+instant
+. The motivation was consistency with how the rest of the ecosystem talks about clocks. "Wall clock" and "datetime" were WASI-isms that didn't match POSIX, Rust's 
+std::time
+, or most other systems. 
+wasi:filesystem
+ timestamps followed, for the same reason.
+
+A small 
+types.wit
+ was added to share the 
+duration = u64
+ alias. 
+monotonic-clock
+ also dropped its pollable-returning 
+subscribe-instant
+ and 
+subscribe-duration
+ calls; callers now 
+await
+ a host-provided timer future, the same pattern used everywhere else.
+
+Downstream impact is mostly mechanical find-and-replace. See
+
+WebAssembly/wasi-testsuite@f13976f
+ for a representative update across the test suite.
+
+Assets
+
+3
+
+Loading
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+29 people reacted

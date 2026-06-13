@@ -1,0 +1,356 @@
+Recently, a new type of question has entered the database arena: what did this data look like 
+last Tuesday
+? Maybe it's the price of a product before the holiday sale kicked in, or which department an employee belonged to before that reorg nobody asked for. Short of adding an entire audit trigger system, how can we know what data looked like before and after a change at that exact date?
+The SQL:2011 standard formalized a proper solution over a decade ago with temporal tables. Other database engines adopted pieces of it relatively quickly. Characteristically, Postgres took its time. But Postgres 19 is finally bringing native temporal table support to the party — 
+and it's been well worth the wait.
+Let’s see what we’re working with.
+The Old-Fashioned Way
+Before we get to the shiny new stuff, let’s check out the crusty old approach for some perspective. Suppose we want to track product pricing over time. A reasonable first attempt might look like this:
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+CREATE TABLE products (
+    product_id   INT NOT NULL,
+    product_name TEXT NOT NULL,
+    price        NUMERIC(10,2) NOT NULL,
+    valid_from   DATE NOT NULL,
+    valid_to     DATE NOT NULL,
+    CONSTRAINT no_time_travel CHECK (valid_from < valid_to)
+);
+Simple enough. We've got a product, a price, and a valid date range for the price. Unfortunately, nothing stops us from inserting two rows for the same product with overlapping date ranges. Product number 42 could be $9.99 
+and
+ $14.99 on the same Tuesday. Your accountant might have some choice words upon discovering that.
+The traditional Postgres answer here is the 
+btree_gist
+ extension and an exclusion constraint:
+ALTER TABLE products
+  ADD CONSTRAINT no_overlapping_prices
+  EXCLUDE USING gist (
+    product_id WITH =,
+    daterange(valid_from, valid_to) WITH &&
+  );
+This works. If we try to insert a conflicting row, Postgres catches it:
+INSERT INTO products VALUES (1, 'Widget', 9.99, '2025-01-01', '2025-07-01');
+INSERT INTO products VALUES (1, 'Widget', 12.99, '2025-06-01', '2026-01-01');
+
+ERROR:  conflicting key value violates exclusion constraint
+    "no_overlapping_prices"
+A problem solved by using 
+btree_gist
+! So what’s the problem? Well, a few things:
+Everyone knows BTREE and indexing in general, but 
+GiST
+ is specific to Postgres and thus requires experience to understand. This goes double for being an 
+optional
+ extension.
+The exclusion constraint syntax is quite non-intuitive. It’s in the documentation, but there’s no reason anyone would think of this as the standard approach otherwise.
+There’s no temporal awareness baked into the table itself.
+Basically, Postgres doesn't 
+understand
+ that this is temporal data. It's just columns and an esoteric constraint using a fancy index type. Every update that changes the time range requires manual splitting and stitching of rows, which means applications must carry the full burden of temporal correctness.
+It’s the barest of minimums, and frankly we can do better.
+A Brief History of Time
+The desire for proper temporal support in Postgres isn’t new. The SQL:2011 standard introduced 
+APPLICATION TIME
+ periods, 
+WITHOUT OVERLAPS
+ constraints, and 
+FOR PORTION OF
+ syntax for temporal DML. 2011 was a 
+long
+ time ago.
+Henrietta Dombrovskaya (Hetti to her friends) was one of the earliest champions of temporal data in the Postgres ecosystem. Along with Chad Slaughter, she developed the 
+pg_bitemporal
+ extension. 
+It's a framework for managing bitemporal tables entirely within Postgres using PL/pgSQL. She presented the concepts at multiple conferences since 2015, demonstrating how to track both 
+valid time
+ (when was this fact true in the real world?) and 
+transaction time
+ (when did the database record this fact?) simultaneously.
+The distinction matters. Valid time says "this price is effective from January through June." Transaction time is the database perspective, saying "this row was inserted at 3:47 PM on March 12th and superseded at 9:01 AM on April 3rd." Combining both produces a bitemporal table that can answer questions like "what did we 
+think
+ the price was last Tuesday, based on what we knew at the time?"
+The 
+pg_bitemporal
+ approach leaned heavily on the same 
+EXCLUDE USING gist
+ mechanism we discussed earlier, but doubled up: one exclusion for the 
+effective
+ range (valid time) and another for the 
+asserted
+ range (transaction time)
+. A table definition looked something like this
+:
+CREATE TABLE bi_temporal.customers (
+    cust_nbr        INTEGER,
+    cust_nm         TEXT,
+    cust_type       TEXT,
+    effective_range TSTZRANGE,
+    asserted_range  TSTZRANGE,
+    row_created_at  TIMESTAMPTZ,
+    EXCLUDE USING gist (
+        cust_nbr WITH =,
+        effective_range WITH &&,
+        asserted_range WITH &&
+    )
+);
+That's two temporal dimensions enforced by a single exclusion constraint. The extension also introduced functions for bitemporal inserts, updates, corrections, inactivations, and deletes, plus implementations of 
+Allen's interval relationships
+ for temporal reasoning. It was a 
+lot
+ of machinery built on top of what Postgres offered at the time.
+And it worked! But an extension can only go so far. It can't change how the query planner sees temporal predicates, can't integrate with the constraint system at the engine level, and can't provide native DML syntax. For that, the feature needed to land in core.
+Now Postgres 19 accommodates the application-time half of a bi-temporal system. It's not the full picture, but that's still a 
+huge
+ step in the right direction.
+Ranges to the Rescue
+Let’s rebuild our products table the Postgres 19 way. Instead of separate 
+valid_from
+ and 
+valid_to
+ columns, we use a single 
+range type
+ column:
+CREATE TABLE products (
+    product_id   INT NOT NULL,
+    product_name TEXT NOT NULL,
+    price        NUMERIC(10,2) NOT NULL,
+    valid_at     DATERANGE NOT NULL,
+    PRIMARY KEY (product_id, valid_at WITHOUT OVERLAPS)
+);
+That’s it. No 
+btree_gist
+ extension needed. No exclusion constraint. The 
+WITHOUT OVERLAPS
+ clause in the primary key tells Postgres that 
+product_id
+ must be unique 
+at any given point in time
+, but the same product can have multiple rows as long as their 
+valid_at
+ ranges don’t overlap.
+How does this compare to our old approach? Let’s put them side by side. The old way:
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+-- Two separate columns for the range
+valid_from DATE NOT NULL,
+valid_to   DATE NOT NULL,
+
+-- Manual range construction in the constraint
+EXCLUDE USING gist (
+    product_id WITH =,
+    daterange(valid_from, valid_to) WITH &&
+)
+The new way:
+-- Single range column, no extension
+valid_at DATERANGE NOT NULL,
+
+-- Temporal awareness built into the primary key
+PRIMARY KEY (product_id, valid_at WITHOUT OVERLAPS)
+It's cleaner, more expressive, and Postgres actually 
+understands
+ what we're doing. Under the hood, the 
+WITHOUT OVERLAPS
+ constraint still uses a GiST index, and it still requires 
+btree_gist
+ for the non-temporal columns in the key. But Postgres handles that dependency automatically when initializing the constraint. Very convenient.
+Let’s populate our table with some data to work with throughout the rest of this article:
+INSERT INTO products VALUES
+    (1, 'Widget',    9.99, '[2025-01-01, 2025-07-01)'),
+    (1, 'Widget',   12.99, '[2025-07-01, 2026-01-01)'),
+    (1, 'Widget',   11.99, '[2026-01-01, 2026-07-01)'),
+    (2, 'Gadget',   24.99, '[2025-01-01, 2025-04-01)'),
+    (2, 'Gadget',   22.99, '[2025-04-01, 2026-01-01)'),
+    (2, 'Gadget',   26.99, '[2026-01-01,)');
+
+SELECT * FROM products ORDER BY product_id, valid_at;
+
+ product_id | product_name | price |        valid_at
+------------+--------------+-------+-------------------------
+          1 | Widget       |  9.99 | [2025-01-01,2025-07-01)
+          1 | Widget       | 12.99 | [2025-07-01,2026-01-01)
+          1 | Widget       | 11.99 | [2026-01-01,2026-07-01)
+          2 | Gadget       | 24.99 | [2025-01-01,2025-04-01)
+          2 | Gadget       | 22.99 | [2025-04-01,2026-01-01)
+          2 | Gadget       | 26.99 | [2026-01-01,)
+Notice the range notation: 
+[
+ means inclusive, 
+)
+ means exclusive. So 
+[2025-01-01, 2025-07-01)
+ includes January 1st but 
+not
+ July 1st. The final Gadget row has an open-ended range 
+[2026-01-01,)
+, meaning the current price has no defined end date. And the overlap protection works exactly as we'd expect:
+-- Try to add an invalid range
+INSERT INTO products VALUES (1, 'Widget', 99.99, '[2025-03-01, 2025-01-01)');
+
+ERROR:  range lower bound must be less than or equal to range upper bound
+LINE 1: INSERT INTO products VALUES (1, 'Widget', 99.99, '[2025-03-0...'
+
+-- Try to add an overlap
+INSERT INTO products VALUES (1, 'Widget', 99.99, '[2025-03-01, 2025-09-01)');
+
+ERROR:  conflicting key value violates exclusion constraint "products_pkey"
+DETAIL:  Key (product_id, valid_at)=(1, [2025-03-01,2025-09-01))
+  conflicts with existing key (product_id, valid_at)=(1, [2025-01-01,2025-07-01)).
+Two validation checks for the price of one! That’s what we get for working with ranges rather than two separate unrelated columns.
+Slicing and Dicing
+Now for the really fun stuff. Let's say Widget's price needs to change to $10.99, but only from March through September of 2025. In the old world, we'd have to manually split the existing row into pieces: delete or update the original, insert the new price range, and insert leftover rows for the portions we didn't change. Get any of that wrong, and we've got gaps or overlaps in our timeline.
+With temporal tables, we just say what we mean:
+UPDATE products
+   FOR PORTION OF valid_at FROM '2025-03-01' TO '2025-09-01'
+   SET price = 10.99
+ WHERE product_id = 1;
+Let’s see what the rows look like now:
+SELECT * FROM products WHERE product_id = 1 ORDER BY valid_at;
+
+ product_id | product_name | price |        valid_at
+------------+--------------+-------+-------------------------
+          1 | Widget       |  9.99 | [2025-01-01,2025-03-01)
+          1 | Widget       | 10.99 | [2025-03-01,2025-07-01)
+          1 | Widget       | 10.99 | [2025-07-01,2025-09-01)
+          1 | Widget       | 12.99 | [2025-09-01,2026-01-01)
+          1 | Widget       | 11.99 | [2026-01-01,2026-07-01)
+Wait... what happened here? We started with three Widget rows and now we have 
+five
+!
+Well, Postgres sees the tuples at range 
+[2025-01-01, 2025-07-01)
+ for $9.99 and range 
+[2024-07-01, 2025-01-01)
+ at $12.99 and needs to correct the overlaps to accommodate the new row. Several things happen as a result:
+Postgres modifies the existing $9.99 row to only cover the 
+[2025-01-01, 2025-03-01)
+ range.
+Then it adds a new row for $10.99 over the remaining 
+[2025-03-01, 2024-07-01)
+ range.
+Then it modifies the existing $12.99 row to only cover the 
+[2025-09-01, 2026-01-01)
+ range.
+Finally, it adds another new row for $10.99 over the remaining 
+[2025-07-01, 2025-09-01)
+ range.
+Why two rows at $10.99 instead of one over the merged 
+[2024-03-01, 2024-09-01)
+ range? Because 
+FOR PORTION OF
+ operates on each matching row independently. It doesn’t coalesce adjacent ranges afterward.
+The end result is gap-free and overlap-free, and that's something we didn't have using pure exclusion logic.
+That’s a lot of power packed into a single 
+UPDATE
+ statement.
+What about the edge cases? If the 
+FOR PORTION OF
+ range falls entirely within a single existing row, Postgres creates up to two leftovers (one before, one after). If it aligns perfectly with existing boundaries, no leftovers are needed. It just works.
+Interestingly, the newly introduced temporal leftovers don't require 
+INSERT
+ privileges. They're preserving existing data, not adding new information. But they 
+do
+ fire existing 
+INSERT
+ triggers. That's something to keep in mind for audit logging or 
+SECURITY DEFINER
+ trigger functions.
+Erasing History
+The 
+FOR PORTION OF
+ clause also works with 
+DELETE
+ statements. Let’s say Gadget was temporarily pulled from the catalog between June and October of 2025:
+DELETE FROM products
+   FOR PORTION OF valid_at FROM '2025-06-01' TO '2025-10-01'
+ WHERE product_id = 2;
+Let’s check the damage:
+SELECT * FROM products WHERE product_id = 2 ORDER BY valid_at;
+
+ product_id | product_name | price |        valid_at
+------------+--------------+-------+-------------------------
+          2 | Gadget       | 24.99 | [2025-01-01,2025-04-01)
+          2 | Gadget       | 22.99 | [2025-04-01,2025-06-01)
+          2 | Gadget       | 22.99 | [2025-10-01,2026-01-01)
+          2 | Gadget       | 26.99 | [2026-01-01,)
+The delete carved out the June-to-October window. The $22.99 row that originally covered 
+[2025-04-01, 2026-01-01)
+ was split into two leftovers: one ending in June and one starting in October. 
+The pricing data before and after the gap is preserved with its original values. It's kind of hard to wrap my mind around a 
+DELETE
+ causing the row count to 
+increase
+, but here we are.
+Either way, the mechanisms underlying temporal table management mean it’s all handled automatically. There’s no more risk of accidentally deleting too much or leaving orphaned fragments behind at the application layer.
+Truth in Advertising
+Temporal tables wouldn’t be complete without temporal foreign keys. Postgres 19 supports these using the 
+PERIOD
+ keyword:
+CREATE TABLE variants (
+    variant_id   INT NOT NULL,
+    product_id   INT NOT NULL,
+    variant_name TEXT NOT NULL,
+    valid_at     DATERANGE NOT NULL,
+    PRIMARY KEY (variant_id, valid_at WITHOUT OVERLAPS),
+    FOREIGN KEY (product_id, PERIOD valid_at)
+        REFERENCES products (product_id, PERIOD valid_at)
+);
+The 
+PERIOD
+ keyword tells Postgres that the foreign key 
+itself
+ is temporal. As a result, the referenced product must exist for the 
+entire
+ duration of the variant’s 
+valid_at
+ range. 
+It's not enough for a matching product row to exist somewhere in time. The combination of all matching rows in the referenced table must fully cover the referencing row's period.
+If we try to create a variant that extends beyond the product’s known timeline:
+INSERT INTO variants VALUES
+    (100, 1, 'Widget Deluxe', '[2025-01-01, 2027-01-01)');
+
+ERROR:  insert or update on table "variants" violates foreign key constraint
+    "variants_product_id_valid_at_fkey"
+DETAIL:  Key (product_id, valid_at)=(1, [2025-01-01,2027-01-01))
+    is not present in table "products".
+The Widget only has pricing defined through mid-2026, so a variant claiming validity through 2027 is rejected. Postgres checked the 
+full
+ temporal coverage, verifying that matching rows in the parent table span the variant's entire validity period.
+There’s one significant limitation here: temporal foreign keys only support 
+NO ACTION
+ for referential actions. That leaves out 
+CASCADE
+, 
+SET NULL
+, and 
+SET DEFAULT
+. 
+That means deleting a product row that a variant depends on always results in an error. This is understandable given the complexity of cascading temporal operations, but it does mean applications need to handle these cases explicitly. For now.
+Baby Steps
+So we’ve got application-time temporal tables with overlap prevention, temporal DML, and temporal foreign keys. What else is left?
+The big omission is system time, sometimes called transaction time. We already mentioned that application time tracks when facts are true in the real world, and system time tracks when the database knows about those facts. Systems that rely on temporal tables often make use of both. This is exactly the space that the 
+pg_bitemporal
+ extension has filled since 2015. It's possible to emulate system time with triggers, but it's not the same as having the engine manage it transparently like it does with the other new temporal features.
+The 
+temporal table documentation
+ acknowledges this directly, noting that system time is not natively supported but can be emulated. Whether it arrives in Postgres 20 or later is anyone’s guess, but the groundwork 
+is already there.
+Final Thoughts
+Temporal tables have been missing in action for a while now. The 
+EXCLUDE USING gist
+ approach works, but it’s a crude work-around by comparison. Extensions like 
+pg_bitemporal
+ proved the concept and kept 
+the conversation alive. Now we're one step closer to the dream of deprecating the need for it.
+It’s also a much more intuitive approach than using GiST exclusion constraints. 
+WITHOUT OVERLAPS
+ in a primary key reads like plain English as proper SQL should. 
+FOR PORTION OF
+ says exactly what it does. 
+The automatic row splitting during temporal updates and deletes eliminates an entire class of potential bugs. Anyone who's ever had to debug a gap in a temporal timeline knows how valuable that is.
+The road from SQL:2011 to Postgres 19 was a long one. Hetti and others in the community spent years proving these patterns were needed and workable. 
+Now they're in core, and they'll only get better from here. Keep an eye on system-time support in future releases, because all bets are off once Postgres has both halves of the bitemporal equation.
+For now, go experiment with 
+WITHOUT OVERLAPS
+ and 
+FOR PORTION OF
+ on a test instance. There’s no (temporal) time like the present!

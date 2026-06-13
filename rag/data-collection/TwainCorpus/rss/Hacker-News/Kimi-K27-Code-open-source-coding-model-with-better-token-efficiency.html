@@ -1,0 +1,442 @@
+<main class="flex flex-1 flex-col"><!--[-1--><!--]--> <div class="SVELTE_HYDRATER contents" data-props="{&quot;activeTab&quot;:&quot;modelCard&quot;,&quot;author&quot;:{&quot;_id&quot;:&quot;6425a114812813f8f4a9b02c&quot;,&quot;avatarUrl&quot;:&quot;https://cdn-avatars.huggingface.co/v1/production/uploads/641c1e77c3983aa9490f8121/X1yT2rsaIbR9cdYGEVu0X.jpeg&quot;,&quot;fullname&quot;:&quot;Moonshot AI&quot;,&quot;name&quot;:&quot;moonshotai&quot;,&quot;type&quot;:&quot;org&quot;,&quot;isHf&quot;:false,&quot;isHfAdmin&quot;:false,&quot;isMod&quot;:false,&quot;plan&quot;:&quot;team&quot;,&quot;followerCount&quot;:10464,&quot;isUserFollowing&quot;:false},&quot;canReadRepoSettings&quot;:false,&quot;canWriteRepoContent&quot;:false,&quot;canDisable&quot;:false,&quot;model&quot;:{&quot;author&quot;:&quot;moonshotai&quot;,&quot;cardData&quot;:{&quot;tags&quot;:[&quot;compressed-tensors&quot;],&quot;license&quot;:&quot;other&quot;,&quot;license_name&quot;:&quot;modified-mit&quot;,&quot;library_name&quot;:&quot;transformers&quot;,&quot;pipeline_tag&quot;:&quot;image-text-to-text&quot;},&quot;cardExists&quot;:true,&quot;config&quot;:{&quot;architectures&quot;:[&quot;KimiK25ForConditionalGeneration&quot;],&quot;auto_map&quot;:{&quot;AutoConfig&quot;:&quot;configuration_kimi_k25.KimiK25Config&quot;,&quot;AutoModel&quot;:&quot;modeling_kimi_k25.KimiK25ForConditionalGeneration&quot;,&quot;AutoModelForCausalLM&quot;:&quot;modeling_kimi_k25.KimiK25ForConditionalGeneration&quot;},&quot;model_type&quot;:&quot;kimi_k25&quot;,&quot;tokenizer_config&quot;:{&quot;bos_token&quot;:&quot;[BOS]&quot;,&quot;eos_token&quot;:&quot;[EOS]&quot;,&quot;pad_token&quot;:&quot;[PAD]&quot;,&quot;unk_token&quot;:&quot;[UNK]&quot;},&quot;chat_template_jinja&quot;:&quot;{%- macro render_content(msg) -%}\n    {%- set c = msg.get('content') -%}\n    {%- if c is string -%}\n      {{ c }}\n    {%- elif c is not none -%}\n      {% for content in c -%}\n        {% if content['type'] == 'image' or content['type'] == 'image_url' -%}\n          &lt;|media_begin|&gt;image&lt;|media_content|&gt;&lt;|media_pad|&gt;&lt;|media_end|&gt;\n        {% elif content['type'] == 'video' or content['type']== 'video_url'-%}\n          &lt;|kimi_k25_video_placeholder|&gt;\n        {% else -%}\n          {{ content['text'] }}\n        {%- endif -%}\n      {%- endfor -%}\n    {%- endif -%}\n{%- endmacro -%}\n\n{% macro set_roles(message) -%}\n  {%- set role_name =  message.get('name') or  message['role'] -%}\n  {%- if message['role'] == 'user' -%}\n    &lt;|im_user|&gt;{{role_name}}&lt;|im_middle|&gt;\n  {%- elif message['role'] == 'assistant' -%}\n    &lt;|im_assistant|&gt;{{role_name}}&lt;|im_middle|&gt;\n  {%- else -%}\n    &lt;|im_system|&gt;{{role_name}}&lt;|im_middle|&gt;\n  {%- endif -%}\n{%- endmacro -%}\n\n\n{%- macro render_toolcalls(message) -%}\n  &lt;|tool_calls_section_begin|&gt;\n  {%- for tool_call in message['tool_calls'] -%}\n    {%- set formatted_id = tool_call['id'] -%}\n    &lt;|tool_call_begin|&gt;{{ formatted_id }}&lt;|tool_call_argument_begin|&gt;{% if tool_call['function']['arguments'] is string %}{{ tool_call['function']['arguments'] }}{% else %}{{ tool_call['function']['arguments'] | tojson }}{% endif %}&lt;|tool_call_end|&gt;\n  {%- endfor -%}\n  &lt;|tool_calls_section_end|&gt;\n{%- endmacro -%}\n\n\n{%- set preserve_thinking = preserve_thinking | default(true) -%}\n{# Find last non-tool-call assistant message. If preserve_thinking, keep -1 so hist is empty and all msgs use suffix (retain reasoning). #}\n{%- set ns = namespace(last_non_tool_call_assistant_msg=-1) -%}\n{%- if not preserve_thinking -%}\n{%- for idx in range(messages|length-1, -1, -1) -%}\n    {%- if messages[idx]['role'] == 'assistant' and not messages[idx].get('tool_calls') -%}\n        {%- set ns.last_non_tool_call_assistant_msg = idx -%}\n        {%- break -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- endif -%}\n\n{# split all messages into history &amp; suffix, reasoning_content in suffix should be reserved.#}\n{%- set hist_msgs = messages[:ns.last_non_tool_call_assistant_msg+1] -%}\n{%- set suffix_msgs = messages[ns.last_non_tool_call_assistant_msg+1:] -%}\n\n{%- if tools -%}\n  {%- if tools_ts_str -%}\n    &lt;|im_system|&gt;tool_declare&lt;|im_middle|&gt;{{ tools_ts_str }}&lt;|im_end|&gt;\n  {%- else -%}\n    &lt;|im_system|&gt;tool_declare&lt;|im_middle|&gt;{{ tools | tojson(separators=(',', ':')) }}&lt;|im_end|&gt;\n  {%- endif -%}\n{%- endif -%}\n\n  \n{%- for message in hist_msgs -%}\n  {{set_roles(message)}}\n  {%- if message['role'] == 'assistant' -%}\n    &lt;think&gt;&lt;/think&gt;{{render_content(message)}}\n    {%- if message.get('tool_calls') -%}\n      {{render_toolcalls(message)}}\n    {%- endif -%}\n  {%- elif message['role'] == 'tool' -%}\n    {%- set tool_call_id = message.tool_call_id -%}\n    ## Return of {{ tool_call_id }}\n{{render_content(message)}}\n  {%- elif message['content'] is not none -%}\n    {{render_content(message)}}\n  {%- endif -%}\n  &lt;|im_end|&gt;\n{%- endfor -%}\n\n{%- for message in suffix_msgs -%}\n  {{set_roles(message)}}\n  {%- if message['role'] == 'assistant' -%}\n    {%- if thinking is defined and thinking is false and preserve_thinking is false -%}\n    &lt;think&gt;&lt;/think&gt;{{render_content(message)}}\n    {%- else -%}\n    {%- set rc = message.get('reasoning', message.get('reasoning_content', '')) -%}\n    &lt;think&gt;{{rc}}&lt;/think&gt;{{render_content(message)}}\n    {%- endif -%}\n    {%- if message.get('tool_calls') -%}\n     {{render_toolcalls(message)}}\n    {%- endif -%}\n  {%- elif message['role'] == 'tool' -%}\n    {%- set tool_call_id = message.tool_call_id -%}\n    ## Return of {{ tool_call_id }}\n{{render_content(message)}}\n  {%- elif message['content'] is not none -%}\n    {{render_content(message)}}\n  {%- endif -%}\n  &lt;|im_end|&gt;\n{%- endfor -%}\n\n\n{%- if add_generation_prompt -%}\n  &lt;|im_assistant|&gt;assistant&lt;|im_middle|&gt;\n  {%- if thinking is defined and thinking is false -%}\n  &lt;think&gt;&lt;/think&gt;\n  {%- else -%}\n  &lt;think&gt;\n  {%- endif -%}\n{%- endif -%}&quot;},&quot;createdAt&quot;:&quot;2026-06-11T07:51:47.000Z&quot;,&quot;discussionsDisabled&quot;:false,&quot;discussionsSorting&quot;:&quot;recently-created&quot;,&quot;downloads&quot;:0,&quot;downloadsAllTime&quot;:0,&quot;id&quot;:&quot;moonshotai/Kimi-K2.7-Code&quot;,&quot;isLikedByUser&quot;:false,&quot;availableInferenceProviders&quot;:[],&quot;showHuggingChatEntry&quot;:false,&quot;inference&quot;:&quot;&quot;,&quot;lastModified&quot;:&quot;2026-06-12T10:05:55.000Z&quot;,&quot;likes&quot;:116,&quot;pipeline_tag&quot;:&quot;image-text-to-text&quot;,&quot;library_name&quot;:&quot;transformers&quot;,&quot;librariesOther&quot;:[],&quot;trackDownloads&quot;:true,&quot;model-index&quot;:null,&quot;private&quot;:false,&quot;repoType&quot;:&quot;model&quot;,&quot;gated&quot;:false,&quot;tags&quot;:[&quot;transformers&quot;,&quot;safetensors&quot;,&quot;kimi_k25&quot;,&quot;image-feature-extraction&quot;,&quot;compressed-tensors&quot;,&quot;image-text-to-text&quot;,&quot;conversational&quot;,&quot;custom_code&quot;,&quot;license:other&quot;,&quot;region:us&quot;],&quot;tag_objs&quot;:[{&quot;id&quot;:&quot;image-text-to-text&quot;,&quot;label&quot;:&quot;Image-Text-to-Text&quot;,&quot;type&quot;:&quot;pipeline_tag&quot;,&quot;subType&quot;:&quot;multimodal&quot;},{&quot;id&quot;:&quot;transformers&quot;,&quot;label&quot;:&quot;Transformers&quot;,&quot;type&quot;:&quot;library&quot;},{&quot;id&quot;:&quot;safetensors&quot;,&quot;label&quot;:&quot;Safetensors&quot;,&quot;type&quot;:&quot;library&quot;},{&quot;id&quot;:&quot;kimi_k25&quot;,&quot;label&quot;:&quot;kimi_k25&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;image-feature-extraction&quot;,&quot;label&quot;:&quot;image-feature-extraction&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;compressed-tensors&quot;,&quot;label&quot;:&quot;compressed-tensors&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;conversational&quot;,&quot;label&quot;:&quot;conversational&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;custom_code&quot;,&quot;label&quot;:&quot;custom_code&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;license:other&quot;,&quot;label&quot;:&quot;other&quot;,&quot;type&quot;:&quot;license&quot;},{&quot;type&quot;:&quot;region&quot;,&quot;label&quot;:&quot;🇺🇸 Region: US&quot;,&quot;id&quot;:&quot;region:us&quot;}],&quot;transformersInfo&quot;:{&quot;auto_model&quot;:&quot;AutoModel&quot;,&quot;custom_class&quot;:&quot;modeling_kimi_k25.KimiK25ForConditionalGeneration&quot;,&quot;pipeline_tag&quot;:&quot;image-feature-extraction&quot;},&quot;widgetData&quot;:[{&quot;text&quot;:&quot;Hi, what can you help me with?&quot;},{&quot;text&quot;:&quot;What is 84 * 3 / 2?&quot;},{&quot;text&quot;:&quot;Tell me an interesting fact about the universe!&quot;},{&quot;text&quot;:&quot;Explain quantum computing in simple terms.&quot;}],&quot;safetensors&quot;:{&quot;parameters&quot;:{&quot;BF16&quot;:43902267888,&quot;F32&quot;:23040,&quot;I32&quot;:1014687129600},&quot;total&quot;:1058589420528,&quot;sharded&quot;:true,&quot;totalFileSize&quot;:595201585646},&quot;hasBlockedOids&quot;:false,&quot;region&quot;:&quot;us&quot;,&quot;isQuantized&quot;:false,&quot;licenseFilePath&quot;:&quot;LICENSE&quot;},&quot;discussionsStats&quot;:{&quot;closed&quot;:0,&quot;open&quot;:0,&quot;total&quot;:0},&quot;query&quot;:{},&quot;inferenceContextData&quot;:{&quot;billableEntities&quot;:[],&quot;entityName2Providers&quot;:{}},&quot;hasQuantizations&quot;:false,&quot;copyToBucketNamespaces&quot;:[]}" data-target="ModelHeader"><!--[-1--><!--]-->  <!--[0--><!--[-1--><!--]--> <dialog class="shadow-alternate z-40 mx-4 my-auto h-fit select-text overflow-hidden rounded-xl bg-white max-sm:max-w-[calc(100dvw-2rem)] sm:mx-auto lg:mt-26 md:portrait:mt-30 xl:mt-30 2xl:mt-32 w-full sm:w-96 max-w-[calc(100%-4rem)] text-base"></dialog><!--]--><!-- --><!-- --></div> <div class="container relative flex flex-col md:grid md:space-y-0 w-full md:grid-cols-12 md:flex-1 md:grid-rows-full space-y-4 md:gap-6"><!--[-1--><section class="pt-8 border-gray-100 md:col-span-7 pb-24 relative break-words copiable-code-container"><!--[0--><!--]--> <!--[-1--><!--]--> <!--[-1--><!--]--> <!--[-1--><!--]--> <!--[-1--><!--]--> <!--[1--><!--[-1--><!--]--> <div class="SVELTE_HYDRATER contents" data-props="{}" data-target="RepoCodeCopy"><!-- --></div> <!--[-1--><!--]--> <div class="relative md:mt-2"><div class="SVELTE_HYDRATER contents" data-props='{"titleTree":[{"id":"1-model-introduction","label":"1. Model Introduction","children":[],"isValid":true,"title":"1. Model Introduction"},{"id":"2-model-summary","label":"2. Model Summary","children":[],"isValid":true,"title":"2. Model Summary"},{"id":"3-evaluation-results","label":"3. Evaluation Results","children":[],"isValid":true,"title":"3. Evaluation Results"},{"id":"4-native-int4-quantization","label":"4. Native INT4 Quantization","children":[],"isValid":true,"title":"4. Native INT4 Quantization"},{"id":"5-deployment","label":"5. Deployment","children":[],"isValid":true,"title":"5. Deployment"},{"id":"6-model-usage","label":"6. Model Usage","children":[{"id":"chat-completion","label":"Chat Completion","children":[],"isValid":true,"title":"Chat Completion"},{"id":"chat-completion-with-visual-content","label":"Chat Completion with visual content","children":[],"isValid":true,"title":"Chat Completion with visual content"},{"id":"preserve-thinking","label":"Preserve Thinking","children":[],"isValid":true,"title":"Preserve Thinking"},{"id":"interleaved-thinking-and-multi-step-tool-call","label":"Interleaved Thinking and Multi-Step Tool Call","children":[],"isValid":true,"title":"Interleaved Thinking and Multi-Step Tool Call"},{"id":"coding-agent-framework","label":"Coding Agent Framework","children":[],"isValid":true,"title":"Coding Agent Framework"}],"isValid":true,"title":"6. Model Usage"},{"id":"7-license","label":"7. License","children":[],"isValid":true,"title":"7. License"},{"id":"8-third-party-notices","label":"8. Third Party Notices","children":[],"isValid":true,"title":"8. Third Party Notices"},{"id":"9-contact-us","label":"9. Contact Us","children":[],"isValid":true,"title":"9. Contact Us"}]}' data-target="SideNavigation"><!--[0--><div class="absolute -left-12 bottom-0 top-0 z-10"><div class="sticky top-4 flex"><div class="h-7 pt-[0.175rem]"><span class="peer" tabindex="0"></span> </div></div></div><!--]--><!-- --></div> <!--[0--> <div class="model-card-content prose md:px-6 md:-mx-6 lg:-mr-20 lg:pr-20 xl:-mr-24 xl:pr-24 2xl:-mr-36 2xl:pr-36 hf-sanitized hf-sanitized-d9XdIuSCHzvwYC7sFFc0z copiable-code-container"><!--[-1--><!--]--> <!-- --><div align="center">
+<picture>
+
+</picture>
+</div>
+
+<div align="center" style="line-height:1">
+<a href="https://www.kimi.com/code" rel="nofollow"></a>
+<a href="https://www.moonshot.ai" rel="nofollow"></a>
+</div>
+<div align="center" style="line-height: 1;">
+<a href="https://huggingface.co/moonshotai"></a>
+<a href="https://twitter.com/kimi_moonshot" rel="nofollow"></a>
+<a href="https://discord.gg/TYU2fdJykW" rel="nofollow"></a>
+<a href="https://modelscope.cn/organization/moonshotai" rel="nofollow"></a>
+</div>
+<div align="center" style="line-height: 1;">
+<a href="https://huggingface.co/moonshotai/Kimi-K2.7-Code/blob/main/LICENSE"></a>
+</div>
+<h2 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#1-model-introduction" id="1-model-introduction" rel="nofollow">
+
+</a>
+<span>
+		1. Model Introduction
+	</span>
+</h2>
+<p>Kimi K2.7 Code is a coding-focused agentic model built upon Kimi K2.6. With substantial improvements on real-world long-horizon coding tasks, it strengthens end-to-end task completion across complex software engineering workflows while improving token efficiency, reducing thinking-token usage by approximately 30% compared with Kimi K2.6.</p>
+<h2 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#2-model-summary" id="2-model-summary" rel="nofollow">
+
+</a>
+<span>
+		2. Model Summary
+	</span>
+</h2>
+<div align="center">
+<div class="max-w-full overflow-auto">
+<table>
+<thead><tr>
+
+
+</tr>
+</thead><tbody><tr>
+<td align="center"><strong>Architecture</strong></td>
+<td align="center">Mixture-of-Experts (MoE)</td>
+</tr>
+<tr>
+<td align="center"><strong>Total Parameters</strong></td>
+<td align="center">1T</td>
+</tr>
+<tr>
+<td align="center"><strong>Activated Parameters</strong></td>
+<td align="center">32B</td>
+</tr>
+<tr>
+<td align="center"><strong>Number of Layers</strong> (Dense layer included)</td>
+<td align="center">61</td>
+</tr>
+<tr>
+<td align="center"><strong>Number of Dense Layers</strong></td>
+<td align="center">1</td>
+</tr>
+<tr>
+<td align="center"><strong>Attention Hidden Dimension</strong></td>
+<td align="center">7168</td>
+</tr>
+<tr>
+<td align="center"><strong>MoE Hidden Dimension</strong> (per Expert)</td>
+<td align="center">2048</td>
+</tr>
+<tr>
+<td align="center"><strong>Number of Attention Heads</strong></td>
+<td align="center">64</td>
+</tr>
+<tr>
+<td align="center"><strong>Number of Experts</strong></td>
+<td align="center">384</td>
+</tr>
+<tr>
+<td align="center"><strong>Selected Experts per Token</strong></td>
+<td align="center">8</td>
+</tr>
+<tr>
+<td align="center"><strong>Number of Shared Experts</strong></td>
+<td align="center">1</td>
+</tr>
+<tr>
+<td align="center"><strong>Vocabulary Size</strong></td>
+<td align="center">160K</td>
+</tr>
+<tr>
+<td align="center"><strong>Context Length</strong></td>
+<td align="center">256K</td>
+</tr>
+<tr>
+<td align="center"><strong>Attention Mechanism</strong></td>
+<td align="center">MLA</td>
+</tr>
+<tr>
+<td align="center"><strong>Activation Function</strong></td>
+<td align="center">SwiGLU</td>
+</tr>
+<tr>
+<td align="center"><strong>Vision Encoder</strong></td>
+<td align="center">MoonViT</td>
+</tr>
+<tr>
+<td align="center"><strong>Parameters of Vision Encoder</strong></td>
+<td align="center">400M</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<h2 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#3-evaluation-results" id="3-evaluation-results" rel="nofollow">
+
+</a>
+<span>
+		3. Evaluation Results
+	</span>
+</h2>
+<div align="center">
+<table>
+<thead>
+<tr>
+<th align="center">Benchmark</th>
+<th align="center">Kimi K2.6</th>
+<th align="center">Kimi K2.7 Code</th>
+<th align="center">GPT-5.5</th>
+<th align="center">Claude Opus 4.8</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="center" colspan="5"><strong>Coding</strong></td>
+</tr>
+<tr>
+<td align="center" style="vertical-align: middle">Kimi Code Bench v2</td>
+<td align="center" style="vertical-align: middle">50.9</td>
+<td align="center" style="vertical-align: middle">62.0</td>
+<td align="center" style="vertical-align: middle">69.0</td>
+<td align="center" style="vertical-align: middle">67.4</td>
+</tr>
+<tr>
+<td align="center" style="vertical-align: middle">Program Bench</td>
+<td align="center" style="vertical-align: middle">48.3</td>
+<td align="center" style="vertical-align: middle">53.6</td>
+<td align="center" style="vertical-align: middle">69.1</td>
+<td align="center" style="vertical-align: middle">63.8</td>
+</tr>
+<tr>
+<td align="center" style="vertical-align: middle">MLS Bench Lite</td>
+<td align="center" style="vertical-align: middle">26.7</td>
+<td align="center" style="vertical-align: middle">35.1</td>
+<td align="center" style="vertical-align: middle">35.5</td>
+<td align="center" style="vertical-align: middle">42.8</td>
+</tr>
+<tr>
+<td align="center" colspan="5"><strong>Agentic</strong></td>
+</tr>
+<tr>
+<td align="center" style="vertical-align: middle">Kimi Claw 24/7 Bench</td>
+<td align="center" style="vertical-align: middle">42.9</td>
+<td align="center" style="vertical-align: middle">46.9</td>
+<td align="center" style="vertical-align: middle">52.8</td>
+<td align="center" style="vertical-align: middle">50.4</td>
+</tr>
+<tr>
+<td align="center" style="vertical-align: middle">MCP Atlas</td>
+<td align="center" style="vertical-align: middle">69.4</td>
+<td align="center" style="vertical-align: middle">76.0</td>
+<td align="center" style="vertical-align: middle">79.4</td>
+<td align="center" style="vertical-align: middle">81.3</td>
+</tr>
+<tr>
+<td align="center" style="vertical-align: middle">MCP Mark Verified</td>
+<td align="center" style="vertical-align: middle">72.8</td>
+<td align="center" style="vertical-align: middle">81.1</td>
+<td align="center" style="vertical-align: middle">92.9</td>
+<td align="center" style="vertical-align: middle">76.4</td>
+</tr>
+</tbody>
+</table>
+</div>
+<details>
+<summary><b>Footnotes</b></summary>
+<ol>
+<li><strong>General Testing Details</strong><ul>
+<li>Unless stated otherwise, Kimi K2.7 Code and K2.6 were tested with thinking mode enabled via Kimi Code CLI at temperature = 1.0, top-p = 0.95, and a 262,144-token context length; GPT-5.5 ran in Codex with xhigh mode, and Opus 4.8 in Claude Code with xhigh mode. Aside from these differences, all benchmarks were evaluated under the same conditions.</li>
+</ul>
+</li>
+<li><strong>Coding Benchmarks</strong><ul>
+<li>Kimi Code Bench V2 is our in-house benchmark designed to evaluate coding agents on realistic tasks. It has diversed software engineering tasks across 10+ mainstream programming languages and a full production tech stack covering tasks from internal engineering use cases, production incidents, and real-world open-source projects, with emphasis on backend services, infrastructure, performance engineering, systems programming, security, frontend development, and ML/data engineering.</li>
+<li><a href="https://programbench.com/" rel="nofollow">Program Bench</a> evaluates code-generation agents by asking them to recreate a program’s behavior from only a compiled binary and its documentation. It spans 200 tasks, from small CLI tools to large systems like FFmpeg and SQLite. Submissions are judged against over 248,000 fuzz-generated behavioral tests. In each task, the agent is given an executable and its documentation, but no source code, decompilation, or internet access. It must choose its own implementation language, build the full program from scratch, and pass a behavioral test suite comparing its output against the original binary.</li>
+<li><a href="https://mls-bench.com" rel="nofollow">MLS-Bench</a> evaluates whether AI systems can invent generalizable and scalable ML methods. MLS-Bench-Lite is the official 30-task subset of MLS-Bench, covering LLM pretraining and post-training, robotics, world models, computer vision, reinforcement learning, optimization, ML systems, AI for Science, and more. Agents are given 5 hours to explore before submitting their solutions. Opus 4.8 is evaluated with the max effort setting in Claude Code.</li>
+</ul>
+</li>
+<li><strong>Agentic Benchmarks</strong><ul>
+<li>Kimi Claw 24/7 Bench is our in-house benchmark for evaluating long-horizon agentic performance in persistent, multi-day coworking tasks. It spans 17 professional scenarios across 610 evaluation points, covering domains such as software engineering, ML research, recruiting, trading, marketing. All tasks are executed through the OpenClaw harness. The final score is the average pass rate across all evaluation points, and is averaged over 3 runs.</li>
+<li><a href="https://labs.scale.com/leaderboard/mcp_atlas" rel="nofollow">MCP-Atlas</a> evaluates LLM performance on realistic tool-use tasks through the scalable MCPs. We followed the official MCP-Atlas evaluation configuration with a 100 tool-call budget, and with 32k max tokens per step. The final result is averaged over 3 runs.</li>
+<li>MCPMark-Verified is a human-verified edition of <a href="https://mcpmark.ai/" rel="nofollow">MCPMark</a>, a benchmark for evaluating MCP tool use across five real server environments — Notion, GitHub, Filesystem, Postgres, and Playwright. Each task has been re-checked by our team and the benchmark offical and will be open-sourced soon. We followed the official MCPMark evaluation configuration with a 100-step tool-call budget and 32k max tokens per step. The final result is averaged over 3 runs.</li>
+</ul>
+</li>
+</ol>
+</details>
+<h2 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#4-native-int4-quantization" id="4-native-int4-quantization" rel="nofollow">
+
+</a>
+<span>
+		4. Native INT4 Quantization
+	</span>
+</h2>
+<p>Kimi-K2.7-Code adopts the same native int4 quantization method as <a href="https://huggingface.co/moonshotai/Kimi-K2-Thinking#4-native-int4-quantization" rel="nofollow">Kimi-K2-Thinking</a>.</p>
+<h2 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#5-deployment" id="5-deployment" rel="nofollow">
+
+</a>
+<span>
+		5. Deployment
+	</span>
+</h2>
+<blockquote class="note">
+<p>You can access Kimi-K2.7-Code's API on <a href="https://platform.moonshot.ai" rel="nofollow">https://platform.moonshot.ai</a> and we provide OpenAI/Anthropic-compatible API for you.
+Currently, Kimi-K2.7-Code is recommended to run on the following inference engines:</p>
+</blockquote>
+<ul>
+<li>vLLM</li>
+<li>SGLang</li>
+<li>KTransformers</li>
+</ul>
+<p>Kimi-K2.7-Code has the same architecture as Kimi-K2.5/Kimi-K2.6, and the deployment method can be directly reused.</p>
+<p>The version requirement for <code>transformers</code> is <code>&gt;=4.57.1, &lt;5.0.0</code>.</p>
+<p>Deployment examples can be found in the <a href="/moonshotai/Kimi-K2.7-Code/blob/main/docs/deploy_guidance.md" rel="nofollow">Model Deployment Guide</a>.</p>
+
+<h2 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#6-model-usage" id="6-model-usage" rel="nofollow">
+
+</a>
+<span>
+		6. Model Usage
+	</span>
+</h2>
+<p>The usage demos below demonstrate how to call our official API. Note that Kimi-K2.7-Code forces thinking and preserve_thinking as True.</p>
+<p>For third-party APIs deployed with vLLM or SGLang, please note that:</p>
+<blockquote class="note">
+
+<ul>
+<li><p>Chat with video content is an experimental feature and is only supported in our official API for now.</p>
+</li>
+<li><p>The recommended <code>temperature</code> will be <code>1.0</code> for Thinking mode.</p>
+</li>
+<li><p>The recommended <code>top_p</code> is <code>0.95</code>.</p>
+</li>
+<li><p>Instant mode is not supported.</p>
+</li>
+</ul>
+</blockquote>
+<h3 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#chat-completion" id="chat-completion" rel="nofollow">
+
+</a>
+<span>
+		Chat Completion
+	</span>
+</h3>
+<p>This is a simple chat completion script which shows how to call K2.7-Code API in Thinking mode.</p>
+<pre><code class="language-python"><span class="hljs-keyword">import</span> openai
+<span class="hljs-keyword">import</span> base64
+<span class="hljs-keyword">import</span> requests
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">simple_chat</span>(<span class="hljs-params">client: openai.OpenAI, model_name: <span class="hljs-built_in">str</span></span>):
+    messages = [
+        {<span class="hljs-string">'role'</span>: <span class="hljs-string">'system'</span>, <span class="hljs-string">'content'</span>: <span class="hljs-string">'You are Kimi, an AI assistant created by Moonshot AI.'</span>},
+        {
+            <span class="hljs-string">'role'</span>: <span class="hljs-string">'user'</span>,
+            <span class="hljs-string">'content'</span>: [
+                {<span class="hljs-string">'type'</span>: <span class="hljs-string">'text'</span>, <span class="hljs-string">'text'</span>: <span class="hljs-string">'which one is bigger, 9.11 or 9.9? think carefully.'</span>}
+            ],
+        },
+    ]
+    response = client.chat.completions.create(
+        model=model_name, messages=messages, stream=<span class="hljs-literal">False</span>, max_tokens=<span class="hljs-number">4096</span>
+    )
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">'====== Below is reasoning content in Thinking Mode ======'</span>)
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">f'reasoning content: <span class="hljs-subst">{response.choices[<span class="hljs-number">0</span>].message.reasoning}</span>'</span>)
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">'====== Below is response in Thinking Mode ======'</span>)
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">f'response: <span class="hljs-subst">{response.choices[<span class="hljs-number">0</span>].message.content}</span>'</span>)
+</code></pre>
+<h3 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#chat-completion-with-visual-content" id="chat-completion-with-visual-content" rel="nofollow">
+
+</a>
+<span>
+		Chat Completion with visual content
+	</span>
+</h3>
+<p>K2.7-Code supports Image and Video input.</p>
+<p>The following example demonstrates how to call K2.7-Code API with image input:</p>
+<pre><code class="language-python"><span class="hljs-keyword">import</span> openai
+<span class="hljs-keyword">import</span> base64
+<span class="hljs-keyword">import</span> requests
+
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">chat_with_image</span>(<span class="hljs-params">client: openai.OpenAI, model_name: <span class="hljs-built_in">str</span></span>):
+    url = <span class="hljs-string">'https://huggingface.co/moonshotai/Kimi-K2.7-Code/resolve/main/figures/kimi-logo.png'</span>
+    image_base64 = base64.b64encode(requests.get(url).content).decode()
+    messages = [
+        {
+            <span class="hljs-string">'role'</span>: <span class="hljs-string">'user'</span>,
+            <span class="hljs-string">'content'</span>: [
+                {<span class="hljs-string">'type'</span>: <span class="hljs-string">'text'</span>, <span class="hljs-string">'text'</span>: <span class="hljs-string">'Describe this image in detail.'</span>},
+                {
+                    <span class="hljs-string">'type'</span>: <span class="hljs-string">'image_url'</span>,
+                    <span class="hljs-string">'image_url'</span>: {<span class="hljs-string">'url'</span>: <span class="hljs-string">f'data:image/png;base64,<span class="hljs-subst">{image_base64}</span>'</span>},
+                },
+            ],
+        }
+    ]
+
+    response = client.chat.completions.create(
+        model=model_name, messages=messages, stream=<span class="hljs-literal">False</span>, max_tokens=<span class="hljs-number">8192</span>
+    )
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">'====== Below is reasoning content in Thinking Mode ======'</span>)
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">f'reasoning content: <span class="hljs-subst">{response.choices[<span class="hljs-number">0</span>].message.reasoning}</span>'</span>)
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">'====== Below is response in Thinking Mode ======'</span>)
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">f'response: <span class="hljs-subst">{response.choices[<span class="hljs-number">0</span>].message.content}</span>'</span>)
+</code></pre>
+<p>The following example demonstrates how to call K2.7-Code API with video input:</p>
+<pre><code class="language-python"><span class="hljs-keyword">import</span> openai
+<span class="hljs-keyword">import</span> base64
+<span class="hljs-keyword">import</span> requests
+
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">chat_with_video</span>(<span class="hljs-params">client: openai.OpenAI, model_name:<span class="hljs-built_in">str</span></span>):
+    url = <span class="hljs-string">'https://huggingface.co/moonshotai/Kimi-K2.7-Code/resolve/main/figures/demo_video.mp4'</span>
+    video_base64 = base64.b64encode(requests.get(url).content).decode()
+    messages = [
+        {
+            <span class="hljs-string">"role"</span>: <span class="hljs-string">"user"</span>,
+            <span class="hljs-string">"content"</span>: [
+                {<span class="hljs-string">"type"</span>: <span class="hljs-string">"text"</span>,<span class="hljs-string">"text"</span>: <span class="hljs-string">"Describe the video in detail."</span>},
+                {
+                    <span class="hljs-string">"type"</span>: <span class="hljs-string">"video_url"</span>,
+                    <span class="hljs-string">"video_url"</span>: {<span class="hljs-string">"url"</span>: <span class="hljs-string">f"data:video/mp4;base64,<span class="hljs-subst">{video_base64}</span>"</span>},
+                },
+            ],
+        }
+    ]
+
+    response = client.chat.completions.create(model=model_name, messages=messages)
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">'====== Below is reasoning content in Thinking Mode ======'</span>)
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">f'reasoning content: <span class="hljs-subst">{response.choices[<span class="hljs-number">0</span>].message.reasoning}</span>'</span>)
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">'====== Below is response in Thinking Mode ======'</span>)
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">f'response: <span class="hljs-subst">{response.choices[<span class="hljs-number">0</span>].message.content}</span>'</span>)
+</code></pre>
+<h3 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#preserve-thinking" id="preserve-thinking" rel="nofollow">
+
+</a>
+<span>
+		Preserve Thinking
+	</span>
+</h3>
+<p>Kimi K2.7 Code forces <code>preserve_thinking</code> mode, which retains full reasoning content across multi-turn interactions and enhances performance in coding agent scenarios.</p>
+<p>This feature is enabled by default and can't be disabled. The following example demonstrates how to call K2.7-Code API in <code>preserve_thinking</code> mode:</p>
+<pre><code class="language-python"><span class="hljs-keyword">def</span> <span class="hljs-title function_">chat_with_preserve_thinking</span>(<span class="hljs-params">client: openai.OpenAI, model_name: <span class="hljs-built_in">str</span></span>):
+    messages = [
+        {
+            <span class="hljs-string">"role"</span>: <span class="hljs-string">"user"</span>,
+            <span class="hljs-string">"content"</span>: <span class="hljs-string">"Tell me three random numbers."</span>
+        },
+        {
+            <span class="hljs-string">"role"</span>: <span class="hljs-string">"assistant"</span>,
+            <span class="hljs-string">"reasoning_content"</span>: <span class="hljs-string">"I'll start by listing five numbers: 473, 921, 235, 215, 222, and I'll tell you the first three."</span>,
+            <span class="hljs-comment"># Some API (e.g. vLLM) may not support reasoning_content, you can try reasoning instead</span>
+            <span class="hljs-string">"content"</span>: <span class="hljs-string">"473, 921, 235"</span>
+        },
+        {
+            <span class="hljs-string">"role"</span>: <span class="hljs-string">"user"</span>,
+            <span class="hljs-string">"content"</span>: <span class="hljs-string">"What are the other two numbers you have in mind?"</span>
+        }
+    ]
+
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        stream=<span class="hljs-literal">False</span>,
+        max_tokens=<span class="hljs-number">4096</span>,
+    )
+    <span class="hljs-comment"># the assistant should mention 215 and 222 that appear in the prior reasoning content</span>
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">f"response: <span class="hljs-subst">{response.choices[<span class="hljs-number">0</span>].message.reasoning}</span>"</span>)
+    <span class="hljs-keyword">return</span> response.choices[<span class="hljs-number">0</span>].message.content
+</code></pre>
+<h3 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#interleaved-thinking-and-multi-step-tool-call" id="interleaved-thinking-and-multi-step-tool-call" rel="nofollow">
+
+</a>
+<span>
+		Interleaved Thinking and Multi-Step Tool Call
+	</span>
+</h3>
+<p>K2.7-Code shares the same design of Interleaved Thinking and Multi-Step Tool Call as K2 Thinking. For usage example, please refer to the <a href="https://platform.moonshot.ai/docs/guide/use-kimi-k2-thinking-model#complete-example" rel="nofollow">K2 Thinking documentation</a>.</p>
+<h3 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#coding-agent-framework" id="coding-agent-framework" rel="nofollow">
+
+</a>
+<span>
+		Coding Agent Framework
+	</span>
+</h3>
+<p>Kimi K2.7-Code works best with Kimi Code CLI as its agent framework — give it a try at <a href="https://www.kimi.com/code" rel="nofollow">https://www.kimi.com/code</a>.</p>
+
+<h2 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#7-license" id="7-license" rel="nofollow">
+
+</a>
+<span>
+		7. License
+	</span>
+</h2>
+<p>Both the code repository and the model weights are released under the <a href="/moonshotai/Kimi-K2.7-Code/blob/main/LICENSE" rel="nofollow">Modified MIT License</a>.</p>
+
+<h2 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#8-third-party-notices" id="8-third-party-notices" rel="nofollow">
+
+</a>
+<span>
+		8. Third Party Notices
+	</span>
+</h2>
+<p>See <a href="/moonshotai/Kimi-K2.7-Code/blob/main/THIRD_PARTY_NOTICES.md" rel="nofollow">THIRD PARTY NOTICES</a></p>
+
+<h2 class="relative group flex items-baseline">
+<a class="block pr-1.5 text-lg md:absolute md:p-1.5 md:opacity-0 md:group-hover:opacity-100 md:right-full" href="#9-contact-us" id="9-contact-us" rel="nofollow">
+
+</a>
+<span>
+		9. Contact Us
+	</span>
+</h2>
+<p>If you have any questions, please reach out at <a href="mailto:support@moonshot.ai" rel="nofollow">support@moonshot.ai</a>.</p>
+<!-- --></div> <!--[-1--><!--]--><!-- --><!--]--></div><!--]--><!-- --></section><!-- --> <section class="pt-8 border-gray-100 md:col-span-5 pt-6 md:pb-24 md:pl-6 md:border-l order-first md:order-none"><!--[-1--><div class="flex justify-between pb-2"><dl><dt class="-mb-1 text-sm text-gray-500">Downloads last month</dt> <dd class="font-semibold">-</dd> <!--[-1--><!--]--></dl> </div> <!--]--> <!--[0--><div class="SVELTE_HYDRATER contents" data-props="{&quot;modelId&quot;:&quot;moonshotai/Kimi-K2.7-Code&quot;,&quot;safetensors&quot;:{&quot;parameters&quot;:{&quot;BF16&quot;:43902267888,&quot;F32&quot;:23040,&quot;I32&quot;:1014687129600},&quot;total&quot;:1058589420528,&quot;sharded&quot;:true,&quot;totalFileSize&quot;:595201585646},&quot;isGated&quot;:false,&quot;query&quot;:{},&quot;model&quot;:{&quot;author&quot;:&quot;moonshotai&quot;,&quot;cardData&quot;:{&quot;tags&quot;:[&quot;compressed-tensors&quot;],&quot;license&quot;:&quot;other&quot;,&quot;license_name&quot;:&quot;modified-mit&quot;,&quot;library_name&quot;:&quot;transformers&quot;,&quot;pipeline_tag&quot;:&quot;image-text-to-text&quot;},&quot;cardExists&quot;:true,&quot;config&quot;:{&quot;architectures&quot;:[&quot;KimiK25ForConditionalGeneration&quot;],&quot;auto_map&quot;:{&quot;AutoConfig&quot;:&quot;configuration_kimi_k25.KimiK25Config&quot;,&quot;AutoModel&quot;:&quot;modeling_kimi_k25.KimiK25ForConditionalGeneration&quot;,&quot;AutoModelForCausalLM&quot;:&quot;modeling_kimi_k25.KimiK25ForConditionalGeneration&quot;},&quot;model_type&quot;:&quot;kimi_k25&quot;,&quot;tokenizer_config&quot;:{&quot;bos_token&quot;:&quot;[BOS]&quot;,&quot;eos_token&quot;:&quot;[EOS]&quot;,&quot;pad_token&quot;:&quot;[PAD]&quot;,&quot;unk_token&quot;:&quot;[UNK]&quot;},&quot;chat_template_jinja&quot;:&quot;{%- macro render_content(msg) -%}\n    {%- set c = msg.get('content') -%}\n    {%- if c is string -%}\n      {{ c }}\n    {%- elif c is not none -%}\n      {% for content in c -%}\n        {% if content['type'] == 'image' or content['type'] == 'image_url' -%}\n          &lt;|media_begin|&gt;image&lt;|media_content|&gt;&lt;|media_pad|&gt;&lt;|media_end|&gt;\n        {% elif content['type'] == 'video' or content['type']== 'video_url'-%}\n          &lt;|kimi_k25_video_placeholder|&gt;\n        {% else -%}\n          {{ content['text'] }}\n        {%- endif -%}\n      {%- endfor -%}\n    {%- endif -%}\n{%- endmacro -%}\n\n{% macro set_roles(message) -%}\n  {%- set role_name =  message.get('name') or  message['role'] -%}\n  {%- if message['role'] == 'user' -%}\n    &lt;|im_user|&gt;{{role_name}}&lt;|im_middle|&gt;\n  {%- elif message['role'] == 'assistant' -%}\n    &lt;|im_assistant|&gt;{{role_name}}&lt;|im_middle|&gt;\n  {%- else -%}\n    &lt;|im_system|&gt;{{role_name}}&lt;|im_middle|&gt;\n  {%- endif -%}\n{%- endmacro -%}\n\n\n{%- macro render_toolcalls(message) -%}\n  &lt;|tool_calls_section_begin|&gt;\n  {%- for tool_call in message['tool_calls'] -%}\n    {%- set formatted_id = tool_call['id'] -%}\n    &lt;|tool_call_begin|&gt;{{ formatted_id }}&lt;|tool_call_argument_begin|&gt;{% if tool_call['function']['arguments'] is string %}{{ tool_call['function']['arguments'] }}{% else %}{{ tool_call['function']['arguments'] | tojson }}{% endif %}&lt;|tool_call_end|&gt;\n  {%- endfor -%}\n  &lt;|tool_calls_section_end|&gt;\n{%- endmacro -%}\n\n\n{%- set preserve_thinking = preserve_thinking | default(true) -%}\n{# Find last non-tool-call assistant message. If preserve_thinking, keep -1 so hist is empty and all msgs use suffix (retain reasoning). #}\n{%- set ns = namespace(last_non_tool_call_assistant_msg=-1) -%}\n{%- if not preserve_thinking -%}\n{%- for idx in range(messages|length-1, -1, -1) -%}\n    {%- if messages[idx]['role'] == 'assistant' and not messages[idx].get('tool_calls') -%}\n        {%- set ns.last_non_tool_call_assistant_msg = idx -%}\n        {%- break -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- endif -%}\n\n{# split all messages into history &amp; suffix, reasoning_content in suffix should be reserved.#}\n{%- set hist_msgs = messages[:ns.last_non_tool_call_assistant_msg+1] -%}\n{%- set suffix_msgs = messages[ns.last_non_tool_call_assistant_msg+1:] -%}\n\n{%- if tools -%}\n  {%- if tools_ts_str -%}\n    &lt;|im_system|&gt;tool_declare&lt;|im_middle|&gt;{{ tools_ts_str }}&lt;|im_end|&gt;\n  {%- else -%}\n    &lt;|im_system|&gt;tool_declare&lt;|im_middle|&gt;{{ tools | tojson(separators=(',', ':')) }}&lt;|im_end|&gt;\n  {%- endif -%}\n{%- endif -%}\n\n  \n{%- for message in hist_msgs -%}\n  {{set_roles(message)}}\n  {%- if message['role'] == 'assistant' -%}\n    &lt;think&gt;&lt;/think&gt;{{render_content(message)}}\n    {%- if message.get('tool_calls') -%}\n      {{render_toolcalls(message)}}\n    {%- endif -%}\n  {%- elif message['role'] == 'tool' -%}\n    {%- set tool_call_id = message.tool_call_id -%}\n    ## Return of {{ tool_call_id }}\n{{render_content(message)}}\n  {%- elif message['content'] is not none -%}\n    {{render_content(message)}}\n  {%- endif -%}\n  &lt;|im_end|&gt;\n{%- endfor -%}\n\n{%- for message in suffix_msgs -%}\n  {{set_roles(message)}}\n  {%- if message['role'] == 'assistant' -%}\n    {%- if thinking is defined and thinking is false and preserve_thinking is false -%}\n    &lt;think&gt;&lt;/think&gt;{{render_content(message)}}\n    {%- else -%}\n    {%- set rc = message.get('reasoning', message.get('reasoning_content', '')) -%}\n    &lt;think&gt;{{rc}}&lt;/think&gt;{{render_content(message)}}\n    {%- endif -%}\n    {%- if message.get('tool_calls') -%}\n     {{render_toolcalls(message)}}\n    {%- endif -%}\n  {%- elif message['role'] == 'tool' -%}\n    {%- set tool_call_id = message.tool_call_id -%}\n    ## Return of {{ tool_call_id }}\n{{render_content(message)}}\n  {%- elif message['content'] is not none -%}\n    {{render_content(message)}}\n  {%- endif -%}\n  &lt;|im_end|&gt;\n{%- endfor -%}\n\n\n{%- if add_generation_prompt -%}\n  &lt;|im_assistant|&gt;assistant&lt;|im_middle|&gt;\n  {%- if thinking is defined and thinking is false -%}\n  &lt;think&gt;&lt;/think&gt;\n  {%- else -%}\n  &lt;think&gt;\n  {%- endif -%}\n{%- endif -%}&quot;},&quot;createdAt&quot;:&quot;2026-06-11T07:51:47.000Z&quot;,&quot;discussionsDisabled&quot;:false,&quot;discussionsSorting&quot;:&quot;recently-created&quot;,&quot;downloads&quot;:0,&quot;downloadsAllTime&quot;:0,&quot;id&quot;:&quot;moonshotai/Kimi-K2.7-Code&quot;,&quot;isLikedByUser&quot;:false,&quot;availableInferenceProviders&quot;:[],&quot;showHuggingChatEntry&quot;:false,&quot;inference&quot;:&quot;&quot;,&quot;lastModified&quot;:&quot;2026-06-12T10:05:55.000Z&quot;,&quot;likes&quot;:116,&quot;pipeline_tag&quot;:&quot;image-text-to-text&quot;,&quot;library_name&quot;:&quot;transformers&quot;,&quot;librariesOther&quot;:[],&quot;trackDownloads&quot;:true,&quot;model-index&quot;:null,&quot;private&quot;:false,&quot;repoType&quot;:&quot;model&quot;,&quot;gated&quot;:false,&quot;tags&quot;:[&quot;transformers&quot;,&quot;safetensors&quot;,&quot;kimi_k25&quot;,&quot;image-feature-extraction&quot;,&quot;compressed-tensors&quot;,&quot;image-text-to-text&quot;,&quot;conversational&quot;,&quot;custom_code&quot;,&quot;license:other&quot;,&quot;region:us&quot;],&quot;tag_objs&quot;:[{&quot;id&quot;:&quot;image-text-to-text&quot;,&quot;label&quot;:&quot;Image-Text-to-Text&quot;,&quot;type&quot;:&quot;pipeline_tag&quot;,&quot;subType&quot;:&quot;multimodal&quot;},{&quot;id&quot;:&quot;transformers&quot;,&quot;label&quot;:&quot;Transformers&quot;,&quot;type&quot;:&quot;library&quot;},{&quot;id&quot;:&quot;safetensors&quot;,&quot;label&quot;:&quot;Safetensors&quot;,&quot;type&quot;:&quot;library&quot;},{&quot;id&quot;:&quot;kimi_k25&quot;,&quot;label&quot;:&quot;kimi_k25&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;image-feature-extraction&quot;,&quot;label&quot;:&quot;image-feature-extraction&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;compressed-tensors&quot;,&quot;label&quot;:&quot;compressed-tensors&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;conversational&quot;,&quot;label&quot;:&quot;conversational&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;custom_code&quot;,&quot;label&quot;:&quot;custom_code&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;license:other&quot;,&quot;label&quot;:&quot;other&quot;,&quot;type&quot;:&quot;license&quot;},{&quot;type&quot;:&quot;region&quot;,&quot;label&quot;:&quot;🇺🇸 Region: US&quot;,&quot;id&quot;:&quot;region:us&quot;}],&quot;transformersInfo&quot;:{&quot;auto_model&quot;:&quot;AutoModel&quot;,&quot;custom_class&quot;:&quot;modeling_kimi_k25.KimiK25ForConditionalGeneration&quot;,&quot;pipeline_tag&quot;:&quot;image-feature-extraction&quot;},&quot;widgetData&quot;:[{&quot;text&quot;:&quot;Hi, what can you help me with?&quot;},{&quot;text&quot;:&quot;What is 84 * 3 / 2?&quot;},{&quot;text&quot;:&quot;Tell me an interesting fact about the universe!&quot;},{&quot;text&quot;:&quot;Explain quantum computing in simple terms.&quot;}],&quot;safetensors&quot;:{&quot;parameters&quot;:{&quot;BF16&quot;:43902267888,&quot;F32&quot;:23040,&quot;I32&quot;:1014687129600},&quot;total&quot;:1058589420528,&quot;sharded&quot;:true,&quot;totalFileSize&quot;:595201585646},&quot;hasBlockedOids&quot;:false,&quot;region&quot;:&quot;us&quot;,&quot;isQuantized&quot;:false,&quot;licenseFilePath&quot;:&quot;LICENSE&quot;},&quot;inferenceContextData&quot;:{&quot;billableEntities&quot;:[],&quot;entityName2Providers&quot;:{}},&quot;canWrite&quot;:false}" data-target="ModelTensorsParams"><div class="relative z-2 flex gap-x-1.5 gap-y-2 flex-wrap"><!--[0--><div class="text-smd mr-auto flex flex-none items-center gap-1.5 overflow-hidden rounded-lg font-semibold"><!-- -->Safetensors</div> <div class="flex flex-wrap gap-x-1.5 gap-y-1 text-sm"><div class="inline-flex h-6 shrink-0 items-center overflow-hidden rounded-lg border"><div class="border-r px-2 text-gray-500">Model size</div> <div class="px-1.5">1.1T params</div></div> <div class="inline-flex h-6 shrink-0 items-center overflow-hidden rounded-lg border"><div class="border-r px-2 text-gray-500">Tensor type</div> <div class="flex px-1.5"><!--[--><!-- -->BF16 <div class="mx-1 text-gray-400 last:hidden">·</div><!-- -->F32 <div class="mx-1 text-gray-400 last:hidden">·</div><!-- -->I32 <div class="mx-1 text-gray-400 last:hidden">·</div><!--]--></div></div> <!--[0--><button class="inline-flex h-6 shrink-0 items-center gap-x-1 overflow-hidden rounded-lg border px-2 hover:shadow-inner dark:hover:brightness-125"><!-- --> <p class="text-gray-500">Chat template</p></button><!--]--> <div class="group relative"><button class="inline-flex h-6 shrink-0 items-center gap-x-1 overflow-hidden rounded-lg border px-2 hover:shadow-inner dark:hover:brightness-125"><!-- --> <p class="text-gray-500">Files info</p></button></div></div><!--]-->  <!--[-1--><!--]--> <!--[-1--><!--]--></div> <!--[-1--><!--]--> <!--[-1--><!--]--><!-- --></div> <!--]--> <div class="bg-white pb-1"><div class="SVELTE_HYDRATER contents" data-props="{&quot;widgetData&quot;:{&quot;model&quot;:{&quot;author&quot;:&quot;moonshotai&quot;,&quot;cardData&quot;:{&quot;tags&quot;:[&quot;compressed-tensors&quot;],&quot;license&quot;:&quot;other&quot;,&quot;license_name&quot;:&quot;modified-mit&quot;,&quot;library_name&quot;:&quot;transformers&quot;,&quot;pipeline_tag&quot;:&quot;image-text-to-text&quot;},&quot;cardExists&quot;:true,&quot;config&quot;:{&quot;architectures&quot;:[&quot;KimiK25ForConditionalGeneration&quot;],&quot;auto_map&quot;:{&quot;AutoConfig&quot;:&quot;configuration_kimi_k25.KimiK25Config&quot;,&quot;AutoModel&quot;:&quot;modeling_kimi_k25.KimiK25ForConditionalGeneration&quot;,&quot;AutoModelForCausalLM&quot;:&quot;modeling_kimi_k25.KimiK25ForConditionalGeneration&quot;},&quot;model_type&quot;:&quot;kimi_k25&quot;,&quot;tokenizer_config&quot;:{&quot;bos_token&quot;:&quot;[BOS]&quot;,&quot;eos_token&quot;:&quot;[EOS]&quot;,&quot;pad_token&quot;:&quot;[PAD]&quot;,&quot;unk_token&quot;:&quot;[UNK]&quot;},&quot;chat_template_jinja&quot;:&quot;{%- macro render_content(msg) -%}\n    {%- set c = msg.get('content') -%}\n    {%- if c is string -%}\n      {{ c }}\n    {%- elif c is not none -%}\n      {% for content in c -%}\n        {% if content['type'] == 'image' or content['type'] == 'image_url' -%}\n          &lt;|media_begin|&gt;image&lt;|media_content|&gt;&lt;|media_pad|&gt;&lt;|media_end|&gt;\n        {% elif content['type'] == 'video' or content['type']== 'video_url'-%}\n          &lt;|kimi_k25_video_placeholder|&gt;\n        {% else -%}\n          {{ content['text'] }}\n        {%- endif -%}\n      {%- endfor -%}\n    {%- endif -%}\n{%- endmacro -%}\n\n{% macro set_roles(message) -%}\n  {%- set role_name =  message.get('name') or  message['role'] -%}\n  {%- if message['role'] == 'user' -%}\n    &lt;|im_user|&gt;{{role_name}}&lt;|im_middle|&gt;\n  {%- elif message['role'] == 'assistant' -%}\n    &lt;|im_assistant|&gt;{{role_name}}&lt;|im_middle|&gt;\n  {%- else -%}\n    &lt;|im_system|&gt;{{role_name}}&lt;|im_middle|&gt;\n  {%- endif -%}\n{%- endmacro -%}\n\n\n{%- macro render_toolcalls(message) -%}\n  &lt;|tool_calls_section_begin|&gt;\n  {%- for tool_call in message['tool_calls'] -%}\n    {%- set formatted_id = tool_call['id'] -%}\n    &lt;|tool_call_begin|&gt;{{ formatted_id }}&lt;|tool_call_argument_begin|&gt;{% if tool_call['function']['arguments'] is string %}{{ tool_call['function']['arguments'] }}{% else %}{{ tool_call['function']['arguments'] | tojson }}{% endif %}&lt;|tool_call_end|&gt;\n  {%- endfor -%}\n  &lt;|tool_calls_section_end|&gt;\n{%- endmacro -%}\n\n\n{%- set preserve_thinking = preserve_thinking | default(true) -%}\n{# Find last non-tool-call assistant message. If preserve_thinking, keep -1 so hist is empty and all msgs use suffix (retain reasoning). #}\n{%- set ns = namespace(last_non_tool_call_assistant_msg=-1) -%}\n{%- if not preserve_thinking -%}\n{%- for idx in range(messages|length-1, -1, -1) -%}\n    {%- if messages[idx]['role'] == 'assistant' and not messages[idx].get('tool_calls') -%}\n        {%- set ns.last_non_tool_call_assistant_msg = idx -%}\n        {%- break -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- endif -%}\n\n{# split all messages into history &amp; suffix, reasoning_content in suffix should be reserved.#}\n{%- set hist_msgs = messages[:ns.last_non_tool_call_assistant_msg+1] -%}\n{%- set suffix_msgs = messages[ns.last_non_tool_call_assistant_msg+1:] -%}\n\n{%- if tools -%}\n  {%- if tools_ts_str -%}\n    &lt;|im_system|&gt;tool_declare&lt;|im_middle|&gt;{{ tools_ts_str }}&lt;|im_end|&gt;\n  {%- else -%}\n    &lt;|im_system|&gt;tool_declare&lt;|im_middle|&gt;{{ tools | tojson(separators=(',', ':')) }}&lt;|im_end|&gt;\n  {%- endif -%}\n{%- endif -%}\n\n  \n{%- for message in hist_msgs -%}\n  {{set_roles(message)}}\n  {%- if message['role'] == 'assistant' -%}\n    &lt;think&gt;&lt;/think&gt;{{render_content(message)}}\n    {%- if message.get('tool_calls') -%}\n      {{render_toolcalls(message)}}\n    {%- endif -%}\n  {%- elif message['role'] == 'tool' -%}\n    {%- set tool_call_id = message.tool_call_id -%}\n    ## Return of {{ tool_call_id }}\n{{render_content(message)}}\n  {%- elif message['content'] is not none -%}\n    {{render_content(message)}}\n  {%- endif -%}\n  &lt;|im_end|&gt;\n{%- endfor -%}\n\n{%- for message in suffix_msgs -%}\n  {{set_roles(message)}}\n  {%- if message['role'] == 'assistant' -%}\n    {%- if thinking is defined and thinking is false and preserve_thinking is false -%}\n    &lt;think&gt;&lt;/think&gt;{{render_content(message)}}\n    {%- else -%}\n    {%- set rc = message.get('reasoning', message.get('reasoning_content', '')) -%}\n    &lt;think&gt;{{rc}}&lt;/think&gt;{{render_content(message)}}\n    {%- endif -%}\n    {%- if message.get('tool_calls') -%}\n     {{render_toolcalls(message)}}\n    {%- endif -%}\n  {%- elif message['role'] == 'tool' -%}\n    {%- set tool_call_id = message.tool_call_id -%}\n    ## Return of {{ tool_call_id }}\n{{render_content(message)}}\n  {%- elif message['content'] is not none -%}\n    {{render_content(message)}}\n  {%- endif -%}\n  &lt;|im_end|&gt;\n{%- endfor -%}\n\n\n{%- if add_generation_prompt -%}\n  &lt;|im_assistant|&gt;assistant&lt;|im_middle|&gt;\n  {%- if thinking is defined and thinking is false -%}\n  &lt;think&gt;&lt;/think&gt;\n  {%- else -%}\n  &lt;think&gt;\n  {%- endif -%}\n{%- endif -%}&quot;},&quot;createdAt&quot;:&quot;2026-06-11T07:51:47.000Z&quot;,&quot;discussionsDisabled&quot;:false,&quot;discussionsSorting&quot;:&quot;recently-created&quot;,&quot;downloads&quot;:0,&quot;downloadsAllTime&quot;:0,&quot;id&quot;:&quot;moonshotai/Kimi-K2.7-Code&quot;,&quot;isLikedByUser&quot;:false,&quot;availableInferenceProviders&quot;:[],&quot;showHuggingChatEntry&quot;:false,&quot;inference&quot;:&quot;&quot;,&quot;lastModified&quot;:&quot;2026-06-12T10:05:55.000Z&quot;,&quot;likes&quot;:116,&quot;pipeline_tag&quot;:&quot;image-text-to-text&quot;,&quot;library_name&quot;:&quot;transformers&quot;,&quot;librariesOther&quot;:[],&quot;trackDownloads&quot;:true,&quot;model-index&quot;:null,&quot;private&quot;:false,&quot;repoType&quot;:&quot;model&quot;,&quot;gated&quot;:false,&quot;tags&quot;:[&quot;transformers&quot;,&quot;safetensors&quot;,&quot;kimi_k25&quot;,&quot;image-feature-extraction&quot;,&quot;compressed-tensors&quot;,&quot;image-text-to-text&quot;,&quot;conversational&quot;,&quot;custom_code&quot;,&quot;license:other&quot;,&quot;region:us&quot;],&quot;tag_objs&quot;:[{&quot;id&quot;:&quot;image-text-to-text&quot;,&quot;label&quot;:&quot;Image-Text-to-Text&quot;,&quot;type&quot;:&quot;pipeline_tag&quot;,&quot;subType&quot;:&quot;multimodal&quot;},{&quot;id&quot;:&quot;transformers&quot;,&quot;label&quot;:&quot;Transformers&quot;,&quot;type&quot;:&quot;library&quot;},{&quot;id&quot;:&quot;safetensors&quot;,&quot;label&quot;:&quot;Safetensors&quot;,&quot;type&quot;:&quot;library&quot;},{&quot;id&quot;:&quot;kimi_k25&quot;,&quot;label&quot;:&quot;kimi_k25&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;image-feature-extraction&quot;,&quot;label&quot;:&quot;image-feature-extraction&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;compressed-tensors&quot;,&quot;label&quot;:&quot;compressed-tensors&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;conversational&quot;,&quot;label&quot;:&quot;conversational&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;custom_code&quot;,&quot;label&quot;:&quot;custom_code&quot;,&quot;type&quot;:&quot;other&quot;,&quot;clickable&quot;:true},{&quot;id&quot;:&quot;license:other&quot;,&quot;label&quot;:&quot;other&quot;,&quot;type&quot;:&quot;license&quot;},{&quot;type&quot;:&quot;region&quot;,&quot;label&quot;:&quot;🇺🇸 Region: US&quot;,&quot;id&quot;:&quot;region:us&quot;}],&quot;transformersInfo&quot;:{&quot;auto_model&quot;:&quot;AutoModel&quot;,&quot;custom_class&quot;:&quot;modeling_kimi_k25.KimiK25ForConditionalGeneration&quot;,&quot;pipeline_tag&quot;:&quot;image-feature-extraction&quot;},&quot;widgetData&quot;:[{&quot;text&quot;:&quot;Hi, what can you help me with?&quot;},{&quot;text&quot;:&quot;What is 84 * 3 / 2?&quot;},{&quot;text&quot;:&quot;Tell me an interesting fact about the universe!&quot;},{&quot;text&quot;:&quot;Explain quantum computing in simple terms.&quot;}],&quot;safetensors&quot;:{&quot;parameters&quot;:{&quot;BF16&quot;:43902267888,&quot;F32&quot;:23040,&quot;I32&quot;:1014687129600},&quot;total&quot;:1058589420528,&quot;sharded&quot;:true,&quot;totalFileSize&quot;:595201585646},&quot;hasBlockedOids&quot;:false,&quot;region&quot;:&quot;us&quot;,&quot;isQuantized&quot;:false,&quot;licenseFilePath&quot;:&quot;LICENSE&quot;},&quot;queryParams&quot;:{},&quot;inferenceContextData&quot;:{&quot;billableEntities&quot;:[],&quot;entityName2Providers&quot;:{}},&quot;isLoggedIn&quot;:false,&quot;canWrite&quot;:false,&quot;examples&quot;:[],&quot;widgetType&quot;:&quot;conversational&quot;,&quot;isMaximized&quot;:false,&quot;isMac&quot;:false}}" data-target="InferenceWidget"><!--[0--> <!--[-1--><!--]--> <dialog class="shadow-alternate z-40 mx-4 my-auto h-fit select-text overflow-hidden rounded-xl bg-white max-sm:max-w-[calc(100dvw-2rem)] sm:mx-auto lg:mt-26 md:portrait:mt-30 xl:mt-30 2xl:mt-32 w-full lg:w-10/12 xl:w-8/12 2xl:w-7/12 max-w-[calc(100%-4rem)] lg:max-w-4xl"></dialog><!-- --><!--]--><!-- --></div></div> <!--[-1--><!--]--><!-- --> <!--[-1--><!--]--> <!--[-1--><!--]--> <!--[0--> <h2 class="text-smd mb-5 flex items-baseline overflow-hidden whitespace-nowrap font-semibold text-gray-800"><!-- --> Collection including <span class="ml-1 truncate font-mono text-[0.86rem] font-medium">moonshotai/Kimi-K2.7-Code</span></h2> <div class="flex flex-col gap-3"><!--[--><div class="flex flex-col"><article class="overview-card-wrapper group/collection rounded-md! from-white! to-white! dark:from-gray-900! dark:to-gray-900! relative peer"><a class="block p-2" href="/collections/moonshotai/kimi-k25"> <div class="mr-1 flex items-center overflow-hidden whitespace-nowrap text-sm leading-tight text-gray-400"><!--[0--><span class="max-w-64 truncate">Moonshot's most powerful model</span> <span class="px-1.5 text-gray-300">•</span><!--]--> <span>4 items</span> <span class="px-1.5 text-gray-300">•</span> <span class="truncate">Updated <time datetime="2026-06-12T12:02:41" title="2026-06-12T12:02:41.610Z">18 minutes ago</time></span> <!--[0--><span class="px-1.5 text-gray-300">•</span> <!--[-1--><!--]--> 69<!--]--></div></a></article> <!--[0--><!--]--></div><!--]--></div><!--]--> <!--[-1--><!--]--> <!--[-1--><!--]-->  <!-- --></section><!-- --><!--]--><!-- --></div><!-- --><!-- --></main>
