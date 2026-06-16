@@ -1,0 +1,293 @@
+sharkclean-mcp
+
+An 
+MCP
+ server for 
+SharkClean
+ /
+SharkNinja robot vacuums. Lets any MCP client (Claude Code, Claude Desktop, etc.) start
+cleanings, clean specific rooms, send the robot home, and check status — agentically, in
+plain language.
+
+Unofficial — not affiliated with or endorsed by SharkNinja.
+
+All commands go through SharkNinja's current cloud ("skegox") — the same backend the
+SharkClean app uses — so the robot behaves exactly as if driven from the app, with no
+hardware modification.
+
+Why not the Ayla cloud?
+ The widely-used 
+sharkiq
+ SDK (and the Home Assistant Shark IQ
+integration built on it) talk to SharkNinja's 
+legacy
+ Ayla IoT cloud. Newer robots
+(Matrix, AI Ultra, Mach 2, the RV2500+ generation) have been migrated off Ayla onto the
+skegox backend. On Ayla those robots show up permanently "Offline" with a frozen, stale
+room map, even though the app controls them fine. This server talks to skegox directly,
+which is why it works with the newer robots that 
+sharkiq
+ can't reach. The reverse
+engineering of the skegox API is owed to the 
+shark2mqtt
+
+project.
+
+Tools
+
+Tool
+
+What it does
+
+list_robots
+
+List robots on the account (name, device id)
+
+get_status
+
+Live state: cleaning/paused/docked, battery %, charging, power mode, online, errors
+
+start_cleaning
+
+Whole-home clean, optional power mode (
+eco
+/
+normal
+/
+max
+)
+
+list_rooms
+
+Rooms the robot knows from its current map (with floor id + last-updated)
+
+clean_rooms
+
+Clean only specific rooms (validated against the live map)
+
+pause_cleaning
+ / 
+resume_cleaning
+ / 
+stop_cleaning
+
+Run control
+
+return_to_dock
+
+Send the robot home to recharge / self-empty
+
+set_power_mode
+
+Suction: 
+eco
+, 
+normal
+, 
+max
+
+locate_robot
+
+Make the robot beep
+
+start_cleaning
+ and 
+clean_rooms
+ first check the robot is online and refuse if it isn't,
+so commands don't silently vanish. Multi-robot accounts are supported — every tool takes an
+optional 
+robot
+ argument (name or device id). With one robot, omit it.
+
+Setup
+
+Requires 
+uv
+ and Python ≥ 3.10.
+
+git clone https://github.com/a-funk/sharkclean-mcp
+
+cd
+ sharkclean-mcp
+uv sync
+cp .env.example .env       
+#
+ add your SharkClean app email + password
+
+uv run shark-mcp-auth      
+#
+ one-time browser login (see below)
+
+uv run shark-mcp-doctor    
+#
+ confirm: prints your robot + current room map
+
+One-time login (
+shark-mcp-auth
+)
+
+SharkNinja's Auth0 tenant blocks headless password logins, so the first login happens in
+your browser using the SharkClean app's own PKCE flow:
+
+shark-mcp-auth
+ opens the real SharkClean login page.
+
+Log in. The browser then tries to redirect to 
+com.sharkninja.shark://...
+ and usually
+shows an error, blank page, or an "Open SharkClean?" dialog — that's expected.
+
+Copy that full 
+com.sharkninja.shark://...
+ URL (from the address bar, browser history,
+or the DevTools Network tab with "Preserve log" on) and paste it at the prompt.
+
+That's it. Tokens are cached at 
+~/.config/shark-mcp/tokens.json
+ (mode 
+600
+) and refreshed
+automatically; you won't need the browser again. See 
+SECURITY.md
+ for how
+credentials are handled.
+
+Register with your MCP client
+
+Claude Code
+ (user-wide):
+
+claude mcp add --scope user sharkclean -- uv run --directory /ABSOLUTE/PATH/TO/sharkclean-mcp shark-mcp
+
+Or copy 
+.mcp.json.example
+ to 
+.mcp.json
+, set the absolute path, and Claude Code will pick
+it up automatically when opened in this directory.
+
+Claude Desktop
+ — add to 
+claude_desktop_config.json
+:
+
+{
+  
+"mcpServers"
+: {
+    
+"sharkclean"
+: {
+      
+"command"
+: 
+"
+uv
+"
+,
+      
+"args"
+: [
+"
+run
+"
+, 
+"
+--directory
+"
+, 
+"
+/ABSOLUTE/PATH/TO/sharkclean-mcp
+"
+, 
+"
+shark-mcp
+"
+]
+    }
+  }
+}
+
+Credentials come from environment variables or the 
+.env
+ file: 
+SHARKCLEAN_EMAIL
+,
+
+SHARKCLEAN_PASSWORD
+, and optionally 
+SHARKCLEAN_REGION=eu
+.
+
+Example prompts
+
+"Start a max-power clean."
+
+"Vacuum the kitchen and the living room."
+
+"Is the shark done? What's its battery at?"
+
+"Send the robot back to its dock."
+
+Command-line control
+
+Beyond the MCP server, 
+shark-mcp-rc
+ drives the robot from a shell (handy for scripts/cron):
+
+uv run shark-mcp-rc status
+uv run shark-mcp-rc rooms
+uv run shark-mcp-rc clean Kitchen 
+"
+Living Room
+"
+
+uv run shark-mcp-rc start max
+uv run shark-mcp-rc dock
+
+Development
+
+uv run pytest            
+#
+ unit tests (fake robot, no cloud calls)
+
+uv run shark-mcp         
+#
+ run the server on stdio
+
+uv run shark-mcp-doctor  
+#
+ live end-to-end check against the cloud
+
+See 
+CONTRIBUTING.md
+. If your robot works, add it to
+
+CONFIRMED_MODELS.md
+.
+
+Notes & limitations
+
+Auth: the one-time browser login (
+shark-mcp-auth
+) yields an Auth0 refresh token, cached
+at 
+~/.config/shark-mcp/tokens.json
+. The server mints short-lived skegox id_tokens from
+it. SharkNinja's Auth0 tenant rotates refresh tokens, so the server persists the rotated
+token on every refresh — if you see 
+invalid_grant
+, re-run 
+shark-mcp-auth
+.
+
+Headless/scripted password login is blocked by Auth0 bot detection ("Suspicious request
+requires verification"); the browser flow is the reliable path.
+
+Room targeting (
+clean_rooms
+) requires a robot with a completed map; older models
+without room support report no rooms.
+
+This is unofficial, built on community reverse engineering. SharkNinja can change the
+backend at any time.
