@@ -1,0 +1,389 @@
+Sortis - A paper empire game
+
+Get link
+
+Facebook
+
+X
+
+Pinterest
+
+Email
+
+Other Apps
+
+June 16, 2026
+
+Sortis - A paper empire game
+I settled on the name Sortis from the latin because you don't play every turn in the game instead you skip ahead and calculate what happened at the point you want to make a genuine change to what's going on. Its a way of having the mechanics of the computer adding 1 wheat each turn without you having to manually add 1 wheat each turn. The literal translation is "of the lot/ of fate/ of oracle". Its etymology stretches back to a series, chain or row; which is equally relevant to this game. I'd love for the word to come to mean computationally reducible, a generalisation of closed form. 
+
+I have been working on a game recently that is played on paper but has the emergence of a procedural game like Minecraft, without forcing the player to do all the computation that would normally require. 
+
+What I wanted from this game was the feeling of progression, automation and discovery without needing anything other than pen and paper. I also wanted it to be something I could engage with that wouldn't rot my brain, but that I could actively do while very tired.
+
+I feel I have achieved what I set out to.
+
+If you are trained in computer science you will already know enough of the primitives to find the rules simple and memorable. If you haven't, then concepts like XOR and hexadecimal may need a little research. If you feel up to the effort, none of the concepts in this game are challenging to grasp.
+
+The game is based on a grid world where each square is naturally water, forest or mountain. Forests can be cleared to build on, and there are a number of buildings. The aim of the game is to get the workshop to the highest level possible, and you do this using ever higher grades of ore. Ore is mined at a mine built on a mountain square. The build progression was inspired by OGame (a browser strategy game whose costs all climb on powers of two), so the formulas are all some form of \(2^n\). As the only player (the game is played alone in a notebook) you coordinate every agent in the game, of which you start with one.
+
+The map
+The page with the map from one play through - coloured in.
+
+The core aspect of the game that I found difficult to produce was an effectively procedurally generated map, without too much computation by hand and without needing dice or a calculator. The ethos of the game is that everything can be done with just pen and paper, with no step much more complex than sudoku. The algorithm I stumbled across that worked for this was an LFSR random number generator, specifically over a single byte. Written out it looks complicated, but it reduces to something very simple.
+
+To build the map you start by picking two numbers from 0–255, or 0x0–0xFF. One is for X and the other for Y. You then step these numbers as you increase X or Y using the following formula:
+
+$$\text{step}(s) = \big((s \ll 1)\ \&\ \text{0xFF}\big) \mid (b_8 \oplus b_7 \oplus b_2 \oplus b_1)$$
+
+That is: given a number \(s\) written in binary, take the XOR of the first two and last two digits, append that XOR to the end of the number, and drop the first digit so it stays 8 binary digits long. (Number the bits from either end you like, as long as you're consistent - the tap positions are symmetric, so it doesn't matter which.)
+
+That gives you two number sequences starting from your two seeds, one for X and one for Y. To get the value for square \((x, y)\) you take the \(x\)-th number from the X sequence and the \(y\)-th number from the Y sequence and XOR them:
+
+$$v(x, y) = \text{LFSR}^{x}(s_x) \oplus \text{LFSR}^{y}(s_y)$$
+
+What we end up with is a random number at every square in the grid. The following rule converts a number into terrain:
+
+Value
+Terrain
+
+\(v < \text{0x75}\)
+Water
+
+\(\text{0x75} \le v < \text{0xE0}\)
+Forest
+
+\(v \ge \text{0xE0}\)
+Mountain
+
+Because we XOR the two random numbers there are side-by-side correlations, which leads to water gathering into lakes and mountain ranges forming. For map-building rules, that's exactly what I wanted. Also, given the cutoffs, you only need to calculate the first nibble of a square's number (so long as it isn't 0) to know what the square is. This speeds up map generation when I'm playing.
+
+There is a further detail to the mountains whose importance becomes clear when I explain the mechanics. The number of trailing zeros of the square's value is the ore level of that square. So a mountain with an odd number has 0 trailing zeros and is ore(0), or stone. A number like E2, F2 or FA has 1 trailing zero, so its ore is ore(1). You might notice the highest possible ore on the map is ore(5), at E0. This is similar to how the Bitcoin algorithm gets harder as more people mine, and has the nice property that on average ore(n+1) is twice as rare as ore(n).
+
+Exploring the map costs only the time you spend doing the XOR calculation and extending one of the sequences. Interestingly, the seeds you choose don't change the world you play in - there is precisely one world, 256×256 large. What the seeds do is place you randomly on it.
+
+A seed of \(x+1\) is not a translation of the world from seed \(x\) by one square; it's a new random value. Since you'd never calculate all 65,536 squares by hand, it might as well be a new world to you.
+
+Buildings
+
+I wanted to keep the rules as simple as possible: enough to support an emergent playing style, but otherwise minimal. Buildings have levels, and I'll write L(N) for "level N" throughout - so a workshop L(3) is a level-3 workshop. To that end the buildings are:
+
+House
+
+Workshop - whose max level is the aim of the game
+
+Extractor (sawmill or mine)
+
+Smelter (for getting past level 5)
+
+Road segment
+
+And two vehicles: the wagon and the boat.
+
+It's more building types than I would have hoped, but I think having both wood and ore as resources is needed (here I've folded both extractors into a single building type anyway). The house adds interesting limits on the number of agents through geography, which I think justifies its place. The road could have been removed, but some late-game mechanics justify its existence; for the most part it can be ignored. Likewise the smelter - before level 5, smelting is a challenging way to expand when exploration is so cheap.
+
+The house
+
+Each agent (except the first) needs to be housed; they spawn when there is housing space. Houses have levels, each level allowing one more agent to live there, and each level costs exponentially more. A house costs \(2^n\) wood and starts at level 0, so a level-0 house costs 1 wood. That initial wood can come from clearing a forest, which yields 1 wood. To upgrade the house to level 1 you'd need 2 wood transported in, plus a level-1 workshop.
+
+Workshop
+
+In general, to build any building (other than a workshop) of level \(n\), you need a workshop of level \(n\). You also need the agent tasked with building or upgrading to level \(n\) to have visited a workshop of at least level \(n\). The workshop follows the same cost curve as the house, \(2^n\), but the resource required is ore(n).
+
+Extractor
+
+There are two resources, ore and wood. Extractor costs scale the same way as the house and workshop: \(2^n\). The sawmill requires \(2^n\) wood and the mine requires \(2^n\) ore(0). Unlike the workshop, the mine only needs low-grade ore to build or upgrade. Any higher grade ore can be used one-to-one as lower grade: if you need 1×ore(0) you can use 1×ore(1) in its place. It does not hold the other way - you cannot use ore(0) where ore(1) is required, unless you smelt it up. An extractor L(n) produces \((n+1)\) units per turn.
+
+The smelter
+
+To get past the natural ore limits you can smelt lower-grade ore into higher-grade ore, but it's very expensive. A smelter costs the same as a workshop of the same level: \(2^n\) ore(n). Once built, it converts \(2^n\) ore(n) + \(2^{n+1}\) wood into 1 ore(n+1). A smelter L(n) only accepts ore(n) or higher as its input. There's no limit on the amount a single smelter can process, but the output isn't available until the turn after the inputs arrive. To reach the very highest levels you'll need to chain smelters together and feed the early ones truly huge amounts.
+
+Road segment
+
+This includes bridges, which can be built but are also very expensive. A road costs 1 ore(d) per square and must be on cleared land or on water. On land, \(d = 0\), so the cost is one ore(0) per square. For bridges, \(d\) is five plus the distance from shore: 1 square from shore requires ore(6), 2 squares from shore requires ore(7). Since the map tops out at ore(5), every bridge tile demands ore you can only reach by smelting - which is why bridges create a late game that almost no one will reach.
+
+Playing the game
+
+So far there's been a lot of explanation for a game I claimed is easy to remember and needs only pen and paper. The principle behind the agents is that they must travel to a square to act on it. The agents do the actions.
+
+With that, let me start a game with you. We need a seed: \(x_\text{seed} = 01\), \(y_\text{seed} = 77\). Let's step X forward a few times to get some map.
+
+Binary step
+Hex
+
+0000 0001 → 0000 0011
+01 → 03
+
+0000 0011 → 0000 0110
+03 → 06
+
+0000 0110 → 0000 1101
+06 → 0D
+
+0000 1101 → 0001 1010
+0D → 1A
+
+X sequence: 
+01, 03, 06, 0D, 1A
+
+And for Y:
+
+Binary step
+Hex
+
+0111 0111 → 1110 1111
+77 → EF
+
+1110 1111 → 1101 1110
+EF → DE
+
+1101 1110 → 1011 1101
+DE → BD
+
+1011 1101 → 0111 1010
+BD → 7A
+
+Y sequence: 
+77, EF, DE, BD, 7A
+
+That's enough for a 5×5 grid. To get square (1,1) we take the first number of each sequence and XOR them: 77 XOR 01. You can convert to binary and go bit by bit, but here I spot that since the first nibble of X is 0, the first nibble of the answer is 7. Since it's a 7 we check the second nibble to see whether it's under 75 (water). For the XOR of 7 and 1, I know the 1 makes 7 even, so it's 6: 76, so this square is forest. Again you can fall back to binary, but you'll learn the hex XOR quickly. I do keep the binary expansions of A–E written at the top of the page:
+
+Hex
+Binary
+Decimal
+
+A
+1010
+10
+
+B
+1011
+11
+
+C
+1100
+12
+
+D
+1101
+13
+
+E
+1110
+14
+
+The grid so far (rows are Y seeds, columns are X seeds):
+
+01
+03
+06
+0D
+1A
+
+77
+76
+74
+71
+7A
+6D
+
+EF
+EE
+ED
+
+DE
+
+BD
+
+7A
+
+Happily (1,1) is forest, so our agent can start there. From here they can leave it as forest and travel, clear the forest, or build a house.
+
+Filling in the rest the same way (XOR each X seed with each Y seed) gives us our starting patch of world - keeping the row we already worked out for the top edge. Green is forest, blue is water, white is mountain, with the ore tier of each mountain in brackets:
+
+01
+03
+06
+0D
+1A
+
+77
+76
+74
+71
+7A
+6D
+
+EF
+EE ore(1)
+EC ore(2)
+E9 ore(0)
+E2 ore(1)
+F5 ore(0)
+
+DE
+DF
+DD
+D8
+D3
+C4
+
+You can already read the geography off it: forest along the top dropping into water, a mountain range across the middle (handily including an ore(2) square), and solid forest along the bottom. A good spot to begin - clear forest for early wood, with mountains one step away for mining once the workshop is up.
+
+The bottom row shows off the nibble shortcut. Every cell there XORs to a first nibble of C or D, and anything from 0x75 up to 0xDF is forest - so the moment I see a leading C or D I can write "forest" without bothering to XOR the second nibble at all. You only need the full byte when the first nibble is 7 (it straddles the water/forest cutoff at 0x75) or E/F (where the trailing zeros decide the ore tier).
+
+Keeping track and skipping turns
+
+One aspect of the game that takes some getting used to is that you don't need to consciously play every turn. Because you know the production levels, you can project them into the future. To keep track of what's going on, I suggest keeping a few references written down:
+
+Terrain map
+ - a page for the terrain, leaving enough room to explore and expand as you go.
+
+Buildings map
+ - you could just make the squares on the terrain map big enough, but I prefer a separate page to track what has been built where and to what level. I also keep a turn number in each building square marking when that square's production formula last changed.
+
+Agent log
+ - a column per agent noting their location and the turn on which they were there. Keep it append-only.
+
+Turn log
+ - the bulk of the game. You don't play turn by turn; it might be that nothing happens for 100 turns as resources accumulate and people travel. But every time there's an action - upgrading a building, or changing how an agent behaves - you note it against the turn it happens.
+
+So far in this playthrough we have just 1 agent. In playthroughs I've done I've had over 26, and keeping track of them isn't too hard, since most are simply standing on a square operating a mine or sawmill. Others bounce between two locations carrying resources, and for those I record position in terms of the turn number \(t\).
+
+Say an agent ferries between (1,1) and (4,1) by boat. The round trip is a 6-turn cycle, so their position takes the form: \(t \bmod 6 = a\) means they're at (1,1), and \(t \bmod 6 = b\) means they're at (4,1). If they set off at turn 5, then \(a = 5\) and \(b = 2\). That lets you work out where they are on any future turn instantly, without simulating the steps in between.
+
+Using closed-form formulas like this means the turn log only has to record interesting events - you never add 1 to a square's resources turn after turn. It's a necessary element of the game, too: the volumes required climb so fast that reaching level 6 will have you skipping 100 turns forward at a time.
+My agent log for all A-AB over 180 turns
+
+Cheat sheet
+
+Principles
+
+Locality
+ - every resource is on exactly one square. Resources for a build must be on the target square.
+
+One action per agent per turn
+ - move one square, clear, build, or man a facility.
+
+Buildings need operators to produce
+ - a sawmill or mine only produces if a person is dedicated to it and physically present.
+
+Authorisation is personal and persistent
+ - visiting a workshop of level \(\ge n\) permanently authorises that agent to build at level \(n\).
+
+Map
+
+Given two seeds \(s_x, s_y \in [1, 255]\):
+
+$$\text{step}(s) = \big((s \ll 1)\ \&\ \text{0xFF}\big) \mid (b_8 \oplus b_7 \oplus b_2 \oplus b_1)$$
+
+$$v(x, y) = \text{LFSR}^{x}(s_x) \oplus \text{LFSR}^{y}(s_y)$$
+
+Terrain
+
+Value
+Terrain
+
+\(v < \text{0x75}\)
+Water
+
+\(\text{0x75} \le v < \text{0xE0}\)
+Forest
+
+\(v \ge \text{0xE0}\)
+Mountain (ore tier = trailing zeros in \(v\))
+
+Start
+
+You start with one person on a forest square of your choice. No buildings, no resources.
+
+Movement and transport
+
+A person can carry up to 1 resource and moves orthogonally.
+
+Terrain
+Cleared / road
+Forest
+Mountain
+Water
+
+Turns to enter
+1
+2
+3
+Impossible on foot
+
+Multiple agents may share a square. Vehicles carry \(2N\) slots (people count as 2 resources), require 1 operator, and must be built at a workshop whose level is equal to or higher than the vehicle's.
+
+Wagon(N)
+ travels only on the road network. A road network is a maximal set of orthogonal road squares; its reach is all road squares plus their orthogonal neighbours. A wagon delivers between any two reach squares in 1 turn.
+
+Boat(N)
+ is built at a lake-adjacent workshop and travels 1 square per turn. It can land at any lake-adjacent workshop of level \(\ge N-1\) - so a boat L(0) can land at any lake-adjacent workshop regardless of level.
+
+Clearing
+
+An agent on a forest square can clear it, taking 1 turn and yielding 1 wood. The terrain becomes cleared.
+
+Buildings
+
+Building or upgrading to level \(N\) costs \(2^N\) of its primary resource on the target square. The builder must be authorised at level \(N\).
+
+Building
+Primary resource
+Where built
+
+Workshop
+ore(N)
+Cleared land; lake-adjacent for boats
+
+House
+wood
+Cleared land
+
+Extractor
+tile's resource
+Forest (wood), mountain (ore)
+
+Smelter
+ore(n)
+Cleared land
+
+Road segment
+ore(d)
+Cleared land, or water for a bridge. On land \(d=0\); on water \(d = \) distance from shore + 5.
+
+Production
+
+An operated extractor of level \(n\) produces \((n+1)\) units per turn. A smelter of level \(n\) consumes \(2^n\) ore(n) + \(2^{n+1}\) wood per 1 ore(n+1) produced, at whatever rate the inputs arrive.
+
+Quantity
+Formula
+
+Cost at level N
+\(2^N\) primary resource
+
+Extractor production at level N
+\(N+1\) per turn
+
+Vehicle cargo
+\(2N\) slots (people cost 2 slots)
+
+Movement
+1 / 2 / 3 turns to enter cleared / forest / mountain
+
+Get link
+
+Facebook
+
+X
+
+Pinterest
+
+Email
+
+Other Apps
+
+Comments
+
+Post a Comment

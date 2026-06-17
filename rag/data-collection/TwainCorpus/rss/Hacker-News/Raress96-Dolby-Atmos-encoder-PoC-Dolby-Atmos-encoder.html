@@ -1,0 +1,373 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">dolby-atmos-encoder</h1></div>
+<p dir="auto">Convert a <strong>Dolby Atmos Master (DAMF)</strong> — as decoded from a Dolby <strong>TrueHD + Atmos</strong> stream by
+<a href="https://github.com/truehdd/truehdd"><code>truehdd</code></a> — into <strong>E-AC-3 (Dolby Digital Plus) with Joint
+Object Coding (JOC)</strong>, i.e. "DD+ Atmos". The aim was to let consumer gear that can't bitstream
+TrueHD Atmos (e.g. an LG TV → Denon AVR over eARC) render real object-based Atmos with height.</p>
+<blockquote>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Status: research-complete, hardware-blocked</h2></div>
+<p dir="auto">Every stage below is <strong>provably correct by every software oracle available</strong> (ffmpeg 7,
+<a href="https://github.com/VoidXH/Cavern">VoidXH/Cavern</a>): the output is detected as
+<code>E-AC-3 (Dolby Digital Plus + Dolby Atmos)</code>, decodes with the right object count and valid 3D
+object positions (including height), and is CRC-clean. <strong>But it does not engage Atmos on
+Dolby-certified hardware</strong> — playback falls back to Dolby Surround.</p>
+<p dir="auto">The cause is <strong>two independent, proprietary walls</strong> (see <a href="#why-it-cant-fully-work">Why it can't fully
+work</a>). This repository is the honest, documented artifact of that
+investigation, with a clean seam for the one missing cryptographic piece.</p>
+</blockquote>
+<p dir="auto">This is for <strong>personal / interoperability research use only.</strong> See
+<a href="#licensing--provenance">Licensing &amp; provenance</a>.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">What it does (pipeline)</h2></div>
+<p dir="auto">A near-complete reimplementation of the relevant parts of a DD+ Atmos encoder, in Rust:</p>
+<ul dir="auto">
+<li><strong>DAMF reader</strong> — parses the Dolby Atmos Master (<code>.atmos</code> / <code>.audio</code> / <code>.metadata</code>).</li>
+<li><strong>5.1 downmix renderer</strong> — VBAP-pans the Atmos objects to a 5.1 bed (L R C LFE Ls Rs).</li>
+<li><strong>OAMD encoder</strong> (ETSI TS 103 420) — per-frame Object Audio Metadata: object positions (with
+elevation), bed/LFE, program assignment. Round-trips through our decoder and Cavern.</li>
+<li><strong>JOC encoder</strong> — Joint Object Coding matrices over the 5-channel core × parameter bands, with
+Dolby's quant/Huffman config. Bit-exact round-trip.</li>
+<li><strong>EMDF container</strong> (ETSI TS 102 366 Annex H) — wraps OAMD (id 11) + JOC (id 14) with the
+<code>emdf_protection</code> field, carried in the E-AC-3 audio-block <strong>skip field</strong> exactly where real Dolby
+streams put it (recomputing <code>frmsiz</code> + <code>crc2</code>).</li>
+<li><strong>addbsi signaling</strong> — the <code>flag_ec3_extension_type_a</code> + <code>complexity_index</code> Atmos-detection flag.</li>
+</ul>
+<p dir="auto">The E-AC-3 <strong>core</strong> itself is encoded externally (e.g. by ffmpeg); this tool injects/synthesizes the
+Atmos metadata layer. See <code>Command</code> variants below.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Build</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo build --release" dir="auto"><pre>cargo build --release</pre></div>
+<p dir="auto">(Stand-alone crate — it does <strong>not</strong> depend on the <code>truehdd</code> library; it consumes the DAMF files
+<code>truehdd</code> produces. The only out-of-the-ordinary deps are <code>hmac</code>/<code>sha2</code>, used by the EMDF signing
+seam.)</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Memory use (large files)</h3></div>
+<p dir="auto">The frame pipeline streams: <code>eac3::transform_frames_io</code> reads the E-AC-3 core in a few-MiB rolling
+buffer, transforms each syncframe, and writes it straight out, so memory stays bounded regardless of
+file length (E-AC-3 frames are ≤4 KB, so a 4 MiB chunk batches ~1000 frames per read). <code>eac3inject</code>
+and <code>oamd</code> are fully streamed (input + output); <code>atmos</code> streams its output and still loads the core
+once for per-frame JOC context. Fully streaming <code>atmos</code>'s input and the (large) master audio essence
+is possible future work. Note: this is plain synchronous streaming — <code>async</code> would add a runtime
+without helping a single-file, CPU-bound batch transform.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Test files / samples</h2></div>
+<p dir="auto">You need a source that actually contains <strong>Dolby TrueHD + Atmos</strong>. Public sample sources:</p>
+<ul dir="auto">
+<li><strong>Kodi samples wiki</strong> — <a href="https://kodi.wiki/view/Samples" rel="nofollow">https://kodi.wiki/view/Samples</a> (see the Dolby TrueHD / Atmos entries).</li>
+<li><strong>r/hometheater — "surround sound test files in almost every format"</strong> —
+<a href="https://www.reddit.com/r/hometheater/comments/11qqv95/surround_sound_test_files_in_almost_every_format/" rel="nofollow">https://www.reddit.com/r/hometheater/comments/11qqv95/surround_sound_test_files_in_almost_every_format/</a>
+(links to TrueHD Atmos, DD+ JOC Atmos and more).</li>
+</ul>
+<p dir="auto">A <strong>TrueHD Atmos</strong> clip is the lossless source you decode to a DAMF master; a known-good <strong>DD+ JOC
+Atmos</strong> clip is handy as a reference for <code>jocprobe</code> / <code>emdfverify</code>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Toolchain: from a Blu-ray MKV to a testable stream</h2></div>
+<p dir="auto">Tools: <a href="https://github.com/truehdd/truehdd"><code>truehdd</code></a>, <code>ffmpeg</code> (≥5), <code>mkvextract</code> / <code>mkvmerge</code>
+(MKVToolNix), this crate, and optionally Cavern (verification, below).</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='# 0. Build this tool.
+cargo build --release                              # -&gt; target/release/dolby-atmos-encoder
+
+# 1. Extract the TrueHD elementary stream from the MKV.
+#    Find the TrueHD track first:  ffprobe movie.mkv
+ffmpeg -i movie.mkv -map 0:a:0 -c copy -f truehd movie.thd
+#    (or, by track id:  mkvextract tracks movie.mkv 1:movie.thd)
+
+# 2. Decode TrueHD -&gt; Dolby Atmos Master (DAMF).  --presentation 3 selects the Atmos presentation.
+truehdd decode --presentation 3 movie.thd --output-path master
+#    -&gt; master.atmos  +  master.atmos.audio  +  master.atmos.metadata
+
+# 3. Render objects to a 5.1 bed, then encode an E-AC-3 core with ffmpeg.
+#    Pipe raw f32le straight into ffmpeg — works for any length (no WAV size cap):
+dolby-atmos-encoder downmix master.atmos --out - \
+  | ffmpeg -f f32le -ar 48000 -ac 6 -i - -c:a eac3 -b:a 768k -f eac3 core.eac3
+#    (Short clips only — `--out downmix.wav` then `ffmpeg -i downmix.wav ...` — but a 5.1
+#     32-bit-float WAV is capped at 4 GB, i.e. ~58 min at 48 kHz, so prefer the pipe above.)
+
+# 4. Inject per-frame Atmos metadata (OAMD + JOC + the addbsi detection flag) into the core.
+dolby-atmos-encoder atmos core.eac3 master.atmos --out atmos.eac3
+#    (add  --emdf-key &lt;hex&gt;  to sign the EMDF protection field — see "The signing seam")
+
+# 5. Mux into an MKV alongside your video.
+mkvmerge -o out.mkv --no-audio movie.mkv atmos.eac3
+
+# 6. Quick check (full verification with Cavern below).
+ffmpeg -i atmos.eac3            # expect: Audio: eac3 (... Dolby Atmos ...)' dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> 0. Build this tool.</span>
+cargo build --release                              <span class="pl-c"><span class="pl-c">#</span> -&gt; target/release/dolby-atmos-encoder</span>
+
+<span class="pl-c"><span class="pl-c">#</span> 1. Extract the TrueHD elementary stream from the MKV.</span>
+<span class="pl-c"><span class="pl-c">#</span>    Find the TrueHD track first:  ffprobe movie.mkv</span>
+ffmpeg -i movie.mkv -map 0:a:0 -c copy -f truehd movie.thd
+<span class="pl-c"><span class="pl-c">#</span>    (or, by track id:  mkvextract tracks movie.mkv 1:movie.thd)</span>
+
+<span class="pl-c"><span class="pl-c">#</span> 2. Decode TrueHD -&gt; Dolby Atmos Master (DAMF).  --presentation 3 selects the Atmos presentation.</span>
+truehdd decode --presentation 3 movie.thd --output-path master
+<span class="pl-c"><span class="pl-c">#</span>    -&gt; master.atmos  +  master.atmos.audio  +  master.atmos.metadata</span>
+
+<span class="pl-c"><span class="pl-c">#</span> 3. Render objects to a 5.1 bed, then encode an E-AC-3 core with ffmpeg.</span>
+<span class="pl-c"><span class="pl-c">#</span>    Pipe raw f32le straight into ffmpeg — works for any length (no WAV size cap):</span>
+dolby-atmos-encoder downmix master.atmos --out - \
+  <span class="pl-k">|</span> ffmpeg -f f32le -ar 48000 -ac 6 -i - -c:a eac3 -b:a 768k -f eac3 core.eac3
+<span class="pl-c"><span class="pl-c">#</span>    (Short clips only — `--out downmix.wav` then `ffmpeg -i downmix.wav ...` — but a 5.1</span>
+<span class="pl-c"><span class="pl-c">#</span>     32-bit-float WAV is capped at 4 GB, i.e. ~58 min at 48 kHz, so prefer the pipe above.)</span>
+
+<span class="pl-c"><span class="pl-c">#</span> 4. Inject per-frame Atmos metadata (OAMD + JOC + the addbsi detection flag) into the core.</span>
+dolby-atmos-encoder atmos core.eac3 master.atmos --out atmos.eac3
+<span class="pl-c"><span class="pl-c">#</span>    (add  --emdf-key &lt;hex&gt;  to sign the EMDF protection field — see "The signing seam")</span>
+
+<span class="pl-c"><span class="pl-c">#</span> 5. Mux into an MKV alongside your video.</span>
+mkvmerge -o out.mkv --no-audio movie.mkv atmos.eac3
+
+<span class="pl-c"><span class="pl-c">#</span> 6. Quick check (full verification with Cavern below).</span>
+ffmpeg -i atmos.eac3            <span class="pl-c"><span class="pl-c">#</span> expect: Audio: eac3 (... Dolby Atmos ...)</span></pre></div>
+<blockquote>
+<p dir="auto"><g-emoji alias="warning" class="g-emoji">⚠️</g-emoji> This yields a stream ffmpeg/Cavern accept as Atmos, but it will <strong>not</strong> engage Atmos on
+Dolby-certified hardware — see <a href="#why-it-cant-fully-work">Why it can't fully work</a>.</p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Subcommands</h3></div>
+<p dir="auto">Run <code>--help</code> on each for details.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inspect &lt;atmos&gt;</code></td>
+<td>Report a DAMF master's bed/object layout and metadata.</td>
+</tr>
+<tr>
+<td><code>downmix &lt;atmos&gt; --out d.wav</code></td>
+<td>Render objects to a 5.1 bed WAV (<code>--out -</code> streams raw f32le to stdout — no 4 GB cap, pipe into ffmpeg).</td>
+</tr>
+<tr>
+<td><code>atmos &lt;core&gt; &lt;atmos&gt; --out o.eac3</code></td>
+<td>Inject OAMD+JOC metadata + the addbsi flag into an E-AC-3 core.</td>
+</tr>
+<tr>
+<td><code>oamd &lt;core&gt; &lt;atmos&gt; --out o.eac3</code></td>
+<td>OAMD only (no JOC).</td>
+</tr>
+<tr>
+<td><code>coregraft &lt;realcore&gt; &lt;myatmos&gt; --out o.eac3</code></td>
+<td>Splice our metadata onto a real Dolby core (diagnostic).</td>
+</tr>
+<tr>
+<td><code>graft &lt;core&gt; &lt;reference&gt; --out o.eac3</code></td>
+<td>Splice Dolby's metadata onto our core (diagnostic).</td>
+</tr>
+<tr>
+<td><code>jocprobe</code> / <code>eac3probe</code> / <code>walkprobe</code> / <code>bsidump</code></td>
+<td>Stream inspectors.</td>
+</tr>
+<tr>
+<td><code>oamddump &lt;hex&gt;</code></td>
+<td>Verbose field-by-field OAMD decode.</td>
+</tr>
+<tr>
+<td><code>emdfverify &lt;input&gt;</code></td>
+<td>Check whether our protection CRC matches a stream's stored <code>emdf_protection</code>.</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Global: <code>--emdf-key &lt;hex|@file&gt;</code> and <code>--emdf-key-id &lt;0..7&gt;</code> (or <code>DOLBY_EMDF_KEY</code>) — see
+<a href="#the-signing-seam---emdf-key">The signing seam</a>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Verifying with Cavern</h2></div>
+<p dir="auto"><a href="https://github.com/VoidXH/Cavern">Cavern</a> is the open-source decoder we validate against: if Cavern
+reports objects, the OAMD/JOC metadata is well-formed. A small harness is included in
+<a href="/raress96/dolby-atmos-encoder/blob/main/tools/cavernprobe"><code>tools/cavernprobe</code></a>:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Needs the .NET 8 SDK and a local Cavern checkout (adjust the path in cavernprobe.csproj).
+dotnet build tools/cavernprobe -c Release
+dotnet tools/cavernprobe/bin/Release/net8.0/cavernprobe.dll atmos.eac3" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Needs the .NET 8 SDK and a local Cavern checkout (adjust the path in cavernprobe.csproj).</span>
+dotnet build tools/cavernprobe -c Release
+dotnet tools/cavernprobe/bin/Release/net8.0/cavernprobe.dll atmos.eac3</pre></div>
+<p dir="auto">It prints the channel layout, <strong><code>HasObjects</code></strong>, and the decoder's full metadata (<code>object_count</code>,
+<code>joc_num_objects</code>, object positions). On a stream from this tool:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="channels    : 6
+HasObjects  : True
+[JOC information]
+  joc_num_objects (Number of rendered dynamic objects): ...
+...
+RESULT: object-based audio detected (Atmos objects present)."><pre class="notranslate"><code>channels    : 6
+HasObjects  : True
+[JOC information]
+  joc_num_objects (Number of rendered dynamic objects): ...
+...
+RESULT: object-based audio detected (Atmos objects present).
+</code></pre></div>
+<p dir="auto">Exit code <code>0</code> = objects present, <code>2</code> = channel-based only. (ffmpeg ≥5's <code>eac3</code> decoder also reports
+<code>+ Dolby Atmos</code> as a faster first-pass sanity check.)</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Results / verified on</h2></div>
+<p dir="auto">Run end-to-end on a full feature film — a <em>Logan</em> (2017) 2160p UHD Blu-ray remux, TrueHD 7.1 + Atmos
+(137 min) — on a single WSL2 workstation:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>truehdd decode</code></td>
+<td>9,891,890 TrueHD frames → 395,675,600 samples (full 137 min), 16 GB DAMF essence</td>
+</tr>
+<tr>
+<td><code>downmix --out -</code> → ffmpeg</td>
+<td>791 MB E-AC-3 core @ 768 kbps (raw-pipe path; no WAV size cap hit)</td>
+</tr>
+<tr>
+<td><code>atmos</code> inject</td>
+<td>257,602 E-AC-3 frames; <strong>13 dynamic objects + LFE</strong>; JOC avg 213 B EMDF/frame</td>
+</tr>
+<tr>
+<td>Carriage</td>
+<td>skip-field on <strong>257,602 / 257,602</strong> frames (100%); addbsi detection flag on all</td>
+</tr>
+<tr>
+<td>Output</td>
+<td>809 MB <code>atmos.eac3</code></td>
+</tr>
+<tr>
+<td><strong>Cavern</strong></td>
+<td><code>HasObjects=True</code>, <strong>13 objects</strong>, 1 bed instance, 5-channel JOC downmix</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto"><strong>Memory is bounded by frame count, not file size.</strong> Every subcommand streams the core through
+<code>eac3::transform_frames_io</code> (~4 MiB rolling buffer), so the working set is fixed regardless of length:
+that same 791 MB Logan core runs <code>eac3inject</code> at <strong>7.9 MB peak RSS</strong> (a 1.25 GB synthetic core,
+487,424 frames, also holds ~7.9 MB). <code>atmos</code> builds its JOC context from a streamed header-only scan
+(<code>eac3::parse_frames_io</code>) of the core plus a streaming pass over the CAF essence — both <em>O(number of
+frames)</em>, never the core bytes — then streams the input core and output through the same path. So it
+no longer holds the core in RAM: an earlier build peaked at <strong>815 MB</strong> on Logan (it loaded the whole
+core); it now stays in the tens of MB (≈ the 7.9 MB streaming floor plus the per-frame position/power
+tables). Output is byte-identical across this refactor (golden SHA-256 verified).</p>
+<blockquote>
+<p dir="auto">These are <em>decoder-side</em> results: ffmpeg and Cavern both accept the stream as object Atmos. It
+still will <strong>not</strong> engage Atmos on Dolby-certified hardware — see below for why.</p>
+</blockquote>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Why it can't fully work</h2></div>
+<p dir="auto">Two diagnostic builds bisect the problem. Both pass ffmpeg 7 and Cavern; both fall back to Dolby
+Surround on real hardware:</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Wall 1 — the core encoder</h3></div>
+<p dir="auto"><code>graft</code> = <strong>our ffmpeg-encoded core + Dolby's genuine metadata</strong> → Dolby Surround. So the <strong>core
+itself</strong> is rejected even with perfect metadata. ffmpeg's E-AC-3 encoder is not Dolby-grade (e.g. it
+does no channel coupling); there is no open-source Dolby-conformant E-AC-3 core encoder.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Wall 2 — EMDF keyed authentication (the decisive one)</h3></div>
+<p dir="auto"><code>coregraft</code> = <strong>a real Dolby core + our metadata</strong> → Dolby Surround. The metadata is rejected too,
+and we traced it to the EMDF <code>emdf_protection</code> field, which is a <strong>keyed authentication code</strong>, not
+a computable checksum:</p>
+<ol dir="auto">
+<li><strong>The spec says so.</strong> <a href="https://www.etsi.org/deliver/etsi_ts/102300_102399/102366/01.04.01_60/ts_102366v010401p.pdf" rel="nofollow">ETSI TS 102 366 v1.4.1</a>
+§H.2.2: <code>key_id</code> "identifies the <strong>authentication
+key</strong> used to calculate the value of the <code>protection_bits_primary</code> and <code>protection_bits_secondary</code>
+fields," and that calculation is "<strong>implementation dependent and is not defined in the present
+document</strong>."</li>
+<li><strong>Brute force confirms it.</strong> <code>emdfverify</code> dumps each real frame's protection bits; an offline
+sweep of <strong>all 256 CRC-8 polynomials × every init/xorout/reflection over 7 candidate
+byte-regions across 8 real Dolby frames found ZERO matches</strong>, and no standard CRC-32 variant
+matched the 32-bit primary. The null result is the signature of a real secret key.</li>
+<li><strong>No open decoder computes it.</strong> <code>truehdd</code> marks the field <code>// TODO: HMAC</code>; Cavern and ffmpeg
+don't validate it at all. Only Dolby's licensed encoder (holding the key) can produce valid
+protection bits; certified hardware validates them.</li>
+</ol>
+<p dir="auto"><strong>Conclusion:</strong> an open-source encoder that produces <em>hardware-conformant</em> DD+ JOC Atmos is not
+achievable. The audio coding is solved; the format gates playback behind a proprietary cryptographic
+signature by design.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">The signing seam (<code>--emdf-key</code>)</h2></div>
+<p dir="auto">All of the proprietary cryptography is isolated behind <strong>one trait</strong>, <code>emdf::EmdfProtector</code>, with one
+real implementation point, <code>emdf::dolby_keyed_mac</code>:</p>
+<ul dir="auto">
+<li><strong><code>PublicCrcProtector</code></strong> (default) — public CRC-32 / CRC-8. Well-formed but <strong>unsigned</strong>; this is
+the historical behaviour and what you get with no key.</li>
+<li><strong><code>KeyedProtector</code></strong> — selected by <code>--emdf-key &lt;hex&gt;</code> (or <code>DOLBY_EMDF_KEY</code>). Routes to
+<code>dolby_keyed_mac</code>, currently an <strong>HMAC-SHA256 stand-in</strong> that proves the wiring end-to-end.</li>
+</ul>
+<p dir="auto">To produce a signature real hardware accepts you need <strong>both</strong>, and even then a caveat:</p>
+<ol dir="auto">
+<li>a valid Dolby authentication key for the correct <code>key_id</code>, <strong>and</strong></li>
+<li>Dolby's <strong>actual</strong> keyed-MAC construction — exact covered byte-range, MAC algorithm, bit/byte
+ordering, truncation, per-<code>key_id</code> handling — implemented in <code>dolby_keyed_mac</code>. This is
+undocumented (the spec explicitly declines to define it). <strong>A key alone is not sufficient:</strong> we
+know the container <em>structure</em> (32-bit primary + 8-bit secondary + 3-bit <code>key_id</code>) but not the
+algorithm or which bytes it covers (our CRCs over the obvious regions do not match Dolby).</li>
+<li>…and a valid signature still does <strong>not</strong> defeat <strong>Wall 1</strong> for a from-scratch file — only the
+<code>coregraft</code> path (our metadata on a <em>real</em> Dolby core) could benefit.</li>
+</ol>
+<blockquote>
+<p dir="auto">This project does <strong>not</strong> contain, ship, or attempt to recover any Dolby key, and it cannot
+reverse a secure keyed MAC from output samples (that is the security guarantee of a MAC). The seam
+exists for completeness and research. Producing conformant Atmos requires Dolby's licensed encoder.</p>
+</blockquote>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">What actually works on your hardware (no encoder needed)</h2></div>
+<p dir="auto">The real limitation was never the format — it was that some players won't <em>bitstream</em> TrueHD Atmos.
+Bypass it entirely: feed the <strong>original, untouched</strong> TrueHD Atmos straight into the AVR.</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="PC / media streamer (Kodi, JRiver, Shield, Zidoo…) ──HDMI──&gt; Denon AVR (HDMI in) ──HDMI──&gt; TV (video)"><pre class="notranslate"><code>PC / media streamer (Kodi, JRiver, Shield, Zidoo…) ──HDMI──&gt; Denon AVR (HDMI in) ──HDMI──&gt; TV (video)
+</code></pre></div>
+<p dir="auto">The AVR decodes the original TrueHD Atmos losslessly, with full object heights — zero conversion,
+zero signature problem. The only requirement is routing audio into the AVR directly rather than
+through the TV's eARC return.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Layout</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="src/
+  main.rs          CLI + command dispatch (clap)
+  damf.rs          DAMF (.atmos/.audio/.metadata) reader
+  render.rs        Atmos objects -&gt; 5.1 bed (VBAP)
+  emdf.rs          EMDF container, OAMD encode/decode, the EmdfProtector signing seam
+  joc.rs           Joint Object Coding analysis + payload writer
+  joc_tables.rs    JOC quant / Huffman tables
+  eac3.rs          E-AC-3 frame parse, BSI, aux/skip-field injection, crc2
+  eac3_audblk.rs   A/52 audio-block bit-walker (locates the skip field)"><pre class="notranslate"><code>src/
+  main.rs          CLI + command dispatch (clap)
+  damf.rs          DAMF (.atmos/.audio/.metadata) reader
+  render.rs        Atmos objects -&gt; 5.1 bed (VBAP)
+  emdf.rs          EMDF container, OAMD encode/decode, the EmdfProtector signing seam
+  joc.rs           Joint Object Coding analysis + payload writer
+  joc_tables.rs    JOC quant / Huffman tables
+  eac3.rs          E-AC-3 frame parse, BSI, aux/skip-field injection, crc2
+  eac3_audblk.rs   A/52 audio-block bit-walker (locates the skip field)
+</code></pre></div>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Credits, sources &amp; references</h2></div>
+<p dir="auto">This project stands on open specifications and existing projects:</p>
+<ul dir="auto">
+<li><strong><a href="https://github.com/VoidXH/Cavern">VoidXH/Cavern</a></strong> — creator Bence Sgánetz
+(<a href="http://en.sbence.hu" rel="nofollow">http://en.sbence.hu</a>). DSP/codec math for the 5.1 rendering, the OAMD/JOC decode logic, and the
+object gain handling was <strong>ported / adapted from Cavern's C# decoder</strong>. Cavern is released under
+its own <strong>non-commercial, share-alike licence</strong> — see <a href="#licensing">Licensing</a> below.</li>
+<li><strong><a href="https://github.com/truehdd/truehdd">truehdd</a></strong> (Apache-2.0) — the Dolby TrueHD decoder that
+produces the DAMF (<code>.atmos</code> / <code>.audio</code> / <code>.metadata</code>) master this tool consumes. This crate began
+life as a <code>truehdd</code> workspace member before being extracted into its own repository.</li>
+<li><strong><a href="https://www.etsi.org/deliver/etsi_ts/102300_102399/102366/01.04.01_60/ts_102366v010401p.pdf" rel="nofollow">ETSI TS 102 366 V1.4.1</a></strong>
+(free PDF) — Digital Audio Compression (AC-3, Enhanced AC-3), including <strong>Annex H</strong> (the EMDF
+extensible-metadata container and the <code>emdf_protection</code> field).</li>
+<li><strong><a href="https://www.etsi.org/deliver/etsi_ts/103400_103499/103420/01.02.01_60/ts_103420v010201p.pdf" rel="nofollow">ETSI TS 103 420 V1.2.1</a></strong>
+(free PDF) — backwards-compatible carriage of object audio (OAMD / Joint Object Coding) in E-AC-3.</li>
+<li><strong><a href="https://www.atsc.org/wp-content/uploads/2021/04/A52-2018.pdf" rel="nofollow">ATSC A/52:2018</a></strong> (free PDF) — the
+AC-3 / E-AC-3 audio-block syntax underpinning the skip-field bit-walker.</li>
+<li><strong><a href="https://ffmpeg.org" rel="nofollow">FFmpeg</a></strong> — used as an external tool for the E-AC-3 core encode and as a
+reference decoder/validator (invoked as a separate process; not linked).</li>
+<li><strong>Dolby</strong> specifications and the
+<a href="https://github.com/DolbyLaboratories/dolby-encoding-engine">Dolby Encoding Engine</a> plugin SDK
+were <em>examined</em> for context only. <strong>No Dolby source code or keys are used or included here.</strong></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Licensing</h2></div>
+<p dir="auto">This project <strong>includes code ported / adapted from
+<a href="https://github.com/VoidXH/Cavern">Cavern</a></strong>, whose licence is <strong>non-commercial and share-alike</strong>
+and states that any project including the code remains bound by its terms. Accordingly the entire
+repository is released <strong>under the Cavern licence</strong> (see <a href="/raress96/dolby-atmos-encoder/blob/main/LICENSE"><code>LICENSE</code></a>), <em>not</em> MIT:</p>
+<ul dir="auto">
+<li>✅ free to use, modify, and redistribute <strong>for free</strong>;</li>
+<li>⛔ <strong>no selling</strong> any part of the original or a modified version;</li>
+<li>⛔ no advertisements in the software;</li>
+<li>🔗 Cavern (<a href="https://github.com/VoidXH/Cavern">https://github.com/VoidXH/Cavern</a>, creator <a href="http://en.sbence.hu" rel="nofollow">http://en.sbence.hu</a>) is credited and
+linked as the source — in <a href="#credits-sources--references">Credits</a> and in <code>LICENSE</code>;</li>
+<li>public <em>use</em> (e.g. screenings) or commercial use requires the original Cavern creator's permission.</li>
+</ul>
+<p dir="auto">If a permissively-licensed (e.g. MIT) version is ever needed, the Cavern-derived portions must first
+be <strong>clean-room rewritten</strong> from the ETSI specs without consulting Cavern's source.</p>
+<p dir="auto"><code>publish = false</code> is set in <code>Cargo.toml</code> to prevent accidental release to crates.io.</p>
+<p dir="auto">"Dolby", "Dolby Atmos", "Dolby Digital Plus", and "TrueHD" are trademarks of Dolby Laboratories.
+This is an independent, unaffiliated interoperability / research project, not a Dolby product.</p>
+</article>

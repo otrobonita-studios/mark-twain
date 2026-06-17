@@ -1,0 +1,191 @@
+<body>
+<div class="container-lg px-3 my-5 markdown-body">
+<h1><a href="https://mgunlogson.github.io/magma/">MAGMA</a></h1>
+<h1 id="magma">Magma</h1>
+<p><strong>Vertical reinforcement infill for FDM 3D printing.</strong>
+A fork of <a href="https://github.com/SoftFever/OrcaSlicer">OrcaSlicer</a> that injects molten plastic into sealed lattice channels during printing — for continuous solid Z-axis reinforcement, with no hardware modifications.</p>
+<blockquote>
+<p>⚠️ <strong>Experimental.</strong> The slicer pipeline works end-to-end. Mechanical print results are still being characterized. <strong>Do not report bugs to the official OrcaSlicer repo.</strong> This is a research release; help is welcome.</p>
+</blockquote>
+
+<h2 id="what-it-does">What it does</h2>
+<p>FDM-printed parts are notoriously weak in the Z-axis because layers only bond at their thin interfaces. Magma changes the infill geometry so that the print contains sealed vertical channels, then it injects molten plastic into those channels during the print itself. The injection comes from the printer’s existing extruder — no new hardware required.</p>
+<p>The result, when it works: continuous interlocking solid columns running vertically through the part, mechanically locked into the layer-printed walls.</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>One paired cell pair, vertical cross-section:
+
+   Before injection:        After injection:
+
+     ┌───┬───┐                ┌───┬───┐
+     │   │   │                │███│███│
+     │   │   │                │███│███│
+     │   │   │      →         │███│███│
+     │   │   │                │███│███│
+     │   │   │                │███│███│
+     │       │                │███████│   ← continuous through window
+     └───────┘                └───────┘
+
+  Two adjacent triangle      Injection fills both
+  cells sharing a wall,      cells in a continuous
+  with a "window" gap at     U-shape, mechanically
+  the bottom.                interlocking with the
+                             surrounding lattice.
+</code></pre></div></div>
+<p></p>
+<p><em>Mid-print injection in GCode preview: the nozzle (white marker) drops into a vertical channel, extrudes a column of molten plastic, lifts, and moves to the next one. Every red column is one of these injection events. They’re what turn an otherwise hollow lattice into solid vertical reinforcement.</em></p>
+<p></p>
+<p><em>The lattice the injections fill: top-down view of a single printed layer. The orange triangular grid is the outer Magma zone — hollow channels at this stage. The hexagonal gaps in the lattice are <strong>windows</strong>, where pairs of channels are connected so plastic can flow from one tube into its partner during injection.</em></p>
+
+<h2 id="status-works-in-software-not-yet-in-physical-print">Status: works in software, not yet in physical print</h2>
+<p>I want to be upfront about this. <strong>The slicer pipeline is fully functional:</strong></p>
+<ul>
+<li>Triangle lattice generation with optional spiral interlock</li>
+<li>Dual-zone infill (Magma outer + configurable inner)</li>
+<li>Two-stage tube assignment solver (greedy + CP-SAT)</li>
+<li>Injection G-code with Z-slam sealing, multi-material support</li>
+<li>Full GCode preview with tube and injection visualization</li>
+<li>40+ configurable settings exposed in the UI</li>
+</ul>
+<p><strong>What’s NOT yet working: the physical print.</strong> On my Ender, same-material plastic injected into freshly-printed cells melts the cell walls before they can seal. The math says this should work; the materials science is the open question.</p>
+<p>I’m publishing the software now so people with better setups can experiment.</p>
+
+<h2 id="what-you-can-try-please">What you can try (please)</h2>
+<p>I’ve done the first three. They didn’t work for me, but might for you with better hardware:</p>
+<ul>
+<li><strong>Lower-melt injection material</strong> — PCL (60°C melt), TPU, sugar/wax for lost-wax style applications</li>
+<li><strong>Dual extruder</strong> — print cells in PETG/ABS, inject with PLA</li>
+<li><strong>Higher injection temperatures</strong> — way above print temp, fast injection before damage propagates</li>
+</ul>
+<p>Things I haven’t tried that might work:</p>
+<ul>
+<li><strong>CHT or Volcano nozzles</strong> — much higher flow before pressure drop, faster injection before the cell walls heat-soak</li>
+<li><strong>Redesigned injection nozzles</strong> — triangle-shaped with flat sealing faces (a lathe project for someone)</li>
+<li><strong>Silicone gaskets</strong> on the nozzle tip for sealing</li>
+<li><strong>PTFE or other non-stick coatings</strong> to prevent injected plastic from sticking to the nozzle</li>
+<li><strong>Thermal breaks</strong> around the injection nozzle so it doesn’t conduct heat to cell tops</li>
+<li><strong>Slow injection with long dwell</strong> — let the heat soak rather than melt-and-go</li>
+<li><strong>Larger nozzle bore</strong> — more volume per second at lower pressure</li>
+<li><strong>Post-print annealing</strong> — fuse the interfaces after cooling</li>
+<li><strong>Different injection volumetric flow ratios</strong> — current default is 0.5; testing across 0.3-0.9 needed</li>
+<li><strong>Different z-slam depths</strong> — currently default 0.05mm, testing up to 3.5mm might help sealing</li>
+<li><strong>Variable cell sizes</strong> — current default ~5x nozzle diameter; smaller cells would print faster but require finer nozzles</li>
+</ul>
+<p>If you find a combination that works, please open an issue or contact me. The community can solve this faster than I can alone.</p>
+
+<h2 id="multi-material--multi-extruder">Multi-material / multi-extruder</h2>
+<p>I attempted to wire Magma through OrcaSlicer’s multi-material and multi-extruder infrastructure:</p>
+<ul>
+<li><strong><code class="language-plaintext highlighter-rouge">magma_injection_filament</code></strong> — pick a dedicated filament/extruder for tube injection (so you can print walls in PETG and inject with PLA, for example)</li>
+<li><strong><code class="language-plaintext highlighter-rouge">dual_infill_outer_filament</code></strong> — pick a different filament for the outer Magma zone</li>
+<li>Tool-ordering, temperature management, and filament switching are all wired through</li>
+</ul>
+<p><strong>I have not been able to test any of this</strong> — I only have a single-extruder Ender. The code path exists and slices without errors in my testing, but real multi-material printing might surface bugs I can’t see. If you have a dual-extruder or IDEX setup, please try this and report what breaks.</p>
+
+<h2 id="get-the-beta">Get the beta</h2>
+<p><strong>Source:</strong> <a href="https://github.com/MGunlogson/OrcaSlicer/tree/magma-infill">MGunlogson/OrcaSlicer (magma-infill branch)</a></p>
+<p><strong>Pre-built binaries:</strong> <a href="https://github.com/MGunlogson/OrcaSlicer/releases">Releases page</a></p>
+<h3 id="recommended-starting-settings">Recommended starting settings</h3>
+<p>These are my current best guesses. <strong>None have produced a successful print yet</strong> — they’re a starting point for experimentation.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sparse infill pattern</td>
+<td>Magma Triangle</td>
+</tr>
+<tr>
+<td><code class="language-plaintext highlighter-rouge">dual_infill_enabled</code></td>
+<td>on</td>
+</tr>
+<tr>
+<td><code class="language-plaintext highlighter-rouge">dual_infill_outer_width</code></td>
+<td>5.0 mm</td>
+</tr>
+<tr>
+<td>Inner zone infill (<code class="language-plaintext highlighter-rouge">sparse_infill_pattern</code> for the inner region)</td>
+<td><strong>Lightning</strong> — strength isn’t the goal here; the inner zone just needs to support the top of the part. Lightning uses the least material.</td>
+</tr>
+<tr>
+<td><code class="language-plaintext highlighter-rouge">magma_tube_height</code></td>
+<td>6 mm (max ~6mm seems to work in preview)</td>
+</tr>
+<tr>
+<td><code class="language-plaintext highlighter-rouge">magma_nozzle_outer_diameter</code></td>
+<td>3.5 mm (or 2.5 mm for finer cells)</td>
+</tr>
+<tr>
+<td><code class="language-plaintext highlighter-rouge">magma_injection_z_slam</code></td>
+<td>0.5–1.0 mm</td>
+</tr>
+<tr>
+<td><code class="language-plaintext highlighter-rouge">magma_injection_speed</code></td>
+<td>8 mm³/s</td>
+</tr>
+<tr>
+<td><code class="language-plaintext highlighter-rouge">magma_tube_fill_factor</code></td>
+<td>0.5–0.9 (start higher)</td>
+</tr>
+<tr>
+<td><code class="language-plaintext highlighter-rouge">magma_tube_solver_mode</code></td>
+<td><strong>Basic</strong> — the CP-SAT (Refined) solver is much slower and only really helps on complex geometry</td>
+</tr>
+<tr>
+<td><code class="language-plaintext highlighter-rouge">magma_spiral_interlock</code></td>
+<td><strong>off</strong> — see notes below</td>
+</tr>
+</tbody>
+</table>
+<p>Full configuration reference: <a href="/magma/RELEASE.html"><code class="language-plaintext highlighter-rouge">RELEASE.md</code></a></p>
+
+<h2 id="how-it-works-high-level">How it works (high level)</h2>
+<ol>
+<li><strong>Slice with Magma Triangle infill.</strong> The slicer generates a triangular lattice. Adjacent cells are paired and connected by “windows” (gaps in the shared wall) at the bottom of each tube pair.</li>
+<li><strong>Print normally.</strong> The printer prints each layer’s walls, perimeters, and infill — including the cell walls that form sealed tubes.</li>
+<li><strong>Inject during print.</strong> At configured points in the print, the printer pauses motion, drops the nozzle to the top of a tube, extrudes molten plastic to fill the tube + its U-tube partner, lifts, and continues.</li>
+<li><strong>Result.</strong> As the print finishes, every tube pair is a continuous solid column of injected plastic, mechanically interlocking with the surrounding lattice.</li>
+</ol>
+<p></p>
+<p><em>Close-up of the lattice from inside the part, showing the <strong>windows</strong> — every paired cell has a gap in its shared wall so plastic injected into one tube flows through and fills its U-tube partner.</em></p>
+<p></p>
+<p><em>Cutaway preview after slicing: the red Magma triangle tubes form the outer reinforcement zone, surrounding the solid blue inner zone (yolk). The brown band visible above the inner solid is the zone-boundary shell — perimeter walls between the two zones.</em></p>
+<p></p>
+<p><em>With <code class="language-plaintext highlighter-rouge">magma_spiral_interlock</code> on, the entire lattice rotates slightly per layer — the result is helical tube paths rather than straight vertical columns. The intent is mechanical interlock with the surrounding lattice walls (potentially better pullout resistance), but <strong>this hasn’t been measured</strong> — the actual benefit vs. straight tubes is unknown. There’s a real cost: the spiral arc effectively widens each tube footprint, so fewer full tubes fit, especially in thin sections. <strong>Default is off</strong>; turn on only if you’re specifically testing this trade-off.</em></p>
+<p></p>
+<p><em>Press <strong>J</strong> in the preview to toggle the zone-boundary shell overlay — the transparent volumes show the computed inner-zone region (raw vs. smoothed). Useful for diagnosing zone splitting on complex models.</em></p>
+<p>The clever bits are in the solver (figuring out which cells to pair into U-tubes for maximum coverage with weak-plane avoidance), the spiral offset (so tube boundaries don’t form weak Z-planes), and the injection G-code (parking, sealing, multi-material support).</p>
+<p>Full design documentation:</p>
+<ul>
+<li><a href="/magma/DESIGN-TUBE-SOLVER.html">DESIGN-TUBE-SOLVER.md</a> — Greedy + CP-SAT tube assignment algorithm</li>
+<li><a href="/magma/DEFENSIVE_PUBLICATION.html">DEFENSIVE_PUBLICATION.md</a> — Full algorithm and architecture disclosure (CC0)</li>
+</ul>
+
+<h2 id="defensive-publication">Defensive publication</h2>
+<p>The algorithms, data structures, and techniques in Magma are dedicated to the public domain via a CC0 1.0 Universal defensive publication, dated before public release.</p>
+<p><strong>Read it:</strong> <a href="/magma/DEFENSIVE_PUBLICATION.html">DEFENSIVE_PUBLICATION.md</a></p>
+<p>This means anyone is free to use, modify, build on, or commercialize any of the techniques. The intent is to prevent third parties from patenting these ideas later.</p>
+
+<h2 id="why-im-releasing-this-in-this-state">Why I’m releasing this in this state</h2>
+<p>I’ve been working on this for months. The software is solid. I don’t have the printer setups, materials, or shop time to characterize all the materials variables, and continuing alone would take another year of trial and error.</p>
+<p>The community is much better at materials science than I am. The slicer is the bottleneck — once it exists, anyone with a dual-extruder Voron, a lathe and some brass, or a stash of exotic filaments can experiment in hours.</p>
+<p>If this turns into something useful, it should belong to the community. Hence the CC0 dedication.</p>
+
+<h2 id="license">License</h2>
+<ul>
+<li><strong>OrcaSlicer fork:</strong> AGPL-3.0 (inherited from upstream)</li>
+<li><strong>Magma algorithms and design (this repo):</strong> CC0 1.0 Universal — public domain dedication</li>
+</ul>
+
+<h2 id="contact">Contact</h2>
+<ul>
+<li>Issues: <a href="https://github.com/MGunlogson/magma/issues">GitHub issues</a> — for the design/docs</li>
+<li>Bug reports for the slicer: <a href="https://github.com/MGunlogson/OrcaSlicer/issues">Fork issues</a> — <strong>not</strong> the upstream OrcaSlicer repo</li>
+<li>Mark Gunlogson — <a href="https://github.com/MGunlogson">GitHub</a></li>
+</ul>
+</div>
+
+
+</body>
