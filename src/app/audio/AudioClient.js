@@ -15,21 +15,21 @@ const PODCAST_FORMATS = {
     title: "Short & Tech-Focused",
     duration: "17 min",
     file: "/sounds/podcast/DebriefOfADead-Short.m4a",
-    desc: "A concise 17-minute discussion focusing on the mechanics of digital resurrection, modern tech bubbles, and the boardroom logic of Stella Studios."
+    desc: "A concise 17-minute discussion focusing on the Mark Reappears project as well as the upcoming novel."
   },
   long: {
     id: "long",
     title: "In-depth Book Focus",
     duration: "46 min",
     file: "/sounds/podcast/DebriefOfADeadLong.m4a",
-    desc: "A comprehensive 46-minute exploration of Mark Twain's bibliography, private letters, and the philosophical challenges of constructing a digital double."
+    desc: "A comprehensive 46-minute exploration of the Mark Reappears project as well as the upcoming novel."
   },
   swedish: {
     id: "swedish",
     title: "Swedish Translation",
     duration: "30 min",
     file: "/sounds/podcast/DebriefOfADead-Swedish.m4a",
-    desc: "A 30-minute translation of the debrief for our Scandinavian correspondents (processed via a semi-good AI Swedish translation pipeline)."
+    desc: "A 30-minute discussion in Swedish, focusing on the Mark Reappears project, the tech used, as well as the upcoming novel."
   }
 };
 
