@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { Menu, X, Home, MessageSquare, BookOpen, Layers, FileText, Eye } from 'lucide-react';
+import { Menu, X, Home, MessageSquare, BookOpen, Layers, FileText, Eye, Headphones } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 
 export default function Navigation() {
@@ -43,6 +43,7 @@ export default function Navigation() {
     { href: '/', label: 'Let us Talk', icon: MessageSquare, desc: 'Interactive AI Dialogue' },
     { href: '/diary', label: 'My Diary', icon: BookOpen, desc: 'Extracts from my Diary' },
     { href: '/read/eves-diary', label: 'Eve\'s Diary', badge: 'Featured', icon: BookOpen, desc: 'Eve\'s Diary Multimedia Edition' },
+    { href: '/audio', label: 'Audio Desk', icon: Headphones, desc: 'Podcasts & Songs' },
     { href: '/complete-works', label: 'The Library', icon: Layers, desc: 'Books, Songs, Photos and Letters' },
     { href: '/about', label: 'About Me', icon: BookOpen, desc: 'Against My Better Judgment' }
   ];

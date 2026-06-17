@@ -28,5 +28,17 @@ export const soundtrack = [
     style: "Album: Mark Twain Reappears",
     cover: "/images/music-covers/WhatIsManCover.png",
     spotifyUrl: "https://open.spotify.com/track/3Bd0wJdOTlmRhEXpFYJFen"
+  },
+  {
+    id: "mud-on-the-page",
+    title: "Mud on the Page",
+    file: "/sounds/music/mud-on-the-pagel.mp3",
+    style: "Album: Mark Twain Reappears"
+  },
+  {
+    id: "the-sequel-suno",
+    title: "The Sequel (Suno Original)",
+    file: "/sounds/music/the-sequel-suno-original.mp3",
+    style: "Album: Mark Twain Reappears"
   }
 ];
