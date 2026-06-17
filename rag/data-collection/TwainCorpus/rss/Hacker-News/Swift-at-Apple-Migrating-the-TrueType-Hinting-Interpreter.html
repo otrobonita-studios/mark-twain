@@ -1,0 +1,119 @@
+<main>
+
+<section class="section" id="post">
+
+<div class="content">
+<h1>Swift at Apple: Migrating the TrueType Hinting Interpreter</h1>
+<div class="authors fullwidth">
+<div class="author">
+<div class="byline">
+
+<span class="author">
+<a href="https://github.com/numist/" rel="nofollow" title="Scott Perry (@numist) on GitHub">Scott Perry</a>
+</span>
+</div>
+<div class="about">Scott Perry is a member of Apple's Security team, focusing on Swift adoption.</div>
+</div>
+</div>
+<time datetime="2026-06-12T06:00:00-04:00" pubdate="">June 12, 2026</time>
+
+
+<div class="details">
+<p>TrueType is a widely used vector font standard for rendering text in web pages, PDFs, operating systems, and applications. Familiar fonts like Helvetica, Garamond, and Monaco are all built on TrueType outlines. The format specifies a <a href="https://developer.apple.com/fonts/TrueType-Reference-Manual/RM02/Chap2.html#environment">hinting interpreter</a> intended to help outlines rasterize faithfully on low-resolution displays. Modern high-resolution displays enable beautiful typography from outlines alone, but TrueType fonts that need hinting to render legibly remain in use and we continue to support them.</p>
+<p>Font parsers process data from untrusted sources, making the TrueType hinting interpreter a security-critical attack surface. To make the format more resilient on Apple platforms, we rewrote its hinting interpreter from C to <a href="https://docs.swift.org/compiler/documentation/diagnostics/strict-memory-safety/">memory-safe</a> Swift for the Fall 2025 releases. In addition to memory safety, we also improved performance: on average, our Swift interpreter runs 13% faster than the C interpreter it replaced.</p>
+<p>To accompany this post, we’ve also published the source code of <a href="https://github.com/apple/truetype-hinting-interpreter-example">the Swift TrueType hinting interpreter</a>. We hope sharing our experience helps others doing similar work in Swift.</p>
+<!--read more-->
+<h2 class="header-with-anchor" id="truetype-and-the-hinting-engine">TrueType and the hinting engine </h2>
+<p>Apple developed TrueType in the late 1980s and released it with the launch of System 7 in 1991. TrueType was a major breakthrough for the time: it gave font developers enormous control over how glyphs are displayed, with an advanced grid-fitting algorithm and a sophisticated hinting engine built around a special-purpose bytecode interpreter. TrueType did all this on computers that were vastly less powerful than today’s, so it had to be extremely well-tuned for performance.</p>
+<p>Then the internet revolutionized how fonts were used. TrueType became embeddable in PDF files in 1994 and in web pages in 2008, and it remains as relevant as ever. However, these new use cases brought additional risk: TrueType could now be exposed to untrusted fonts from anywhere on the internet.</p>
+<p>TrueType fonts may contain programs the hinting engine runs through a bytecode interpreter. This interpreter involves input-driven control flow, complex data structures, and careful memory management—exactly the kind of code that’s hard to make perfect and where memory errors are easier to exploit. This high inherent complexity also makes correctness especially important.</p>
+<h2 class="header-with-anchor" id="rewriting-in-swift">Rewriting in Swift </h2>
+<p>A rewrite required a memory-safe language that could integrate into the existing codebase and provide an equivalent level of performance to the implementation it was replacing. Swift was the obvious choice for the task.</p>
+<p>Binary compatibility was crucial for this project to succeed: existing programs had to continue to function the same as they did before, effectively unaware that a new implementation was in place. This means not just interface compatibility but pixel-identical glyph rendering as well, relative to the C implementation. Hinting can radically change the on-screen appearance of glyphs, so a small change in the interpreter’s behavior could result in substantial user-visible changes. For this project, we defined <em>correctness</em> to mean exact compatibility with the C implementation’s outputs.</p>
+<h2 class="header-with-anchor" id="validating-correctness">Validating correctness </h2>
+<p>To ensure correctness, we developed two test suites. The first was a unit test suite that can target both implementations, providing exhaustive (99.7%) code coverage for both. This suite is included with the open source release of the Swift interpreter.</p>
+<p>Then, to represent real-world workloads, we used a fuzzer to minimize a corpus of 10 million PDF files down to 4,200 without any loss of code coverage. The documents in the minimized corpus embedded 25,572 fonts with a total of 27 million glyphs that we rendered using four different transformations each, comparing the resulting bitmaps against the reference interpreter. This gave us confidence in the new interpreter’s compatibility.</p>
+<p>By the end of the project, we wrote nearly four times as many lines of test code as we wrote for the Swift interpreter itself.</p>
+<h2 class="header-with-anchor" id="achieving-high-performance">Achieving high performance </h2>
+<p>Once our new implementation passed all its tests, we turned our attention to performance. We assessed performance at a high level using PDF render time, and then iterated on improvements guided by benchmarks that rendered all of the glyphs from three different fonts. These improvements fell into four main categories.</p>
+<h3 class="header-with-anchor" id="minimizing-runtime-overhead">Minimizing runtime overhead </h3>
+<p>Swift uses <a href="https://docs.swift.org/swift-book/documentation/the-swift-programming-language/automaticreferencecounting/">automatic reference counting</a> for managing the lifetime of shared reference types, and runtime exclusivity checking for preventing overlapping access to data structures. These sources of overhead are often exacerbated by aliasing, an irreducible amount of which existed in the interpreter’s specification by design.</p>
+<p>These sources of overhead can be eliminated by giving up the convenience of copyability, adopting <a href="https://developer.apple.com/documentation/Swift/Copyable"><code class="language-plaintext highlighter-rouge">~Copyable</code></a> value types (see also: <a href="https://developer.apple.com/documentation/swift/choosing-between-structures-and-classes"><code class="language-plaintext highlighter-rouge">struct</code> instead of <code class="language-plaintext highlighter-rouge">class</code></a>) throughout the architecture, reserving reference types for high-level abstractions. <a href="https://developer.apple.com/documentation/swift/span"><code class="language-plaintext highlighter-rouge">Span</code></a>, introduced in Swift 6.2 with back-deployment support all the way back to macOS 10.14.4 and iOS 12.2, allowed us to efficiently operate on sequences of these types.</p>
+<h3 class="header-with-anchor" id="moving-data-around">Moving data around </h3>
+<p>Sometimes we want to change the “shape” of structured data when crossing language boundaries to better match the idioms on the other side. In Swift, glyph outlines are represented by a sequence of points, each of which carries a flag for whether it’s ‘on a curve’, flags for whether it’s been ‘touched’ on each axis, and three coordinate pairs: original (in the font’s base units), scaled (to the desired point size), and hinted (the interpreter program’s output).</p>
+<p>The original C code stored these points in one struct with eight arrays. This is good from a performance perspective because it’s cache-friendly: you can operate on a dimension of many points in long runs, which is fast. But exposing the data in Swift as a collection of point elements resulted in source code that was easier to follow.</p>
+<p>The initial cross-language bridging code we wrote prioritized expediency, safety, and simplicity by copying the glyph’s data from its C struct into Swift and then back after the program completed. Initially, those copies accounted for around 20% of the new interpreter’s runtime. In the end we wound up using projection types that provide safe access to the underlying C structure. Swift thus gives us readability without copying or otherwise transforming the underlying data structure.</p>
+<p>Following WebKit’s <a href="https://github.com/WebKit/WebKit/wiki/Safer-Swift-Guidelines">Safer Swift Guidelines</a>, the example below demonstrates how to wrap a bridged structure from C in a projection type that uses <a href="https://github.com/apple/swift-collections/blob/main/Sources/ContainersPreview/Types/Ref.swift"><code class="language-plaintext highlighter-rouge">Ref</code></a> for lifetime safety, brokers bounds-safe access to the underlying data, and returns idiomatic Swift types to its callers. All <code class="language-plaintext highlighter-rouge">unsafe</code> expressions bear <code class="language-plaintext highlighter-rouge">// SAFETY:</code> comments that document the safety invariants and the reasoning which guarantees that they are true.</p>
+<div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">@safe</span> <span class="kd">struct</span> <span class="kt">Zone</span><span class="p">:</span> <span class="kt">~Copyable</span><span class="p">,</span> <span class="o">~</span><span class="kt">Escapable</span> <span class="p">{</span>
+  <span class="k">let</span> <span class="nv">_element</span><span class="p">:</span> <span class="kt">Ref</span><span class="o">&lt;</span><span class="n">fnt_ElementType</span><span class="o">&gt;</span>
+
+  <span class="kd">@_lifetime</span><span class="p">(</span><span class="n">copy</span> <span class="n">element</span><span class="p">)</span>
+  <span class="nf">init</span><span class="p">(</span><span class="n">wrapping</span> <span class="nv">element</span><span class="p">:</span> <span class="kt">Ref</span><span class="o">&lt;</span><span class="n">fnt_ElementType</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">{</span>
+    <span class="c1">// SAFETY: the `fnt_ElementType` passed by the caller must satisfy:</span>
+    <span class="c1">// * `sp`, `ep` point at arrays of length ≥ `maxContourCount`.</span>
+    <span class="n">unsafe</span> <span class="n">_element</span> <span class="o">=</span> <span class="n">element</span>
+  <span class="p">}</span>
+
+  <span class="kd">func</span> <span class="nf">readContour</span><span class="p">(</span><span class="nv">index</span><span class="p">:</span> <span class="kt">Int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">ClosedRange</span><span class="o">&lt;</span><span class="kt">Int</span><span class="o">&gt;</span> <span class="p">{</span>
+    <span class="nf">precondition</span><span class="p">(</span><span class="mi">0</span><span class="o">..&lt;</span><span class="n">contourCount</span> <span class="o">~=</span> <span class="n">index</span><span class="p">)</span>
+    <span class="c1">// SAFETY: `index` is bounds checked above; `_element.pointee.sp` and `_element.pointee.ep`</span>
+    <span class="c1">// are live arrays of length `maxContourCount` per `init(wrapping:)` premises.</span>
+    <span class="k">return</span> <span class="n">unsafe</span> <span class="kt">Int</span><span class="p">(</span><span class="n">_element</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">sp</span><span class="p">[</span><span class="n">index</span><span class="p">])</span><span class="o">...</span><span class="kt">Int</span><span class="p">(</span><span class="n">_element</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">ep</span><span class="p">[</span><span class="n">index</span><span class="p">])</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<h3 class="header-with-anchor" id="short-lived-allocations">Short-lived allocations </h3>
+<p>While runtime overhead imposes its costs in aggregate, and copying data across the language border showed up as a specific hot spot, the costs of short-lived memory allocations can show up in both ways.</p>
+<p>Operations like <code class="language-plaintext highlighter-rouge">filter</code> and <code class="language-plaintext highlighter-rouge">map</code> allocate memory, but that allocation is only necessary if the value escapes. The Swift standard library provides <code class="language-plaintext highlighter-rouge">.lazy.map</code> and <code class="language-plaintext highlighter-rouge">.lazy.filter</code>, but they don’t work in every case. For logic that only <em>iterates</em> over the filter or map, it’s much more efficient to loop with <code class="language-plaintext highlighter-rouge">continue</code> (or use <code class="language-plaintext highlighter-rouge">for … in … where</code>) and transform elements into local variables as necessary.</p>
+<p>Allocations that exist exclusively to pass results to a function’s caller can be elided too. For example, we often needed to <code class="language-plaintext highlighter-rouge">pop</code> the last <code class="language-plaintext highlighter-rouge">n</code> elements from the interpreter’s stack. The obvious implementation of this operation has to allocate space for the elements it returns (because the function simultaneously removes them) and looks something like:</p>
+<div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">mutating</span> <span class="kd">func</span> <span class="nf">pop</span><span class="p">(</span>
+  <span class="n">count</span> <span class="nv">n</span><span class="p">:</span> <span class="kt">Int</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="p">[</span><span class="kt">Element</span><span class="p">]</span> <span class="p">{</span>
+  <span class="k">defer</span> <span class="p">{</span> <span class="n">items</span><span class="o">.</span><span class="nf">removeLast</span><span class="p">(</span><span class="n">n</span><span class="p">)</span> <span class="p">}</span>
+  <span class="k">return</span> <span class="kt">Array</span><span class="p">(</span><span class="n">items</span><span class="o">.</span><span class="nf">suffix</span><span class="p">(</span><span class="n">n</span><span class="p">))</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>Optimizing this operation without compromising safety eventually led us to a continuation-passing approach where the caller passes a block that can operate on a slice of stack elements before they are removed. Swift’s compile-time exclusivity checking ensured that the stack could not be modified from inside the block, and the interface structurally eliminated any need for heap allocations or element copying.</p>
+<div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">mutating</span> <span class="kd">func</span> <span class="n">pop</span><span class="o">&lt;</span><span class="kt">R</span><span class="p">,</span> <span class="kt">E</span><span class="p">:</span> <span class="kt">Error</span><span class="o">&gt;</span><span class="p">(</span>
+  <span class="n">count</span> <span class="nv">n</span><span class="p">:</span> <span class="kt">Int</span><span class="p">,</span>
+  <span class="n">_</span> <span class="nv">op</span><span class="p">:</span> <span class="p">(</span><span class="kd">borrowing</span> <span class="kt">Span</span><span class="o">&lt;</span><span class="kt">Element</span><span class="o">&gt;</span><span class="p">)</span> <span class="nf">throws</span><span class="p">(</span><span class="kt">E</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">R</span>
+<span class="p">)</span> <span class="nf">throws</span><span class="p">(</span><span class="kt">E</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">R</span> <span class="p">{</span>
+  <span class="k">defer</span> <span class="p">{</span> <span class="n">items</span><span class="o">.</span><span class="nf">removeLast</span><span class="p">(</span><span class="n">n</span><span class="p">)</span> <span class="p">}</span>
+  <span class="k">return</span> <span class="k">try</span> <span class="nf">op</span><span class="p">(</span><span class="n">items</span><span class="o">.</span><span class="n">span</span><span class="o">.</span><span class="nf">extracting</span><span class="p">(</span><span class="nv">last</span><span class="p">:</span> <span class="n">n</span><span class="p">))</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<h3 class="header-with-anchor" id="dynamic-dispatch">Dynamic dispatch </h3>
+<p>Abstraction mechanisms like protocols, generics, and inheritance are very powerful, but they introduce method-call indirection that may manifest at runtime as dynamic dispatch. This overhead can often be eliminated by the optimizer, but that is not possible in all conditions. In our case, not making abstractions more generic than necessary and encouraging the toolchain to inline were sufficient for the optimizer to hoist bounds checks and specialize all of our generic contexts. When you’re profiling your code, if you see unspecialized generics or protocol witness tables in hot paths, that’s a sign that the optimizer does not have sufficient visibility to optimize the call sites and that your implementation may benefit from inlining.</p>
+<h2 class="header-with-anchor" id="zero-cost-abstractions">Zero-cost abstractions </h2>
+<p>At this point, anyone accustomed to grinding out performance improvements in a project might reasonably expect that our optimizations could come at the cost of readability, but in reality Swift’s type system and optimizer enabled us to employ abstractions that resulted in highly legible code. For example:</p>
+<ul>
+<li><code class="language-plaintext highlighter-rouge">FixedPoint</code> types provided the same ergonomics as integral types, encapsulating complex rounding and shifting arithmetic.</li>
+<li><code class="language-plaintext highlighter-rouge">StackElement</code> provided access to 32-bit values with built-in conversions for all eight of its supported numeric types.</li>
+<li>Our projection types provided safe and natural access to data that was not structured with those considerations in mind.</li>
+</ul>
+<p>Swift’s type system makes it possible to define powerful and expressive abstractions. When built with optimizations, all of our abstractions added zero cost while substantially improving readability.</p>
+<h2 class="header-with-anchor" id="memory-safe-and-faster-than-c">Memory-safe and faster than C </h2>
+<p>Our goal for this project was to make the TrueType hinting interpreter fully memory-safe, to have the same observable rendering behavior as the C implementation, and to achieve a level of performance that did not regress any user-visible benchmarks.</p>
+<p>We met these goals. The Swift interpreter includes a small number of thoroughly verified <code class="language-plaintext highlighter-rouge">unsafe</code> statements at the language interop boundary; there have been no bugs reported against it since it was enabled; and it’s <em>faster</em>.</p>
+<p>On average, the Swift interpreter runs 13% faster than the C interpreter it replaced. Here is a chart showing the average CPU megacycles spent per glyph in the Swift implementation versus the C implementation for all of the hinted fonts that ship on macOS, plus a sampling of non-system fonts:</p>
+<div id="hinting-chart-wrap" style="margin: 1.2em 0;">
+
+
+<div class="legend"><b class="sys">● System font</b> · <b class="tp">● Non-system font</b> · below the line: Swift faster · above: C faster</div>
+</div>
+
+
+<p>Despite the overall performance improvement, we did not optimize everything! All of the new interpreter’s internal state was written in terms of noncopyable structures that were borrowed by its operations, but the top-level type itself is an <code class="language-plaintext highlighter-rouge">@objc class</code> that gets called across a module boundary from an Objective-C++ file. The hot paths are fast, and the cold paths are convenient.</p>
+<h2 class="header-with-anchor" id="swift-in-practice">Swift in practice </h2>
+<p>The Swift language made this project possible. Swift is memory-safe, has great ergonomics, and can be as fast as carefully written C. This makes it an excellent language for both application and systems development.</p>
+<p>Code using noncopyable types, value types, and <code class="language-plaintext highlighter-rouge">Span</code> is both safe and fast by default, and module-private types can be used to collectively define an architecture at no additional cost. Together with exhaustive test coverage, these well-defined internal interface boundaries make refactoring substantially easier, which in turn accelerates the measure-and-fix optimization loop while minimizing the risk of introducing bugs.</p>
+<p>This migration effort has deepened our Swift expertise and given us a foundation to build on. After completing the migration, we distilled what we learned into instructions for LLM coding assistants, and have since used them successfully in other projects. LLMs have improved the efficiency of our team’s work converting C/C++ to Swift, and have proven valuable in performing the kind of code transformations used in this effort.</p>
+<p>To accompany this post, we’ve published the source code for <a href="https://github.com/apple/truetype-hinting-interpreter-example">the Swift TrueType hinting interpreter</a> on GitHub. This is production code, intended as a reference implementation rather than an ongoing open source project. We hope seeing how these techniques work in practice helps others achieve similar results.</p>
+
+<h2>Continue Reading</h2>
+
+</div>
+</div>
+</section>
+
+</main>

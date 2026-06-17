@@ -1,0 +1,1656 @@
+On AI assistance
+
+"Bodh" in "AIBodh" means understanding. Since conversational AI first arrived, the main thing I kept coming back to it for was learning, asking, getting it wrong, asking again, until something finally made sense. That turned into a belief I still hold: used well, AI can genuinely help people learn. So I use it for teaching, but not as a shortcut. Each article still takes me 20 to 25 hours. AI is how I get through the parts of writing that are genuinely hard: finding the example where a concept is the obvious answer, the analogy that clicks, the visual that makes it concrete, the pass that cuts the jargon and the bloat. I verify the code runs, I keep the voice mine, and I cut anything that does not help you understand. The judgment and the corrections stay with me. If anything feels off in any section, let me know on 
+Discord
+ and I'll work on it.
+
+Async Rust is usually taught from one of two directions. The async book and the runtime write-ups show you the internals: how 
+Future
+, 
+poll
+, and 
+Pin
+ work, and you can even hand-build a tiny executor. Tokio’s guides go the other way, you wire up a real service and it runs. Both are genuinely useful. What is harder to find is the bridge between them, the part that connects understanding how async works to actually shipping with it.
+
+That bridge is what this series is. You build the engine yourself, the future, the waker, the executor, until you understand every piece, and then you drive the real one, Tokio, and recognize those same pieces because you built them.
+
+Couples therapy
+
+This series assumes two things. First, that you’ve written 
+async
+ and 
+await
+ code in JavaScript before. Second, that you’re comfortable with Rust’s basics: structs, enums, associated functions, and closures (all covered in the free chapters of 
+The Impatient Programmer’s Guide to Bevy and Rust
+).
+
+A quick note on the series: I plan to keep at least 5 to 8 chapters free to read here, with the rest collected in a paid ebook. The free chapters may not follow the numbering in order, so some will land out of sequence.
+
+Future
+
+If you’ve shipped any modern JavaScript, you’ve done this a hundred times:
+
+Pseudocode, don't use.
+async
+ 
+function
+ 
+getUser
+()
+ 
+{
+ 
+/* ... */
+ 
+}
+const
+ 
+user
+ 
+=
+ 
+await
+ 
+getUser
+();
+   
+// and it just... works
+
+You write 
+async function
+, add 
+await
+, and it runs. You never had to think about 
+what
+ runs it, because something always did. The 
+node
+ process ships a built-in 
+event loop
+: a hidden engine that picks up your Promises and pushes each one forward until it’s done.
+
+In JavaScript you never had to ask who keeps that loop running. But what about Rust? 
+Who actually runs your async code?
+ Or, in Rust’s own terms: 
+who runs your future?
+
+Rust does the opposite, on purpose. It ships 
+no event loop at all.
+ Nothing in the language is sitting around waiting to run your async code. If you want one, you bring it in. Or, the way we’re going to learn it, you 
+build
+ one yourself.
+
+A second job
+
+That sounds like a missing feature. By the end of this series it’ll feel like the opposite. But before we ask 
+who runs it
+, let’s be precise about what 
+async
+ is.
+
+A normal function is the kind you write every day. You call it, it runs then and there, and by the next line its return value is already sitting in your variable:
+
+A normal function
+You call it, it runs immediately, and hands back the finished value.
+fn
+ 
+add
+(
+a
+:
+ 
+i32
+,
+ 
+b
+:
+ 
+i32
+)
+ 
+->
+ 
+i32
+ 
+{
+ 
+a
+ 
++
+ 
+b
+ 
+}
+let
+ 
+sum
+ 
+=
+ 
+add
+(
+2
+,
+ 
+3
+);
++
+Runs right now. 
+sum
+ is 
+5
+ before the next line even starts.
+
+An 
+async function
+ doesn’t do that. You call it and it hands you back a placeholder instead of a result. Not the value, but a thing that 
+represents
+ a value that isn’t ready yet, stamped 
+“I’ll be done later.”
+ Every async language has this placeholder; they just use different names for it:
+
+JavaScript calls it a 
+Promise
+.
+
+Rust calls it a 
+Future
+.
+
+Different words, identical idea: 
+a value that represents work that isn’t finished yet.
+
+Hang on, doesn’t JavaScript have a 
+Future
+ too?
+
+Not as a type. You’ll still hear both words, and they’re not interchangeable: there’s a write side, filled with the value once the work finishes, and a read side, the handle you hold and await. In JavaScript the 
+Promise
+ you await is the read side, which is the one Rust gives its own name: 
+Future
+.
+
+resolve is the write side; the Promise you await is the read side.
+The write side
+Code doing the work calls 
+resolve
+ to put the value in, when it is ready.
+const
+ 
+promise
+ 
+=
+ 
+new
+ 
+Promise
+((
+resolve
+)
+ 
+=>
+ 
+{
+  
+setTimeout
+(()
+ 
+=>
+ 
+resolve
+(
+"
+the data
+"
+),
+ 
+1000
+);
++
+Value goes IN here, one second later.
+});
+The read side
+You await the promise itself. The event loop runs it; 
+await
+ just hands you the value.
+const
+ 
+data
+ 
+=
+ 
+await
+ 
+promise
+;
++
+Value comes OUT here, with no work from you.
+
+Rust names the handle you hold a 
+Future
+, because in Rust you are the one who reads it, by polling, as you’ll see in a moment. So whenever you read 
+Future
+ in this series, picture a 
+Promise
+ that you have to read yourself.
+
+In Node, the instant you 
+call
+ an async function, the placeholder is 
+live
+. The hidden event loop grabs it and drives it to completion whether you’re watching or not. 
+await
+ is just you asking for the value once it’s ready. The work was always going to happen.
+
+In Rust, calling an 
+async fn
+ does 
+nothing
+:
+
+Calling it does nothing
+In Rust an 
+async fn
+ call builds a 
+Future
+ and stops. The body has not run.
+async
+ 
+fn
+ 
+get_user
+()
+ 
+->
+ 
+User
+ 
+{
+ 
+/* ... */
+ 
+}
+let
+ 
+f
+ 
+=
+ 
+get_user
+();
++
+f
+ is a 
+Future
+. Not one line of the body has executed yet.
+
+get_user()
+ handed you a 
+Future
+ and then stopped. The body hasn’t executed. It’s 
+lazy
+: it just sits there, fast asleep, parked in a variable. It will do absolutely nothing, forever, until something 
+polls
+ it, the technical word for tapping it on the shoulder and asking 
+“can you make any progress?”
+ And since Rust ships no event loop, the thing doing that tapping has to be a runtime like Tokio that you pull in, or, the way we’ll learn it, code you write yourself.
+
+My Future
+
+You are holding this future. What can you actually 
+do
+ with it to get the work done and pull the value out?
+
+Polling
+
+A 
+Future
+ gives you exactly one method. You can 
+poll
+ it. Polling is you asking the future a single question, 
+“can you make any progress right now?”
+ The future runs as far as it can, then answers one of two ways: 
+Ready(value)
+ if it finished, or 
+Pending
+ if it had to stop and wait for something.
+
+That phrase, 
+“runs as far as it can,”
+ is the whole idea, so let’s make it concrete with a future that has a real job: checking out a shopping cart. The 
+async fn
+ loads the cart from the database, then calls a payment provider’s API to charge the card, and finally returns a confirmed order. Neither the database nor the payment API answers instantly, so the future has to stop and wait at each of those two calls. So let’s poll it, and watch how each poll drives the future forward:
+
+Poll #1.
+ The future starts and fires off the database query to load the cart. The database hasn’t replied yet, so it can go no further. It sleeps right there and answers 
+Pending
+.
+
+Poll #2
+, once the database replies. It resumes from exactly where it paused, takes the cart, and runs on until it calls the payment API. The charge is still in flight, so it sleeps again and answers 
+Pending
+.
+
+Poll #3
+, once the payment goes through. It resumes one last time, runs clean to the end of the function, builds the confirmed order, and answers 
+Ready(order)
+.
+
+So 
+“runs as far as it can”
+ means this: pick up from wherever you last paused, and go forward until you either finish or hit the next thing you have to wait on. The early polls each end at a wait, so they hand back 
+Pending
+. The last poll has nothing left to wait for, so it runs off the end of the function and hands back 
+Ready
+. Most polls hit a wall and say 
+“not yet”
+. One poll, eventually, runs off the end and says 
+“done”
+. Async is just that loop: hitting walls, waiting, trying again, until the last poll finally makes it through.
+
+And here is the part that trips people up coming from Node. 
+poll
+ is not just 
+checking
+ on the future, it is what 
+runs
+ it. Calling the 
+async fn
+ ran none of that body. The first 
+poll
+ is what starts it, and each poll after carries it one stretch further. So the rule is blunt: no poll, no progress. A future that is never polled never runs a single line. Nothing is running it in the background. The only thing that moves it forward is you calling 
+poll
+ again.
+
+“Cool, so I just have to call 
+poll
+. That sounds easy”
+. Well, let’s have a look at the function signature.
+
+Let’s understand these one by one.
+
+The Future Itself
+
+self: Pin<&mut Self>
+
+Back at the start I asked you to picture a future like a 
+Promise
+, a representation of work that is not finished yet.
+
+So what is that representation, concretely? It is a piece of 
+data
+. When you write an 
+async fn
+, the compiler turns your code into a value that holds everything it needs to remember to carry on later. The future 
+is
+ that value: your async code, in data form. And as the future runs, poll by poll, that data is what moves forward.
+
+So a future is just a small 
+struct
+, and every field it holds is its state, the stuff it has to remember between polls.
+
+The diagram below is a way to picture the future. Treat it as a mental model to build your intuition, not the exact, byte-level layout of a real future in memory:
+
+Our checkout future, paused mid-job, is holding things like where it stopped (at “charge card”), the 
+cart
+ it already loaded from the database, and an 
+item
+ it is still pointing at inside that cart. Each 
+poll
+ picks this state up and runs it forward, and since we need to update those fields we ask for writable access through 
+&mut
+ in the first argument.
+
+But there’s a problem. 
+item
+ points back into the future itself, at the 
+cart
+ field sitting right beside it. A value pointing at its own insides. You have probably never written a struct like that, and that is no accident: normal Rust quietly steers you away from self-references. So you have never had to care where a value lives in memory. Move it into a function, push it into a 
+Vec
+, hand it to a caller, it all just works. But if this future is moved to a new place in memory, 
+cart
+ goes along to the new spot while 
+item
+ keeps pointing at the old one. It is now pointing at empty space. A dangling pointer.
+
+Why would the 
+future
+ move by itself to a new place in memory?
+
+It doesn’t move itself. Your code moves it, the same way any value gets moved in Rust:
+
+Calling the 
+async fn
+ itself.
+ 
+checkout()
+ returns the future to you. That return is already a move.
+
+Passing it around.
+ A future is a value, so handing it to any function passes it by value. That is a move.
+
+Storing it.
+ Push it into a 
+Vec
+, or keep it in a struct field. All moves.
+
+I know this is getting tricky. These concepts are genuinely hard to wrap your head around, and they deserve a fuller explanation than I’ll give here. I’ll come back to all of it in a later chapter: why a future ends up pointing into itself at all, how the compiler lays it out, and why values move around in memory in the first place.
+
+For now, just hold onto this. That 
+Pin
+ in 
+self: Pin<&mut Self>
+ is a guarantee that the future won’t move in memory while it’s being polled. That’s all you need for now.
+
+No returns
+
+The Waker
+
+cx: &mut Context
+
+So imagine our checkout future, waiting on the payment provider. The initial poll you made starts the work and you get 
+Pending
+. So, when do you poll again?
+
+Right away is pointless: the provider has not answered, so the future would only hand you another 
+Pending
+. You really have two options.
+
+First, keep polling in a tight loop until it finally says 
+Ready
+. It works, but it burns a whole CPU core asking 
+“done yet? done yet?”
+ thousands of times a second while the provider is still processing.
+
+Second, go to sleep, and let something wake you the moment the answer lands. This is what a real runtime does, and that brings us to the question: who tells you the moment has come?
+
+That is the whole job of the 
+Waker
+. The future knows what it is waiting on: it made the database call, it owns the socket, meaning it holds the actual network connection the reply will arrive on. Your poller does not; to it a future is a black box with a single 
+poll
+ button, so it has no way to know when polling is worth it again.
+
+So 
+poll
+ hands the future a 
+Waker
+, tucked inside the 
+Context
+. The 
+Waker
+ is a callback that means 
+“wake me when I can make progress.”
+ The future registers it with whatever it is blocked on, the timer or the network connection the reply will arrive on, and returns 
+Pending
+. The moment that thing is ready, it fires the waker. The waker wakes the poller, and the poller polls the future again.
+
+The Output
+
+Every 
+poll
+ ends in one of exactly two answers: 
+Ready(value)
+, where the value is the future’s 
+Output
+, whatever it finally produces (an 
+Order
+, a 
+u32
+, a 
+String
+), or 
+Pending
+, meaning it is not done yet. 
+Ready
+ ends the loop; 
+Pending
+ sends you back to sleep until the next wake.
+
+Build a Oneshot Channel
+
+We have met async’s three moving parts: the 
+Future
+, the 
+poll
+ that drives it, and the 
+Waker
+ that signals when to poll again. Now let’s put them to work on a real problem.
+
+Imagine a web server backed by a single database connection. A connection like that cannot be used from two places at once, so instead of letting every request grab it, you hand it to one background worker: a task whose whole job is to hold the connection and run queries on it.
+
+Now requests pour in, each needing a lookup. Say Handler A is serving 
+GET /products/:id
+ and needs that product, while Handler B is serving 
+GET /users/:id
+ and needs that user. Neither can touch the connection directly, and neither can just call the worker like a normal function, because the worker is shared: every handler drops its query into one queue, and the worker pulls them off and runs them against the connection one at a time. Getting queries 
+in
+ is easy.
+
+The hard part is getting each answer back 
+out
+, to the exact handler that asked and not some other one. There is no single caller to return to anymore.
+
+The solution is to give each request a way to send its answer back. When a handler builds its request, it creates a one-time link with two ends: a sending end and a receiving end. It keeps the receiving end and tucks the sending end into the message. While the worker pulls the request off the queue and runs the query, the handler waits on its receiving end. When the result is ready, the worker pushes it through the sending end, and it arrives at that handler’s receiving end and nowhere else; waiting on it returns the result. This one-time, one-value, one-destination link is called a oneshot channel.
+
+Is the 
+Sender
+ like our 
+Waker
+?
+
+Yes and no. They look similar: both are handed off to someone else, and both signal 
+“I am done.”
+ But they do different jobs. The 
+Sender
+ carries the actual value. When the worker is done, it sends the result through it. The 
+Waker
+ carries no value at all. It just taps the poller on the shoulder and says 
+“poll again.”
+
+Soon you will see how they fit together: the 
+Sender
+ will deliver the value, and as part of doing that, it will fire the 
+Waker
+ to wake the poller up.
+
+Let’s build the Oneshot channel by hand, with the standard library and the three pieces you just met: the 
+Future
+, its 
+poll
+, and the 
+Waker
+.
+
+Create a new rust project.
+
+cargo new oneshot
+cd 
+oneshot
+
+Sender and Receiver
+
+Start by writing the two components of the Oneshot channel, the 
+Sender
+ and the 
+Receiver
+. For a value dropped in at the 
+Sender
+ to come back out at the 
+Receiver
+, both ends have to reach the 
+same
+ piece of memory: one writes the value there, the other reads it from there. Let’s call this shared piece of memory 
+Inner
+.
+
+Why 
+Inner
+ and why not 
+SharedState
+?
+
+SharedState
+ would be a fair name for it, but think about where it lives: the 
+Sender
+ and 
+Receiver
+ are the parts your program holds and passes around, and this struct hides 
+inside
+ them, behind those two handles, the bit nobody touches directly. It is the channel’s inner workings, so we will follow the usual convention and call it 
+Inner
+.
+
+What should 
+Inner
+ hold? Two things, and you have already met both:
+
+The value
+, in a slot that sits empty until something is sent.
+
+A waker.
+ When the 
+Receiver
+ future is polled and the value has not arrived yet, the future has to sleep. But something needs to wake it up the moment the value lands. So before sleeping, it leaves its 
+Waker
+ in 
+Inner
+.
+
+Let’s start with the implementation of the 
+Sender
+ and the 
+Receiver
+.
+
+src/main.rs
+Replace src/main.rs with the following code.
+use
+ 
+std
+::
+future
+::
+Future
+;
+use
+ 
+std
+::
+pin
+::{
+pin
+,
+ 
+Pin
+};
+use
+ 
+std
+::
+sync
+::{
+Arc
+,
+ 
+Mutex
+};
+use
+ 
+std
+::
+task
+::{
+Context
+,
+ 
+Poll
+,
+ 
+Waker
+};
+The two ends
+Each holds a handle to the same shared 
+Inner
+.
+struct
+ 
+Sender
+   
+{
+ 
+inner
+:
+ 
+Arc
+<
+Mutex
+<
+Inner
+>>
+ 
+}
+struct
+ 
+Receiver
+ 
+{
+ 
+inner
+:
+ 
+Arc
+<
+Mutex
+<
+Inner
+>>
+ 
+}
+Inner, the shared state
+One slot for the value, one for the receiver's waker.
+struct
+ 
+Inner
+ 
+{
+    
+value
+:
+ 
+Option
+<
+String
+>
+,
++
+the value, once it has been sent (
+None
+ until then)
+    
+waker
+:
+ 
+Option
+<
+Waker
+>
+,
++
+the receiver's waker, so 
+send
+ can wake it (
+None
+ until it waits)
+}
+
+So what is that 
+Arc<Mutex<…>>
+ wrapped around 
+Inner
+ for?
+
+Remember, 
+Inner
+ has to be shared between the 
+Sender
+ and the 
+Receiver
+, and they usually sit on separate threads. 
+Arc
+ (a reference-counted pointer) is what lets them share it: both ends hold a handle to the same 
+Inner
+, across threads.
+
+But 
+Arc
+ alone only gives a read-only view, and both ends need to 
+write
+ into 
+Inner
+ too (the sender drops in the value, the receiver leaves its waker). That is what 
+Mutex
+ adds: a lock, so one end at a time can open 
+Inner
+ and change it safely.
+
+Safely here means without the 
+Sender
+ and 
+Receiver
+ writing at the same moment and corrupting the data.
+
+Let’s write the constructor, 
+oneshot
+, that sets up the channel.
+
+Now, the trick for sharing memory between the 
+Sender
+ and the 
+Receiver
+ is to clone the 
+inner
+ handle: cloning an 
+Arc
+ does not duplicate the 
+Inner
+, it just hands back another pointer to the same one, exactly as the diagram above shows.
+
+Append this to src/main.rs
+fn
+ 
+oneshot
+()
+ 
+->
+ 
+(
+Sender
+,
+ 
+Receiver
+)
+ 
+{
+    
+let
+ 
+inner
+ 
+=
+ 
+Arc
+::
+new
+(
+Mutex
+::
+new
+(
+Inner
+ 
+{
+ 
+value
+:
+ 
+None
+,
+ 
+waker
+:
+ 
+None
+ 
+}));
+    
+(
+Sender
+ 
+{
+ 
+inner
+:
+ 
+inner
+.clone
+()
+ 
+},
+ 
+Receiver
+ 
+{
+ 
+inner
+ 
+})
+  
+}
+
+Now let’s write 
+send
+. What does it need to do? Get the value into the shared 
+Inner
+ so the receiver can find it. And, if the 
+Reciever
+ future is already asleep and left its 
+Waker
+ in 
+Inner
+, fire that waker so it gets polled again.
+
+Let’s build that up.
+
+Append this to src/main.rs
+impl
+ 
+Sender
+ 
+{
+    
+fn
+ 
+send
+(
+self
+,
+ 
+value
+:
+ 
+String
+)
+ 
+{
+        
+let
+ 
+mut
+ 
+inner
+ 
+=
+ 
+self
+.inner
+.lock
+()
+.unwrap
+();
++
+lock the Inner; nobody else can touch it while we do
+        
+inner
+.value
+ 
+=
+ 
+Some
+(
+value
+);
++
+put the value into its slot
+        
+if
+ 
+let
+ 
+Some
+(
+waker
+)
+ 
+=
+ 
+inner
+.waker
+.take
+()
+ 
+{
++
+did the receiver already sleep and leave a waker?
+            
+waker
+.wake
+();
++
+fire it: "there is progress, poll me again"
+        
+}
+    
+}
+}
+
+We have 
+send
+ take 
+self
+ by value, not 
+&self
+, and that is on purpose: a oneshot fires exactly once, and taking 
+self
+ lets the compiler enforce it for us, after one call the 
+Sender
+ is consumed, so a second send will not even compile.
+
+Then we lock the 
+Inner
+, put the value into the 
+value
+ slot, and check the 
+waker
+ slot. If the receiver already polled and left a waker, we fire it (
+“there is progress, poll me again”
+). If it has not polled yet, there is nothing to wake, so the value just waits in the slot for the next poll to pick it up.
+
+Why lock?
+
+Because the sender and the receiver sit on different threads and both reach into the same 
+Inner
+, so the lock makes sure they take turns instead of corrupting each other mid-write.
+
+Poll
+
+Now let’s implement the 
+poll
+ function. It needs to look for the value, and react to whether it is there. So it locks the same 
+Inner
+ and checks the 
+value
+ slot.
+
+If the value has arrived, we are done: hand it back as 
+Poll::Ready(value)
+. If it has not, the receiver cannot finish yet, so it clones the waker out of 
+cx
+, leave it in the 
+waker
+ slot for 
+send
+ to fire later, and return 
+Poll::Pending
+.
+
+Append this to src/main.rs
+impl
+ 
+Future
+ 
+for
+ 
+Receiver
+ 
+{
+    
+type
+ 
+Output
+ 
+=
+ 
+String
+;
+    
+fn
+ 
+poll
+(
+self
+:
+ 
+Pin
+<&
+mut
+ 
+Self
+>
+,
+ 
+cx
+:
+ 
+&
+mut
+ 
+Context
+<
+'_
+>
+)
+ 
+->
+ 
+Poll
+<
+String
+>
+ 
+{
+        
+let
+ 
+mut
+ 
+inner
+ 
+=
+ 
+self
+.inner
+.lock
+()
+.unwrap
+();
+        
+if
+ 
+let
+ 
+Some
+(
+value
+)
+ 
+=
+ 
+inner
+.value
+.take
+()
+ 
+{
+            
+Poll
+::
+Ready
+(
+value
+)
++
+the value is here: hand it back, we are done
+        
+}
+ 
+else
+ 
+{
+            
+inner
+.waker
+ 
+=
+ 
+Some
+(
+cx
+.waker
+()
+.clone
+());
++
+not yet: leave a waker so 
+send
+ can reach us
+            
+Poll
+::
+Pending
++
+and report that we are still waiting
+        
+}
+    
+}
+}
+
+Our 
+Receiver
+ does nothing until something polls it, and so far nothing does. That something is a 
+runner
+: a loop that drives a future to completion. Let’s build the smallest one that works and call it 
+block_on
+. You hand it a future, it polls until 
+Ready
+, and hands you the value. (A runner that juggles 
+many
+ futures at once has a name, the executor, and we build that one a few chapters from now. 
+block_on
+ is the simplest version of that.)
+
+Why 
+block_on
+ and not 
+loop
+?
+
+The loop is just the 
+how
+ on the inside. The name says what it does to you, the caller: it 
+blocks
+ the current thread (your 
+main
+) on a future until that future resolves, then hands back the value. It is the doorway from ordinary synchronous code into async, and it is what real runtimes like Tokio call this same function, so the name will already be familiar when you meet it out in the wild.
+
+But isn’t 
+async
+ supposed to be non blocking?
+
+It is, on the inside. Imagine a web server, whose job is to keep running and answer requests, but 
+main
+ is ordinary synchronous code: left to itself it runs to the bottom and the program exits. 
+block_on
+ is what keeps 
+main
+ alive, you hand it the server as one big future and it parks right there, driving the server for as long as it runs. That is the single block, at the top, and every request the server handles inside it stays non-blocking. That is the non-blocking you were promised.
+
+So how should 
+block_on
+ work? The obvious version is a tight loop: poll, and if it comes back 
+Pending
+, poll again.
+
+But imagine what that does while the worker is still off on its database query: 
+block_on
+, running on the calling thread, would spin the CPU at millions of polls a second, every one of them coming back 
+Pending
+ because the worker has not sent yet.
+
+We can do better. The channel already has the waker mechanism wired in, so on 
+Pending
+ we can put the thread to sleep, as long as we hand it a waker that actually wakes the thread.
+
+Waker
+
+Building a 
+Waker
+ by hand is low-level work, and we will do exactly that, from scratch, in a later chapter. For now the standard library gives us a shortcut: the 
+Wake
+ trait. You write a single 
+wake
+ method on a type of your own, and 
+Waker::from
+ turns it into a real 
+Waker
+.
+
+So what should 
+wake
+ do? Wake our sleeping thread, and Rust threads already have a built-in pair for exactly that. 
+thread::park()
+ puts the current thread to sleep, and calling 
+.unpark()
+ on that thread’s handle wakes it back up.
+
+If we have 
+.unpark()
+ then why not call it directly? Why implement the 
+Wake
+ trait?
+
+Because the future has no idea a thread is involved. Think about what 
+poll
+ can see: it gets a 
+Context
+, pulls a 
+Waker
+ out of it, and stores it in Inner. That is all. It does not know who is polling it.
+
+Today it is our 
+block_on
+ sleeping on a parked thread, but the same future could be polled by some other runtime that wakes things up in a completely different way. The future cannot call 
+.unpark()
+ because it does not know there is anything to unpark.
+
+The Waker is the common language. The poller, whoever it is, packs 
+“here is how to wake me”
+ into a Waker and hands it in. The future just stores it and fires it, no questions asked.
+
+Time for implementation.
+
+src/main.rs
+Add this to the imports of main.rs
+use
+ 
+std
+::
+task
+::
+Wake
+;
+use
+ 
+std
+::
+thread
+::
+Thread
+;
+
+Now let’s implement the wake method.
+
+src/main.rs
+Append this to src/main.rs
+struct
+ 
+ThreadWaker
+(
+Thread
+);
+impl
+ 
+Wake
+ 
+for
+ 
+ThreadWaker
+ 
+{
+    
+fn
+ 
+wake
+(
+self
+:
+ 
+Arc
+<
+Self
+>
+)
+ 
+{
+        
+self
+.0
+.unpark
+();
+
+}
+}
+
+Block On
+
+Now let’s write 
+block_on
+ itself.  Here is what it needs to do, step by step:
+
+Pin the future, because poll requires it (Look at the function signature of the 
+poll
+).
+
+Grab a handle to the current thread and wrap it in a 
+ThreadWaker
+. This is us telling the future: 
+“when you are done and need to wake someone up, here is the thread to unpark.”
+
+Wrap that 
+Waker
+ in a 
+Context
+, because that is what poll accepts.
+
+Call 
+poll
+. If it comes back 
+Ready
+, return the value and stop. If it comes back 
+Pending
+, park the thread and go to sleep.
+
+When 
+send
+ fires the waker, the waker calls 
+.unpark()
+ on the thread. The thread wakes up and goes back to step 4.
+
+Steps 1 to 3 are setup, done once. Steps 4 and 5 are the loop: poll, sleep if not ready, wake up, poll again, until the future finishes.
+
+Append this to src/main.rs
+fn
+ 
+block_on
+<
+F
+:
+ 
+Future
+>
+(
+future
+:
+ 
+F
+)
+ 
+->
+ 
+F
+::
+Output
+ 
+{
+    
+let
+ 
+mut
+ 
+future
+ 
+=
+ 
+pin!
+(
+future
+);
++
+pin it: poll() only accepts a pinned future
+    
+let
+ 
+waker
+ 
+=
+ 
+Waker
+::
+from
+(
+Arc
+::
+new
+(
+ThreadWaker
+(
+thread
+::
+current
+())));
++
+a waker tied to this thread, so waking it unparks us
+    
+let
+ 
+mut
+ 
+cx
+ 
+=
+ 
+Context
+::
+from_waker
+(
+&
+waker
+);
++
+the Context that poll() reads the waker out of
+    
+loop
+ 
+{
+        
+match
+ 
+future
+.as_mut
+()
+.poll
+(
+&
+mut
+ 
+cx
+)
+ 
+{
+            
+Poll
+::
+Ready
+(
+value
+)
+ 
+=>
+ 
+return
+ 
+value
+,
++
+the value is here: hand it back, done
+            
+Poll
+::
+Pending
+      
+=>
+ 
+thread
+::
+park
+(),
++
+not yet: sleep until the waker unparks us
+        
+}
+    
+}
+}
+
+Putting it Together
+
+Now we have every piece: the channel, the receiver that implements a future, the waker, and the runner. Let’s put them together in 
+main
+ and run it.
+
+oneshot()
+ hands us back a pair, 
+(tx, rx)
+, the two ends of the channel: 
+tx
+ is the 
+Sender
+ (
+tx
+ is the usual name for 
+transmit
+) and 
+rx
+ is the 
+Receiver
+ (for 
+receive
+), which is the future we drive. We give 
+tx
+ to a worker thread that stands in for a slow database query, a half-second 
+sleep
+ plays the part of the real query here, and once it is done it sends the row back through 
+tx
+. On the main thread, 
+block_on(rx)
+ drives the receiver and parks until that row arrives.
+
+All the pieces together. Append this to src/main.rs, then run it.
+use
+ 
+std
+::
+thread
+;
+use
+ 
+std
+::
+time
+::
+Duration
+;
+fn
+ 
+main
+()
+ 
+{
+    
+let
+ 
+(
+tx
+,
+ 
+rx
+)
+ 
+=
+ 
+oneshot
+();
++
+open the channel: tx is the Sender, rx is the Receiver (our future)
+    
+thread
+::
+spawn
+(
+move
+ 
+||
+ 
+{
+        
+thread
+::
+sleep
+(
+Duration
+::
+from_millis
+(
+500
+));
++
+pretend the query takes a moment
+        
+tx
+.send
+(
+"a fresh database row"
+.to_string
+());
++
+the worker sends the result back
+    
+});
+    
+let
+ 
+row
+ 
+=
+ 
+block_on
+(
+rx
+);
++
+park here until the row arrives
+    
+println!
+(
+"{row}"
+);
+}
+
+The one new thing here is 
+move
+. The worker runs on a separate thread that can keep going after 
+main
+ moves on, so its closure cannot simply borrow 
+tx
+ from the outside, the borrow might end while the thread is still using it. 
+move
+ tells the closure to 
+take ownership
+ of 
+tx
+: it carries the sender onto the thread and does its work there, calling 
+tx.send(...)
+ once the row is ready.
+
+cargo run
+
+After about half a second it prints:
+
+a fresh database row
+
+There it is: a future you wrote, run to completion by 
+block_on
+, a runner you wrote, out of nothing but 
+std
+. That is the same poll, park, wake loop a real runtime runs on, just smaller. The complete code for this chapter is in the 
+series repo on GitHub
+.
+
+In the chapters ahead you build a 
+Waker
+ by hand, see what an 
+async fn
+ compiles into and why 
+Pin
+ is needed, then grow 
+block_on
+ into an executor that schedules many futures on one thread. From there: futures that wake on real network sockets and timers, a channel that carries many values, an async mutex, and cancellation. Each one you build first, then use its Tokio version by name.
+
+Who runs it now
+
+Febin John James
+
+          I love exploring and building intelligent systems.
+
+LinkedIn
+
+X / Twitter

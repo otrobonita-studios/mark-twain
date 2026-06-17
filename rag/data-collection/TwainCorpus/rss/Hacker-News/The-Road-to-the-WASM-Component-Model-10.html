@@ -1,0 +1,138 @@
+<article class="post h-entry" itemscope="" itemtype="http://schema.org/BlogPosting">
+<div class="container w-container">
+<div class="width-container" markdown="1">
+
+<div class="post-content e-content" itemprop="articleBody">
+<p>WASI P3 is almost here, bringing native async support to the <strong>WebAssembly System Interface (WASI)</strong> and <strong>Component Model</strong>. In this post, we’re looking to the <em>next</em> big milestone: a stable, formally specified Component Model 1.0.</p>
+<p>At February’s <a href="https://www.youtube.com/watch?v=aQchiu6DXUE">Bytecode Alliance Plumbers Summit</a>, Luke Wagner and Alex Crichton gave a preview of what the path to a stable 1.0 actually looks like. At <a href="https://wasm.io/">Wasm I/O 2026 in Barcelona</a> in March, Luke <a href="https://youtu.be/qq0Auw01tH8?si=4Zb2r52SNsAsUtkQ">expanded on that vision</a>. So let’s take a look at where the Component Model is heading.</p>
+<!--end_excerpt-->
+<h2 id="a-quick-refresher-on-the-component-model-and-wasi">A quick refresher on the Component Model and WASI</h2>
+<p>Before we dive into the future of the Component Model, we should take a moment to review what the specification does, as well as its relationship to WASI.</p>
+<ul>
+<li>
+<p>The <a href="https://github.com/WebAssembly/component-model"><strong>Component Model</strong></a> is the specification layered atop core WebAssembly that defines how Wasm binaries bundle, link, and communicate: it specifies the type system, the binary format, the interface definition language, and the calling conventions for passing typed values across component isolation boundaries.</p>
+</li>
+<li>
+<p>The <a href="https://github.com/WebAssembly/WASI"><strong>WebAssembly System Interface (WASI)</strong></a>, in turn, is a standardized set of APIs for accessing system resources like files, sockets, clocks, randomness, and more in a portable, capability-secure way.</p>
+</li>
+</ul>
+<p>WASI interfaces are consumed through the Component Model; together they form the composable, portable foundation of the Wasm ecosystem. (It’s worth noting that Component Model 1.0 and WASI 1.0 are related but distinct milestones: WASI 1.0 will follow from and depend on the Component Model reaching 1.0 first.)</p>
+<p>At the Plumbers Summit, Luke described the relationship between the Component Model and WASI as analogous to a microkernel architecture: the Component Model is the always-present microkernel, providing foundational primitives that run across any host. WASI layers on top like OS services (e.g., networking, storage, graphics) that run as processes on top of the microkernel and may or may not be present on a given device. A browser, for instance, has very strong opinions about what I/O APIs exist; WASI interfaces run there via polyfill. But the Component Model itself can be implemented natively in the browser alongside core WebAssembly, since it only provides computational primitives, not I/O.</p>
+<p>In practical terms, both WASI and the Component Model are already heavily used in production. Despite ongoing evolution of both the binary format and WASI APIs, platform providers and embedders can give strong backwards-compatibility guarantees. P1 modules still work. P2 components still work. The team has been maintaining this stability since P1 using semantic versioning, side-by-side implementations, and Wasm-to-Wasm adapters. That story continues past 1.0. As Luke put it: “We can start using this stuff now.” But <em>getting</em> to Component Model 1.0 involves critical work across several important areas.</p>
+<h2 id="five-areas-of-work">Five areas of work</h2>
+<p>Luke frames the path to 1.0 around five areas of work:</p>
+<h3 id="1-abi-improvements">1. ABI improvements</h3>
+<p>The Component Model’s current Application Binary Interface (ABI), the calling convention that governs how components pass data to each other, relies on a function conventionally called <code class="language-plaintext highlighter-rouge">cabi_realloc</code>, which all components are required to export. When a callee returns a value like a list of strings, the host calls the calling component’s <code class="language-plaintext highlighter-rouge">cabi_realloc</code> to allocate memory for each element, then copies everything before returning to the caller. This works, but experience has surfaced real friction: heap fragmentation over time, difficulty handling large allocation failures gracefully, one host-to-guest call per value in a list, and trouble using custom memory allocators.</p>
+<p>One planned change inverts the control flow. Instead of the host eagerly allocating, the callee returns <em>lazy value handles</em>: opaque <code class="language-plaintext highlighter-rouge">i32</code> indices. When the caller is ready to place a value into memory, it calls a static built-in function with the destination address. Because these built-ins are statically known to the compiler, they can be inlined as if they were instructions.</p>
+<p>This lazy ABI resolves the existing friction, and adds a few bonuses: lazy values can be zero-copy forwarded between calls, dropped if unused, and the approach cleans up some complex string transcoding logic that currently lives in the engine by moving it into guest code.</p>
+<p></p>
+<p>The transition is designed to be non-breaking: the lazy ABI ships as a new opt-in option in a 0.3.x minor release, and producer toolchains adopt it when ready. When 1.0 arrives and adoption is complete, the lazy ABI becomes the default and the option goes away. An adapter tool will handle converting eager components to lazy.</p>
+<p>Bundled into the same transition are multivalue returns (using Wasm multivalue for return types at the C ABI level) and an error context value in every result’s error case, so there’s always a standard way for hosts to attach backtraces and debug information.</p>
+<p>There is one significant dependency: LLVM doesn’t yet support multivalue at the C ABI level. A <a href="https://github.com/WebAssembly/tool-conventions/pull/268">proposal for the precise ABI</a> exists, but getting that upstream may be the longest lead time in this piece of work.</p>
+<p>There’s also a separate GC ABI option planned, enabling components to pass values via Wasm GC-allocated memory instead of linear memory, and avoiding copies through linear memory for GC-based languages. Nick Fitzgerald has a pre-proposal on this in <a href="https://github.com/WebAssembly/component-model/issues/525">Component Model issue 525</a>.</p>
+<p>Sitting alongside the ABI work is a related performance goal: zero overhead on synchronous calls between components. The current implementation manages async task infrastructure across component boundaries via a host call, which (per Nick Fitzgerald’s Plumbers Summit measurements) adds roughly 3.5x overhead even on purely synchronous call paths. Some of this has already been addressed at the spec level (the recursion check was removed during P3 development). The remaining work is <a href="https://github.com/bytecodealliance/wasmtime/issues/12311">planned</a> for after WASI P3 ships, refactoring task state so synchronous adapters allocate a lightweight task on the stack that compilers like <a href="https://github.com/bytecodealliance/wasmtime/tree/main/cranelift">Cranelift</a> (Wasmtime’s optimizing code generation backend) can largely optimize away. The goal is to restore the performance profile that synchronous adapters had before component model async support was added.</p>
+<h3 id="2-the-browser-path">2. The browser path</h3>
+<p>The Component Model can’t formally reach 1.0 without native implementation in at least two browser engines. The groundwork for browser implementations is being laid today: <a href="https://github.com/bytecodealliance/jco/"><code class="language-plaintext highlighter-rouge">jco</code></a>’s <code class="language-plaintext highlighter-rouge">transpile</code> command already converts any component into equivalent core Wasm and JavaScript glue, making components runnable in any browser without native support. That already works, but native support matters for two reasons:</p>
+<ul>
+<li>
+<p><strong>Performance</strong>: <a href="https://hacks.mozilla.org/wp-content/uploads/2026/02/Screenshot-2026-02-25-at-2.22.23-PM-1536x1018.png">Experiments</a> by Ryan Hunt at Mozilla show that a DOM mutation-heavy Wasm VDOM reconciliation loop can get close to a 2x speedup from direct Wasm-to-browser API calls, bypassing the JavaScript glue layer. Real-world gains will vary by workload, but the ceiling is meaningful.</p>
+</li>
+<li>
+<p><strong>Reach</strong>: Native Component Model support in browsers creates strong incentives for upstream Wasm support across languages, packages, and frameworks, which in turn feeds back into a better developer experience across all platforms where Wasm runs.</p>
+</li>
+</ul>
+<p>The strategy for earning that support borrows a page from <a href="https://bytecodealliance.org/articles/ten-years-of-webassembly-a-retrospective">WebAssembly’s own history</a>. When asm.js shipped, it contained a no-op <code class="language-plaintext highlighter-rouge">"use asm"</code> string that browser engines could detect in their feature usage telemetry, building a data-driven case for optimization and eventually WebAssembly itself. <code class="language-plaintext highlighter-rouge">jco</code> is doing the same: its generated JavaScript glue now emits a <code class="language-plaintext highlighter-rouge">"use components"</code> identifier (renamed from <code class="language-plaintext highlighter-rouge">"use jco"</code> in jco 1.16.8). As <code class="language-plaintext highlighter-rouge">jco</code>-transpiled components accumulate real-world usage, that data becomes evidence for native implementation.</p>
+<p>Both Mozilla and Chrome are paying attention. The Mozilla team presented performance results at a recent in-person WebAssembly CG meeting, and <a href="https://hacks.mozilla.org/2026/02/making-webassembly-a-first-class-language-on-the-web/">Ryan Hunt discussed Mozilla’s Component Model work in a recent blog</a>. The Chrome V8 team opened an <a href="https://issues.chromium.org/issues/474661098">issue</a> for evaluating Component Model implementation. These aren’t commitments, but they’re meaningful signals. For folks working in the component ecosystem, now is a great time to use <code class="language-plaintext highlighter-rouge">jco</code>-transpiled components in browser contexts.</p>
+<h3 id="3-making-the-component-model-easier-to-implement">3. Making the Component Model easier to implement</h3>
+<p>Getting native browser support requires a manageable implementation burden. The plan here has two key components:</p>
+<p>The first one is to simplify the specification itself. The Component Model 1.0 spec will only include the “good parts” of the P3 spec, instead of being a superset of what exists right now. Most importantly, the ABI change described above means that implementers aiming for 1.0, but not P3, support don’t have to support the current, <code class="language-plaintext highlighter-rouge">cabi_realloc</code> based calling convention. As is the case for P1 and P2 support in various production environments today, existing P3 components will still be supported with the help of tools and adapters.</p>
+<p>The second one is a pair of C ABIs to ease implementation, one for guests and one for hosts, both expressed as header files generated by <code class="language-plaintext highlighter-rouge">wit-bindgen</code>.</p>
+<ul>
+<li>
+<p>The <strong>guest C-ABI</strong> lets toolchains target the Component Model by compiling to a core Wasm module and calling Component Model imports via generated C headers, then wrapping the result into a component binary with a <code class="language-plaintext highlighter-rouge">wasm-component-ld</code> linker. Toolchain authors work in familiar territory, much like targeting WASI P1.</p>
+</li>
+<li>
+<p>The <strong>host C-ABI</strong> lets core Wasm runtimes implement Component Model support without re-implementing the full spec. A proposed new tool tentatively called <code class="language-plaintext highlighter-rouge">lower-components</code> would “smash” a compound component (containing multiple modules and memories) into a single core Wasm module with the same observable behavior, using Wasm multi-memory. The host would then interact with it through a generated host C-ABI header.</p>
+</li>
+</ul>
+<p></p>
+<p>The goal here is for implementing WASI and the Component Model to be about as easy as implementing WASI P1. Projects like <code class="language-plaintext highlighter-rouge">jco</code> and Gravity (built on wazero) are already doing something like “component smashing” by reusing parts of Wasmtime. A hypothetical <code class="language-plaintext highlighter-rouge">lower-components</code> tool would formalize this into a proper CLI tool.</p>
+<h3 id="4-growing-the-ecosystem">4. Growing the ecosystem</h3>
+<p>In addition to everything above, the path to 1.0 will include a sustained documentation and ecosystem push:</p>
+<ul>
+<li>
+<p>More introductory, tutorial, and reference content for each language and tool. The <a href="https://component-model.bytecodealliance.org/">Component Model book</a> and Danilo Chiarlone’s <a href="https://www.manning.com/books/server-side-webassembly"><em>Server-Side WebAssembly</em></a> are great starts, but more is needed.</p>
+</li>
+<li>
+<p>Getting stable P3 support upstream in the major language ecosystems. Progress is trackable in Yosh’s <a href="https://github.com/yoshuawuyts/awesome-wasm-components">awesome-wasm-components</a> repo. Rust, Tokio, LLVM, and CPython all have first steps underway.</p>
+</li>
+<li>
+<p>More cross-language tooling like <a href="https://github.com/bytecodealliance/jco/"><code class="language-plaintext highlighter-rouge">jco</code></a> (more Web API integration via WebIDL imports), <a href="https://github.com/bytecodealliance/wac/"><code class="language-plaintext highlighter-rouge">wac</code></a> (component composition from the command line or a linking language), and <a href="https://github.com/bytecodealliance/wasm-pkg-tools"><code class="language-plaintext highlighter-rouge">wkg</code></a> (publishing and fetching from OCI registries, with higher-level discovery tooling still needed).</p>
+</li>
+<li>
+<p>Record/replay debugging, a capability uniquely suited to components’ shared-nothing architecture. At the Summit, Yan Chen demoed a concrete implementation: instrumentation components wrap a target component’s imports and exports, recording all WIT-level calls in WAVE format and replaying them later without the original host. Recorded traces are editable and human-writable in WAVE syntax, and can be replayed against a modified binary — a debugging workflow that the Component Model’s isolation makes possible.</p>
+</li>
+</ul>
+<h3 id="5-closing-expressivity-gaps">5. Closing expressivity gaps</h3>
+<p><a href="https://component-model.bytecodealliance.org/design/wit.html">WebAssembly Interface Type (WIT)</a> serves as the Component Model’s interface definition language, describing the typed APIs a component imports and exports.</p>
+<p>The path to 1.0 includes work on several WIT features, based on gaps identified in practice:</p>
+<ul>
+<li>
+<p><strong>Optional imports</strong>: Lets a component declare that it only optionally requires a capability. Standard libraries could compile against a minimal host world without forcing every component to unconditionally import files, sockets, and GPU capabilities. This pairs well with the guest C-ABI.</p>
+</li>
+<li>
+<p><strong>Callbacks</strong>: Needed to express DOM APIs like <code class="language-plaintext highlighter-rouge">addEventListener</code> in WIT.</p>
+</li>
+<li>
+<p><strong>Resource subtyping</strong>: Lets a resource type (like a DOM Node) extend another (like EventTarget), enabling method reuse without virtual dispatch or complex inheritance semantics.</p>
+</li>
+<li>
+<p><strong>Function subtyping</strong>: Allows WIT interfaces to add parameters, record fields, and variant cases without having to add new functions or declare a breaking change, something that’s currently painful in practice.</p>
+</li>
+<li>
+<p><strong>Enhanced import/export names</strong>: Lets components import multiple of the same WIT interface with different arbitrary identifiers, enabling deployment-time configuration checking rather than runtime surprises.</p>
+</li>
+<li>
+<p><strong>Getters and setters</strong>: Syntactic sugar for more idiomatic bindings in languages that expect property access patterns. Like constructors and methods, these would be sugar for regular functions with special names that binding generators recognize.</p>
+</li>
+<li>
+<p><strong>Map type</strong>: For producing and consuming idiomatic objects, dictionaries, and associative arrays across languages. (Yordis Prieto is already working on this!)</p>
+</li>
+<li>
+<p><strong>Runtime instantiation</strong>: The ability to instantiate components at runtime, within the Component Model. This is useful for lazy code loading, spawning subcommands, and giving different components different lifetimes. Browsers already support something more powerful in their JavaScript API; this would bring some of this functionality to the Component Model so that producer toolchains could address these use cases in a way that works both inside <em>and</em> outside the browser.</p>
+</li>
+</ul>
+<p>Not all of these will land before 1.0: some may come in 1.x releases. Sequencing depends on use cases and available resources.</p>
+<h2 id="cooperative-threads-and-stream-splicing">Cooperative threads and stream splicing</h2>
+<p>Sy Brand presented a deep dive on cooperative threads at the Plumbers Summit, and it’s worth noting here that they’re implemented at the Component Model level, below the WASI layer. A Rust component using <code class="language-plaintext highlighter-rouge">std::thread::spawn</code> gets cooperative thread support when it lands, with nothing special needed in WIT.</p>
+<p>The implementation is in progress: <code class="language-plaintext highlighter-rouge">wasi-libc</code> pthreads support is largely done, LLVM patches have just landed and will be included in the next release, and Wasmtime has a functional implementation under a feature flag. Cooperative threads support will ship in a follow-up WASI P3 minor release. These advancements also pave the road for shared-everything threads later, since many of the heaviest toolchain lifts for cooperative threads carry over directly.</p>
+<p>Also shipping in an early WASI P3 follow-up release will be <strong>stream splicing</strong>, the ability to splice one stream directly into another without an intermediate copy. Stream splicing is important for streaming performance, since unnecessary copying through an intermediate buffer is costly on hot paths, and was simply too close to the wire to make WASI P3 itself.</p>
+<h2 id="the-toolchain-view">The toolchain view</h2>
+<p>At the Plumbers Summit, Alex Crichton highlighted the implementation pipeline for new features:</p>
+<p></p>
+<p>Each stage provides feedback that refines the previous one. The Bytecode Alliance controls much of this pipeline, but not all of it. Rust, LLVM, CPython, and the broader ecosystems have their own release cadences and decision-making processes. LLVM releases every six months; landing something in Rust takes roughly nine weeks to reach stable. Release cycles matter when you’re coordinating changes across this many dependencies.</p>
+<h2 id="getting-involved">Getting involved</h2>
+<p>If you want to help out on the road to Component Model 1.0, there are lots of different ways to contribute:</p>
+<ul>
+<li>
+<p><strong>Spec discussion:</strong> The <a href="https://github.com/WebAssembly/component-model">Component Model repo</a> is where WIT expressivity feature proposals land.</p>
+</li>
+<li>
+<p><strong>Implementation:</strong> <a href="https://github.com/bytecodealliance/wasm-tools"><code class="language-plaintext highlighter-rouge">wasm-tools</code></a>, <a href="https://github.com/bytecodealliance/wasmtime">Wasmtime</a>, and <a href="https://github.com/bytecodealliance/wit-bindgen"><code class="language-plaintext highlighter-rouge">wit-bindgen</code></a> are the core implementation projects.</p>
+</li>
+<li>
+<p><strong>Language toolchains:</strong> <a href="https://github.com/bytecodealliance/componentize-go"><code class="language-plaintext highlighter-rouge">componentize-go</code></a>, <a href="https://github.com/bytecodealliance/componentize-py"><code class="language-plaintext highlighter-rouge">componentize-py</code></a>, <a href="https://github.com/bytecodealliance/ComponentizeJS"><code class="language-plaintext highlighter-rouge">componentize-js</code></a>, and others need P3 support and ecosystem work.</p>
+</li>
+<li>
+<p><strong>Browser usage:</strong> Using <code class="language-plaintext highlighter-rouge">jco</code>-transpiled components in browser contexts contributes directly to the telemetry signal that motivates native browser implementation.</p>
+</li>
+<li>
+<p><strong>Discussion:</strong> The <a href="https://bytecodealliance.zulipchat.com/">Bytecode Alliance Zulip</a> is the primary venue for day-to-day discussion across all of these projects.</p>
+</li>
+</ul>
+<p>WASI P3 is almost here. Now the work continues, taking the Component Model from a preview to a stable, long-term foundation for the Wasm ecosystem.</p>
+</div>
+
+</div>
+</div>
+</article>

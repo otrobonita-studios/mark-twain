@@ -1,0 +1,162 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">sharkclean-mcp</h1></div>
+<p dir="auto">An <a href="https://modelcontextprotocol.io" rel="nofollow">MCP</a> server for <a href="https://www.sharkclean.com/" rel="nofollow">SharkClean</a> /
+SharkNinja robot vacuums. Lets any MCP client (Claude Code, Claude Desktop, etc.) start
+cleanings, clean specific rooms, send the robot home, and check status — agentically, in
+plain language.</p>
+<p dir="auto"><a href="https://github.com/a-funk/sharkclean-mcp/actions/workflows/ci.yml/badge.svg" rel="noopener noreferrer" target="_blank"></a>
+<a href="/a-funk/sharkclean-mcp/blob/main/LICENSE"></a></p>
+<blockquote>
+<p dir="auto">Unofficial — not affiliated with or endorsed by SharkNinja.</p>
+</blockquote>
+<p dir="auto">All commands go through SharkNinja's current cloud ("skegox") — the same backend the
+SharkClean app uses — so the robot behaves exactly as if driven from the app, with no
+hardware modification.</p>
+<blockquote>
+<p dir="auto"><strong>Why not the Ayla cloud?</strong> The widely-used <code>sharkiq</code> SDK (and the Home Assistant Shark IQ
+integration built on it) talk to SharkNinja's <em>legacy</em> Ayla IoT cloud. Newer robots
+(Matrix, AI Ultra, Mach 2, the RV2500+ generation) have been migrated off Ayla onto the
+skegox backend. On Ayla those robots show up permanently "Offline" with a frozen, stale
+room map, even though the app controls them fine. This server talks to skegox directly,
+which is why it works with the newer robots that <code>sharkiq</code> can't reach. The reverse
+engineering of the skegox API is owed to the <a href="https://github.com/CamSoper/shark2mqtt">shark2mqtt</a>
+project.</p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Tools</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>list_robots</code></td>
+<td>List robots on the account (name, device id)</td>
+</tr>
+<tr>
+<td><code>get_status</code></td>
+<td>Live state: cleaning/paused/docked, battery %, charging, power mode, online, errors</td>
+</tr>
+<tr>
+<td><code>start_cleaning</code></td>
+<td>Whole-home clean, optional power mode (<code>eco</code>/<code>normal</code>/<code>max</code>)</td>
+</tr>
+<tr>
+<td><code>list_rooms</code></td>
+<td>Rooms the robot knows from its current map (with floor id + last-updated)</td>
+</tr>
+<tr>
+<td><code>clean_rooms</code></td>
+<td>Clean only specific rooms (validated against the live map)</td>
+</tr>
+<tr>
+<td><code>pause_cleaning</code> / <code>resume_cleaning</code> / <code>stop_cleaning</code></td>
+<td>Run control</td>
+</tr>
+<tr>
+<td><code>return_to_dock</code></td>
+<td>Send the robot home to recharge / self-empty</td>
+</tr>
+<tr>
+<td><code>set_power_mode</code></td>
+<td>Suction: <code>eco</code>, <code>normal</code>, <code>max</code></td>
+</tr>
+<tr>
+<td><code>locate_robot</code></td>
+<td>Make the robot beep</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto"><code>start_cleaning</code> and <code>clean_rooms</code> first check the robot is online and refuse if it isn't,
+so commands don't silently vanish. Multi-robot accounts are supported — every tool takes an
+optional <code>robot</code> argument (name or device id). With one robot, omit it.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Setup</h2></div>
+<p dir="auto">Requires <a href="https://docs.astral.sh/uv/" rel="nofollow">uv</a> and Python ≥ 3.10.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="git clone https://github.com/a-funk/sharkclean-mcp
+cd sharkclean-mcp
+uv sync
+cp .env.example .env       # add your SharkClean app email + password
+uv run shark-mcp-auth      # one-time browser login (see below)
+uv run shark-mcp-doctor    # confirm: prints your robot + current room map" dir="auto"><pre>git clone https://github.com/a-funk/sharkclean-mcp
+<span class="pl-c1">cd</span> sharkclean-mcp
+uv sync
+cp .env.example .env       <span class="pl-c"><span class="pl-c">#</span> add your SharkClean app email + password</span>
+uv run shark-mcp-auth      <span class="pl-c"><span class="pl-c">#</span> one-time browser login (see below)</span>
+uv run shark-mcp-doctor    <span class="pl-c"><span class="pl-c">#</span> confirm: prints your robot + current room map</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">One-time login (<code>shark-mcp-auth</code>)</h3></div>
+<p dir="auto">SharkNinja's Auth0 tenant blocks headless password logins, so the first login happens in
+your browser using the SharkClean app's own PKCE flow:</p>
+<ol dir="auto">
+<li><code>shark-mcp-auth</code> opens the real SharkClean login page.</li>
+<li>Log in. The browser then tries to redirect to <code>com.sharkninja.shark://...</code> and usually
+shows an error, blank page, or an "Open SharkClean?" dialog — that's expected.</li>
+<li>Copy that full <code>com.sharkninja.shark://...</code> URL (from the address bar, browser history,
+or the DevTools Network tab with "Preserve log" on) and paste it at the prompt.</li>
+</ol>
+<p dir="auto">That's it. Tokens are cached at <code>~/.config/shark-mcp/tokens.json</code> (mode <code>600</code>) and refreshed
+automatically; you won't need the browser again. See <a href="/a-funk/sharkclean-mcp/blob/main/SECURITY.md">SECURITY.md</a> for how
+credentials are handled.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Register with your MCP client</h3></div>
+<p dir="auto"><strong>Claude Code</strong> (user-wide):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="claude mcp add --scope user sharkclean -- uv run --directory /ABSOLUTE/PATH/TO/sharkclean-mcp shark-mcp" dir="auto"><pre>claude mcp add --scope user sharkclean -- uv run --directory /ABSOLUTE/PATH/TO/sharkclean-mcp shark-mcp</pre></div>
+<p dir="auto">Or copy <code>.mcp.json.example</code> to <code>.mcp.json</code>, set the absolute path, and Claude Code will pick
+it up automatically when opened in this directory.</p>
+<p dir="auto"><strong>Claude Desktop</strong> — add to <code>claude_desktop_config.json</code>:</p>
+<div class="highlight highlight-source-json notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='{
+  "mcpServers": {
+    "sharkclean": {
+      "command": "uv",
+      "args": ["run", "--directory", "/ABSOLUTE/PATH/TO/sharkclean-mcp", "shark-mcp"]
+    }
+  }
+}' dir="auto"><pre>{
+  <span class="pl-ent">"mcpServers"</span>: {
+    <span class="pl-ent">"sharkclean"</span>: {
+      <span class="pl-ent">"command"</span>: <span class="pl-s"><span class="pl-pds">"</span>uv<span class="pl-pds">"</span></span>,
+      <span class="pl-ent">"args"</span>: [<span class="pl-s"><span class="pl-pds">"</span>run<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>--directory<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>/ABSOLUTE/PATH/TO/sharkclean-mcp<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>shark-mcp<span class="pl-pds">"</span></span>]
+    }
+  }
+}</pre></div>
+<p dir="auto">Credentials come from environment variables or the <code>.env</code> file: <code>SHARKCLEAN_EMAIL</code>,
+<code>SHARKCLEAN_PASSWORD</code>, and optionally <code>SHARKCLEAN_REGION=eu</code>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Example prompts</h2></div>
+<ul dir="auto">
+<li>"Start a max-power clean."</li>
+<li>"Vacuum the kitchen and the living room."</li>
+<li>"Is the shark done? What's its battery at?"</li>
+<li>"Send the robot back to its dock."</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Command-line control</h2></div>
+<p dir="auto">Beyond the MCP server, <code>shark-mcp-rc</code> drives the robot from a shell (handy for scripts/cron):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='uv run shark-mcp-rc status
+uv run shark-mcp-rc rooms
+uv run shark-mcp-rc clean Kitchen "Living Room"
+uv run shark-mcp-rc start max
+uv run shark-mcp-rc dock' dir="auto"><pre>uv run shark-mcp-rc status
+uv run shark-mcp-rc rooms
+uv run shark-mcp-rc clean Kitchen <span class="pl-s"><span class="pl-pds">"</span>Living Room<span class="pl-pds">"</span></span>
+uv run shark-mcp-rc start max
+uv run shark-mcp-rc dock</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Development</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="uv run pytest            # unit tests (fake robot, no cloud calls)
+uv run shark-mcp         # run the server on stdio
+uv run shark-mcp-doctor  # live end-to-end check against the cloud" dir="auto"><pre>uv run pytest            <span class="pl-c"><span class="pl-c">#</span> unit tests (fake robot, no cloud calls)</span>
+uv run shark-mcp         <span class="pl-c"><span class="pl-c">#</span> run the server on stdio</span>
+uv run shark-mcp-doctor  <span class="pl-c"><span class="pl-c">#</span> live end-to-end check against the cloud</span></pre></div>
+<p dir="auto">See <a href="/a-funk/sharkclean-mcp/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>. If your robot works, add it to
+<a href="/a-funk/sharkclean-mcp/blob/main/CONFIRMED_MODELS.md">CONFIRMED_MODELS.md</a>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Notes &amp; limitations</h2></div>
+<ul dir="auto">
+<li>Auth: the one-time browser login (<code>shark-mcp-auth</code>) yields an Auth0 refresh token, cached
+at <code>~/.config/shark-mcp/tokens.json</code>. The server mints short-lived skegox id_tokens from
+it. SharkNinja's Auth0 tenant rotates refresh tokens, so the server persists the rotated
+token on every refresh — if you see <code>invalid_grant</code>, re-run <code>shark-mcp-auth</code>.</li>
+<li>Headless/scripted password login is blocked by Auth0 bot detection ("Suspicious request
+requires verification"); the browser flow is the reliable path.</li>
+<li>Room targeting (<code>clean_rooms</code>) requires a robot with a completed map; older models
+without room support report no rooms.</li>
+<li>This is unofficial, built on community reverse engineering. SharkNinja can change the
+backend at any time.</li>
+</ul>
+</article>

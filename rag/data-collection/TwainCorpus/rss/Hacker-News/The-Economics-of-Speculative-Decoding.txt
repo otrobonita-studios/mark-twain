@@ -1,0 +1,2477 @@
+The economics of speculative decoding 
+
+ 8 Jun 2026 
+
+·
+ 
+19 min read
+
+·
+
+Cover: William Holbrook Beard, 
+The Bulls and Bears in the Market
+ (1879), via 
+Wikimedia Commons
+. 
+
+Speculative decoding is one of the cleanest performance wins in inference
+optimisation: it’s lossless, it hits decode latency when not much else does,
+and in its standard formulation it’s simple and elegant.
+
+It works by looking forwards: speculative decoding takes a position on what
+tokens will come next. For dense transformers the bet is riskless: accepted
+tokens pay off, rejected tokens cost nothing, a clean arbitrage on spare memory
+bandwidth.
+
+A burst of research activity has recently pushed the envelope on how far
+forwards we can take that bet, for example 
+Eagle
+3.1
+,
+
+DFlash
+,
+
+SSD
+.
+
+This post looks at two architectural shifts that have changed the underlying
+economics of speculation: what mixture-of-experts routing does to the decode
+roofline, and how compressed attention takes away the slack that used to make
+speculated tokens free.
+
+Then it works through what they mean for when, and how far ahead, we should
+speculate.
+
+The expert tax
+§
+
+FFN layers in older, dense transformers (like the venerable
+
+Llama
+I wrote about this model before, 
+here
+.
+ series) have a
+simple 
+roofline
+ with batch size: arithmetic intensity climbs linearly with
+batch size as weights get reused across the batch, then flattens onto the
+compute ceiling.
+
+The win for speculative decoding is clear. If you’re on the slope of the
+roofline you’re memory bound, and speculated tokens increase the amount of
+compute you’re doing without increasing the memory transfer. So both accepted &
+rejected tokens are free until they push you over the knee.
+
+Modern models almost invariably
+With some interesting 
+exceptions
+.
+ use
+
+mixture-of-experts
+ (MoE) layers in place of
+simple dense FFNs. Each token passes first through a ‘routing’ layer, which
+orders the relevant experts by affinity. The token hidden state is sent to the
+top 
+k
+k
+k
+ experts, then the results are recombined.
+
+This routing means that the arithmetic intensity of the MoE layer can depend on
+the actual content of the hidden state inputs, not just the shape. In practice,
+one training objective (for training and large scale inference reasons) is to
+keep the experts balanced — that is, if 
+B
+B
+B
+ tokens come in, each expert of 
+E
+E
+E
+
+total should process a fraction 
+B
+/
+E
+B/E
+B
+/
+E
+ of the total.
+
+From here on, take DeepSeek-V4-Flash as an example: 
+k
+=
+6
+k=6
+k
+=
+6
+ routed experts of
+
+E
+=
+256
+E=256
+E
+=
+256
+, plus one always-on shared expert. The intensity-vs-batch curve changes
+in two ways vs. a dense equivalent.
+
+Barely amortising at the bottom.
+ At small batch each new token added to
+the batch tends to activate fresh experts (at batch 2 the chance the new
+token’s experts already match is small), so it drags its own weights across
+the bus and gets little to no amortisation. The intensity leaves the origin
+at only half its eventual slope, so a token added here, speculated or not,
+pays close to full freight for its experts.
+
+Shallower slope / distant knee, same ceiling.
+ Once every expert is being
+triggered, the MoE line climbs more gently, reaching the same ceiling only at
+a far larger batch. The free-token band is much wider.
+
+Dense climbs steeply; the MoE is shallower by a factor 
+(
+k
++
+1
+)
+/
+(
+E
++
+1
+)
+(k+1)/(E+1)
+(
+k
++
+1
+)
+/
+(
+E
++
+1
+)
+. The shaded
+region under each line is the memory-bound stretch, where speculated tokens are
+roughly free; it runs much wider for the MoE. Assuming uniform routing to
+experts, which is a good assumption for DeepSeek, and single-node deployment
+(expert parallelism changes stuff a bit). We’re using the fp4 threshold since
+DeepSeek’s experts are natively mxfp4. Not visible on this plot, because of the
+shallowness of the MoE roofline: the curve between 
+B
+=
+0
+B=0
+B
+=
+0
+ and ~
+B
+=
+43
+B=43
+B
+=
+43
+, where new
+experts are being brought in.
+
+The whole idea of speculative decoding is to amortise the weight transfer in
+autoregressive decoding between multiple steps. Notably, the chart tells us at
+batch size 
+1
+1
+1
+ this barely works for the MoE layers. But, as batch size grows
+past this low region, there’s a much larger space in which speculative decoding
+might pay.
+
+The implications for speculative decoding are that:
+
+The win when speculative tokens are accepted is no longer so big
+
+The penalty when speculative tokens are rejected is no longer zero.
+
+Both the win & the penalty from speculative decoding changes nonlinearly with batch size.
+
+The changing face of attention
+§
+
+The ‘expert tax’ at low batch size is part of the story that’s changed. The
+other part is attention. A recap: the term for the ratio of FLOPs to memory transferred
+for an operation is 
+arithmetic intensity
+. You can figure out whether an
+operation is memory bound or compute bound by comparing its arithmetic
+intensity to the ratio of 
+available
+ flops and memory bandwidth, for the
+hardware you’ll run the operation on.
+
+Generically, we can write the arithmetic intensity of the attention operation as:
+
+A
+I
+=
+f
+⋅
+T
+S
+m
+c
+⋅
+S
++
+m
+q
+⋅
+T
+AI = \frac{f\cdot TS}{m_c \cdot S + m_q \cdot T}
+A
+I
+=
+m
+c
+​
+⋅
+S
++
+m
+q
+​
+⋅
+T
+f
+⋅
+TS
+​
+
+for 
+T
+T
+T
+ query tokens over 
+S
+S
+S
+ context tokens, where 
+f
+f
+f
+ is the (bf16) FLOPs per
+query-context pair and 
+m
+c
+m_c
+m
+c
+​
+, 
+m
+q
+m_q
+m
+q
+​
+ are the bytes transferred per context and
+query token.
+
+For models in the Llama-3 vein, at decode, where 
+S
+≫
+T
+S \gg T
+S
+≫
+T
+, this goes as 
+∼
+T
+\sim
+T
+∼
+T
+For pure MHA, it truly goes as 
+∼
+T
+\sim T
+∼
+T
+ with no constant. Llama-3 is not
+quite so optimisation-blind so it uses GQA, which makes it something like 
+8
+T
+8T
+8
+T
+.
+. The ridge for a B200 is 
+281
+281
+281
+ FLOPs/byte (bf16). Assuming we don’t have
+a speculator that can produce hundreds of correct tokens at a time (if we did,
+we might as well just use it in place of the target model), pretty much any
+reasonable number of speculation tokens you verify wring more compute out of a
+KV read you had already paid for. This means speculation can still be a win for
+global throughput at high batch sizes, even when the GEMMs hit their
+ridgepoint, something that maybe goes underappreciated.
+
+The trend in attention implementations, driven by the binding pressure of KV
+cache sizes, has been KV cache compression — driving down 
+m
+c
+m_c
+m
+c
+​
+, the bytes
+stored and transferred per token in the sequence, and often correspondingly
+
+f
+f
+f
+. One successful attention implementation, DeepSeek’s
+
+Multihead Latent Attention
+ (MLA) does this by
+storing only a single latent vector per token, for all the attention heads 
+The architecture we’ve been discussing is DeepSeek-V4, which is to
+Attention is All You Need MHA what 
+ASML’s EUV
+machines
+ are to
+
+spirographs
+.
+Its variants get a full breakdown in the 
+appendix
+. The
+upshot is the same qualitative shape as MLA, but the exact thresholds move
+with the compression ratio and sequence length. For the calculations on MLA +
+Deepseek’s attention variants, see the 
+appendix
+.
+.
+
+The arithmetic intensity is:
+
+S
+\
+T
+S \,\backslash\, T
+S
+\
+T
+1
+2
+4
+8
+512
+193
+322
+484
+645
+1,024
+215
+387
+645
+967
+8,192
+238
+469
+910
+1719
+16,384
+240
+476
+938
+1820
+1,048,576
+242
+483
+967
+1932
+
+Compare the bf16 ridge (
+≈
+281
+\approx 281
+≈
+281
+ FLOP/byte)
+Attention stays in bf16 even when the FFN GEMMs and the KV cache itself
+drop to fp8/fp4, because the softmax is more sensitive to the precision.
+. Bold is compute-bound.
+Decode (
+T
+=
+1
+T=1
+T
+=
+1
+) is just memory-bound at every context length.
+
+Any number of speculation tokens makes MLA immediately compute bound!
+It’s a little more subtle than this. MLA has two algebraically-equivalent
+formulations: an MQA one (a single latent KV shared across all heads — what the
+table assumes), used at decode, and an MHA one (the latent up-projected to
+per-head K/V), used in prefill. The MHA form’s attention runs at intensity 
+∼
+T
+\sim
+T
+∼
+T
+ rather than 
+∼
+n
+h
+T
+\sim n_h T
+∼
+n
+h
+​
+T
+, so it stays memory-bound far longer — but only by
+up-projecting the whole KV context to per-head K/V, a fixed cost that amortises
+across the attending tokens and so only pays for itself past 
+T
+≈
+170
+T \approx 170
+T
+≈
+170
+.
+Speculation never gets near that (we assume 
+≤
+100
+\le 100
+≤
+100
+ tokens), so we’re always in
+the MQA regime, where the table holds.
+ So
+there’s no free lunch. When you speculate with DeepSeek, you pay close to full
+price for your speculated tokens.
+
+How to price a speculated token
+§
+
+We’ve talked about two different things that have changed the cost landscape
+for speculative decoding.
+
+When figuring out how well speculation is going to work 
+as a system
+, there
+are two things that matter:
+
+The extra cost that comes from running the draft model. This cost can come
+to bear in throughput (the FLOPs used on the draft model could have been
+used on the original model), and in latency (i.e. in the standard
+formulation the draft model has to run synchronously in the forward pass)
+Realistically the draft model will also have its own roofline, which adds
+straightforwardly to the per token marginal cost.
+
+Eagle
+ / MTP use a fast
+autoregressive model conditioned on the hidden states of the base model,
+
+DFlash
+ uses bidirectional attention with
+a masked language modelling objective.
+.
+
+How much each token costs to verify. Accepted, we book it as profit over
+generating the token anew; rejected, a tax for having speculated. For a
+dense, memory-bound model this is roughly zero. That’s no longer quite true —
+and not just for MoE, since the compressed attention eats the same slack from
+the other side.
+
+In order to choose how to build a speculation system, we need to pick
+parameters that balance the value we get from new tokens, with the cost we pay
+for producing, then verifying those tokens.
+
+The chart tells us how much a new speculated token costs to produce + verify,
+relative to a new token. 
+1
+×
+1\times
+1
+×
+ is break-even. Toggle the components to see
+how the different parts of the model contribute.
+
+avg seq len
+16,845 tok
+drafter cost
+10%
+show components
+
+How far ahead should we speculate
+§
+
+The cost model tells us that we need to be careful with speculated tokens,
+because they’re no longer free. Speculated tokens that are expensive to verify
+need to be likely to be accepted, otherwise they don’t pay their way relative
+to tokens generated anew. To figure out how many speculated tokens to work
+with, we need a model of acceptance.
+
+Pick the simplest speculation model: each draft token gets accepted i.i.d. with
+fixed probability 
+α
+\alpha
+α
+, draft length 
+γ
+\gamma
+γ
+Constant per-position 
+α
+\alpha
+α
+ is the optimistic case; real acceptance
+decays with draft depth in some complicated way, and also depends on the
+content & length of the preceding sequence. So read 
+γ
+⋆
+\gamma^\star
+γ
+⋆
+ as an upper
+bound. Drafter cost would add to 
+c
+c
+c
+; I’m holding it fixed here. This is just a
+finite 
+geometric series
+.
+. The expected number of
+tokens committed by one verifier pass goes like:
+
+N
+(
+α
+,
+γ
+)
+=
+1
+−
+α
+γ
++
+1
+(
+1
+−
+α
+)
+,
+N(\alpha, \gamma) = \frac{1 - \alpha^{\gamma+1}}{(1-\alpha)},
+N
+(
+α
+,
+γ
+)
+=
+(
+1
+−
+α
+)
+1
+−
+α
+γ
++
+1
+​
+,
+
+The cost of verifying 
+γ
++
+1
+\gamma+1
+γ
++
+1
+ tokens in the target model is:
+
+C
+v
+e
+r
+i
+f
+y
+(
+B
+,
+γ
++
+1
+,
+S
+)
+=
+C
+a
+t
+t
+n
+p
+r
+o
+j
+(
+B
+⋅
+(
+γ
++
+1
+)
+)
++
+C
+M
+o
+E
+(
+B
+⋅
+(
+γ
++
+1
+)
+)
++
+C
+a
+t
+t
+n
+(
+B
+,
+γ
++
+1
+,
+S
+)
+C_\mathrm{verify}(B, \gamma+1, S) = C_\mathrm{attn~proj}(B\cdot(\gamma+1)) + C_\mathrm{MoE}(B\cdot(\gamma+1)) + C_{\mathrm{attn}}(B, \gamma+1, S)
+C
+verify
+​
+(
+B
+,
+γ
++
+1
+,
+S
+)
+=
+C
+attn
+proj
+​
+(
+B
+⋅
+(
+γ
++
+1
+))
++
+C
+MoE
+​
+(
+B
+⋅
+(
+γ
++
+1
+))
++
+C
+attn
+​
+(
+B
+,
+γ
++
+1
+,
+S
+)
+
+Writing the no-speculation decode cost as
+
+C
+0
+(
+B
+,
+S
+)
+=
+C
+v
+e
+r
+i
+f
+y
+(
+B
+,
+1
+,
+S
+)
+C_0(B,S)=C_\mathrm{verify}(B,1,S)
+C
+0
+​
+(
+B
+,
+S
+)
+=
+C
+verify
+​
+(
+B
+,
+1
+,
+S
+)
+, the throughput speedup relative to ordinary
+decode is then:
+
+S
+p
+(
+α
+,
+γ
+)
+=
+N
+(
+α
+,
+γ
+)
+C
+0
+(
+B
+,
+S
+)
+C
+v
+e
+r
+i
+f
+y
+(
+B
+,
+γ
++
+1
+,
+S
+)
++
+C
+d
+r
+a
+f
+t
+m
+o
+d
+e
+l
+(
+B
+,
+γ
+,
+S
+)
+\mathrm{Sp}(\alpha, \gamma) =
+\frac{N(\alpha, \gamma)\,C_0(B,S)}
+{C_\mathrm{verify}(B, \gamma+1, S) + C_\mathrm{draft~model}(B, \gamma, S)}
+Sp
+(
+α
+,
+γ
+)
+=
+C
+verify
+​
+(
+B
+,
+γ
++
+1
+,
+S
+)
++
+C
+draft
+model
+​
+(
+B
+,
+γ
+,
+S
+)
+N
+(
+α
+,
+γ
+)
+C
+0
+​
+(
+B
+,
+S
+)
+​
+
+The mental model is usually that the denominator is roughly constant with 
+B
+B
+B
+
+up until the model becomes compute bound. But that’s nowhere near true any
+more. At small batch sizes, there are parameter regions where you’re better off
+not speculating at all!
+
+Optimising the speedup for 
+γ
+⋆
+\gamma^\star
+γ
+⋆
+ gives us everywhere that speculation
+is useful for DeepSeek-V4-Flash:
+
+avg seq len
+4,096 tok
+acceptance α
+75%
+drafter cost
+10%
+
+Conclusion
+§
+
+The picture of speculative decoding that I had in my head before running the
+maths was the one from the original paper, valid for dense transformers:
+speculative decoding works for small batch size, and it’s a big win up to the
+point at which the GEMMs are compute bound. After that point, it’s still a win,
+because attention’s arithmetic intensity doesn’t saturate with batch size.
+
+Architectural innovations have rendered both of those notions false. The MoE
+tax can leave us with a gutter in which the optimal speculative decode length
+drops to zero. And MLA is compute bound with a single speculation token.
+
+Some of this maths is exaggerated by considering a regime that we don’t sit in
+at scale. If we’re serving a MoE model, the win from distributing those experts
+across nodes (expert parallel) is big, even considered per GPU. And fewer
+experts per GPU lowers the MoE tax, since with fewer experts per GPU, a larger
+fraction are brought in per token. On the other hand each speculated token does
+then have to pay a 
+communications
+ tax instead, which does not get amortized.
+
+There are a few directions to take this further.
+
+First, the model we’ve built of the cost of a marginal speculation token makes
+it easy to tune production deployments without expensive trial and error. If we
+want to sit at batch size 
+B
+B
+B
+ and average sequence length 
+S
+S
+S
+, and we’re using
+MTP with an average acceptance rate 
+α
+\alpha
+α
+, then we can just read off the
+value of 
+γ
+\gamma
+γ
+ we should set.
+
+More interestingly, the architecture has raised the stakes on every speculation
+decision: rejected tokens cost more than they used to, and accepted ones pay
+less. With the stakes higher and the optimal 
+γ
+⋆
+\gamma^\star
+γ
+⋆
+ moving with load,
+profile-guided adaptive speculation is worth far more than it once was. It points
+us towards better ways of choosing how many tokens to propose dynamically per
+scheduler step, and towards more sophisticated real time decision making as to
+whether to run the verifier on those tokens.
+
+For more on these ideas, watch this space.
+
+Appendix: the roofline maths
+§
+
+Everything here is DeepSeek-V4-Flash. Each part is the maths behind one of the
+charts above: the MoE roofline under the expert-stack chart, the attention
+roofline under the intensity table, and the marginal-cost curve under the
+ledger.
+
+The MoE roofline
+§
+
+Routing sends each token to 
+k
+k
+k
+ of 
+E
+E
+E
+ routed experts (
+k
+=
+6
+k=6
+k
+=
+6
+, 
+E
+=
+256
+E=256
+E
+=
+256
+ for
+DeepSeek-V4-Flash), and the block also has one always-on shared expert. A
+forward pass over 
+B
+B
+B
+ tokens therefore issues 
+B
+k
+Bk
+B
+k
+ routed expert picks plus
+
+B
+B
+B
+ shared-expert applications. The compute is set by those expert applications,
+but the routed weight traffic is set by how many 
+distinct
+ routed experts get
+touched, since each resident routed expert is loaded once and reused by every
+token routed to it.
+
+That distinct count is the
+
+coupon-collector
+
+(occupancy) expectation. A given expert is among the 
+k
+k
+k
+ a token picks
+with probability 
+k
+/
+E
+k/E
+k
+/
+E
+, so a single token misses it with probability 
+1
+−
+k
+/
+E
+1-k/E
+1
+−
+k
+/
+E
+,
+and all 
+B
+B
+B
+ tokens miss it (independently) with probability 
+(
+1
+−
+k
+/
+E
+)
+B
+(1-k/E)^B
+(
+1
+−
+k
+/
+E
+)
+B
+. The
+expected number activated is
+
+A
+(
+B
+)
+=
+E
+[
+1
+−
+(
+1
+−
+k
+E
+)
+B
+]
+.
+A(B) = E\left[1 - \left(1 - \tfrac{k}{E}\right)^{B}\right].
+A
+(
+B
+)
+=
+E
+[
+1
+−
+(
+1
+−
+E
+k
+​
+)
+B
+]
+.
+
+There are two interpretable limits. For 
+B
+≪
+E
+/
+k
+B \ll E/k
+B
+≪
+E
+/
+k
+ expand the bracket: 
+A
+(
+B
+)
+≈
+B
+k
+A(B)
+\approx Bk
+A
+(
+B
+)
+≈
+B
+k
+, every token drags in 
+k
+k
+k
+ fresh experts and gets no sharing. For 
+B
+≫
+E
+/
+k
+B
+\gg E/k
+B
+≫
+E
+/
+k
+, 
+A
+(
+B
+)
+→
+E
+A(B) \to E
+A
+(
+B
+)
+→
+E
+, every expert is resident and the next token is free
+below the threshold. The crossover is the knee at 
+B
+≈
+E
+/
+k
+≈
+43
+B \approx E/k \approx 43
+B
+≈
+E
+/
+k
+≈
+43
+.
+The marginal fresh-expert load per token is the derivative,
+
+A
+′
+(
+B
+)
+=
+−
+E
+ln
+⁡
+ ⁣
+(
+1
+−
+k
+E
+)
+(
+1
+−
+k
+E
+)
+B
+≈
+k
+e
+−
+B
+k
+/
+E
+,
+A'(B) = -E\ln\!\left(1-\tfrac{k}{E}\right)\left(1-\tfrac{k}{E}\right)^{B}
+\approx k\,e^{-Bk/E},
+A
+′
+(
+B
+)
+=
+−
+E
+ln
+(
+1
+−
+E
+k
+​
+)
+(
+1
+−
+E
+k
+​
+)
+B
+≈
+k
+e
+−
+B
+k
+/
+E
+,
+
+Arithmetic intensity is FLOPs over bytes. The MoE GEMM does 
+2
+B
+(
+k
++
+1
+)
+2B(k+1)
+2
+B
+(
+k
++
+1
+)
+ FLOPs per
+expert-param and loads 
+A
+(
+B
+)
++
+1
+A(B)+1
+A
+(
+B
+)
++
+1
+ experts’ worth of weights at 
+b
+b
+b
+ bytes each
+(
+b
+≈
+0.5
+b\approx0.5
+b
+≈
+0.5
+ for MXFP4), so
+
+I
+MoE
+(
+B
+)
+=
+2
+B
+(
+k
++
+1
+)
+b
+(
+E
+[
+1
+−
+(
+1
+−
+k
+/
+E
+)
+B
+]
++
+1
+)
+,
+I_\text{MoE}(B) =
+\frac{2B(k+1)}
+{b\left(E\left[1-(1-k/E)^B\right]+1\right)},
+I
+MoE
+​
+(
+B
+)
+=
+b
+(
+E
+[
+1
+−
+(
+1
+−
+k
+/
+E
+)
+B
+]
++
+1
+)
+2
+B
+(
+k
++
+1
+)
+​
+,
+
+The B200 fp4 ridge is 
+R
+4
+=
+9
+PFLOP/s
+/
+8
+TB/s
+≈
+1125
+R_4 = 9\,\text{PFLOP/s} \,/\, 8\,\text{TB/s} \approx 1125
+R
+4
+​
+=
+9
+PFLOP/s
+/
+8
+TB/s
+≈
+1125
+
+FLOP/byte.
+
+The attention roofline
+§
+
+MLA
+§
+
+The cache is a single latent of width 
+d
+c
+d_c
+d
+c
+​
+ plus a shared rope key 
+d
+r
+d_r
+d
+r
+​
+, read
+once per context token; the query, though, is 
+per head
+, so each of the 
+n
+h
+n_h
+n
+h
+​
+
+heads drags its own copy in to dot product against that latent. Hence
+
+m
+c
+=
+(
+d
+c
++
+d
+r
+)
+b
+kv
+,
+m
+q
+=
+n
+h
+(
+d
+c
++
+d
+r
+)
+b
+q
+,
+f
+=
+2
+n
+h
+(
+2
+d
+c
++
+d
+r
+)
+,
+m_c = (d_c + d_r)\,b_\text{kv}, \qquad
+m_q = n_h\,(d_c + d_r)\,b_q, \qquad
+f = 2\,n_h\,(2 d_c + d_r),
+m
+c
+​
+=
+(
+d
+c
+​
++
+d
+r
+​
+)
+b
+kv
+​
+,
+m
+q
+​
+=
+n
+h
+​
+(
+d
+c
+​
++
+d
+r
+​
+)
+b
+q
+​
+,
+f
+=
+2
+n
+h
+​
+(
+2
+d
+c
+​
++
+d
+r
+​
+)
+,
+
+where 
+b
+kv
+b_\text{kv}
+b
+kv
+​
+ and 
+b
+q
+b_q
+b
+q
+​
+ are the bytes per element of the (fp8) cache and
+(bf16) query
+f
+f
+f
+ counts, per head, the score over latent-plus-rope (
+d
+c
++
+d
+r
+d_c + d_r
+d
+c
+​
++
+d
+r
+​
+) and
+the value over the latent (
+d
+c
+d_c
+d
+c
+​
+), doubled for FLOPs per MAC. For V4-Flash
+(
+n
+h
+=
+64
+n_h = 64
+n
+h
+​
+=
+64
+, 
+d
+c
+=
+512
+d_c = 512
+d
+c
+​
+=
+512
+, 
+d
+r
+=
+64
+d_r = 64
+d
+r
+​
+=
+64
+, 
+b
+kv
+=
+1
+b_\text{kv} = 1
+b
+kv
+​
+=
+1
+, 
+b
+q
+=
+2
+b_q = 2
+b
+q
+​
+=
+2
+): 
+m
+c
+=
+576
+m_c = 576
+m
+c
+​
+=
+576
+
+bytes, 
+m
+q
+=
+73,728
+m_q = 73{,}728
+m
+q
+​
+=
+73
+,
+728
+ bytes, 
+f
+=
+139,264
+f = 139{,}264
+f
+=
+139
+,
+264
+ FLOP/pair.
+. The important asymmetry is then 
+m
+q
+/
+m
+c
+=
+n
+h
+b
+q
+/
+b
+kv
+=
+128
+m_q / m_c = n_h\,b_q /
+b_\text{kv} = 128
+m
+q
+​
+/
+m
+c
+​
+=
+n
+h
+​
+b
+q
+​
+/
+b
+kv
+​
+=
+128
+.
+
+V4: HCA and CSA
+§
+
+DeepSeek-V4’s sparse attention mechanism has two variants, both based on MLA,
+called “Heavily Compressed Attention” (HCA) and “Compressed Sparse Attention”
+(CSA). They alternate in the backbones of DeepSeek-V4-Flash and Pro.
+
+HCA runs MLA, but over a sequence compressed 128× along its length, so every
+
+S
+S
+S
+ above becomes 
+S
+/
+128
+S/128
+S
+/128
+. That divides the compute (
+f
+⋅
+T
+S
+f \cdot TS
+f
+⋅
+TS
+) and the
+cache read (
+m
+c
+⋅
+S
+m_c \cdot S
+m
+c
+​
+⋅
+S
+) by 128, while leaving the query term 
+m
+q
+⋅
+T
+m_q \cdot T
+m
+q
+​
+⋅
+T
+
+alone, since the query is per token, not per context token. The right mental
+model is to read the MLA table at an effective context length 
+S
+/
+128
+S/128
+S
+/128
+.
+
+With the constants above, HCA’s first speculative token (
+T
+=
+2
+T=2
+T
+=
+2
+) crosses the
+bf16 ridge at an original context length of about 
+45
+k
+45\text{k}
+45
+k
+ tokens. HCA does
+leave a real speculation band at short-to-mid context lengths; around
+
+20
+k
+20\text{k}
+20
+k
+ tokens, moderately wide verifies remain memory-bound. But memory
+bound has to be caveated — the memory is split between pulling in KV cache for
+previous entries (which gets amortized over 
+T
+T
+T
+, so encourages speculation),
+and pulling in new (larger) query vectors (scales with 
+T
+T
+T
+, penalizes
+speculation). Speculation is useful between about 
+S
+≈
+30
+S\approx 30
+S
+≈
+30
+k, and 
+S
+≈
+40
+S
+\approx 40
+S
+≈
+40
+k.
+
+CSA does two different attention things. It first runs an ‘indexer’, which is a
+smaller MLA mechanism, scoring every (lightly, ~
+4
+×
+4\times
+4
+×
+) compressed position
+with an index and keeping the top 
+∼
+512
+\sim 512
+∼
+512
+, then attends over only those.
+
+The main attention part is plain MLA over that fixed 
+∼
+512
+\sim 512
+∼
+512
+-token sequence, so it sits
+exactly where the table above puts pure MLA at 
+S
+≈
+512
+S \approx 512
+S
+≈
+512
+: just
+memory-bound at 
+T
+=
+1
+T=1
+T
+=
+1
+, compute-bound the instant you speculate. It’s capped, so
+it never grows with context.
+
+The index is 
+itself
+ an MLA
+The index keeps its own small cache, one 128-wide key per token in fp8,
+scored against 64 query heads. The 
+d
+idx
+d_\text{idx}
+d
+idx
+​
+ cancels exactly as 
+d
+c
+d_c
+d
+c
+​
+ does
+in the main attention, leaving the same 
+m
+q
+/
+m
+c
+=
+128
+m_q/m_c = 128
+m
+q
+​
+/
+m
+c
+​
+=
+128
+, just at score-only
+(half) cost.
+. It dots a query from each of 64 heads
+against a single shared 128-wide key per position, the same
+one-latent-feeds-many-heads shape, with the same fat-query asymmetry. It
+computes the score but not the value, so its intensity is half the main
+attention’s, roughly 
+128
+T
+128\,T
+128
+T
+, enough to keep it memory-bound for a token or
+two and compute-bound by 
+T
+≈
+4
+T \approx 4
+T
+≈
+4
+, nearly regardless of context.
+
+So pretty much wherever you look in V4’s attention, the compressed dense
+layers, the sparse selected attention, or the index that feeds it, the verify
+tokens have a real cost. The compression that makes the KV cache cheap is the
+very thing that removes some of the slack speculation needs.
+
+The marginal-cost curve
+§
+
+The second chart prices one speculated token against a token already in the
+batch. Each of the three terms of 
+C
+verify
+C_\text{verify}
+C
+verify
+​
+ is a roofline: a pass over
+some number of tokens costs 
+max
+⁡
+(
+compute
+,
+memory
+)
+\max(\text{compute}, \text{memory})
+max
+(
+compute
+,
+memory
+)
+, the compute
+growing with the token count and the memory set by whatever bytes that pass has to
+move. A token already in the batch pays the average, 
+C
+/
+(
+tokens
+)
+C/(\text{tokens})
+C
+/
+(
+tokens
+)
+; the
+speculated token wedged into the same step pays the marginal, 
+d
+C
+/
+d
+(
+tokens
+)
+dC/d(\text{tokens})
+d
+C
+/
+d
+(
+tokens
+)
+.
+The ratio of the two is the local slope of the roofline,
+
+r
+=
+d
+log
+⁡
+C
+d
+log
+⁡
+(
+tokens
+)
+∈
+[
+0
+,
+1
+]
+,
+r = \frac{d \log C}{d \log (\text{tokens})} \in [0, 1],
+r
+=
+d
+lo
+g
+(
+tokens
+)
+d
+lo
+g
+C
+​
+∈
+[
+0
+,
+1
+]
+,
+
+which is the only thing the chart draws. It splits on which side of the ridge we
+sit. Compute-bound, 
+C
+C
+C
+ grows linearly with the tokens, so 
+r
+=
+1
+r = 1
+r
+=
+1
+ and the
+speculated token pays full price. Memory-bound, 
+r
+r
+r
+ is the elasticity of the byte
+traffic: 
+0
+0
+0
+ for a load that doesn’t grow with the batch, somewhere between for
+one that does.
+
+C
+attn proj
+C_\text{attn~proj}
+C
+attn
+proj
+​
+ is standard. It reuses a fixed set of weights, so the
+bytes it moves don’t grow with the batch at all: 
+r
+=
+0
+r = 0
+r
+=
+0
+ until the fp8 GEMM
+saturates, 
+r
+=
+1
+r = 1
+r
+=
+1
+ after. The step lands where the GEMM’s two FLOPs per weight
+byte, summed over the batch, reach the fp8 ridge of 
+563
+563
+563
+, at 
+B
+≈
+281
+B \approx 281
+B
+≈
+281
+
+tokens.
+
+C
+MoE
+C_\text{MoE}
+C
+MoE
+​
+ moves the distinct experts the batch touches, the coupon count
+
+A
+(
+B
+)
+A(B)
+A
+(
+B
+)
+ from above, so on its memory branch 
+r
+=
+B
+A
+′
+(
+B
+)
+/
+A
+(
+B
+)
+r = B\,A'(B)/A(B)
+r
+=
+B
+A
+′
+(
+B
+)
+/
+A
+(
+B
+)
+. A lone token pays
+for all 
+k
+k
+k
+ of its own experts and shares nothing (
+r
+→
+1
+r \to 1
+r
+→
+1
+ as 
+B
+→
+0
+B \to 0
+B
+→
+0
+); once
+the batch is past the knee at 
+B
+≈
+E
+/
+k
+≈
+43
+B \approx E/k \approx 43
+B
+≈
+E
+/
+k
+≈
+43
+ the experts are already
+resident and the next token rides them for free (
+r
+→
+0
+r \to 0
+r
+→
+0
+). The always-on shared
+expert sits in the denominator as one more resident load, 
+r
+=
+B
+A
+′
+(
+B
+)
+/
+(
+A
+(
+B
+)
++
+1
+)
+r = B\,A'(B)/(A(B)+1)
+r
+=
+B
+A
+′
+(
+B
+)
+/
+(
+A
+(
+B
+)
++
+1
+)
+,
+which pulls the lone-token value at 
+B
+=
+1
+B = 1
+B
+=
+1
+ down to 
+≈
+0.85
+\approx 0.85
+≈
+0.85
+. Far out, where
+
+I
+MoE
+I_\text{MoE}
+I
+MoE
+​
+ finally meets the fp4 ridge (the right edge of the first chart,
+
+B
+≈
+10,950
+B \approx 10{,}950
+B
+≈
+10
+,
+950
+), the GEMM turns compute-bound and 
+r
+r
+r
+ climbs back to 
+1
+1
+1
+.
+
+C
+attn
+C_\text{attn}
+C
+attn
+​
+ is MLA. Its memory is the KV read, 
+m
+c
+m_c
+m
+c
+​
+ bytes per context
+token, paid once per step however many query tokens ride along; its compute is
+the 
+f
+T
+S
+f\,T S
+f
+TS
+ of the intensity model, growing with the verify width 
+T
+T
+T
+. So 
+r
+=
+0
+r =
+0
+r
+=
+0
+ while the read dominates and 
+r
+=
+1
+r = 1
+r
+=
+1
+ once the compute overtakes it, with the
+crossover at 
+T
+=
+m
+c
+⋅
+281
+/
+f
+≈
+1.16
+T = m_c \cdot 281 / f \approx
+1.16
+T
+=
+m
+c
+​
+⋅
+281/
+f
+≈
+1.16
+ tokens. Decode (
+T
+=
+1
+T = 1
+T
+=
+1
+) sits just under that line, memory-bound, the
+usual reason a verify token is cheap. But 
+T
+=
+2
+T = 2
+T
+=
+2
+, the first speculated
+token, is already over it: 
+r
+=
+1
+r = 1
+r
+=
+1
+, and it stays there at every larger batch
+and context.
+
+The black line is these three blended by how much of the bill each currently owns,
+
+r
+=
+r
+attn proj
+C
+attn proj
++
+r
+MoE
+C
+MoE
++
+r
+attn
+C
+attn
+C
+attn proj
++
+C
+MoE
++
+C
+attn
++
+c
+draft
+,
+r = \frac{r_\text{attn~proj}\,C_\text{attn~proj} + r_\text{MoE}\,C_\text{MoE} + r_\text{attn}\,C_\text{attn}}{C_\text{attn~proj} + C_\text{MoE} + C_\text{attn}} + c_\text{draft},
+r
+=
+C
+attn
+proj
+​
++
+C
+MoE
+​
++
+C
+attn
+​
+r
+attn
+proj
+​
+C
+attn
+proj
+​
++
+r
+MoE
+​
+C
+MoE
+​
++
+r
+attn
+​
+C
+attn
+​
+​
++
+c
+draft
+​
+,
+
+plus the flat drafter cost 
+c
+draft
+c_\text{draft}
+c
+draft
+​
+, the 
+C
+draft model
+C_\text{draft~model}
+C
+draft
+model
+​
+ term from
+the speedup, paid on every drafted token whether or not it survives verification.
+
+Suggest an edit
+
+Last modified: 10 Jun 2026

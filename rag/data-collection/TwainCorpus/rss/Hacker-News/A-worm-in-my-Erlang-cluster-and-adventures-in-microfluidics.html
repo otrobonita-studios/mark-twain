@@ -1,0 +1,295 @@
+<article data-astro-cid-bvzihdzo=""> <h1 class="title" data-astro-cid-bvzihdzo="">A worm in my Erlang cluster, and adventures in microfluidics</h1> <div class="tags-container" data-astro-cid-bvzihdzo="" style="margin-bottom: .75em;"> <div class="tags" data-astro-cid-bvzihdzo=""> <a data-astro-cid-bvzihdzo="" href="/blog/tag/elixir"> <span class="tag elixir" data-astro-cid-bvzihdzo="">elixir</span> </a><a data-astro-cid-bvzihdzo="" href="/blog/tag/programming"> <span class="tag programming" data-astro-cid-bvzihdzo="">programming</span> </a><a data-astro-cid-bvzihdzo="" href="/blog/tag/erlang"> <span class="tag erlang" data-astro-cid-bvzihdzo="">erlang</span> </a><a data-astro-cid-bvzihdzo="" href="/blog/tag/hot-loading"> <span class="tag hot-loading" data-astro-cid-bvzihdzo="">hot-loading</span> </a><a data-astro-cid-bvzihdzo="" href="/blog/tag/introspection"> <span class="tag introspection" data-astro-cid-bvzihdzo="">introspection</span> </a> </div> </div> <time data-astro-cid-bvzihdzo="" style="font-size: 0.7rem">June 5 2026</time> <div class="posts-navigation"><div>
+Previous post : <a href="/blog/34-days-of-refactoring-my-elixir-saas">34 days in an Elixir tunnel to refactor my SaaS without a rewrite</a></div></div>   <p>Just to be clear, it should maybe be “minifluidics” or “millifluidics” but I’ll ask for forgiveness on this one, because microfluidics reads better. We’ll see what this has to do with my Erlang cluster a bit later.</p>
+<h2 id="sparsely-connected-erlang-clusters">Sparsely connected Erlang clusters</h2>
+<p>An erlang cluster, by default, is fully meshed, meaning that every node maintains a connection to all the others. Since this can lead to excessive chatter and an explosion of edges, it is possible to <em>not</em> fully connect an Erlang cluster, and connect some peers to select peers. This means that instead of having a full mesh, you can cut sub-meshes in an Erlang (or Elixir) cluster and connect them together via bridges, aka single (or sparse) connections.</p>
+<p>We will use this notation for graphs from now on, which can be interpreted by .dot visualizers :</p>
+<pre class="astro-code github-light" data-language="plaintext" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span>graph G {</span></span>
+<span class="line"><span>a -- b;</span></span>
+<span class="line"><span>b -- c;</span></span>
+<span class="line"><span>a -- c;</span></span>
+<span class="line"><span>}</span></span>
+<span class="line"></span></code></pre>
+<p>The above graph describes a fully-meshed 3-node graph, while the below one describes a 4-node cluster where the “d” node only connects to “c”, meaning the nodes form a triangle with a tail.</p>
+<pre class="astro-code github-light" data-language="plaintext" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span>graph G {</span></span>
+<span class="line"><span>a -- b;</span></span>
+<span class="line"><span>b -- c;</span></span>
+<span class="line"><span>a -- c;</span></span>
+<span class="line"><span>d -- c;</span></span>
+<span class="line"><span>}</span></span>
+<span class="line"></span></code></pre>
+<p>An Erlang node can list the nodes it sees by calling <code>:erlang.nodes()</code> or <code>Node.list()</code> in Elixir. <strong>My question is then : how can you map an arbitrary cluster with arbitrary connections, from a single node ?</strong></p>
+<h2 id="walking-an-erlang-cluster-like-a-graph">Walking an Erlang cluster like a graph</h2>
+<p>My answer is : by <strong>asking all the nodes</strong> for their neighbours, and comparing the answers with the neighbours I can see.
+In the above graph, if I am on node <code>a</code>, I will ask :</p>
+<ul>
+<li><code>b</code>, who answers <code>[:a, :c]</code></li>
+<li><code>c</code>, who answers <code>[:a, :b, :d]</code></li>
+</ul>
+<p>My own neighbors are <code>[:b, :c]</code>. If I take the difference between my own neighbors and the answers, node <code>c</code> gives me new knowledge : there is <code>[:d]</code> that only <code>c</code> can reach.
+But what if <code>d</code> itself has neighbors ? I can ask <code>c</code> to ask <code>d</code> to query their own neighbors. <code>d</code> would report to <code>c</code> who would report to me. And if <code>d</code> finds that some of its neighbors have neighbors it cannot see ? This must continue.</p>
+<p><strong>We need to flood-fill the graph no matter its topology.</strong></p>
+<div aria-label="Graph traversals played in sequence: line, circle, bowtie, web" class="video-sequence" data-astro-cid-j7yldx72="" role="img" style="max-width: 460px;"> <video class="is-active" data-astro-cid-j7yldx72="" muted="" playsinline="" preload="none">  </video><video class="" data-astro-cid-j7yldx72="" muted="" playsinline="" preload="none">  </video><video class="" data-astro-cid-j7yldx72="" muted="" playsinline="" preload="none">  </video><video class="" data-astro-cid-j7yldx72="" muted="" playsinline="" preload="none">  </video> </div> 
+<p>I’ve promised I’d talk about fluids : the graph traversal illustrations here and lower were done by moving ink in channels, and there are a few details about that in this child post : <a href="/blog/a-worm-in-my-erlang-cluster-and-adventures-in-microfluidics/floodfill-in-ink">behind the scenes post</a>.</p>
+<p>And to do this, I would like to <strong>not ship code to more than a single node</strong>.</p>
+<h2 id="the-need-for-self-propagating-code-in-the-cluster">The need for self-propagating code in the cluster</h2>
+<p>My goal is now clear : I want to build a mapping tool that works with any Erlang cluster and reports its full topology, no matter how sparse or dense are the connections, and I want this tool to be a single file that I can ship or paste to a single node. Because clustered nodes have no obligation to share code, and <a href="/blog/tag/hot-loading">hot-loading mechanisms</a> only load code on one node. So, if you have a <code>Probe</code> module loaded on your node, you can’t <code>:erpc.call(neighbor, Probe, :run, [])</code> on it if it does not have this module.</p>
+<p>Thankfully, Erlang has tools for us : <code>:code.load_binary(module, filename, binary)</code> where filename is only to tag the newly created module in the code server, and does not map to a filesystem operation, and <code>:code.get_object_code(module)</code> that gives us the object code for a loaded module, <em>but</em> is unable to recover the object code for an in-memory-loaded module.</p>
+<p>If you paste :</p>
+<pre class="astro-code github-light" data-language="elixir" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span style="color:#D73A49">defmodule</span><span style="color:#6F42C1"> Probe</span><span style="color:#D73A49"> do</span></span>
+<span class="line"><span style="color:#D73A49">  def</span><span style="color:#6F42C1"> run</span><span style="color:#24292E">() </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#D73A49">  ..</span><span style="color:#24292E">.</span></span>
+<span class="line"><span style="color:#D73A49">  end</span></span>
+<span class="line"><span style="color:#D73A49">end</span></span>
+</code></pre>
+<p>into iEx, and you call <code>:code.get_object_code(Probe)</code>, despite the module being defined, you get an <code>:error</code>.</p>
+<p>So, our first task is to create a module that we can paste in a first node, and that makes this first node have access to the module binary. I settled to use <code>Kernel.ParallelCompiler.compile_to_path/2</code> which produces a <code>.beam</code> file, and to add the temporary compilation path to the code server via <code>Code.append_path/1</code>. I resorted to this function from the elixir compiler itself because I did not find an equivalent in <code>:code</code> that gave later access to the object code.</p>
+<pre class="astro-code github-light" data-language="elixir" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span style="color:#D73A49">defmodule</span><span style="color:#6F42C1"> ProbeWrapper</span><span style="color:#D73A49"> do</span></span>
+<span class="line"><span style="color:#D73A49">  def</span><span style="color:#6F42C1"> load</span><span style="color:#24292E">() </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#24292E">    payload </span><span style="color:#D73A49">=</span><span style="color:#032F62"> """</span></span>
+<span class="line"><span style="color:#032F62">    defmodule ActualProbe do</span></span>
+<span class="line"><span style="color:#032F62">      def run() do</span></span>
+<span class="line"><span style="color:#032F62">       :ok</span></span>
+<span class="line"><span style="color:#032F62">      end</span></span>
+<span class="line"><span style="color:#032F62">    end</span></span>
+<span class="line"><span style="color:#032F62">    """</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#24292E">    tmp </span><span style="color:#D73A49">=</span><span style="color:#6F42C1"> System</span><span style="color:#24292E">.</span><span style="color:#6F42C1">tmp_dir!</span></span>
+<span class="line"><span style="color:#24292E">    name </span><span style="color:#D73A49">=</span><span style="color:#24292E"> (</span><span style="color:#005CC5">:crypto</span><span style="color:#24292E">.</span><span style="color:#6F42C1">strong_rand_bytes</span><span style="color:#24292E">(</span><span style="color:#005CC5">16</span><span style="color:#24292E">) </span><span style="color:#D73A49">|&gt;</span><span style="color:#6F42C1"> Base</span><span style="color:#24292E">.</span><span style="color:#6F42C1">encode16</span><span style="color:#24292E">) </span><span style="color:#D73A49">&lt;&gt;</span><span style="color:#032F62"> ".ex"</span></span>
+<span class="line"><span style="color:#24292E">    path </span><span style="color:#D73A49">=</span><span style="color:#6F42C1"> Path</span><span style="color:#24292E">.</span><span style="color:#6F42C1">join</span><span style="color:#24292E">(tmp, name)</span></span>
+<span class="line"><span style="color:#6F42C1">    File</span><span style="color:#24292E">.</span><span style="color:#6F42C1">write!</span><span style="color:#24292E">(path, payload)</span></span>
+<span class="line"><span style="color:#6F42C1">    Kernel</span><span style="color:#24292E">.</span><span style="color:#6F42C1">ParallelCompiler</span><span style="color:#24292E">.</span><span style="color:#6F42C1">compile_to_path</span><span style="color:#24292E">([path], tmp)</span></span>
+<span class="line"><span style="color:#6F42C1">    Code</span><span style="color:#24292E">.</span><span style="color:#6F42C1">append_path</span><span style="color:#24292E">(tmp)</span></span>
+<span class="line"><span style="color:#D73A49">  end</span></span>
+<span class="line"><span style="color:#D73A49">end</span></span>
+</code></pre>
+<p>When you paste this, you get :</p>
+<pre class="astro-code github-light" data-language="plaintext" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span>{:module, ProbeWrapper,</span></span>
+<span class="line"><span> &lt;&lt;70, 79, 82, 49, 0, 0, 8, 100, 66, 69, 65, 77, 65, 116, 85, 56, 0, 0, 1, 113,</span></span>
+<span class="line"><span>   0, 0, 0, 34, 19, 69, 108, 105, 120, 105, 114, 46, 80, 114, 111, 98, 101, 87,</span></span>
+<span class="line"><span>   114, 97, 112, 112, 101, 114, 8, 95, 95, ...&gt;&gt;, {:load, 0}}</span></span>
+<span class="line"></span></code></pre>
+<p>Then you can run ActualProbe, but also access its code :</p>
+<pre class="astro-code github-light" data-language="plaintext" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span>iex(2)&gt; ProbeWrapper.load</span></span>
+<span class="line"><span>true</span></span>
+<span class="line"><span>iex(3)&gt; ActualProbe.run</span></span>
+<span class="line"><span>:ok</span></span>
+<span class="line"><span>iex(4)&gt; :code.get_object_code(ActualProbe)</span></span>
+<span class="line"><span>{ActualProbe,</span></span>
+<span class="line"><span> &lt;&lt;70, 79, 82, 49, 0, 0, 5, 224, 66, 69, 65, 77, 65, 116, 85, 56, 0, 0, 0, 176,</span></span>
+<span class="line"><span>   0, 0, 0, 18, 18, 69, 108, 105, 120, 105, 114, 46, 65, 99, 116, 117, 97, 108,</span></span>
+<span class="line"><span>   80, 114, 111, 98, 101, 8, 95, 95, 105, 110, ...&gt;&gt;,</span></span>
+<span class="line"><span> ~c"/var/folders/28/fbhkc24n215b3jkjvkwq5bs80000gn/T/Elixir.ActualProbe.beam"}</span></span>
+<span class="line"></span></code></pre>
+<p>And, now that we have an expression that returns the module binary, we can load it again :</p>
+<pre class="astro-code github-light" data-language="plaintext" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span>iex(5)&gt; {module, binary, _path} = :code.get_object_code(ActualProbe)</span></span>
+<span class="line"><span>...</span></span>
+<span class="line"><span>iex(6)&gt; :code.load_binary(ActualProbe, ~c"some.fakename", binary)</span></span>
+<span class="line"><span>{:module, ActualProbe}</span></span>
+<span class="line"></span></code></pre>
+<p>So we have a first step : a pastable module that gives us access to object code that we can ship around and load. We can re-engineer ActualProbe to contain its own binary access.</p>
+<pre class="astro-code github-light" data-language="elixir" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span style="color:#D73A49">defmodule</span><span style="color:#6F42C1"> ProbeWrapper</span><span style="color:#D73A49"> do</span></span>
+<span class="line"><span style="color:#D73A49">  def</span><span style="color:#6F42C1"> load</span><span style="color:#24292E">() </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#24292E">    payload </span><span style="color:#D73A49">=</span><span style="color:#032F62"> """</span></span>
+<span class="line"><span style="color:#032F62">    defmodule ActualProbe do</span></span>
+<span class="line"><span style="color:#032F62">      def run() do</span></span>
+<span class="line"><span style="color:#032F62">       :ok</span></span>
+<span class="line"><span style="color:#032F62">      end</span></span>
+
+<span class="line"><span style="color:#032F62">      def self_code() do</span></span>
+<span class="line"><span style="color:#032F62">        {_, bin, _} = :code.get_object_code(ActualProbe)</span></span>
+<span class="line"><span style="color:#032F62">        bin</span></span>
+<span class="line"><span style="color:#032F62">      end</span></span>
+<span class="line"><span style="color:#032F62">    end</span></span>
+<span class="line"><span style="color:#032F62">    """</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#24292E">    tmp </span><span style="color:#D73A49">=</span><span style="color:#6F42C1"> System</span><span style="color:#24292E">.</span><span style="color:#6F42C1">tmp_dir!</span></span>
+<span class="line"><span style="color:#24292E">    name </span><span style="color:#D73A49">=</span><span style="color:#24292E"> (</span><span style="color:#005CC5">:crypto</span><span style="color:#24292E">.</span><span style="color:#6F42C1">strong_rand_bytes</span><span style="color:#24292E">(</span><span style="color:#005CC5">16</span><span style="color:#24292E">) </span><span style="color:#D73A49">|&gt;</span><span style="color:#6F42C1"> Base</span><span style="color:#24292E">.</span><span style="color:#6F42C1">encode16</span><span style="color:#24292E">) </span><span style="color:#D73A49">&lt;&gt;</span><span style="color:#032F62"> ".ex"</span></span>
+<span class="line"><span style="color:#24292E">    path </span><span style="color:#D73A49">=</span><span style="color:#6F42C1"> Path</span><span style="color:#24292E">.</span><span style="color:#6F42C1">join</span><span style="color:#24292E">(tmp, name)</span></span>
+<span class="line"><span style="color:#6F42C1">    File</span><span style="color:#24292E">.</span><span style="color:#6F42C1">write!</span><span style="color:#24292E">(path, payload)</span></span>
+<span class="line"><span style="color:#6F42C1">    Kernel</span><span style="color:#24292E">.</span><span style="color:#6F42C1">ParallelCompiler</span><span style="color:#24292E">.</span><span style="color:#6F42C1">compile_to_path</span><span style="color:#24292E">([path], tmp)</span></span>
+<span class="line"><span style="color:#6F42C1">    Code</span><span style="color:#24292E">.</span><span style="color:#6F42C1">append_path</span><span style="color:#24292E">(tmp)</span></span>
+<span class="line"><span style="color:#D73A49">  end</span></span>
+<span class="line"><span style="color:#D73A49">end</span></span>
+</code></pre>
+<p>We then need a graph traversal, an utility to kick it, to keep track of visited nodes, and to ship each node the probe module :</p>
+<pre class="astro-code github-light" data-language="elixir" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span style="color:#D73A49">def</span><span style="color:#6F42C1"> run_probe</span><span style="color:#24292E">(binary) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#6F42C1">  IO</span><span style="color:#24292E">.</span><span style="color:#6F42C1">puts</span><span style="color:#24292E">(</span><span style="color:#032F62">"Launching from </span><span style="color:#032F62">#{</span><span style="color:#6F42C1">node</span><span style="color:#032F62">()}</span><span style="color:#032F62">"</span><span style="color:#24292E">)</span></span>
+<span class="line"><span style="color:#6F42C1">  traverse</span><span style="color:#24292E">(</span><span style="color:#6F42C1">node</span><span style="color:#24292E">(), </span><span style="color:#6F42C1">MapSet</span><span style="color:#24292E">.</span><span style="color:#6F42C1">new</span><span style="color:#24292E">(), binary)</span></span>
+<span class="line"><span style="color:#D73A49">end</span></span>
+
+<span class="line"><span style="color:#D73A49">def</span><span style="color:#6F42C1"> run_probe</span><span style="color:#24292E">(binary, visited) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#6F42C1">  IO</span><span style="color:#24292E">.</span><span style="color:#6F42C1">puts</span><span style="color:#24292E">(</span><span style="color:#032F62">"Hello from </span><span style="color:#032F62">#{</span><span style="color:#6F42C1">node</span><span style="color:#032F62">()}</span><span style="color:#032F62">"</span><span style="color:#24292E">)</span></span>
+<span class="line"><span style="color:#6F42C1">  traverse</span><span style="color:#24292E">(</span><span style="color:#6F42C1">node</span><span style="color:#24292E">(), visited, binary)</span></span>
+<span class="line"><span style="color:#D73A49">end</span></span>
+
+<span class="line"><span style="color:#D73A49">def</span><span style="color:#6F42C1"> traverse</span><span style="color:#24292E">(my_node, visited_nodes, binary) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#24292E">  visible_neighbors </span><span style="color:#D73A49">=</span><span style="color:#005CC5"> :erlang</span><span style="color:#24292E">.</span><span style="color:#6F42C1">nodes</span><span style="color:#24292E">()</span></span>
+<span class="line"><span style="color:#24292E">  initial </span><span style="color:#D73A49">=</span><span style="color:#24292E"> {</span><span style="color:#6F42C1">Map</span><span style="color:#24292E">.</span><span style="color:#6F42C1">put</span><span style="color:#24292E">(%{}, my_node, visible_neighbors), </span><span style="color:#6F42C1">MapSet</span><span style="color:#24292E">.</span><span style="color:#6F42C1">put</span><span style="color:#24292E">(visited_nodes, my_node)}</span></span>
+<span class="line"><span style="color:#24292E">  {adjacent, </span><span style="color:#6A737D">_</span><span style="color:#24292E">} </span><span style="color:#D73A49">=</span><span style="color:#6F42C1"> Enum</span><span style="color:#24292E">.</span><span style="color:#6F42C1">reduce</span><span style="color:#24292E">(visible_neighbors, initial, </span><span style="color:#6F42C1">fn</span><span style="color:#24292E"> (neighbor, {adj, visited}) </span><span style="color:#D73A49">-&gt;</span></span>
+<span class="line"><span style="color:#D73A49">    if</span><span style="color:#6F42C1"> MapSet</span><span style="color:#24292E">.</span><span style="color:#6F42C1">member?</span><span style="color:#24292E">(visited, neighbor) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#24292E">      {adj, visited}</span></span>
+<span class="line"><span style="color:#D73A49">    else</span></span>
+<span class="line"><span style="color:#24292E">      subgraph </span><span style="color:#D73A49">=</span><span style="color:#6F42C1"> visit</span><span style="color:#24292E">(neighbor, visited, binary)</span></span>
+<span class="line"><span style="color:#24292E">      {</span><span style="color:#6F42C1">Map</span><span style="color:#24292E">.</span><span style="color:#6F42C1">merge</span><span style="color:#24292E">(adj, subgraph), </span><span style="color:#6F42C1">MapSet</span><span style="color:#24292E">.</span><span style="color:#6F42C1">union</span><span style="color:#24292E">(visited, </span><span style="color:#6F42C1">MapSet</span><span style="color:#24292E">.</span><span style="color:#6F42C1">new</span><span style="color:#24292E">(</span><span style="color:#6F42C1">Map</span><span style="color:#24292E">.</span><span style="color:#6F42C1">keys</span><span style="color:#24292E">(subgraph)))}</span></span>
+<span class="line"><span style="color:#D73A49">    end</span></span>
+<span class="line"><span style="color:#D73A49">  end</span><span style="color:#24292E">)</span></span>
+<span class="line"><span style="color:#24292E">  adjacent</span></span>
+<span class="line"><span style="color:#D73A49">end</span></span>
+
+<span class="line"><span style="color:#D73A49">def</span><span style="color:#6F42C1"> visit</span><span style="color:#24292E">(</span><span style="color:#D73A49">node</span><span style="color:#24292E">, visited_nodes, binary) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#005CC5">  :erpc</span><span style="color:#24292E">.</span><span style="color:#6F42C1">call</span><span style="color:#24292E">(node, </span><span style="color:#005CC5">:code</span><span style="color:#24292E">, </span><span style="color:#005CC5">:load_binary</span><span style="color:#24292E">, [</span><span style="color:#005CC5">__MODULE__</span><span style="color:#24292E">, </span><span style="color:#032F62">~c"actual_probe.module"</span><span style="color:#24292E">, binary])</span></span>
+<span class="line"><span style="color:#005CC5">  :erpc</span><span style="color:#24292E">.</span><span style="color:#6F42C1">call</span><span style="color:#24292E">(node, </span><span style="color:#005CC5">__MODULE__</span><span style="color:#24292E">, </span><span style="color:#005CC5">:run_probe</span><span style="color:#24292E">, [binary, visited_nodes])</span></span>
+<span class="line"><span style="color:#D73A49">end</span></span>
+
+<span class="line"><span style="color:#D73A49">def</span><span style="color:#6F42C1"> self_code</span><span style="color:#24292E">() </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#24292E">  {</span><span style="color:#6A737D">_</span><span style="color:#24292E">, bin, </span><span style="color:#6A737D">_</span><span style="color:#24292E">} </span><span style="color:#D73A49">=</span><span style="color:#005CC5"> :code</span><span style="color:#24292E">.</span><span style="color:#6F42C1">get_object_code</span><span style="color:#24292E">(</span><span style="color:#6F42C1">ActualProbe</span><span style="color:#24292E">)</span></span>
+<span class="line"><span style="color:#24292E">  bin</span></span>
+<span class="line"><span style="color:#D73A49">end</span></span>
+</code></pre>
+<p>With this in place, we can run it :</p>
+<pre class="astro-code github-light" data-language="plaintext" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span>iex(3)&gt; ActualProbe.run_probe(ActualProbe.self_code)</span></span>
+<span class="line"><span>%{nonode@nohost: []}</span></span>
+<span class="line"></span></code></pre>
+<p>Well. We don’t have a cluster yet. Before we build a cluster, note that the current worm only discovers nodes, but it could also perform work on each node. We could very well add a parameter to pass a function to be ran.
+We also are doing a sequential traversal. We could go parallel with <code>:erpc.multicall</code> for example, but either accept duplicate work, or engineer a distributed data structure over a non-fully connected cluster to prevent nodes being visited multiple times. Said otherwise, we are building a cluster discovery mechanism where we only ask each node “who can you see”, but you could add parameters to answer other questions about the cluster (or even load code over the whole cluster) without caring about its topology.</p>
+<h2 id="building-a-cluster-to-worm-in">Building a cluster to worm in</h2>
+<p>To build our cluster, Erlang provides tools like the <code>:peer</code> module, that allows us to spawn new erlang peers. The node spawning other nodes is called the <code>origin</code>, and we will connect through stdio instead of full EPMD. We will also pass <code>connect_all</code> with a <code>false</code> value to mesh the cluster ourselves instead of the default, fully-connected graph.</p>
+<pre class="astro-code github-light" data-language="elixir" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span style="color:#24292E">{</span><span style="color:#005CC5">:ok</span><span style="color:#24292E">, pid, node} </span><span style="color:#D73A49">=</span></span>
+<span class="line"><span style="color:#005CC5">      :peer</span><span style="color:#24292E">.</span><span style="color:#6F42C1">start</span><span style="color:#24292E">(%{</span></span>
+<span class="line"><span style="color:#005CC5">        name:</span><span style="color:#005CC5"> :"some_name"</span><span style="color:#24292E">,</span></span>
+<span class="line"><span style="color:#005CC5">        connection:</span><span style="color:#005CC5"> :standard_io</span><span style="color:#24292E">,</span></span>
+<span class="line"><span style="color:#005CC5">        args:</span><span style="color:#24292E"> [</span><span style="color:#032F62">~c"-connect_all"</span><span style="color:#24292E">, </span><span style="color:#032F62">~c"false"</span><span style="color:#24292E">]</span></span>
+<span class="line"><span style="color:#24292E">      })</span></span>
+</code></pre>
+<p>We will create a module that allows us to track the peers, nodes, and edges, and setup all the peers. To mesh it, since we have access to all nodes, we call <code>:kernel.connect_node</code> on a node, targeting the other, via <code>:erpc</code>.</p>
+<pre class="astro-code github-light" data-language="elixir" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span style="color:#D73A49">defmodule</span><span style="color:#6F42C1"> LocalCluster</span><span style="color:#D73A49"> do</span></span>
+<span class="line"><span style="color:#D73A49">  defstruct</span><span style="color:#24292E"> [</span><span style="color:#005CC5">:peers</span><span style="color:#24292E">, </span><span style="color:#005CC5">:edges</span><span style="color:#24292E">, </span><span style="color:#005CC5">:nodes</span><span style="color:#24292E">]</span></span>
+
+<span class="line"><span style="color:#D73A49">  def</span><span style="color:#6F42C1"> start</span><span style="color:#24292E">(string) </span><span style="color:#D73A49">when</span><span style="color:#6F42C1"> is_binary</span><span style="color:#24292E">(string) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#6F42C1">    start</span><span style="color:#24292E">(</span><span style="color:#6F42C1">parse_graph</span><span style="color:#24292E">(string))</span></span>
+<span class="line"><span style="color:#D73A49">  end</span></span>
+
+<span class="line"><span style="color:#D73A49">  def</span><span style="color:#6F42C1"> start</span><span style="color:#24292E">(edges) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#24292E">    nodes </span><span style="color:#D73A49">=</span><span style="color:#6F42C1"> edges_to_nodes</span><span style="color:#24292E">(edges)</span></span>
+<span class="line"><span style="color:#24292E">    peers </span><span style="color:#D73A49">=</span><span style="color:#D73A49"> for</span><span style="color:#24292E"> node </span><span style="color:#D73A49">&lt;-</span><span style="color:#24292E"> nodes </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#24292E">      {node, </span><span style="color:#6F42C1">start_peer</span><span style="color:#24292E">(node)} </span></span>
+<span class="line"><span style="color:#D73A49">    end</span><span style="color:#D73A49"> |&gt;</span><span style="color:#6F42C1"> Enum</span><span style="color:#24292E">.</span><span style="color:#6F42C1">into</span><span style="color:#24292E">(%{})</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#24292E">    local_cluster </span><span style="color:#D73A49">=</span><span style="color:#24292E"> %</span><span style="color:#005CC5">__MODULE__</span><span style="color:#24292E">{</span></span>
+<span class="line"><span style="color:#005CC5">      nodes:</span><span style="color:#24292E"> nodes,</span></span>
+<span class="line"><span style="color:#005CC5">      edges:</span><span style="color:#24292E"> edges,</span></span>
+<span class="line"><span style="color:#005CC5">      peers:</span><span style="color:#24292E"> peers</span></span>
+<span class="line"><span style="color:#24292E">    }</span></span>
+
+<span class="line"><span style="color:#6F42C1">    mesh</span><span style="color:#24292E">(local_cluster)</span></span>
+
+<span class="line"><span style="color:#24292E">    local_cluster</span></span>
+<span class="line"><span style="color:#D73A49">  end</span></span>
+
+<span class="line"><span style="color:#D73A49">  def</span><span style="color:#6F42C1"> start_peer</span><span style="color:#24292E">(</span><span style="color:#D73A49">node</span><span style="color:#24292E">) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#24292E">    {</span><span style="color:#005CC5">:ok</span><span style="color:#24292E">, pid, node2} </span><span style="color:#D73A49">=</span></span>
+<span class="line"><span style="color:#005CC5">      :peer</span><span style="color:#24292E">.</span><span style="color:#6F42C1">start</span><span style="color:#24292E">(%{</span></span>
+<span class="line"><span style="color:#005CC5">        name:</span><span style="color:#005CC5"> :"#{node}"</span><span style="color:#24292E">,</span></span>
+<span class="line"><span style="color:#005CC5">        connection:</span><span style="color:#005CC5"> :standard_io</span><span style="color:#24292E">,</span></span>
+<span class="line"><span style="color:#005CC5">        args:</span><span style="color:#24292E"> [</span><span style="color:#032F62">~c"-connect_all"</span><span style="color:#24292E">, </span><span style="color:#032F62">~c"false"</span><span style="color:#24292E">]</span></span>
+<span class="line"><span style="color:#24292E">      })</span></span>
+<span class="line"><span style="color:#005CC5">    :peer</span><span style="color:#24292E">.</span><span style="color:#6F42C1">call</span><span style="color:#24292E">(pid, </span><span style="color:#005CC5">:code</span><span style="color:#24292E">, </span><span style="color:#005CC5">:add_pathsa</span><span style="color:#24292E">, [</span><span style="color:#005CC5">:code</span><span style="color:#24292E">.</span><span style="color:#6F42C1">get_path</span><span style="color:#24292E">()])</span></span>
+<span class="line"><span style="color:#24292E">    %{</span><span style="color:#005CC5">name:</span><span style="color:#24292E"> node, </span><span style="color:#005CC5">node:</span><span style="color:#24292E"> node2, </span><span style="color:#005CC5">pid:</span><span style="color:#24292E"> pid}</span></span>
+<span class="line"><span style="color:#D73A49">  end</span></span>
+
+<span class="line"><span style="color:#D73A49">  def</span><span style="color:#6F42C1"> run_on</span><span style="color:#24292E">(cluster, name, {m, f, a}) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#005CC5">    :peer</span><span style="color:#24292E">.</span><span style="color:#6F42C1">call</span><span style="color:#24292E">(cluster.peers[name].pid, m, f, a)</span></span>
+<span class="line"><span style="color:#D73A49">  end</span></span>
+
+<span class="line"><span style="color:#D73A49">  def</span><span style="color:#6F42C1"> mesh</span><span style="color:#24292E">(%</span><span style="color:#005CC5">__MODULE__</span><span style="color:#24292E">{</span><span style="color:#005CC5">peers:</span><span style="color:#24292E"> peers, </span><span style="color:#005CC5">edges:</span><span style="color:#24292E"> edges} </span><span style="color:#D73A49">=</span><span style="color:#24292E"> cluster) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#D73A49">    for</span><span style="color:#24292E"> {n1, n2} </span><span style="color:#D73A49">&lt;-</span><span style="color:#6F42C1"> unique_edges</span><span style="color:#24292E">(edges) </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#6F42C1">      run_on</span><span style="color:#24292E">(cluster, n1, {</span><span style="color:#005CC5">:net_kernel</span><span style="color:#24292E">, </span><span style="color:#005CC5">:connect_node</span><span style="color:#24292E">, [peers[n2].node]})</span></span>
+<span class="line"><span style="color:#D73A49">    end</span></span>
+<span class="line"><span style="color:#D73A49">  end</span></span>
+
+<span class="line"><span style="color:#D73A49">  def</span><span style="color:#6F42C1"> sample</span><span style="color:#24292E">() </span><span style="color:#D73A49">do</span></span>
+<span class="line"><span style="color:#032F62">    """</span></span>
+<span class="line"><span style="color:#032F62">    graph G {</span></span>
+<span class="line"><span style="color:#032F62">      a -- b;</span></span>
+<span class="line"><span style="color:#032F62">      b -- c;</span></span>
+<span class="line"><span style="color:#032F62">      a -- c;</span></span>
+<span class="line"><span style="color:#032F62">      b -- d;</span></span>
+<span class="line"><span style="color:#032F62">      d -- e;</span></span>
+<span class="line"><span style="color:#032F62">      e -- f;</span></span>
+<span class="line"><span style="color:#032F62">      f -- d;</span></span>
+<span class="line"><span style="color:#032F62">    }</span></span>
+<span class="line"><span style="color:#032F62">    """</span></span>
+<span class="line"><span style="color:#D73A49">  end</span></span>
+<span class="line"><span style="color:#D73A49">end</span></span>
+</code></pre>
+<p>A few utility functions (<code>graph</code>, <code>parse_graph</code>, <code>unique_edges</code>, <code>edges_to_nodes</code>…) are removed so we can focus on the mechanisms, but the full code is at the end of the post.
+When we paste it into iex, we can start a sample cluster :</p>
+<pre class="astro-code github-light" data-language="plaintext" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span>{:module, LocalCluster,</span></span>
+<span class="line"><span> &lt;&lt;70, 79, 82, 49, 0, 0, 29, 4, 66, 69, 65, 77, 65, 116, 85, 56, 0, 0, 3, 24, 0,</span></span>
+<span class="line"><span>   0, 0, 80, 19, 69, 108, 105, 120, 105, 114, 46, 76, 111, 99, 97, 108, 67, 108,</span></span>
+<span class="line"><span>   117, 115, 116, 101, 114, 8, 95, 95, ...&gt;&gt;, {:unique_edges, 1}}</span></span>
+<span class="line"><span>iex(2)&gt; LocalCluster.start(LocalCluster.sample())</span></span>
+<span class="line"><span>%LocalCluster{</span></span>
+<span class="line"><span>  peers: %{</span></span>
+<span class="line"><span>    c: %{name: :c, node: :c@mac, pid: #PID&lt;0.120.0&gt;},</span></span>
+<span class="line"><span>    f: %{name: :f, node: :f@mac, pid: #PID&lt;0.115.0&gt;},</span></span>
+<span class="line"><span>    a: %{name: :a, node: :a@mac, pid: #PID&lt;0.119.0&gt;},</span></span>
+<span class="line"><span>    d: %{name: :d, node: :d@mac, pid: #PID&lt;0.116.0&gt;},</span></span>
+<span class="line"><span>    e: %{name: :e, node: :e@mac, pid: #PID&lt;0.117.0&gt;},</span></span>
+<span class="line"><span>    b: %{name: :b, node: :b@mac, pid: #PID&lt;0.118.0&gt;}</span></span>
+<span class="line"><span>  },</span></span>
+<span class="line"><span>  edges: [f: :d, e: :f, d: :e, b: :d, a: :c, b: :c, a: :b],</span></span>
+<span class="line"><span>  nodes: [:f, :d, :e, :b, :a, :c]</span></span>
+<span class="line"><span>}</span></span>
+<span class="line"><span>[true, true, true, true, true, true, true]</span></span>
+<span class="line"></span></code></pre>
+<p>Given that we own the list of nodes thanks to the accumulation in a struct, we can observe its actual topology by directly asking each node which neighbors it sees :</p>
+<pre class="astro-code github-light" data-language="plaintext" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span>iex&gt; cl = LocalCluster.start(LocalCluster.sample())</span></span>
+<span class="line"><span>iex&gt; LocalCluster.graph(cl)</span></span>
+<span class="line"><span>"graph G {</span></span>
+<span class="line"><span>  a@mac -- c@mac;</span></span>
+<span class="line"><span>  b@mac -- c@mac;</span></span>
+<span class="line"><span>  d@mac -- f@mac;</span></span>
+<span class="line"><span>  e@mac -- f@mac;</span></span>
+<span class="line"><span>  a@mac -- b@mac;</span></span>
+<span class="line"><span>  d@mac -- e@mac;</span></span>
+<span class="line"><span>  b@mac -- d@mac;</span></span>
+<span class="line"><span>}"</span></span>
+<span class="line"></span></code></pre>
+<p>We see that we get the edges we described in the sample, but by virtue of observation.</p>
+<h2 id="worming-the-graph">Worming the graph</h2>
+<p>The full files as I ran them :</p>
+<ul>
+<li><a href="/pics/erlang-worm-and-microfluidics/full_probe.ex">full_probe.ex</a></li>
+<li><a href="/pics/erlang-worm-and-microfluidics/local_cluster.ex">local_cluster.ex</a></li>
+</ul>
+<p>Now, in a fresh iex session, we can, in order :</p>
+<ul>
+<li>paste the LocalCluster module</li>
+<li>start the sample cluster with <code>cl = LocalCluster.start(LocalCluster.sample())</code></li>
+<li>paste the ProbeWrapper module</li>
+<li>call <code>ProbeWrapper.load</code></li>
+<li>call <code>bin = ActualProbe.self_code()</code></li>
+<li>call <code>LocalCluster.run_on(cl, :a, {:code, :load_binary, [ActualProbe, ~c"some.name", bin]})</code></li>
+<li>call <code>LocalCluster.run_on(cl, :a, {ActualProbe, :run_probe, [bin]})</code></li>
+</ul>
+<pre class="astro-code github-light" data-language="plaintext" style="background-color:#fff;color:#24292e;overflow-x:auto" tabindex="0"><code><span class="line"><span>iex(10)&gt; LocalCluster.run_on(cl, :a, {ActualProbe, :run_probe, [bin]})</span></span>
+<span class="line"><span> %{</span></span>
+<span class="line"><span>   f@mac: [:d@mac, :e@mac],</span></span>
+<span class="line"><span>   d@mac: [:f@mac, :e@mac, :b@mac],</span></span>
+<span class="line"><span>   e@mac: [:f@mac, :d@mac],</span></span>
+<span class="line"><span>   b@mac: [:d@mac, :c@mac, :a@mac],</span></span>
+<span class="line"><span>   a@mac: [:c@mac, :b@mac],</span></span>
+<span class="line"><span>   c@mac: [:a@mac, :b@mac]</span></span>
+<span class="line"><span> }</span></span>
+<span class="line"></span></code></pre>
+<p>Now we can flood fill complex graphs :-) .</p>
+<div aria-label="Graph traversal of a complex cluster." class="video-sequence" data-astro-cid-j7yldx72="" role="img" style="max-width: 460px;"> <video class="is-active" data-astro-cid-j7yldx72="" muted="" playsinline="" preload="none">  </video> </div>
+<p>Flood filling a complex graph to traverse it from a single point of entry : see the <a href="/blog/a-worm-in-my-erlang-cluster-and-adventures-in-microfluidics/floodfill-in-ink">behind the scenes post</a> for details.</p>
+<h2 id="a-few-gotchas">A few gotcha’s</h2>
+<ul>
+<li>I’ve forgotten more than once to call <code>:peer.call(pid, :code, :add_pathsa, [:code.get_path()])</code> to load the Elixir stdlib on the bare Erlang nodes. Without it, <code>MapSet</code> as used in the probe cannot run.</li>
+<li>Everything looked fine until my first execution of the whole sequence : in the bowtie-shaped cluster, the worm reported a connexion from <code>a</code> to <code>f</code>. This is because using <code>:erpc.call</code> calls the remote function with the group leader of the calling process. This meant that a pid from <code>a</code> rides along the propagation, and nodes have to grab a connection to <code>a</code>. By default, the VM uses <code>dist_auto_connect: :always</code>, which is orthogonal to <code>connect_all</code> that only prevents a full meshing. So all nodes could see <code>a</code> during the worm propagation despite not being actually connected, as seen in the LocalCluster.graph call. The answer was to reset the group leader to the current node by calling <code>:erlang.group_leader(:erlang.whereis(:init), self())</code>. But this is interfering with the cluster in a way. Can we really perform a measurement without interference ? Your guess ;-)* .</li>
+</ul>
+<p>This post is inspired by Joe Armstrong’s post <a href="https://joearms.github.io/published/2013-11-21-My-favorite-erlang-program.html">“My favorite erlang program”</a> which I’ve read a few years ago. It came again to my mind recently, and after those years in the VM, I feel that I only start to truly grasp why this code was so elegant to him. This made me want to continue my explorations of the introspection abilities of our runtime.</p>
+<p>*<em>(Yes, you could ignore mentions of the node that triggers the worm propagation, and only take into account the edges that emanate from its own <code>:erlang.nodes</code> call. But during a brief period, it would connect to each node in this example.)</em></p> </article>

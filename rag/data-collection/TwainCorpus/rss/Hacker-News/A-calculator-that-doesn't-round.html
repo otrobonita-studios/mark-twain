@@ -1,0 +1,92 @@
+<main class="container page">
+<a class="back" href="index.html">← Constructive Calculator</a>
+<h1>No Rounding</h1>
+<p class="muted" style="color:var(--muted); font-size:0.92rem; margin:4px 0 0;">June 11, 2026</p>
+<p><b>Constructive Calculator</b> is an iPhone calculator that doesn’t round at all.
+  It computes with <i>constructive real numbers</i>: every result is exact, and you can scroll
+  any answer for as many correct digits as you want. What that gives you:</p>
+<ul>
+<li><code>exp(π√163)</code>, Ramanujan’s constant, looks like the
+    integer <code>262,537,412,640,768,744</code>. Scroll past the decimal point and you find
+    <b>twelve 9s</b> before it finally diverges.</li>
+<li><code>exp(100) + 42 − exp(100)</code> returns <b>exactly 42</b>. In IEEE 754 double,
+    <code>exp(100) ≈ 2.7×10<sup>43</sup></code>, and adding 42 changes nothing (42
+    falls off the bottom of the representation), so the subtraction gives <b>0</b>. The constructive 
+    engine evaluates <code>exp(100)</code> to as many digits as is needed, twice, and the subtraction
+    leaves only 42. The calculator does not simplify the expression first; it does indeed 
+    perform both operations as instructed: addition and then subtraction.</li>
+</ul>
+<p>It’s made possible by <i>constructive</i> (or <i>computable</i>) real arithmetic: instead of 
+  storing a number as a fixed-width approximation, store a function that produces an approximation
+  to any requested precision, and evaluate each subexpression to whatever precision the final
+  answer needs. Hans Boehm built a Java library for this in the 1980s and 90s, and it has been
+  the engine behind Android’s built-in Calculator, a fact that periodically
+  delights <a href="https://news.ycombinator.com/item?id=43066953">Hacker</a>
+<a href="https://news.ycombinator.com/item?id=21330341">News</a>.</p>
+<p>But there was no equivalent on iPhone that I could find, so I built one, by porting
+  Boehm’s engine.</p>
+<p>It’s 2026, so I didn’t hand-write the port. I directed Opus 4.8 to translate the source
+  line by line into Swift, and steered the process (architecture, UI, on-device testing, the
+  App Store machinery) over a long back-and-forth.</p>
+<p>What got ported:</p>
+<ul>
+<li><code>com.hp.creals</code>, Boehm’s constructive-reals library (<code>CR</code>,
+    the transcendental functions, the Gauss-Legendre AGM for π), into a Swift package.</li>
+<li><code>UnifiedReal</code> / <code>BoundedRational</code> from AOSP’s
+    ExactCalculator, the layer that keeps results <i>symbolically</i> exact when it can (so
+    <code>cos(π/3)</code> comes back as exactly <code>½</code>, not a constructive
+    approximation of it) and makes comparisons decidable for the rational cases.</li>
+<li>The expression evaluator and a SwiftUI front end with the scroll-for-more-digits
+    display.</li>
+</ul>
+<p>The interesting work was what <i>didn’t</i> translate directly. Java’s
+  <code>synchronized</code>, checked exceptions, and <code>AsyncTask</code> have no Swift
+  equivalents, so the port re-expressed them: exceptions became Swift <code>throws</code>,
+  precision-overflow and divergence became typed errors, and Java’s interrupt-based
+  cancellation became Swift Concurrency’s <code>Task.checkCancellation()</code>. The 2013
+  Mac I develop on can’t run a current Xcode, so signing and TestFlight uploads run on
+  GitHub Actions; the local machine never touches the submission.</p>
+<p>Then I had a <i>different</i> model, Fable 5, do a clean-room review: fresh context, no 
+  memory of how the code was built, just the repository. It earned its keep:</p>
+<ul>
+<li>A <b>concurrency bug</b>: <code>@MainActor</code> was attached to the wrong type, so the
+    view model wasn’t main-actor isolated and a background task was mutating
+    <code>@Published</code> state off the main thread.</li>
+<li>A subtler one: Boehm’s Java <code>get_appr</code> (the memoized approximation
+    routine) is <code>synchronized</code>; the port had dropped the lock and leaned on an actor
+    to serialize access, but two paths slipped around the actor, so two threads could race the
+    same constructive real’s cache. For shared singletons like <code>π</code> that is a
+    memory-safety bug, not just a wrong digit. The fix was the faithful one: put the lock back
+    (reentrant, since the square-root routine re-enters itself).</li>
+<li>A <b>main-thread freeze</b>: a large factorial was evaluated synchronously, hanging the
+    UI with no way to cancel. It now runs off the main thread, cancellable, with a sane cap.</li>
+<li>And the boring-but-mandatory App Store gaps: a missing privacy manifest, the
+    export-compliance flag, accessibility labels.</li>
+</ul>
+<p>As a data point on AI-assisted development, I found this quite useful: the <i>port
+  itself</i> was faithful (Fable 5 checked the algorithms against Boehm’s Java and
+  found no transcription errors), but the <i>adaptation</i> to a different concurrency model is
+  where the bugs lived, and a second model with no stake in the first one’s choices caught
+  them. None would have shown up in the unit tests.</p>
+<h2>Known Limitations</h2>
+<p>Exact real arithmetic has a hard wall: <b>equality is undecidable</b>. You cannot, in
+  general, prove two constructive reals are equal by any finite computation. So
+  <code>exp(100)+42−exp(100)</code> is correctly 42, but the app can’t <i>prove</i>
+  it terminates; it prints <code>42.000…</code> with a “more digits” arrow
+  and will emit zeros forever. It always gives you the right number to as many digits as you
+  want; it only <i>labels</i> a result “exact” when the value stays inside the
+  structured rational-times-known-constant form. <code>cos(π/3)=½</code> does; 
+  <code>exp(100)+42</code> doesn’t. Android’s calculator has the same property, for
+  the same reason.</p>
+<h2>Try it</h2>
+<p>Early TestFlight beta, iPhone, iOS 16+:
+  <a href="https://testflight.apple.com/join/jfrzZJVT">join here</a>. Caveat: iPhone-only for
+  now. Feedback very welcome, especially edge cases: 
+  <a href="mailto:support@dimview.org">support@dimview.org</a>.</p>
+<p class="muted" style="color:var(--muted); font-size:0.92rem; margin-top:2.5em;">
+<b>Update, June 15, 2026:</b> added the standard normal CDF and its inverse,
+  <code>pnorm</code> and <code>qnorm</code> (Φ and Φ<sup>−1</sup> on the keypad),
+  computed to arbitrary precision. This one needed new math. The error function isn’t in
+  Boehm’s library, so it’s the first function here that isn’t a port: it’s
+  implemented directly, as a cancellation-free constructive series. Now in the TestFlight beta.</p>
+</main>
