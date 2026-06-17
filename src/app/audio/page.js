@@ -9,7 +9,7 @@ export const metadata = {
 export default function AudioPage() {
   return (
     <Suspense fallback={<div className="app-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', fontFamily: 'var(--font-mono)' }}>Loading...</div>}>
-      <AudioClient />
+      <AudioClient initialFormat="short" />
     </Suspense>
   );
 }

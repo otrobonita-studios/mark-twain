@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -19,9 +20,9 @@ const PODCAST_FORMATS = {
   long: {
     id: "long",
     title: "In-depth Book Focus",
-    duration: "41 min",
+    duration: "46 min",
     file: "/sounds/podcast/DebriefOfADeadLong.m4a",
-    desc: "A comprehensive 41-minute exploration of Mark Twain's bibliography, private letters, and the philosophical challenges of constructing a digital double."
+    desc: "A comprehensive 46-minute exploration of Mark Twain's bibliography, private letters, and the philosophical challenges of constructing a digital double."
   },
   swedish: {
     id: "swedish",
@@ -32,8 +33,11 @@ const PODCAST_FORMATS = {
   }
 };
 
-export default function AudioClient() {
-  const [currentFormat, setCurrentFormat] = useState('short');
+const TWAIN_SONGS_ORDER = ['mud-on-the-page', 'the-sequel', 'eves-diary', 'what-is-man', 'original-theme'];
+
+export default function AudioClient({ initialFormat = 'short' }) {
+  const router = useRouter();
+  const [currentFormat, setCurrentFormat] = useState(initialFormat || 'short');
   const [isPlayingPodcast, setIsPlayingPodcast] = useState(false);
   const [podcastProgress, setPodcastProgress] = useState(0);
   const [podcastCurrentTime, setPodcastCurrentTime] = useState(0);
@@ -41,6 +45,26 @@ export default function AudioClient() {
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [volume, setVolume] = useState(0.8);
   const [isMuted, setIsMuted] = useState(false);
+
+  // Sync format with URL route parameter
+  useEffect(() => {
+    if (initialFormat && PODCAST_FORMATS[initialFormat]) {
+      setCurrentFormat(initialFormat);
+    }
+  }, [initialFormat]);
+
+  const handleFormatChange = (formatId) => {
+    setCurrentFormat(formatId);
+    router.push(`/audio/${formatId}`);
+  };
+
+  const songsToDisplay = useMemo(() => {
+    return TWAIN_SONGS_ORDER.map(id => {
+      const track = soundtrack.find(t => t.id === id);
+      const index = soundtrack.findIndex(t => t.id === id);
+      return track ? { ...track, globalIndex: index } : null;
+    }).filter(Boolean);
+  }, []);
 
   // Global player state sync
   const [globalPlayerState, setGlobalPlayerState] = useState({
@@ -264,13 +288,18 @@ export default function AudioClient() {
 
         {/* Custom Audio Visualizer Disk */}
         <div className="flex flex-col items-center justify-center h-full z-10 select-none pointer-events-none mt-16 lg:mt-32">
-          <div 
-            className={`relative w-40 h-40 md:w-56 md:h-56 rounded-full border-2 border-[var(--primary)] flex items-center justify-center overflow-hidden bg-[#1a140f] shadow-2xl transition-all duration-1000 ${
-              isPlayingPodcast || isPlayingGlobal ? 'animate-[spin_12s_linear_infinite] border-opacity-100 shadow-[0_0_25px_rgba(217,163,74,0.25)]' : 'border-opacity-30'
-            }`}
-          >
-            <div className="absolute inset-2 rounded-full border border-dashed border-[rgba(217,163,74,0.25)]" />
-            <div className="absolute inset-8 rounded-full border border-[rgba(217,163,74,0.1)] bg-[#15100c]" />
+          <div className="relative w-40 h-40 md:w-56 md:h-56 rounded-full flex items-center justify-center bg-[#1a140f] shadow-2xl overflow-hidden">
+            {/* Spinning Outer Ring & Vinyl Lines */}
+            <div 
+              className={`absolute inset-0 rounded-full border-2 border-[var(--primary)] transition-all duration-1000 ${
+                isPlayingPodcast || isPlayingGlobal ? 'animate-[spin_12s_linear_infinite] border-opacity-100 shadow-[0_0_25px_rgba(217,163,74,0.25)]' : 'border-opacity-30'
+              }`}
+            >
+              <div className="absolute inset-2 rounded-full border border-dashed border-[rgba(217,163,74,0.25)]" />
+              <div className="absolute inset-8 rounded-full border border-[rgba(217,163,74,0.1)] bg-[#15100c]" />
+            </div>
+
+            {/* Static Center Label */}
             <div className="z-10 text-center">
               <span className="text-[9px] uppercase tracking-widest text-[var(--primary)] font-mono font-bold block">
                 Audio Desk
@@ -301,17 +330,11 @@ export default function AudioClient() {
 
       {/* RIGHT PANEL: Audio Players & Links */}
       <main className="desk-panel">
-        {/* Top Left Header */}
-        <div className="desk-header-left">
-          <Headphones size={14} className="desk-header-icon" />
-          <span className="typewriter text-xs uppercase tracking-widest">
-            Samuel Clemens' Audio Desk
-          </span>
-        </div>
+
 
         {/* Page Title */}
         <header className="intro-section">
-          <h1 className="desk-title">The Recorded Voice</h1>
+          <h1 className="desk-title">The Audio Desk</h1>
           <p className="intro-quote">
             "A man's voice is the index of his soul. If we can capture its rhythm, we can capture the shadow of his memory."
           </p>
@@ -343,7 +366,7 @@ export default function AudioClient() {
                 <button
                   key={fmt.id}
                   onClick={() => {
-                    setCurrentFormat(fmt.id);
+                    handleFormatChange(fmt.id);
                   }}
                   className={`px-3 py-1.5 font-sans text-xs uppercase tracking-wider transition-all border whitespace-nowrap ${
                     currentFormat === fmt.id
@@ -446,17 +469,30 @@ export default function AudioClient() {
 
         {/* 2. SONGS SECTION */}
         <section className="mb-10">
-          <div className="flex items-center gap-2 mb-4">
-            <Headphones size={16} className="text-[var(--primary)]" />
-            <h2 className="font-sans font-semibold text-lg uppercase tracking-wider text-[var(--foreground)]">
-              Soundtrack & Inspired Songs
-            </h2>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <div className="flex items-center gap-2">
+              <Headphones size={16} className="text-[var(--primary)]" />
+              <h2 className="font-sans font-semibold text-lg uppercase tracking-wider text-[var(--foreground)]">
+                Soundtrack & Inspired Songs
+              </h2>
+            </div>
+            <a
+              href="https://open.spotify.com/playlist/2DutKyPGDlvUgnaeRuWgPa"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[10px] tracking-wider uppercase font-semibold border border-[#1DB954] hover:bg-[#1DB954] text-[#1DB954] hover:text-white transition-all rounded font-sans max-w-max shadow-md"
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424c-.18.295-.563.387-.857.207-2.377-1.454-5.37-1.783-8.892-1.007-.336.074-.67-.14-.744-.476-.074-.336.14-.67.476-.744 3.856-.88 7.15-.506 9.81 1.127.295.18.387.563.207.857c-.001-.001-.001-.001 0 0zm1.225-2.72c-.226.367-.707.487-1.074.26-2.722-1.672-6.87-2.157-10.082-1.182-.413.125-.847-.107-.972-.52-.125-.413.107-.847.52-.972 3.676-1.116 8.243-.574 11.348 1.33.367.227.487.708.26 1.074v.01zm.106-2.833c-.273.447-.858.594-1.306.32-3.178-1.89-8.412-2.083-11.454-1.16-.503.152-1.037-.134-1.189-.637-.152-.502.135-1.036.637-1.188 3.633-1.102 9.404-.888 13.084 1.3 448.272.274.595.858.32 1.306v-.002z" />
+              </svg>
+              Playlist on Spotify
+            </a>
           </div>
 
           <div className="flex flex-col gap-3">
-            {soundtrack.map((track, index) => {
+            {songsToDisplay.map((track) => {
               const isCurrentPlayingSong =
-                globalPlayerState.isPlaying && globalPlayerState.currentTrackIndex === index;
+                globalPlayerState.isPlaying && globalPlayerState.currentTrackIndex === track.globalIndex;
 
               return (
                 <div
@@ -537,6 +573,24 @@ export default function AudioClient() {
                   style={{ textTransform: 'none', letterSpacing: 'normal' }}
                 >
                   Open Chat
+                </Link>
+              </div>
+
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 bg-[rgba(255,244,223,0.02)] border border-[rgba(255,244,223,0.05)] rounded">
+                <div className="flex flex-col">
+                  <span className="font-sans font-semibold text-xs text-[var(--foreground)]">
+                    Image Lab & Restorations
+                  </span>
+                  <span className="text-[10px] text-[var(--muted-foreground)] font-sans pr-2">
+                    We use Flux2 and Nano Banana to give some images from the books a touch, had cameras been more easy to access.
+                  </span>
+                </div>
+                <Link
+                  href="/restoration"
+                  className="btn-gold flex items-center justify-center gap-1 text-[10px] py-1 px-3 max-w-max"
+                  style={{ textTransform: 'none', letterSpacing: 'normal' }}
+                >
+                  Open Image Lab
                   <ArrowRight size={10} />
                 </Link>
               </div>
@@ -551,7 +605,7 @@ export default function AudioClient() {
                   </span>
                 </div>
                 <a
-                  href="https://github.com/fltman/aimusicvideo.git"
+                  href="https://github.com/otrobonita-studios/mark-twain"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="btn-outline flex items-center justify-center gap-1 text-[10px] py-1 px-3 max-w-max border-[rgba(255,244,223,0.15)] text-[var(--muted-foreground)] hover:text-white"
@@ -570,7 +624,7 @@ export default function AudioClient() {
           <p className="footer-text">{footerT.trademark}</p>
           <div className="footer-links">
             <a
-              href="https://github.com/fltman/aimusicvideo.git"
+              href="https://github.com/otrobonita-studios/mark-twain"
               target="_blank"
               rel="noopener noreferrer"
               className="footer-link"
