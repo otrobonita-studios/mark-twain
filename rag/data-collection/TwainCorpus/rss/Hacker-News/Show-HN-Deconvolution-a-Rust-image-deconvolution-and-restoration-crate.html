@@ -1,0 +1,404 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">deconvolution</h1></div>
+<p dir="auto"><a href="https://crates.io/crates/deconvolution" rel="nofollow"></a> <a href="https://docs.rs/deconvolution" rel="nofollow"></a> <a href="/pbkx/deconvolution/blob/main/LICENSE"></a></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Original</th>
+<th>Deconvolved</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="/pbkx/deconvolution/blob/main/before_deconvolution.png" rel="noopener noreferrer" target="_blank"></a></td>
+<td><a href="/pbkx/deconvolution/blob/main/after_deconvolution.png" rel="noopener noreferrer" target="_blank"></a></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto"><em>Before (left) is the motion-blurred sample; after (right) is restored using <code>wiener_with</code>.</em></p>
+<p dir="auto">Rust image deconvolution and restoration library.</p>
+<p dir="auto">Recovering images from blur depends on a point-spread function, stable
+frequency-domain utilities, and careful regularization. <code>deconvolution</code>
+provides known-PSF restoration, blind workflows, PSF/OTF conversion,
+preprocessing helpers, simulation fixtures, and ndarray APIs.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Overview</h3></div>
+<ul dir="auto">
+<li><strong>Image API</strong>: Top-level functions use <code>image::DynamicImage</code> and return images
+ready to save.</li>
+<li><strong>Known PSF methods</strong>: Inverse filters, Wiener, Richardson-Lucy, constrained,
+proximal, Krylov, and MLE-style restoration.</li>
+<li><strong>Blind methods</strong>: Blind Richardson-Lucy, blind maximum likelihood, and
+parametric PSF estimation.</li>
+<li><strong>PSF and OTF types</strong>: <code>Kernel2D</code>, <code>Kernel3D</code>, <code>Transfer2D</code>, <code>Transfer3D</code>,
+and <code>Blur2D</code>/<code>Blur3D</code>.</li>
+<li><strong>PSF tools</strong>: Gaussian, motion, defocus, microscopy models, support utilities,
+and PSF/OTF conversion.</li>
+<li><strong>Preprocessing</strong>: Edge tapering, apodization, range normalization, and NSR
+estimation.</li>
+<li><strong>Simulation</strong>: Deterministic blur, noise, and synthetic fixture generation.</li>
+<li><strong>ndarray support</strong>: 2D image arrays and 3D volume workflows.</li>
+<li><strong>Feature flags</strong>: <code>rayon</code> by default; optional <code>f16</code> support.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Installation</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo add deconvolution" dir="auto"><pre>cargo add deconvolution</pre></div>
+<div class="highlight highlight-source-toml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='[dependencies]
+deconvolution = "0.2.0"' dir="auto"><pre>[<span class="pl-en">dependencies</span>]
+<span class="pl-smi">deconvolution</span> = <span class="pl-s"><span class="pl-pds">"</span>0.2.0<span class="pl-pds">"</span></span></pre></div>
+<p dir="auto">Image loading: Add <code>image</code> when your application opens or saves image files.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo add image" dir="auto"><pre>cargo add image</pre></div>
+<p dir="auto">Serial build: Disable default features to turn off <code>rayon</code>.</p>
+<div class="highlight highlight-source-toml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='[dependencies]
+deconvolution = { version = "0.2.0", default-features = false }' dir="auto"><pre>[<span class="pl-en">dependencies</span>]
+<span class="pl-smi">deconvolution</span> = { <span class="pl-smi">version</span> = <span class="pl-s"><span class="pl-pds">"</span>0.2.0<span class="pl-pds">"</span></span>, <span class="pl-smi">default-features</span> = <span class="pl-c1">false</span> }</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Quick Start</h3></div>
+<div class="highlight highlight-source-rust notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='use deconvolution::psf::basic::gaussian2d;
+use deconvolution::spectral::{wiener_with, Wiener};
+
+fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let input = image::open("before_deconvolution.png")?;
+    let psf = gaussian2d((15, 15), 2.15)?;
+
+    let restored = wiener_with(&amp;input, &amp;psf, &amp;Wiener::new().nsr(2.5e-4))?;
+    restored.save("after_deconvolution.png")?;
+
+    Ok(())
+}' dir="auto"><pre><span class="pl-k">use</span> deconvolution<span class="pl-kos">::</span>psf<span class="pl-kos">::</span>basic<span class="pl-kos">::</span>gaussian2d<span class="pl-kos">;</span>
+<span class="pl-k">use</span> deconvolution<span class="pl-kos">::</span>spectral<span class="pl-kos">::</span><span class="pl-kos">{</span>wiener_with<span class="pl-kos">,</span> <span class="pl-v">Wiener</span><span class="pl-kos">}</span><span class="pl-kos">;</span>
+
+<span class="pl-k">fn</span> <span class="pl-en">main</span><span class="pl-kos">(</span><span class="pl-kos">)</span> -&gt; <span class="pl-smi">Result</span><span class="pl-kos">&lt;</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">,</span> <span class="pl-smi">Box</span><span class="pl-kos">&lt;</span><span class="pl-k">dyn</span> std<span class="pl-kos">::</span>error<span class="pl-kos">::</span><span class="pl-smi">Error</span><span class="pl-kos">&gt;</span><span class="pl-kos">&gt;</span> <span class="pl-kos">{</span>
+    <span class="pl-k">let</span> input = image<span class="pl-kos">::</span><span class="pl-en">open</span><span class="pl-kos">(</span><span class="pl-s">"before_deconvolution.png"</span><span class="pl-kos">)</span>?<span class="pl-kos">;</span>
+    <span class="pl-k">let</span> psf = <span class="pl-en">gaussian2d</span><span class="pl-kos">(</span><span class="pl-kos">(</span><span class="pl-c1">15</span><span class="pl-kos">,</span> <span class="pl-c1">15</span><span class="pl-kos">)</span><span class="pl-kos">,</span> <span class="pl-c1">2.15</span><span class="pl-kos">)</span>?<span class="pl-kos">;</span>
+
+    <span class="pl-k">let</span> restored = <span class="pl-en">wiener_with</span><span class="pl-kos">(</span><span class="pl-c1">&amp;</span>input<span class="pl-kos">,</span> <span class="pl-c1">&amp;</span>psf<span class="pl-kos">,</span> <span class="pl-c1">&amp;</span><span class="pl-smi">Wiener</span><span class="pl-kos">::</span><span class="pl-en">new</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">.</span><span class="pl-en">nsr</span><span class="pl-kos">(</span><span class="pl-c1">2.5e-4</span><span class="pl-kos">)</span><span class="pl-kos">)</span>?<span class="pl-kos">;</span>
+    restored<span class="pl-kos">.</span><span class="pl-en">save</span><span class="pl-kos">(</span><span class="pl-s">"after_deconvolution.png"</span><span class="pl-kos">)</span>?<span class="pl-kos">;</span>
+
+    <span class="pl-en">Ok</span><span class="pl-kos">(</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">)</span>
+<span class="pl-kos">}</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Image API</h3></div>
+<p dir="auto">Supported <code>DynamicImage</code> variants:</p>
+<ul dir="auto">
+<li><code>ImageLuma8</code></li>
+<li><code>ImageLumaA8</code></li>
+<li><code>ImageRgb8</code></li>
+<li><code>ImageRgba8</code></li>
+<li><code>ImageLuma16</code></li>
+<li><code>ImageLumaA16</code></li>
+<li><code>ImageRgb16</code></li>
+<li><code>ImageRgba16</code></li>
+<li><code>ImageRgb32F</code></li>
+<li><code>ImageRgba32F</code></li>
+</ul>
+<p dir="auto">Configuration enums are shared across algorithm families:</p>
+<ul dir="auto">
+<li><strong><code>Boundary</code></strong>: <code>Zero</code>, <code>Replicate</code>, <code>Reflect</code>, <code>Symmetric</code>, <code>Periodic</code></li>
+<li><strong><code>Padding</code></strong>: <code>None</code>, <code>Same</code>, <code>Minimal</code>, <code>NextFastLen</code>, <code>Explicit2</code>,
+<code>Explicit3</code></li>
+<li><strong><code>ChannelMode</code></strong>: <code>Independent</code>, <code>LumaOnly</code>, <code>IgnoreAlpha</code>,
+<code>PremultipliedAlpha</code></li>
+<li><strong><code>RangePolicy</code></strong>: <code>PreserveInput</code>, <code>Clamp01</code>, <code>ClampNegPos1</code>, <code>Unbounded</code></li>
+</ul>
+<p dir="auto">Use <code>ChannelMode::Independent</code> for per-channel color restoration,
+<code>ChannelMode::LumaOnly</code> when the blur should primarily affect luminance, and
+<code>RangePolicy::PreserveInput</code> when working in normal image sample ranges.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">PSF and OTF API</h3></div>
+<p dir="auto">Basic PSF generators:</p>
+<ul dir="auto">
+<li><code>delta2d</code>, <code>delta3d</code></li>
+<li><code>gaussian2d</code>, <code>gaussian3d</code></li>
+<li><code>motion_linear</code></li>
+<li><code>disk</code>, <code>pillbox</code>, <code>defocus</code></li>
+<li><code>box2d</code>, <code>box3d</code></li>
+<li><code>oriented_gaussian</code></li>
+</ul>
+<p dir="auto">Blind initialization helpers:</p>
+<ul dir="auto">
+<li><code>psf::init::uniform</code></li>
+<li><code>psf::init::gaussian_guess</code></li>
+<li><code>psf::init::motion_guess</code></li>
+<li><code>psf::init::from_support</code></li>
+</ul>
+<p dir="auto">Support utilities:</p>
+<ul dir="auto">
+<li><code>normalize</code>, <code>normalize_3d</code></li>
+<li><code>center</code>, <code>center_3d</code></li>
+<li><code>pad_to</code>, <code>pad_to_3d</code></li>
+<li><code>crop_to</code>, <code>crop_to_3d</code></li>
+<li><code>flip</code>, <code>flip_3d</code></li>
+<li><code>validate</code>, <code>validate_3d</code></li>
+<li><code>support_mask</code>, <code>support_mask_3d</code></li>
+</ul>
+<p dir="auto">Transfer conversion utilities:</p>
+<ul dir="auto">
+<li><code>otf::convert::psf2otf</code></li>
+<li><code>otf::convert::psf2otf_3d</code></li>
+<li><code>otf::convert::otf2psf</code></li>
+<li><code>otf::convert::otf2psf_3d</code></li>
+</ul>
+<p dir="auto">Optical and microscopy models:</p>
+<ul dir="auto">
+<li><code>BornWolfParams</code> / <code>born_wolf</code></li>
+<li><code>GibsonLanniParams</code> / <code>gibson_lanni</code></li>
+<li><code>VariableRiGibsonLanniParams</code> / <code>variable_ri_gibson_lanni</code></li>
+<li><code>RichardsWolfParams</code> / <code>richards_wolf</code></li>
+<li><code>lorentz2d</code></li>
+<li><code>astigmatic</code></li>
+<li><code>double_helix</code></li>
+<li><code>otf::spectra::koehler_otf</code></li>
+<li><code>otf::spectra::defocus_otf</code></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Known PSF Methods</h3></div>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Spectral and inverse filters</h4></div>
+<p dir="auto">Frequency-domain restoration.</p>
+<ul dir="auto">
+<li><code>naive_inverse_filter</code></li>
+<li><code>inverse_filter</code></li>
+<li><code>truncated_inverse_filter</code></li>
+<li><code>regularized_inverse_filter</code></li>
+<li><code>tikhonov_inverse_filter</code></li>
+<li><code>wiener</code></li>
+<li><code>unsupervised_wiener</code></li>
+</ul>
+<p dir="auto">Configuration types:</p>
+<ul dir="auto">
+<li><code>InverseFilter</code></li>
+<li><code>RegularizedInverseFilter</code></li>
+<li><code>TikhonovInverseFilter</code></li>
+<li><code>Wiener</code></li>
+<li><code>UnsupervisedWiener</code></li>
+</ul>
+<p dir="auto">Custom configs: Use <code>_with</code> variants.</p>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Richardson-Lucy and regularized RL</h4></div>
+<p dir="auto">Poisson-style multiplicative restoration.</p>
+<ul dir="auto">
+<li><code>richardson_lucy</code></li>
+<li><code>damped_richardson_lucy</code></li>
+<li><code>richardson_lucy_tv</code></li>
+</ul>
+<p dir="auto">Configuration types:</p>
+<ul dir="auto">
+<li><code>RichardsonLucy</code></li>
+<li><code>RichardsonLucyTv</code></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Iterative least-squares methods</h4></div>
+<p dir="auto">Residual-update restoration.</p>
+<ul dir="auto">
+<li><code>landweber</code></li>
+<li><code>van_cittert</code></li>
+<li><code>tikhonov_miller</code></li>
+<li><code>ictm</code></li>
+</ul>
+<p dir="auto">Configuration types:</p>
+<ul dir="auto">
+<li><code>Landweber</code></li>
+<li><code>VanCittert</code></li>
+<li><code>TikhonovMiller</code></li>
+<li><code>Ictm</code></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Constrained solvers</h4></div>
+<p dir="auto">Bound-aware restoration.</p>
+<ul dir="auto">
+<li><code>nnls</code></li>
+<li><code>bvls</code></li>
+</ul>
+<p dir="auto">Configuration types:</p>
+<ul dir="auto">
+<li><code>Nnls</code></li>
+<li><code>Bvls</code></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Sparse and proximal methods</h4></div>
+<p dir="auto">Proximal-gradient restoration.</p>
+<ul dir="auto">
+<li><code>ista</code></li>
+<li><code>fista</code></li>
+</ul>
+<p dir="auto">Configuration and model types:</p>
+<ul dir="auto">
+<li><code>Ista</code></li>
+<li><code>Fista</code></li>
+<li><code>SparseBasis</code></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Krylov and advanced iterative methods</h4></div>
+<p dir="auto">Scientific imaging solvers.</p>
+<ul dir="auto">
+<li><code>mrnsd</code></li>
+<li><code>cgls</code></li>
+<li><code>wpl</code></li>
+<li><code>hybr</code></li>
+</ul>
+<p dir="auto">Configuration types:</p>
+<ul dir="auto">
+<li><code>Mrnsd</code></li>
+<li><code>Cgls</code></li>
+<li><code>Wpl</code></li>
+<li><code>Hybr</code></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Maximum-likelihood family</h4></div>
+<p dir="auto">Microscopy-oriented MLE-style restoration.</p>
+<ul dir="auto">
+<li><code>cmle</code></li>
+<li><code>gmle</code></li>
+<li><code>qmle</code></li>
+</ul>
+<p dir="auto">Configuration types:</p>
+<ul dir="auto">
+<li><code>Cmle</code></li>
+<li><code>Gmle</code></li>
+<li><code>Qmle</code></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Blind Deconvolution</h3></div>
+<p dir="auto">Blind workflows estimate both the restored image and the PSF.
+Image-facing blind workflows support Gray and GrayAlpha <code>DynamicImage</code> variants
+for u8 and u16 samples.</p>
+<ul dir="auto">
+<li><code>blind::richardson_lucy</code></li>
+<li><code>blind::maximum_likelihood</code></li>
+<li><code>blind::parametric</code></li>
+</ul>
+<p dir="auto"><code>blind::maximum_likelihood</code> shares the same Poisson EM restoration core as blind Richardson-Lucy.</p>
+<p dir="auto">Configuration and output types:</p>
+<ul dir="auto">
+<li><code>BlindRichardsonLucy</code></li>
+<li><code>BlindMaximumLikelihood</code></li>
+<li><code>BlindParametric</code></li>
+<li><code>BlindOutput&lt;I&gt;</code></li>
+<li><code>BlindReport</code></li>
+<li><code>ParametricPsf</code></li>
+<li><code>PsfConstraint</code></li>
+</ul>
+<p dir="auto">PSF constraints:</p>
+<ul dir="auto">
+<li><code>Nonnegative</code></li>
+<li><code>NormalizeSum</code></li>
+<li><code>SupportMask(...)</code></li>
+</ul>
+<p dir="auto">Parametric PSF families:</p>
+<ul dir="auto">
+<li><code>Gaussian { sigma }</code></li>
+<li><code>MotionLinear { length, angle_deg }</code></li>
+<li><code>Defocus { radius }</code></li>
+<li><code>OrientedGaussian { sigma_major, sigma_minor, angle_deg }</code></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">ndarray Workflows</h3></div>
+<p dir="auto">The public <code>nd</code> module exposes array-first workflows for users who already work
+in ndarray or need 3D volumes.
+Enable the optional <code>f16</code> feature to pass <code>half::f16</code> arrays into the 2D
+ndarray API while keeping computation in <code>f32</code>.</p>
+<p dir="auto">2D known-PSF methods in <code>nd::known_psf</code>:</p>
+<ul dir="auto">
+<li><code>wiener</code>, <code>unsupervised_wiener</code></li>
+<li><code>richardson_lucy</code>, <code>richardson_lucy_tv</code></li>
+<li><code>landweber</code>, <code>van_cittert</code>, <code>tikhonov_miller</code>, <code>ictm</code></li>
+<li><code>nnls</code>, <code>bvls</code></li>
+<li><code>ista</code>, <code>fista</code></li>
+<li><code>mrnsd</code>, <code>cgls</code>, <code>wpl</code>, <code>hybr</code></li>
+</ul>
+<p dir="auto">Blind methods in <code>nd::blind</code>:</p>
+<ul dir="auto">
+<li><code>richardson_lucy</code></li>
+<li><code>maximum_likelihood</code></li>
+</ul>
+<p dir="auto">3D and microscopy methods in <code>nd::microscopy</code>:</p>
+<ul dir="auto">
+<li><code>wiener</code></li>
+<li><code>richardson_lucy</code></li>
+<li><code>richardson_lucy_tv</code></li>
+<li><code>cmle</code></li>
+<li><code>gmle</code></li>
+<li><code>qmle</code></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Preprocessing</h3></div>
+<p dir="auto">Preprocessing utilities help reduce ringing and prepare numerical inputs.</p>
+<ul dir="auto">
+<li><code>preprocess::apodize</code></li>
+<li><code>preprocess::apodize::window_edges</code></li>
+<li><code>preprocess::edgetaper</code></li>
+<li><code>preprocess::estimate_nsr</code></li>
+<li><code>preprocess::normalize_range</code></li>
+</ul>
+<p dir="auto">Use <code>edgetaper</code> or apodization before frequency-domain deconvolution when
+strong edge discontinuities create ringing artifacts.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Simulation and Fixtures</h3></div>
+<p dir="auto">Deterministic: Same input and seed produce the same simulated output.</p>
+<p dir="auto">Fixtures: Synthetic images and volumes for tests, examples, and benchmarks.</p>
+<p dir="auto">Blur and degradation:</p>
+<ul dir="auto">
+<li><code>simulate::blur::blur</code></li>
+<li><code>simulate::blur::blur_otf</code></li>
+<li><code>simulate::blur::blur_3d</code></li>
+<li><code>simulate::blur::blur_otf_3d</code></li>
+<li><code>simulate::blur::degrade</code></li>
+</ul>
+<p dir="auto">Noise models:</p>
+<ul dir="auto">
+<li><code>simulate::noise::add_gaussian_noise</code></li>
+<li><code>simulate::noise::add_poisson_noise</code></li>
+<li><code>simulate::noise::add_readout_noise</code></li>
+</ul>
+<p dir="auto">Synthetic fixtures:</p>
+<ul dir="auto">
+<li><code>simulate::phantom::checkerboard_2d</code></li>
+<li><code>simulate::phantom::gaussian_blob_2d</code></li>
+<li><code>simulate::phantom::rgb_edges_2d</code></li>
+<li><code>simulate::phantom::phantom_3d</code></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Optional rayon Integration</h3></div>
+<p dir="auto"><code>rayon</code> is enabled by default. The optional <code>f16</code> feature adds <code>half::f16</code>
+input/output support for the 2D ndarray API; computation remains in <code>f32</code>.</p>
+<div class="highlight highlight-source-toml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='[features]
+default = ["rayon"]
+rayon = ["dep:rayon", "ndarray/rayon", "image/rayon"]
+f16 = ["dep:half"]' dir="auto"><pre>[<span class="pl-en">features</span>]
+<span class="pl-smi">default</span> = [<span class="pl-s"><span class="pl-pds">"</span>rayon<span class="pl-pds">"</span></span>]
+<span class="pl-smi">rayon</span> = [<span class="pl-s"><span class="pl-pds">"</span>dep:rayon<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>ndarray/rayon<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>image/rayon<span class="pl-pds">"</span></span>]
+<span class="pl-smi">f16</span> = [<span class="pl-s"><span class="pl-pds">"</span>dep:half<span class="pl-pds">"</span></span>]</pre></div>
+<p dir="auto">Disable default features for serial builds:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo test --no-default-features" dir="auto"><pre>cargo <span class="pl-c1">test</span> --no-default-features</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Example Programs</h3></div>
+<p dir="auto">Image-facing workflows:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo run --example wiener -- input.png output.png
+cargo run --example richardson_lucy
+cargo run --example blind_motion
+cargo run --example edgetaper
+cargo run --example custom_regularizer" dir="auto"><pre>cargo run --example wiener -- input.png output.png
+cargo run --example richardson_lucy
+cargo run --example blind_motion
+cargo run --example edgetaper
+cargo run --example custom_regularizer</pre></div>
+<p dir="auto">Volume workflow:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo run --example microscopy_volume" dir="auto"><pre>cargo run --example microscopy_volume</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Benchmarks and Development</h3></div>
+<p dir="auto">Benchmarks: Criterion benchmark families.</p>
+<ul dir="auto">
+<li><code>spectral</code></li>
+<li><code>rl</code></li>
+<li><code>blind</code></li>
+<li><code>volume</code></li>
+</ul>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo bench --no-run
+cargo bench --bench spectral
+cargo bench --bench rl
+cargo bench --bench blind
+cargo bench --bench volume" dir="auto"><pre>cargo bench --no-run
+cargo bench --bench spectral
+cargo bench --bench rl
+cargo bench --bench blind
+cargo bench --bench volume</pre></div>
+<p dir="auto">Checks:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo check --all-features
+cargo test --workspace --all-targets --all-features
+cargo doc --workspace --no-deps --all-features" dir="auto"><pre>cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo check --all-features
+cargo <span class="pl-c1">test</span> --workspace --all-targets --all-features
+cargo doc --workspace --no-deps --all-features</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Limitations and Scope</h3></div>
+<ul dir="auto">
+<li>Known-PSF image-facing algorithms support u8/u16 Gray, GrayAlpha, Rgb, and Rgba
+<code>DynamicImage</code> variants, plus 32-bit float Rgb and Rgba images.</li>
+<li>Blind image-facing algorithms support u8/u16 Gray and GrayAlpha
+<code>DynamicImage</code> variants.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">deconvolution is licensed under the <a href="/pbkx/deconvolution/blob/main/LICENSE">MIT License</a>, copyright (c) 2026 pbkx.</p>
+</article>
