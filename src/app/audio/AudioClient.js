@@ -282,7 +282,6 @@ export default function AudioClient({ initialFormat = 'short' }) {
               priority
               className="logo-img"
             />
-            <p className="logo-subtitle">The Open Source AI Project</p>
           </div>
         </div>
 
@@ -355,7 +354,7 @@ export default function AudioClient({ initialFormat = 'short' }) {
           <div className="flex items-center gap-2 mb-4">
             <Activity size={16} className="text-[var(--primary)]" />
             <h2 className="font-sans font-semibold text-lg uppercase tracking-wider text-[var(--foreground)]">
-              Podcast: Debrief of a Dead Man
+              Podcast: Debrief of a Dead
             </h2>
           </div>
 
@@ -561,10 +560,10 @@ export default function AudioClient({ initialFormat = 'short' }) {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 bg-[rgba(255,244,223,0.02)] border border-[rgba(255,244,223,0.05)] rounded">
                 <div className="flex flex-col">
                   <span className="font-sans font-semibold text-xs text-[var(--foreground)]">
-                    Interactive Dialogue System
+                    Chat with Mark II
                   </span>
                   <span className="text-[10px] text-[var(--muted-foreground)] font-sans">
-                    Have an on-demand conversation with the digital recreation of Mark.
+                    Learn to know the main character talking directly to the digital recreation of Mark.
                   </span>
                 </div>
                 <Link
@@ -598,7 +597,7 @@ export default function AudioClient({ initialFormat = 'short' }) {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 bg-[rgba(255,244,223,0.02)] border border-[rgba(255,244,223,0.05)] rounded">
                 <div className="flex flex-col">
                   <span className="font-sans font-semibold text-xs text-[var(--foreground)]">
-                    Chat + Diary + Machine Learning API
+                    GitHub Repo + Machine Learning API
                   </span>
                   <span className="text-[10px] text-[var(--muted-foreground)] font-sans pr-2">
                     Explore the open-source embedding pipelines. Reach out for Qdrant Vector Embedding Access.
