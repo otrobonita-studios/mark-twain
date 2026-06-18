@@ -1,0 +1,105 @@
+My LSM Tree Was Slower Than a B-Tree. Then I Profiled It.
+Aasheesh Rathour
+8 min read
+·
+2 days ago
+--
+Listen
+Share
+A few weeks ago I wanted to understand how the storage engine inside RocksDB actually works. Not read about it. Build it.
+RocksDB, LevelDB, Cassandra, TiKV, CockroachDB — they all sit on top of the same idea: the log-structured merge tree. Every backend engineer has used a database built on an LSM tree. Almost none of us have read one we could actually understand, because the production ones are hundreds of thousands of lines.
+So I built one in Go. Then I benchmarked it and it was embarrassingly slow — 250,000 writes per second when BoltDB, the pure-Go B-tree, was doing more.
+This is the story of getting it from 250k to nearly 2 million writes per second. Every optimization came from profiling, not guessing. Each fix revealed the next bottleneck. That part — watching the bottleneck move as you chase it — is the actual skill, and nobody writes it down.
+The villain: why B-trees choke on writes
+A B-tree keeps your data sorted on disk at all times. Every insert finds the right spot in the tree and writes it there. That means every write is a random write — the disk has to seek to a different location each time.
+On a write-heavy workload, random writes are the enemy. Whether you’re on a spinning disk or an SSD, sequential writes are dramatically faster than scattered ones.
+You can see it in the numbers. BoltDB is a well-engineered B-tree, and on sequential writes it does 2.77 million per second. On random writes it collapses to 234,000 — more than a 10x drop. Same database, same machine. The only difference is the write pattern.
+That collapse is the hole LSM trees exist to fill.
+The fix: never write randomly
+The LSM tree idea is simple. Don’t write to disk on every insert. Write to an in-memory sorted structure instead — that’s instant. When that structure fills up, dump the entire thing to disk in one sequential write.
+The in-memory part is called the MemTable. The on-disk files are SSTables — Sorted String Tables, immutable once written. You never modify an SSTable. You just write new ones and merge old ones together in the background, a process called compaction.
+The trade-off: reads get harder. Your data is now spread across the MemTable plus a pile of SSTables. A read might have to check all of them. Managing that read cost — with bloom filters, sparse indexes, and levels — is the entire engineering challenge of an LSM tree.
+I built all of that. And then the slow part started.
+Baseline: 250k writes/sec, and a profiler
+The first working version did 250,000 sequential writes per second and 120,000 random. Slower than the B-tree I was supposed to beat.
+I ran pprof. The picture was clear and ugly:
+Write syscall: 34% of CPU
+Garbage collection: ~35%
+Sorting: ~13%
+Three bottlenecks eating 80% of the time. So I went after them one at a time.
+Press enter or click to view image in full size
+Bottleneck 1: the write syscall (34% → 2.16%)
+Every batch of writes called 
+file.Write
+ on the write-ahead log. That's a syscall — a trip into the kernel and a data copy — on every single batch. At 34% of CPU, it was the biggest single cost.
+The fix was to memory-map the WAL file. Instead of calling 
+file.Write
+, I 
+mmap
+ the whole file at startup and write into it with a plain 
+copy()
+ into the mapped region. No syscall. The data lands in the page cache directly, and a background goroutine handles the actual fsync to disk.
+Write syscall went from 34% of CPU to 2.16%. The residual is just the page-fault handler and occasional writeback. This was the single biggest win in the whole project.
+Bottleneck 2: GC and sorting (48% combined)
+With the syscall gone, profiling pointed at compaction. The way I’d written it, compaction loaded every entry from the SSTables being merged into one giant slice, sorted the whole thing, then deduplicated it. That slice allocation plus the sort was almost half the CPU time — GC churning through millions of temporary entries, and 
+sort.Slice
+ on top.
+The fix was a streaming k-way merge. The SSTables are already sorted individually. So instead of loading everything and sorting, I use a min-heap (
+container/heap
+) that pulls the next-smallest key across all the input files one at a time. No giant slice. No sort. Constant memory regardless of how much data is being compacted.
+GC overhead from compaction disappeared. The sort disappeared entirely.
+And this is where I hit the bug that taught me the most.
+The bloom filter bug that made reads worse
+A bloom filter is what makes LSM reads fast. Before reading an SSTable from disk, you check its bloom filter — a small probabilistic structure that tells you “this key is definitely not in this file” or “it might be.” If it says definitely not, you skip the file entirely without touching the disk.
+After I rewrote compaction with the merge iterator, reads got slower. Much slower. Every read was scanning entire SSTable files.
+The bug was in how I sized the bloom filter. The merge iterator passed the heap size — the number of input SSTable files, around 5 to 10 — as the expected number of entries. So the bloom filter was sized for 10 entries: about 100 bits. But it was actually storing 100,000 entries.
+A 100-bit bloom filter holding 100,000 keys is saturated instantly. Every bit is set. It returns “maybe present” for every key you ask about — which means it filters nothing, and every read falls through to a full file scan.
+The fix was one line: size the bloom filter with a constant 
+entriesPerChunk = 100000
+ instead of the file count. Reads went back to fast.
+This is the kind of bug you only find by building the thing and measuring it. The bloom filter was “working” — it compiled, it ran, it returned answers. It was just silently useless. Only the read benchmark caught it.
+Bottleneck 3: reads through the kernel
+With the bloom filter fixed, reads were correct but still going through 
+ReadAt
+ — a syscall per read. Same problem as the WAL, different path.
+Same fix: mmap the SSTable files at open. Reads parse directly from mapped memory, zero-copy, no syscall. Read throughput jumped 234%.
+The smaller wins
+After the big three, the profile flattened out. The remaining gains were incremental:
+Incremental CRC.
+ Closing an SSTable used to read the entire 4MB file back just to compute its checksum. I changed the writer to accumulate the CRC as it writes, so there’s no read-back at all.
+Buffered SSTable writes.
+ Wrapped writes in a 256KB buffer to batch syscalls during flush.
+MemTable map capacity hint.
+ The MemTable is a Go map holding ~136,000 entries. Without a capacity hint, it rehashes and reallocates about 17 times as it grows. Pre-allocating with a size hint gave 6%.
+NoWAL mode.
+ An option to skip the WAL entirely, to measure the ceiling. It showed the WAL was no longer the bottleneck — only 10% between durable and non-durable.
+Final number: 1.98 million sequential writes per second. From 250k. Roughly 8x, every step measured.
+The honest benchmarks
+Here’s where it lands against the two pure-Go databases that matter.
+Press enter or click to view image in full size
+On random writes — the workload LSM trees are built for — it does 1.19 million per second versus BoltDB’s 234,000. 
+5x faster than the B-tree.
+ That’s the villain defeated. The whole reason LSM trees exist, shown in one number.
+The full picture, including where I lose:
+Press enter or click to view image in full size
+I’m not going to pretend this beats everything. BadgerDB is roughly 4x faster than mine, and the reason is architectural: BadgerDB is based on the WiscKey paper, which stores values in a separate log and keeps only keys plus pointers in the LSM tree. Because keys are small, their whole tree fits in memory and compaction moves far less data. That’s a fundamentally more efficient design than storing full values inline like I do. Closing that gap means building a value-log architecture — a different engine.
+On reads I’m slower than BoltDB too. A B-tree read is one lookup in one structure. My read might check the MemTable, several overlapping L0 files, then one file per level below that. More places to look means more time. That’s the LSM trade-off working exactly as designed — I bought write speed and paid for it in read complexity.
+Does it actually work?
+Fast and wrong is worthless. So before any of these numbers meant anything, the correctness tests had to pass.
+One million keys, write and read back.
+ Every value matches. Then overwrite half of them and read again — the newest version always wins.
+Crash recovery.
+ Write keys, force some SSTable flushes, then 
+SIGKILL
+ the process before the MemTable flushes. Restart, replay the WAL, verify zero data loss and zero duplicates. A real kill, not a graceful shutdown.
+Tombstone propagation.
+ Delete a key, force compaction to the bottom level, verify the key is gone and the tombstone itself is dropped once it’s below all live data.
+All of it passes under 
+go test -race
+, including with the background compaction goroutine running concurrently with reads. That last part matters — background compaction plus concurrent reads is exactly where a data race would hide.
+What I learned
+The LSM tree itself is an elegant idea you can understand in a paragraph. Building one that’s actually fast is a completely different exercise, and almost all of it is profiling.
+Not once did I speed something up by guessing. Every single win came from pprof showing me where the time went, fixing that one thing, and then watching the bottleneck move somewhere new. Write syscall, then GC, then read syscall, then a saturated bloom filter, then Go map overhead. You can’t predict the order. You can only measure, fix, and measure again.
+The remaining gap to BoltDB on sequential writes is down to Go itself — map inserts with hashing, allocation, and write barriers versus BoltDB’s raw memcpy into an mmap’d page. Closing it would mean a custom byte-keyed hash table to escape Go’s string and map overhead. That’s the next thing.
+The code is on GitHub. The benchmark harness is in the repo — clone it, run it against BadgerDB and BoltDB yourself, and the numbers will land within a few percent of mine. That reproducibility is the whole point.
+If you’ve worked on storage engines and see something I got wrong, tell me — I’d rather know.
