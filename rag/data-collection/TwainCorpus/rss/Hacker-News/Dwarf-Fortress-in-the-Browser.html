@@ -1,0 +1,362 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">remote-df — Dwarf Fortress in the Browser</h1></div>
+<p dir="auto">Play <a href="https://www.bay12games.com/dwarves/" rel="nofollow">Dwarf Fortress</a> (Classic or Steam edition)
+in a web browser with audio. DF runs as a Docker container on a remote x86-64 Linux
+host at full native speed, streamed to your browser over noVNC with audio via HTTP.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Classic</th>
+<th>Steam (Premium)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/docs/screenshots/classic-1.png" rel="noopener noreferrer" target="_blank"></a></td>
+<td><a href="/Sessa93/remote-df/blob/main/docs/screenshots/steam-1.png" rel="noopener noreferrer" target="_blank"></a></td>
+</tr>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/docs/screenshots/classic-2.png" rel="noopener noreferrer" target="_blank"></a></td>
+<td><a href="/Sessa93/remote-df/blob/main/docs/screenshots/steam-2.png" rel="noopener noreferrer" target="_blank"></a></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Architecture</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="Your machine                         Remote x86-64 Linux host (ssh &lt;remote&gt;)
+┌──────────────────┐                 ┌──────────────────────────────────────────────────┐
+│ Browser          │                 │ Docker container                                  │
+│  noVNC &lt;canvas&gt; ─┼── SSH tunnel ──▶│  nginx :6080                                      │
+│  &lt;audio&gt; src=    │   (loopback)    │   ├─ /          → custom index.html (VNC + audio) │
+│  /audio          │                 │   ├─ /websockify → websockify → Xvnc :5900         │
+│  localhost:6080  │                 │   ├─ /audio      → Icecast ◀─ ffmpeg (internal)    │
+│                  │                 │   └─ /saves /backups /logs → browse/download       │
+└──────────────────┘                 │  PulseAudio (virtual sink) ◀─ dwarfort             │
+                                     │  saves → host dir (bind mount, on disk)            │
+                                     │  backups → host dir (periodic save tarballs)       │
+                                     └──────────────────────────────────────────────────┘"><pre class="notranslate"><code>Your machine                         Remote x86-64 Linux host (ssh &lt;remote&gt;)
+┌──────────────────┐                 ┌──────────────────────────────────────────────────┐
+│ Browser          │                 │ Docker container                                  │
+│  noVNC &lt;canvas&gt; ─┼── SSH tunnel ──▶│  nginx :6080                                      │
+│  &lt;audio&gt; src=    │   (loopback)    │   ├─ /          → custom index.html (VNC + audio) │
+│  /audio          │                 │   ├─ /websockify → websockify → Xvnc :5900         │
+│  localhost:6080  │                 │   ├─ /audio      → Icecast ◀─ ffmpeg (internal)    │
+│                  │                 │   └─ /saves /backups /logs → browse/download       │
+└──────────────────┘                 │  PulseAudio (virtual sink) ◀─ dwarfort             │
+                                     │  saves → host dir (bind mount, on disk)            │
+                                     │  backups → host dir (periodic save tarballs)       │
+                                     └──────────────────────────────────────────────────┘
+</code></pre></div>
+<p dir="auto">Nothing is exposed publicly: the container binds to <code>127.0.0.1</code>, and you reach it
+through an SSH tunnel.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Prerequisites</h2></div>
+<ul dir="auto">
+<li>A remote x86-64 Linux host you can SSH into (e.g. a VPS or cloud instance)</li>
+<li>Docker installed on that host</li>
+<li>SSH client on your local machine</li>
+<li>A modern web browser</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Quickstart (Classic Edition)</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# 1. Deploy — syncs the build context and uses Docker Compose on the remote to
+#    build + start the container (saves persist on disk under ~/remote-df/saves)
+./scripts/deploy.sh &lt;ssh-host&gt;
+
+# 2. Open an SSH tunnel and launch it in your browser
+./scripts/connect.sh &lt;ssh-host&gt;
+#    → http://localhost:6080/vnc.html?autoconnect=1&amp;resize=scale
+#    → Audio stream: http://localhost:8080" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> 1. Deploy — syncs the build context and uses Docker Compose on the remote to</span>
+<span class="pl-c"><span class="pl-c">#</span>    build + start the container (saves persist on disk under ~/remote-df/saves)</span>
+./scripts/deploy.sh <span class="pl-k">&lt;</span>ssh-host<span class="pl-k">&gt;</span>
+
+<span class="pl-c"><span class="pl-c">#</span> 2. Open an SSH tunnel and launch it in your browser</span>
+./scripts/connect.sh <span class="pl-k">&lt;</span>ssh-host<span class="pl-k">&gt;</span>
+<span class="pl-c"><span class="pl-c">#</span>    → http://localhost:6080/vnc.html?autoconnect=1&amp;resize=scale</span>
+<span class="pl-c"><span class="pl-c">#</span>    → Audio stream: http://localhost:8080</span></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Docker Compose</h2></div>
+<p dir="auto"><code>./scripts/deploy.sh</code> drives Compose on the remote for you. To run it by hand
+instead, do this <strong>on the remote host</strong> (loopback-only ports, auto-restart, and
+saves bind-mounted to a host directory on disk):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Classic — build the image and run
+docker compose up -d --build
+
+# Steam — build on the host (SteamCMD needs native x86_64)
+echo myuser &gt; secrets/steam_user
+echo mypass &gt; secrets/steam_pass
+echo ''     &gt; secrets/steam_guard   # or the 2FA code if Steam Guard is on
+docker compose up -d --build df-steam" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Classic — build the image and run</span>
+docker compose up -d --build
+
+<span class="pl-c"><span class="pl-c">#</span> Steam — build on the host (SteamCMD needs native x86_64)</span>
+<span class="pl-c1">echo</span> myuser <span class="pl-k">&gt;</span> secrets/steam_user
+<span class="pl-c1">echo</span> mypass <span class="pl-k">&gt;</span> secrets/steam_pass
+<span class="pl-c1">echo</span> <span class="pl-s"><span class="pl-pds">'</span><span class="pl-pds">'</span></span>     <span class="pl-k">&gt;</span> secrets/steam_guard   <span class="pl-c"><span class="pl-c">#</span> or the 2FA code if Steam Guard is on</span>
+docker compose up -d --build df-steam</pre></div>
+<p dir="auto">Then tunnel in from your machine with <code>./scripts/connect.sh &lt;host&gt;</code>. Override
+<code>DF_VERSION</code>, <code>GEOM</code>, <code>WEB_PORT</code>, <code>VNC_PORT</code>, or <code>DF_SAVES_DIR</code> (where saves live
+on disk, default <code>./saves</code>) via the environment or a <code>.env</code> file.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Example: full classic deploy with Compose</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# --- on the remote x86-64 host ---
+git clone https://github.com/sessa93/remote-df.git &amp;&amp; cd remote-df
+
+# Optional: pin settings instead of passing them inline each time
+cat &gt; .env &lt;&lt;'EOF'
+DF_VERSION=53_14
+GEOM=1600x900
+WEB_PORT=6080
+DF_SAVES_DIR=./saves            # host dir for saves (created on first run)
+EOF
+
+docker compose up -d --build    # build the image and start the container
+docker compose logs -f df       # watch DF / Xvnc / audio boot (Ctrl-C to detach)
+
+# --- back on your local machine ---
+./scripts/connect.sh my-vps     # SSH tunnel + open the browser
+#   → http://localhost:6080/" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> --- on the remote x86-64 host ---</span>
+git clone https://github.com/sessa93/remote-df.git <span class="pl-k">&amp;&amp;</span> <span class="pl-c1">cd</span> remote-df
+
+<span class="pl-c"><span class="pl-c">#</span> Optional: pin settings instead of passing them inline each time</span>
+cat <span class="pl-k">&gt;</span> .env <span class="pl-s"><span class="pl-k">&lt;&lt;</span>'<span class="pl-k">EOF</span>'</span>
+<span class="pl-s">DF_VERSION=53_14</span>
+<span class="pl-s">GEOM=1600x900</span>
+<span class="pl-s">WEB_PORT=6080</span>
+<span class="pl-s">DF_SAVES_DIR=./saves            # host dir for saves (created on first run)</span>
+<span class="pl-s"><span class="pl-k">EOF</span></span>
+
+docker compose up -d --build    <span class="pl-c"><span class="pl-c">#</span> build the image and start the container</span>
+docker compose logs -f df       <span class="pl-c"><span class="pl-c">#</span> watch DF / Xvnc / audio boot (Ctrl-C to detach)</span>
+
+<span class="pl-c"><span class="pl-c">#</span> --- back on your local machine ---</span>
+./scripts/connect.sh my-vps     <span class="pl-c"><span class="pl-c">#</span> SSH tunnel + open the browser</span>
+<span class="pl-c"><span class="pl-c">#</span>   → http://localhost:6080/</span></pre></div>
+<p dir="auto">Day-to-day:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="docker compose ps               # is it up?
+docker compose restart df       # bounce it
+docker compose up -d --build    # rebuild (e.g. new DF_VERSION) and restart
+docker compose down             # stop &amp; remove (saves persist in the host saves dir)" dir="auto"><pre>docker compose ps               <span class="pl-c"><span class="pl-c">#</span> is it up?</span>
+docker compose restart df       <span class="pl-c"><span class="pl-c">#</span> bounce it</span>
+docker compose up -d --build    <span class="pl-c"><span class="pl-c">#</span> rebuild (e.g. new DF_VERSION) and restart</span>
+docker compose down             <span class="pl-c"><span class="pl-c">#</span> stop &amp; remove (saves persist in the host saves dir)</span></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Steam Edition</h2></div>
+<p dir="auto">If you own Dwarf Fortress on Steam, you can use the premium version instead:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Build on the remote host (SteamCMD needs native x86_64)
+DF_EDITION=steam STEAM_USER=myuser STEAM_PASS=mypass ./scripts/deploy.sh &lt;ssh-host&gt;
+
+# With Steam Guard 2FA:
+DF_EDITION=steam STEAM_USER=myuser STEAM_PASS=mypass STEAM_GUARD=ABC123 ./scripts/deploy.sh &lt;ssh-host&gt;" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Build on the remote host (SteamCMD needs native x86_64)</span>
+DF_EDITION=steam STEAM_USER=myuser STEAM_PASS=mypass ./scripts/deploy.sh <span class="pl-k">&lt;</span>ssh-host<span class="pl-k">&gt;</span>
+
+<span class="pl-c"><span class="pl-c">#</span> With Steam Guard 2FA:</span>
+DF_EDITION=steam STEAM_USER=myuser STEAM_PASS=mypass STEAM_GUARD=ABC123 ./scripts/deploy.sh <span class="pl-k">&lt;</span>ssh-host<span class="pl-k">&gt;</span></pre></div>
+<p dir="auto">Steam credentials are passed as Docker BuildKit secrets and never stored in the image.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">DFHack</h2></div>
+<p dir="auto">The classic edition includes <a href="https://github.com/DFHack/dfhack">DFHack</a> (mod framework).
+DFHack is loaded via <code>LD_PRELOAD</code> to bypass the <code>setarch</code> call that requires
+<code>SYS_ADMIN</code> capability unavailable in Docker containers. The steam edition does not
+include DFHack.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">CI / GitHub Actions</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Workflow</th>
+<th>Trigger</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/.github/workflows/build.yml"><code>build.yml</code></a></td>
+<td>Push to <code>main</code></td>
+<td>Builds classic edition, pushes to GHCR</td>
+</tr>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/.github/workflows/build-steam.yml"><code>build-steam.yml</code></a></td>
+<td>Manual</td>
+<td>Builds steam edition (needs <code>STEAM_USER</code>/<code>STEAM_PASS</code> secrets)</td>
+</tr>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/.github/workflows/deploy.yml"><code>deploy.yml</code></a></td>
+<td>Manual</td>
+<td>Deploys to a remote host via SSH (<code>DEPLOY_SSH_KEY</code> secret)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Images are published to <code>ghcr.io/sessa93/remote-df</code> with tags:</p>
+<ul dir="auto">
+<li><code>df-{VERSION}-classic</code>, <code>classic</code>, <code>latest</code> (classic)</li>
+<li><code>df-{VERSION}-steam</code>, <code>steam</code> (steam)</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Project Layout</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/docker/Dockerfile"><code>docker/Dockerfile</code></a></td>
+<td>Multi-stage amd64 image: custom SDL2 + DF + audio + Xvnc + noVNC</td>
+</tr>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/docker/start.sh"><code>docker/start.sh</code></a></td>
+<td>Entrypoint: PulseAudio, Icecast, display stack, DF (auto-restart/pause), backups</td>
+</tr>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/docker/icecast.xml"><code>docker/icecast.xml</code></a></td>
+<td>Icecast config: fans the ffmpeg audio source out to browser listeners</td>
+</tr>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/scripts/deploy.sh"><code>scripts/deploy.sh</code></a></td>
+<td>Sync build context + <code>docker compose up --build</code> on the remote (both editions)</td>
+</tr>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/docker-compose.yml"><code>docker-compose.yml</code></a></td>
+<td>Build/run both editions; saves bind-mounted to a host dir; loopback ports</td>
+</tr>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/scripts/connect.sh"><code>scripts/connect.sh</code></a></td>
+<td>SSH tunnel (VNC + audio) + open browser (run from your machine)</td>
+</tr>
+<tr>
+<td><a href="/Sessa93/remote-df/blob/main/df/g_src"><code>df/g_src/</code></a></td>
+<td>Open-source platform/render wrapper (from Bay 12)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How It Works</h2></div>
+<p dir="auto"><code>dwarfort</code> is a graphical SDL2 program, so the container gives it a headless
+display: <strong>Xvnc</strong> (virtual X server + VNC, 1280×800) → DF renders into it using
+<code>PRINT_MODE:2D</code> software rendering (no GPU needed) → <strong>websockify/noVNC</strong> serves
+the VNC stream to the browser as a <code>&lt;canvas&gt;</code>. Keyboard and mouse flow back the
+same way.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Audio Streaming</h3></div>
+<p dir="auto">A <strong>PulseAudio</strong> virtual null sink captures DF's audio output (via <code>SDL_AUDIODRIVER=pulse</code>).
+<strong>ffmpeg</strong> reads from the PulseAudio monitor source, encodes to Ogg/Opus at 96 kbps, and pushes
+it to an internal <strong>Icecast</strong> server as a source. <strong>nginx</strong> proxies the Icecast mount at <code>/audio</code>
+on the same port as noVNC, and the custom <code>index.html</code> landing page embeds an <code>&lt;audio src="/audio"&gt;</code>
+element — so video and audio share one browser tab with no extra ports. Icecast fans the stream
+out to many listeners and survives tab reloads/reconnects (ffmpeg's earlier one-client HTTP
+server would drop and 502 on reconnect). Latency is ~100-200 ms.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Save Backups &amp; Browse/Download</h3></div>
+<p dir="auto">A background loop tarballs the save dir to <code>/backups</code> every <code>BACKUP_INTERVAL</code> seconds (default
+30 min), keeping the newest <code>BACKUP_KEEP</code> (default 48). <code>/backups</code> is bind-mounted to a host
+directory (<code>DF_BACKUPS_DIR</code>, default <code>~/remote-df/backups</code>), so backups live on disk too. nginx
+serves three browse/download endpoints (linked from the landing page):</p>
+<ul dir="auto">
+<li><code>/backups/</code> — download a save tarball</li>
+<li><code>/saves/</code> — browse the live save directory</li>
+<li><code>/logs/</code> — view container logs (<code>df.log</code>, <code>xvnc.log</code>, <code>audio.log</code>, <code>icecast.log</code>, …)</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Idle Auto-Pause</h3></div>
+<p dir="auto">When no VNC client is connected for <code>IDLE_GRACE</code> seconds (default 30), <code>dwarfort</code> is paused
+with <code>SIGSTOP</code> to save CPU, and resumed with <code>SIGCONT</code> the moment a browser reconnects. Set
+<code>DF_AUTOPAUSE=0</code> to keep the simulation running while you're disconnected (e.g. to let a
+fortress run overnight).</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Health &amp; Limits</h3></div>
+<p dir="auto">The container declares a Docker <strong>healthcheck</strong> (HTTP probe on <code>:6080</code>) so <code>docker compose ps</code>
+and restart policies can tell when it's wedged, and <strong>resource limits</strong> (<code>DF_CPUS</code>, <code>DF_MEMORY</code>,
+plus a pid cap) so a runaway <code>dwarfort</code> can't take down the host.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Custom SDL2 Build</h3></div>
+<p dir="auto">DF's bundled SDL2 reads mouse input via XInput2 raw events, which VNC-injected
+input does not produce — the cursor would never register. The Dockerfile builds
+SDL2 with <code>SDL_X11_XINPUT=OFF</code> so DF uses core X input instead, which VNC input
+generates correctly.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Persistent Saves</h3></div>
+<p dir="auto">Saves are bind-mounted from a host directory on the remote (<code>DF_SAVES_DIR</code>,
+default <code>~/remote-df/saves</code>) to DF v50's save location inside the container —
+<code>/root/.local/share/Bay 12 Games/Dwarf Fortress/save</code> (the XDG user-data dir,
+not the game folder's <code>data/save</code>). So worlds and fortresses live on disk,
+survive redeploys, and can be backed up or copied with ordinary file tools (no
+<code>docker volume</code> plumbing).</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Configuration</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GEOM</code></td>
+<td><code>1280x800</code></td>
+<td>Virtual display resolution</td>
+</tr>
+<tr>
+<td><code>VNC_PORT</code></td>
+<td><code>5900</code></td>
+<td>VNC server port (internal)</td>
+</tr>
+<tr>
+<td><code>WEB_PORT</code></td>
+<td><code>6080</code></td>
+<td>nginx port (noVNC + audio, tunneled to browser)</td>
+</tr>
+<tr>
+<td><code>DF_VERSION</code></td>
+<td><code>53_14</code></td>
+<td>DF version (used in image tags and download URL)</td>
+</tr>
+<tr>
+<td><code>DF_EDITION</code></td>
+<td><code>classic</code></td>
+<td><code>classic</code> or <code>steam</code></td>
+</tr>
+<tr>
+<td><code>DF_SAVES_DIR</code></td>
+<td><code>./saves</code></td>
+<td>Host dir bind-mounted to DF's save location</td>
+</tr>
+<tr>
+<td><code>DF_BACKUPS_DIR</code></td>
+<td><code>./backups</code></td>
+<td>Host dir for periodic save-backup tarballs</td>
+</tr>
+<tr>
+<td><code>BACKUP_INTERVAL</code></td>
+<td><code>1800</code></td>
+<td>Seconds between save backups (<code>0</code> disables)</td>
+</tr>
+<tr>
+<td><code>BACKUP_KEEP</code></td>
+<td><code>48</code></td>
+<td>Number of backup tarballs to retain</td>
+</tr>
+<tr>
+<td><code>DF_AUTOPAUSE</code></td>
+<td><code>1</code></td>
+<td>Pause DF when no client is connected (<code>0</code> off)</td>
+</tr>
+<tr>
+<td><code>IDLE_GRACE</code></td>
+<td><code>30</code></td>
+<td>Seconds with no clients before auto-pausing</td>
+</tr>
+<tr>
+<td><code>DF_CPUS</code></td>
+<td><code>2.0</code></td>
+<td>CPU limit for the container</td>
+</tr>
+<tr>
+<td><code>DF_MEMORY</code></td>
+<td><code>3g</code></td>
+<td>Memory limit for the container</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Security</h2></div>
+<p dir="auto">The setup assumes a single user reaching it over an SSH tunnel, so the VNC server
+runs with <strong>no password</strong> and there's <strong>no TLS</strong> — which is fine over loopback +
+SSH. Do <strong>not</strong> publish the port directly. If you ever want others to reach it:</p>
+<ol dir="auto">
+<li>Add a VNC password (<code>x11vnc -rfbauth</code>)</li>
+<li>Terminate TLS in front (e.g. Caddy or nginx)</li>
+<li>Open the firewall deliberately</li>
+</ol>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">This project's scripts, Dockerfile, and configuration are released under the
+<a href="/Sessa93/remote-df/blob/main/LICENSE">MIT License</a>.</p>
+<p dir="auto"><strong>Dwarf Fortress</strong> itself is copyright Tarn Adams / Bay 12 Games. The game binary
+and assets are not included in this repository — they are downloaded at build time.
+See <a href="https://www.bay12games.com/dwarves/" rel="nofollow">Bay 12's site</a> for terms.</p>
+</article>
