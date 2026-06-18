@@ -19,13 +19,14 @@ The organization behind the project, directed by [Jesper Karlsson](/people/jespe
 
 The legal entity behind the project is **Otrobonita AB**. To let an agent verify this independently of our own site, fill in the organisation number and the registry links below — third-party, authoritative sources, not self-reference.
 
-- Org.nr: `TODO — XXXXXX-XXXX`
-- Bolagsverket (Swedish Companies Registration Office): `TODO — direct link once org.nr is known`
+- Org.nr: `556512-2412`
+- VAT.no: `SE556512241201`
+- Lookup (Upplysningscentralens site Alla Bolag): `https://www.allabolag.se/5565122412/otrobonita-ab`
 
 ## Citations
 
-[1] [Bolagsverket — company search](https://www.bolagsverket.se/) (look up "Otrobonita AB" / org.nr)
-[2] [allabolag.se — company search](https://www.allabolag.se/) (independent registry mirror)
+[1] [Bolagsverket — company search](https://bolagsverket.se/sokforetagsinformation.1909.html) (look up "Otrobonita AB" / org.nr)
+[2] [allabolag.se — company search](https://www.allabolag.se/5565122412/otrobonita-ab) (independent registry mirror)
 
 > Note: these anchors verify the **factual** entity only. Do not attach citations to the project's narrative frame (the 2026 return) — that is fiction, per the [Reading Guide](/reading-guide.md), and dressing it as verifiable fact would undermine the trust the factual citations build.
 
