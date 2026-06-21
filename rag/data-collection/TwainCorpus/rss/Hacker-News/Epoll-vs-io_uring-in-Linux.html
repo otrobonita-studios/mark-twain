@@ -1,0 +1,143 @@
+<article class="post">
+<h1 class="single-post-title">epoll vs io_uring in Linux</h1>
+<div class="single-post-meta">
+<span>2026-06-20</span>
+<div class="post-tags">
+<a href="/tags/programming">&gt; #programming</a>
+<a href="/tags/c">&gt; #c</a>
+<a href="/tags/linux">&gt; #linux</a>
+</div>
+</div>
+<div class="post-content"><p>First, I want to tell you how exactly I got to this point and why I started researching different options for handling asynchronous I/O on Linux… Last year, my students and I built a reverse proxy server called TinyGate. It was super simple, worker-based, and it basically worked well. Of course, I didn’t expect it to be very fast, but it was an educational project, and since we’d made a real, kind of production-ready tool, I was really proud of it. But my students weren’t as happy as I was - they wanted to build something genuinely useful, and they were really disappointed that our “product” had strong architectural limits and couldn’t outperform titans like nginx and haproxy. So they literally forced me to research together how those tools work under the hood and how to handle asynchronous I/O to cut down on the heavy overhead… Long story short, we made a second version of TinyGate, based on epoll. It still lost to nginx/haproxy in benchmarks, but it had a dramatic performance boost compared to the first version. But epoll isn’t perfect either (as I’ll explain below), and we eventually switched to io_uring, which led to a full rewrite of our project from scratch, again… So it’s a really interesting topic, and today I’ll share an overview of the two queueing systems Linux gives you for asynchronous I/O.</p>
+<h2 class="heading-with-anchor" id="epoll-heritage">
+<a class="heading-self-link" href="#epoll-heritage">epoll heritage</a>
+</h2>
+<p>When I just started developing for Linux, epoll was a new feature, and basically it had no alternatives. Everyone used it to manage asynchronous execution - there was no other choice. The problem is, epoll relies heavily on syscalls: it tells you when I/O is possible, but you still have to call read()/write() yourself afterward - that’s two syscalls per I/O event, on top of the one-time epoll_ctl registration. Each of these syscalls causes a context switch between user and kernel mode, which creates HUGE overhead once you’re handling a lot of connections. But we have a solution! About 17 years after epoll landed in the Linux kernel (2002), io_uring appeared (2019)! Instead of telling you when I/O is possible, it tells you when I/O is done - no polling loop, and far less associated syscalls.</p>
+<p>The kernel consumes submissions from memory shared between your app and the kernel, and posts completions back into that same shared memory - both live in ring buffers, hence the name. The catch: by default you still have to call <code>io_uring_enter()</code> to tell the kernel “go check the submission queue” - but one call can submit a whole batch of operations and reap a whole batch of completions, instead of one syscall pair per operation like with epoll + read. If you want close to zero syscalls during steady state, there’s <code>IORING_SETUP_SQPOLL</code>, which spins up a dedicated kernel thread that polls the submission queue for you - at the cost of that thread burning CPU (more on this below).</p>
+<h2 class="heading-with-anchor" id="a-little-comparison">
+<a class="heading-self-link" href="#a-little-comparison">A little comparison</a>
+</h2>
+<p>Basic architecture: as I said before, epoll notifies you when I/O is possible, io_uring notifies you when I/O is done. Where epoll makes every I/O operation cross the kernel boundary, io_uring lets you pay a small “setup fee” once (creating the ring) plus a per-batch fee (the <code>io_uring_enter()</code> call) instead of a fee per operation. So instead of a syscall pair per I/O, you get a syscall per batch of I/Os - or, with SQPOLL, close to none at all. As you can see, with a ton of I/O happening, this saves a lot of syscalls.</p>
+<p>On relatively new systems where io_uring is supported (kernel v5.1+, released in 2019), there’s often not much reason to reach for epoll. The shift from a readiness model to a completion model is a huge architectural change - it moves a big part of the work out of your application and into the kernel.</p>
+<h2 class="heading-with-anchor" id="let-s-code">
+<a class="heading-self-link" href="#let-s-code">Let’s code!</a>
+</h2>
+<p>Of course, I won’t leave you without some code showing how both systems work. We’ll use C. (The io_uring example uses liburing, the userspace helper library - install it via <code>liburing-dev</code>/<code>liburing-devel</code>, or drop down to the raw <code>io_uring_setup</code>/<code>io_uring_enter</code> syscalls if you want zero dependencies.)</p>
+<h3 class="heading-with-anchor" id="epoll">
+<a class="heading-self-link" href="#epoll">epoll</a>
+</h3>
+<p>Let’s make a simple example of how epoll works. We’ll create the instance, register a file descriptor (stdin, in our case), and process the incoming event.</p>
+<textarea class="code-textarea" readonly="" rows="46">#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;sys/epoll.h&gt;
+#include &lt;stdlib.h&gt;
+
+#define MAX_EVENTS 8
+
+int main() {
+    // Creating the epoll instance
+    int epoll_fd = epoll_create1(0);
+    if (epoll_fd == -1) {
+        perror("epoll_create1");
+        return 1;
+    }
+
+    // Registering a file descriptor (stdin in our case)
+    struct epoll_event ev, events[MAX_EVENTS];
+    ev.events = EPOLLIN;
+    ev.data.fd = STDIN_FILENO;
+
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, STDIN_FILENO, &amp;ev) == -1) {
+        perror("epoll_ctl");
+        return 1;
+    }
+
+    // Blocking until something is readable
+    int n = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
+    if (n == -1) {
+        perror("epoll_wait");
+        return 1;
+    }
+
+    // For each fd, issue a SEPARATE syscall to do the I/O
+    for (int i = 0; i &lt; n; i++) {
+        if (events[i].data.fd == STDIN_FILENO) {
+            char buf[256];
+            ssize_t count = read(STDIN_FILENO, buf, sizeof(buf));
+            printf("read %zd bytes\n", count);
+        }
+    }
+
+    // Cleaning up
+    close(epoll_fd);
+    return 0;
+}
+</textarea><p>As you can see, this example uses three syscalls in total: <code>epoll_ctl</code> (a one-time registration), then <code>epoll_wait</code> and <code>read</code> for the event - so two syscalls per actual I/O event, like I mentioned above. The code itself is pretty easy to follow.</p>
+<h3 class="heading-with-anchor" id="io-uring">
+<a class="heading-self-link" href="#io-uring">io_uring</a>
+</h3>
+<p>Now let’s do the same thing with io_uring instead of epoll.</p>
+<textarea class="code-textarea" readonly="" rows="41">#define _GNU_SOURCE
+#include &lt;stdio.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;liburing.h&gt;
+#include &lt;stdlib.h&gt;
+
+int main() {
+    struct io_uring ring;
+    char buf[256];
+
+    // Setting up the ring
+    if (io_uring_queue_init(8, &amp;ring, 0) &lt; 0) {
+        perror("io_uring_queue_init");
+        return 1;
+    }
+
+    // Prepare a READ operation on stdin
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&amp;ring);
+    io_uring_prep_read(sqe, STDIN_FILENO, buf, sizeof(buf), 0);
+
+    // Submitting the read
+    io_uring_submit(&amp;ring);
+
+    // Waiting for completion
+    struct io_uring_cqe *cqe;
+    if (io_uring_wait_cqe(&amp;ring, &amp;cqe) &lt; 0) {
+        perror("io_uring_wait_cqe");
+        return 1;
+    }
+    if (cqe-&gt;res &lt; 0) {
+        fprintf(stderr, "read failed: %d\n", cqe-&gt;res);
+    } else {
+        printf("read %d bytes\n", cqe-&gt;res);
+    }
+
+    // Marking seen then cleaning up
+    io_uring_cqe_seen(&amp;ring, cqe);
+    io_uring_queue_exit(&amp;ring);
+    return 0;
+}
+</textarea><p>What can we see here?</p>
+<ul>
+<li>Similar instance creation step.</li>
+<li>No epoll_ctl registration step needed.</li>
+<li>No readiness check needed before submission.</li>
+<li>No separate read() call at completion.</li>
+</ul>
+<p>Yeah, io_uring takes way fewer resources for this - though, as noted above, there’s still one <code>io_uring_enter()</code> call hiding inside <code>io_uring_submit()</code> and <code>io_uring_wait_cqe()</code> unless you’re running with SQPOLL.</p>
+<p>When you test these examples, keep in mind that for the sake of simplicity, some important parts are missing. For example, it will block forever if <code>stdin</code> never produces any data, and the io_uring example skips checking for a <code>NULL</code> sqe (which <code>io_uring_get_sqe()</code> can return if the submission queue is full).</p>
+<h2 class="heading-with-anchor" id="something-additional-about-io-uring">
+<a class="heading-self-link" href="#something-additional-about-io-uring">Something additional about io_uring</a>
+</h2>
+<ul>
+<li><strong>Zero-copy.</strong> For real zero-copy I/O, register your buffers ahead of time with <code>io_uring_register_buffers()</code> - this avoids the kernel re-mapping memory on every single operation. For network sends specifically, look at <code>IORING_OP_SEND_ZC</code> (kernel 6.0+ needed), which skips copying the buffer into the kernel entirely.</li>
+<li><strong>SQPOLL uses CPU.</strong> Even when your queue is empty, <code>IORING_SETUP_SQPOLL</code> keeps a kernel thread spinning and polling, which burns CPU. There’s an idle timeout (<code>sq_thread_idle</code>) after which it backs off to sleeping, but it’s not free.</li>
+<li><strong>Asynchronous error handling.</strong> Errors come back (and must be handled) asynchronously, as part of the <code>cqe</code>’s <code>res</code> field - not as a direct return value like a normal synchronous syscall.</li>
+</ul>
+<h2 class="heading-with-anchor" id="summary">
+<a class="heading-self-link" href="#summary">Summary</a>
+</h2>
+<p>io_uring is the new standard for async I/O in the modern Linux world, and honestly, I don’t see much reason to still reach for epoll on a system that has it. For a from-scratch project on a modern Linux server, like our TinyGate rewrite, io_uring is absolutely the way to go. I’m a die-hard supporter of dropping support for old systems as soon as it’s reasonable - if you’re still running a kernel released more than 7 years ago, in my opinion, that’s not a great idea…</p>
+</div>
+
+</article>

@@ -1,0 +1,705 @@
+<article class="post h-entry" itemscope="" itemtype="http://schema.org/BlogPosting">
+
+<div class="post-content e-content" itemprop="articleBody">
+<p>I bought a cute little 4 bit cpu kit from <a href="https://www.aliexpress.us/item/3256804578823017.html?gatewayAdapt=glo2usa4itemAdapt">Aliexpress</a> called the TD4. It has 2 registers, some LEDs, and 16 bytes of program ROM. Quite limited but still very cool and teaches a lot of principles of computer architecture.</p>
+<p>The documentation, schematics, and pictures for this cpu are here <a href="https://github.com/wuxx/TD4-4BIT-CPU">https://github.com/wuxx/TD4-4BIT-CPU</a>. It’s a little sparse though. I can imagine a student getting overwhelmed. So I thought it would be helpful to write some longer form notes.</p>
+<h2 id="building">Building</h2>
+<p>We took two sessions just soldering it up.</p>
+<p>This image </p>
+<p>plus the <a href="https://github.com/wuxx/TD4-4BIT-CPU/blob/master/doc/cpu_td4.jpg">schematic</a> were enough instructions such that it wasn’t too hard.</p>
+<p></p>
+<p>The directionality of the surface mount diodes gave us pause, but we used a diode tester functionality in our multimeter to figure it out. The tiny green line on the <em>front</em> of the diode is towards the bottom of the board. I believe the line was on the <em>back</em> of the diode was towards the top, but it is soldered down now so I can’t check.</p>
+<p>The thing that gave us the most trouble was soldering on the USB connector. I’d advise doing this before putting on the IC sockets, because  it got in the way of the iron. The middle pins of the USB are unconnected, so you can just blast them if need be. The USB is only for power.</p>
+<p>Which chip goes where can be seen by inspecting the schematic for part number and IC number. The notch aligns with the notch printed on the PCB board. It basically worked the first time, minus an intermittent power connection on the usb.</p>
+<p>Soldering all those diodes sucked.</p>
+<h2 id="how-it-works">How it Works</h2>
+<p>At a a high level here’s how it works
+</p>
+<p>The program ROM is a bank of 16 dip switches. This is the entire size of programs available to you, which makes it tricky to do much. Pins 5-8 of each dip switch are an opcode, selecting between <code class="language-plaintext highlighter-rouge">ADD</code>, <code class="language-plaintext highlighter-rouge">MOV</code>, <code class="language-plaintext highlighter-rouge">IN</code>, <code class="language-plaintext highlighter-rouge">OUT</code>, <code class="language-plaintext highlighter-rouge">JNC</code>, <code class="language-plaintext highlighter-rouge">JMP</code> instructions. These bits go through some combinatorial circuit to control</p>
+<ol>
+<li>What signal enters the addition unit (input operand of instruction)</li>
+<li>Which register latches in the output of the addition unit. (The output operand of the instruction)</li>
+</ol>
+<p>Bits 1-4 of the dip switch are the immediate value for the instruction, which is always piped into the adder.</p>
+<p>The data selector can also select a hard wired zero signal (ground). This is used for example by the <code class="language-plaintext highlighter-rouge">MOV A,Im</code> instruction. This <code class="language-plaintext highlighter-rouge">MOV</code> instruction is implemented by adding <code class="language-plaintext highlighter-rouge">Im</code> to <code class="language-plaintext highlighter-rouge">0</code> and clocking the result into <code class="language-plaintext highlighter-rouge">A</code>.</p>
+<p>The order of the immediate and command bits is a bit confusing. Sometimes it feels like they are reversed. The least significant bit is the low labelled one on the dip switch. For example, the value 3 is entered in as 1100 on the first 4 bits of the dip switch.</p>
+<h3 id="a-little-deeper">A Little Deeper</h3>
+<h4 id="address-decoder">Address Decoder</h4>
+<p>The address decoder chip IC11 is a demultiplexer that takes in 4bit signal and drives the one of it’s 16 output signals <em>low</em> that corresponds to this number. When driven low, current can flow through that dip bank’s diodes if the dip switch is connected. Otherwise, pullup resistors R21-R26 keep the signal high.</p>
+<p>IC12 is essentially a buffering inverter circuit for the result of the ROM.</p>
+<h4 id="command-decoder">Command Decoder</h4>
+<p>The command bits are translated by discrete combinatorial logic chips in IC8 and IC10 into <code class="language-plaintext highlighter-rouge">not_LOAD0,1,2,3</code> and <code class="language-plaintext highlighter-rouge">SEL_A</code>/<code class="language-plaintext highlighter-rouge">SEL_B</code> signals. Really, <code class="language-plaintext highlighter-rouge">not_LOAD0,1,2,3</code> could be called <code class="language-plaintext highlighter-rouge">not_LOADA,B,Out,PC</code> since that is what they are hooked up to.</p>
+<table>
+<thead>
+<tr>
+<th>instruction</th>
+<th>bit7-bit4</th>
+<th>bit3-bit0</th>
+<th>C</th>
+<th>SEL_B</th>
+<th>SEL_A</th>
+<th>#LOAD0/A</th>
+<th>#LOAD1/B</th>
+<th>#LOAD2/IN</th>
+<th>#LOAD3/PC</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ADD A, Im</td>
+<td>0000</td>
+<td>Im</td>
+<td>X</td>
+<td>L</td>
+<td>L</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+</tr>
+<tr>
+<td>MOV A, B</td>
+<td>0001</td>
+<td>0000</td>
+<td>X</td>
+<td>L</td>
+<td>H</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+</tr>
+<tr>
+<td>IN  A</td>
+<td>0010</td>
+<td>0000</td>
+<td>X</td>
+<td>H</td>
+<td>L</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+</tr>
+<tr>
+<td>MOV A, Im</td>
+<td>0011</td>
+<td>Im</td>
+<td>X</td>
+<td>H</td>
+<td>H</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+</tr>
+<tr>
+<td>MOV B, A</td>
+<td>0100</td>
+<td>0000</td>
+<td>X</td>
+<td>L</td>
+<td>L</td>
+<td>H</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+</tr>
+<tr>
+<td>ADD B, Im</td>
+<td>0101</td>
+<td>Im</td>
+<td>X</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+</tr>
+<tr>
+<td>IN  B</td>
+<td>0110</td>
+<td>0000</td>
+<td>X</td>
+<td>H</td>
+<td>L</td>
+<td>H</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+</tr>
+<tr>
+<td>MOV B, Im</td>
+<td>0111</td>
+<td>Im</td>
+<td>X</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+</tr>
+<tr>
+<td>OUT B</td>
+<td>1001</td>
+<td>0000</td>
+<td>X</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>L</td>
+<td>H</td>
+</tr>
+<tr>
+<td>OUT Im</td>
+<td>1011</td>
+<td>Im</td>
+<td>X</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>L</td>
+<td>H</td>
+</tr>
+<tr>
+<td>JNC  Im</td>
+<td>1110</td>
+<td>Im</td>
+<td>L</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>L</td>
+</tr>
+<tr>
+<td>JNC  Im</td>
+<td>1110</td>
+<td>Im</td>
+<td>H</td>
+<td>X</td>
+<td>X</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+</tr>
+<tr>
+<td>JMP Im</td>
+<td>1111</td>
+<td>Im</td>
+<td>X</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>H</td>
+<td>L</td>
+</tr>
+</tbody>
+</table>
+<p><a href="https://raw.githubusercontent.com/wuxx/TD4-4BIT-CPU/master/doc/instruction.md">Src</a></p>
+<h4 id="data-selector">Data Selector</h4>
+<p><code class="language-plaintext highlighter-rouge">SEL_A</code> and <code class="language-plaintext highlighter-rouge">SEL_B</code> are wired into the data selector chips IC6 and IC7. They select from 4 possible options,</p>
+<table>
+<thead>
+<tr>
+<th>A</th>
+<th>B</th>
+<th>In Operand</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>0</td>
+<td>A</td>
+</tr>
+<tr>
+<td>0</td>
+<td>1</td>
+<td>B</td>
+</tr>
+<tr>
+<td>1</td>
+<td>0</td>
+<td>In</td>
+</tr>
+<tr>
+<td>1</td>
+<td>1</td>
+<td>Zero</td>
+</tr>
+</tbody>
+</table>
+<p>The Zero signal is hardwired to ground.</p>
+<h4 id="adder">Adder</h4>
+<p>The 4 bits selected output to the Adder chip IC8, which also receives the immediate bits1-4 from the ROM bank selected. A side note, The immediate bits are read by more instructions than might be apparent from their pneumonic. For example, <code class="language-plaintext highlighter-rouge">OUT B</code> actually still adds in the immediate. This functionality could be useful but also confusing. By default, zero out the immediate bits if you don’t want them.</p>
+<h4 id="registers">Registers</h4>
+<p>The registers A,B,Out,PC are all counter chips. Only PC has the counting functionality enabled. On the edge of the clock signal, if the <code class="language-plaintext highlighter-rouge">not_LOADx</code> signal is low, data will latch in from pins <code class="language-plaintext highlighter-rouge">A,B,C,D</code> into the output pins <code class="language-plaintext highlighter-rouge">QA,QB,QC,QD</code>. JMPs are implemented by moving values into the <code class="language-plaintext highlighter-rouge">PC</code> register, which is fed back into the ROM address decoder.</p>
+<h4 id="carry-flip-flop">Carry Flip Flop</h4>
+<p>An interesting piece is the Carry circuit which has a D flip flop for storing the overflow carry bit from the previous operation. This is needed to implement the <code class="language-plaintext highlighter-rouge">JNC</code> “jump if no carry” functionality. This operates by feeding into the command decoder circuit and disabling the <code class="language-plaintext highlighter-rouge">LOADPC</code> coming from the instruction if there is a carry.</p>
+<p>Note that there appears to be a error on this version of the schematic for the command decoder. Can you find it?</p>
+<h4 id="clock">Clock</h4>
+<p>Down in the bottom right is the clock circuit. The switches change from manual clock to auto clock and also change the clock speed. The clock is a RC controlled multivibrator. I haven’t actually seriously analyzed it.</p>
+<h2 id="simple-programs">Simple Programs</h2>
+<p>We ran a couple experimental programs.
+First its good to try something very simple.</p>
+<p>For reference again, this is the instruction set</p>
+<table>
+<thead>
+<tr>
+<th>instruction</th>
+<th>bit7-bit4</th>
+<th>bit3-bit0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ADD A, Im</td>
+<td>0000</td>
+<td>Im</td>
+</tr>
+<tr>
+<td>MOV A, B</td>
+<td>0001</td>
+<td>0000</td>
+</tr>
+<tr>
+<td>IN  A</td>
+<td>0010</td>
+<td>0000</td>
+</tr>
+<tr>
+<td>MOV A, Im</td>
+<td>0011</td>
+<td>Im</td>
+</tr>
+<tr>
+<td>MOV B, A</td>
+<td>0100</td>
+<td>0000</td>
+</tr>
+<tr>
+<td>ADD B, Im</td>
+<td>0101</td>
+<td>Im</td>
+</tr>
+<tr>
+<td>IN  B</td>
+<td>0110</td>
+<td>0000</td>
+</tr>
+<tr>
+<td>MOV B, Im</td>
+<td>0111</td>
+<td>Im</td>
+</tr>
+<tr>
+<td>OUT B</td>
+<td>1001</td>
+<td>0000</td>
+</tr>
+<tr>
+<td>OUT Im</td>
+<td>1011</td>
+<td>Im</td>
+</tr>
+<tr>
+<td>JNC Im</td>
+<td>1110</td>
+<td>Im</td>
+</tr>
+<tr>
+<td>JMP Im</td>
+<td>1111</td>
+<td>Im</td>
+</tr>
+</tbody>
+</table>
+<h3 id="output-to-led">Output to LED</h3>
+<p>Try getting this program to work
+OUT 0101</p>
+<p>Looking up the opcode for <code class="language-plaintext highlighter-rouge">OUT Im</code> on the table it is <code class="language-plaintext highlighter-rouge">1011</code>.</p>
+<p>This translated to the first dip switch being in <code class="language-plaintext highlighter-rouge">1010 1101</code> The first piece is the constant immediate, and the second piece is the reverse of that opcode.
+</p>
+<h3 id="simple-flashing">Simple Flashing</h3>
+<p>Now we can try a simple blinking program with a jump.</p>
+<p>We output two different constants and then JMP back to instruction 0</p>
+<p>Which translates to</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>         # Im   | Com
+         #------|-----
+OUT 0001 # 1000 | 1101   
+OUT 0010 # 0100 | 1101 
+JMP 0    # 0000 | 1111 
+</code></pre></div></div>
+<p></p>
+<h3 id="counting-up">Counting Up</h3>
+<p>Now we can trying counting</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ADD B 1
+OUT B
+JMP 0
+</code></pre></div></div>
+<h3 id="counting-down">Counting Down</h3>
+<p>Counting down can be done once you realize that adding 15 is the same as subtracting 1 modulo 16.
+require realizing modular arithmetic</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ADD B 15
+OUT B
+JMP 0
+</code></pre></div></div>
+<h3 id="counting-up-then-down">Counting Up then Down</h3>
+<p>This is much trickier strangely. We screwed up a lot getting this simple program to work. In our defense we were tired. But remember to update your jump addresses, put things in the right order, manually assemble, it’s a lot.</p>
+<p>Mistakes we made</p>
+<ul>
+<li>we fed will ice cream too early.</li>
+<li>We flipped the labels going into JNC vs JMP</li>
+<li>We had the OUT in places they couldn’t be executed (at the bottom of the program)</li>
+<li>We moved OUT after the add, destroying the carry for ADD A 1</li>
+<li>We realized we should think of ADD B 1, OUT B a a single unit. A pseudoinstruction.</li>
+<li>And in fact after examining the circuit, thee two can be compressed to OUT B 1 because OUT actually takes immediates. We lucked out that we zeroed the immediates on MOV and OUT.</li>
+</ul>
+<p>Remember the program counter was 0 indexed</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>00: ADD B 1     1000 1010 
+01: OUT B       xxxx 1001
+02: MOV A B     xxxx 1000  # test if at 15
+03: ADD A 1     1000 0000  # adding 1 to 15 makes a carry
+04: JNC 0       0000 0111  # jump to 0 if no overflow (B != 15)
+05: ADD B 15    1111 1010  # Go down 1 by adding 15
+06: OUT B       xxxx 1001
+07: MOV A B     xxxx 1000  # test if at 0
+08: ADD A 15    1111 0000  # only 0 does not overflow when add 15
+09: JNC 0       0000 0111  # jump to ascending at 0 if not overflow (B = 0)
+10: JMP 5       0110 1111  # default jump to 5
+</code></pre></div></div>
+<p>An alternative possibly buggy version. Using the idea <code class="language-plaintext highlighter-rouge">JC ~ JNC;JMP</code> and can we directly test the overflow on B without using A as scratch? Do we miss some numbers though? The ends of the loop are tricky.</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>00: ADD B 1
+01: JNC 3
+02: JMP 5
+03: OUT B
+04: JMP 0
+05: MOV B 15
+06: ADD B 15
+07: JNC 0
+08: OUT B
+09: JMP 6
+</code></pre></div></div>
+<h2 id="python-assembler-and-simulator">Python Assembler and Simulator</h2>
+<p>Here’s a little python simulator and assembler that Ben and I slammed out. Well, Ben mostly wrote. Maybe using regex like this is a bit goofy. Maybe its nice? <code class="language-plaintext highlighter-rouge">match</code> statements rule. We should return to this and make it better, but it’s a start.
+There is also an assembler in the TD4 repo but I haven’t tried using it.</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="kn">import</span> <span class="n">namedtuple</span>
+
+<span class="kn">from</span> <span class="nn">types</span> <span class="kn">import</span> <span class="n">SimpleNamespace</span>
+
+<span class="n">instruction_regex</span> <span class="o">=</span> <span class="n">re</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="sa">r</span><span class="s">"(?P&lt;cmd&gt;ADD|OUT|MOV|JMP|JNC|IN) +(?P&lt;arg1&gt;A|B|\d{1,2})(?: +(?P&lt;arg2&gt;A|B|\d{1,2}))? *(?:#.*)?"</span><span class="p">)</span>
+
+<span class="nb">input</span> <span class="o">=</span> <span class="s">"""</span><span class="se">\
+</span><span class="s">ADD B 1
+OUT B
+MOV A B
+ADD A 1
+JNC 0
+ADD B 15
+OUT B
+MOV A B
+ADD A 15 # this is a comment
+JNC 0
+JMP 5</span><span class="se">\
+</span><span class="s">"""</span>
+
+<span class="n">NULL_IM</span> <span class="o">=</span> <span class="s">"0000"</span>
+
+<span class="k">def</span> <span class="nf">im_to_str</span><span class="p">(</span><span class="n">im</span><span class="p">):</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s">"</span><span class="si">{</span><span class="nb">int</span><span class="p">(</span><span class="n">im</span><span class="p">)</span><span class="si">:</span><span class="mi">04</span><span class="n">b</span><span class="si">}</span><span class="s">"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+<span class="c1"># Assembler
+# We made an error on ADD B not updtang something copied from ADD A
+</span><span class="n">program</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="nb">input</span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">):</span>
+    <span class="n">instruction</span> <span class="o">=</span> <span class="n">instruction_regex</span><span class="p">.</span><span class="n">fullmatch</span><span class="p">(</span><span class="n">line</span><span class="p">)</span>
+    <span class="n">match</span> <span class="n">instruction</span><span class="p">[</span><span class="s">"cmd"</span><span class="p">],</span> <span class="n">instruction</span><span class="p">[</span><span class="s">"arg1"</span><span class="p">],</span> <span class="n">instruction</span><span class="p">[</span><span class="s">"arg2"</span><span class="p">]:</span>
+        <span class="n">case</span> <span class="s">"ADD"</span><span class="p">,</span> <span class="s">"A"</span><span class="p">,</span> <span class="n">im</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">im_to_str</span><span class="p">(</span><span class="n">im</span><span class="p">)</span><span class="o">+</span><span class="s">"0000"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"MOV"</span><span class="p">,</span> <span class="s">"A"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">NULL_IM</span><span class="o">+</span><span class="s">"0001"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"IN"</span><span class="p">,</span> <span class="s">"A"</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">NULL_IM</span><span class="o">+</span><span class="s">"0010"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"MOV"</span><span class="p">,</span> <span class="s">"A"</span><span class="p">,</span> <span class="n">im</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">im_to_str</span><span class="p">(</span><span class="n">im</span><span class="p">)</span><span class="o">+</span><span class="s">"0011"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"MOV"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">,</span> <span class="s">"A"</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">NULL_IM</span><span class="o">+</span><span class="s">"0100"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"ADD"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">,</span> <span class="n">im</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">im_to_str</span><span class="p">(</span><span class="n">im</span><span class="p">)</span><span class="o">+</span><span class="s">"0101"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"IN"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">NULL_IM</span><span class="o">+</span><span class="s">"0110"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"MOV"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">,</span> <span class="n">im</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">im_to_str</span><span class="p">(</span><span class="n">im</span><span class="p">)</span><span class="o">+</span><span class="s">"1001"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"OUT"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">NULL_IM</span><span class="o">+</span><span class="s">"1001"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"OUT"</span><span class="p">,</span> <span class="n">im</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">im_to_str</span><span class="p">(</span><span class="n">im</span><span class="p">)</span><span class="o">+</span><span class="s">"1011"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"JNC"</span><span class="p">,</span> <span class="n">im</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">im_to_str</span><span class="p">(</span><span class="n">im</span><span class="p">)</span><span class="o">+</span><span class="s">"1110"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="s">"JMP"</span><span class="p">,</span> <span class="n">im</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">program</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">im_to_str</span><span class="p">(</span><span class="n">im</span><span class="p">)</span><span class="o">+</span><span class="s">"1111"</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">case</span> <span class="n">_</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="nb">Exception</span><span class="p">(</span><span class="s">"Unrecognized command"</span><span class="p">)</span>
+
+<span class="k">print</span><span class="p">(</span><span class="n">program</span><span class="p">)</span>
+
+<span class="c1"># Simulator
+</span><span class="n">State</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s">"State"</span><span class="p">,</span> <span class="s">"a, b, out, pc, c, inp, program"</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">build_starting_state</span><span class="p">(</span><span class="n">program</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">program</span><span class="p">)</span>
+
+<span class="n">starting_state</span> <span class="o">=</span> <span class="n">build_starting_state</span><span class="p">(</span><span class="s">"""</span><span class="se">\
+</span><span class="s">ADD B 1
+OUT B
+JMP 0</span><span class="se">\
+</span><span class="s">"""</span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">"</span><span class="p">))</span>
+
+
+
+<span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="n">state</span><span class="p">):</span>
+    <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="n">pc</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span> <span class="o">=</span> <span class="n">state</span> 
+    <span class="n">instruction</span> <span class="o">=</span> <span class="n">instruction_regex</span><span class="p">.</span><span class="n">fullmatch</span><span class="p">(</span><span class="n">program</span><span class="p">[</span><span class="n">pc</span><span class="p">])</span>
+    <span class="n">match</span> <span class="n">instruction</span><span class="p">[</span><span class="s">"cmd"</span><span class="p">],</span> <span class="n">instruction</span><span class="p">[</span><span class="s">"arg1"</span><span class="p">],</span> <span class="n">instruction</span><span class="p">[</span><span class="s">"arg2"</span><span class="p">]:</span>
+        <span class="n">case</span> <span class="s">"ADD"</span><span class="p">,</span> <span class="s">"A"</span><span class="p">,</span> <span class="n">im</span><span class="p">:</span>
+            <span class="n">im_int</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">im</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">im_int</span> <span class="o">&lt;</span> <span class="mi">16</span>
+            <span class="n">a_tmp</span> <span class="o">=</span> <span class="n">a</span><span class="o">+</span><span class="n">im_int</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">a_tmp</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="n">a_tmp</span><span class="o">&gt;=</span><span class="mi">16</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"MOV"</span><span class="p">,</span> <span class="s">"A"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="bp">False</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"IN"</span><span class="p">,</span> <span class="s">"A"</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">inp</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="bp">False</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"MOV"</span><span class="p">,</span> <span class="s">"A"</span><span class="p">,</span> <span class="n">im</span><span class="p">:</span>
+            <span class="n">im_int</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">im</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">im_int</span> <span class="o">&lt;</span> <span class="mi">16</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">im_int</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="bp">False</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"MOV"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">,</span> <span class="s">"A"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="bp">False</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"ADD"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">,</span> <span class="n">im</span><span class="p">:</span>
+            <span class="n">im_int</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">im</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">im_int</span> <span class="o">&lt;</span> <span class="mi">16</span>
+            <span class="n">b_tmp</span> <span class="o">=</span> <span class="n">b</span><span class="o">+</span><span class="n">im_int</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b_tmp</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="n">b_tmp</span><span class="o">&gt;=</span><span class="mi">16</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"IN"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="bp">False</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"MOV"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">,</span> <span class="n">im</span><span class="p">:</span>
+            <span class="n">im_int</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">im</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">im_int</span> <span class="o">&lt;</span> <span class="mi">16</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">im_int</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="bp">False</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"OUT"</span><span class="p">,</span> <span class="s">"B"</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="k">print</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="bp">False</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"OUT"</span><span class="p">,</span> <span class="n">im</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">im_int</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">im</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">im_int</span> <span class="o">&lt;</span> <span class="mi">16</span>
+            <span class="k">print</span><span class="p">(</span><span class="n">im_int</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">im_int</span><span class="p">,</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="bp">False</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"JNC"</span><span class="p">,</span> <span class="n">im</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">im_int</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">im</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">im_int</span> <span class="o">&lt;</span> <span class="mi">16</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="n">im_int</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">c</span> <span class="k">else</span> <span class="p">(</span><span class="n">pc</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">%</span><span class="mi">16</span><span class="p">,</span> <span class="bp">False</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="s">"JMP"</span><span class="p">,</span> <span class="n">im</span><span class="p">,</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">im_int</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">im</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">im_int</span> <span class="o">&lt;</span> <span class="mi">16</span>
+            <span class="k">return</span> <span class="n">State</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="n">im_int</span><span class="p">,</span> <span class="bp">False</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span><span class="p">)</span>
+        <span class="n">case</span> <span class="n">_</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="nb">Exception</span><span class="p">(</span><span class="s">"Unrecognized command"</span><span class="p">)</span>
+
+
+<span class="n">state</span> <span class="o">=</span> <span class="n">starting_state</span>
+<span class="k">print</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">200</span><span class="p">):</span>
+    <span class="n">state</span> <span class="o">=</span> <span class="n">step</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
+
+</code></pre></div></div>
+<h2 id="bits-and-bobbles">Bits and Bobbles</h2>
+<p>If you find this intriguing you may want to check out two related projects:</p>
+<p>We had a blast a few years ago taking the Nand2Tetris course <a href="https://www.nand2tetris.org/">https://www.nand2tetris.org/</a>. In it, you learn how to design a computer from gates up to a small programming language. It is a good reference for background on what is going on in the TD4.</p>
+<p>Another option is the Ben Eater computer <a href="https://eater.net/8bit/">https://eater.net/8bit/</a>. The kits are quite a bit more expensive, the cpu is more complex/powerful, and there is a lot more material.</p>
+<p>It seems like there is a japanese book about this thing but I can’t find a translation</p>
+<p>Examining the schematic, looks like there is no ram to speak of, so this is a very limited machine. A + B + OUT + PC means there is 16 bits of state? Can easily exhaustively check this for anything you’d like. What about synthesizing programs?
+Maybe this is good though
+This is so constrained it feels more like a finite state machine.
+Try model checking it?</p>
+<p>Could I implement in python hdl or verilog or that gui thing?</p>
+<p>some further things to try</p>
+<ul>
+<li>subtraction</li>
+<li>equality checking. Bounded model checking</li>
+<li>suproptimization</li>
+</ul>
+<p>Didn’t Conor Mcbride have a 4 bit cpu videos?
+Are there actually 4-bit cpu ou there like this?</p>
+<p><a href="https://en.wikipedia.org/wiki/4-bit_computing">https://en.wikipedia.org/wiki/4-bit_computing</a></p>
+<p>What interesting programs can be written? Toughy.</p>
+<p>Model each chip</p>
+<div class="language-verilog highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">module</span> <span class="n">ALU</span><span class="p">()</span>
+
+<span class="k">end</span>
+
+<span class="k">module</span> <span class="n">ROM</span><span class="p">()</span>
+<span class="k">end</span>
+
+
+<span class="cp">`def</span> <span class="n">JMP</span> <span class="mi">0</span>
+
+<span class="k">module</span> <span class="n">Computron</span><span class="p">()</span>
+    <span class="kt">reg</span> <span class="p">[</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="n">A</span><span class="p">;</span>
+    <span class="kt">reg</span> <span class="p">[</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="n">B</span><span class="p">;</span>
+    <span class="kt">reg</span> <span class="p">[</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="n">OUT</span><span class="p">;</span>
+    <span class="kt">reg</span> <span class="p">[</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="n">PC</span><span class="p">;</span>
+    
+
+<span class="k">end</span>
+
+<span class="k">module</span> <span class="n">HC153</span><span class="p">(</span><span class="n">in</span><span class="p">[</span><span class="mi">4</span><span class="p">],</span> <span class="n">out</span><span class="p">[</span><span class="mi">16</span><span class="p">]);</span> <span class="c1">// demultiplexer</span>
+    
+
+<span class="k">endmodule</span><span class="p">;</span>
+
+</code></pre></div></div>
+<p>74HC154 - Address decoder - 4 - 16 line decoder / demultiplexer. The four incoming signals are translated to 16 mutually exclusive outputs. For example in the inputs pins are LLHH will draw pin 3 of the output <em>low</em>.  Because of all the diodes, only current will flow in through the ROM switches when that bank is enabled by bing drawn low</p>
+<p>The two enable pins are drawn down to ground so that output is always enabled.</p>
+<p>The lines come into this decode and select which flipy floppr is drawn</p>
+<p>74HC540 is an inverting buffer.</p>
+<p>
+</p>
+<p><a href="https://github.com/wuxx/TD4-4BIT-CPU">https://github.com/wuxx/TD4-4BIT-CPU</a></p>
+<p><a href="https://en.wikipedia.org/wiki/Charlieplexing">https://en.wikipedia.org/wiki/Charlieplexing</a> Are all these diodes chaliplexed? Nope. Nevermind.</p>
+<p><a href="https://hackaday.io/project/8442-ttl-based-4-bit-cpu">https://hackaday.io/project/8442-ttl-based-4-bit-cpu</a>
+<a href="https://hackaday.io/project/26215-td4-cpu">https://hackaday.io/project/26215-td4-cpu</a>
+<a href="http://kamakurium.com/wp-content/uploads/2016/01/cpu_td4">http://kamakurium.com/wp-content/uploads/2016/01/cpu_td4</a>
+<a href="http://visual6502.org/">http://visual6502.org/</a>
+<a href="http://www.4004.com/">http://www.4004.com/</a></p>
+<p>      </p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># here we made  failed attempt to emulate at the circuit level. Maybe we'll come back to this.
+</span>
+<span class="c1"># This is wrong.
+</span><span class="k">def</span> <span class="nf">counter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">d</span><span class="p">,</span> <span class="n">not_load</span><span class="p">,</span> <span class="n">not_reset</span><span class="p">,</span> <span class="n">count_enable</span><span class="p">):</span>
+    <span class="n">load</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">not_load</span>
+    <span class="n">reset</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">not_reset</span>
+    <span class="k">if</span> <span class="n">reset</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span>
+    <span class="k">if</span> <span class="n">load</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">d</span>
+    <span class="n">inp</span> <span class="o">=</span> <span class="n">a</span> <span class="o">+</span> <span class="p">(</span><span class="n">b</span> <span class="o">&lt;&lt;</span> <span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">c</span> <span class="o">&lt;&lt;</span> <span class="mi">2</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">d</span> <span class="o">&lt;&lt;</span> <span class="mi">3</span><span class="p">)</span>
+    <span class="n">inp</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="n">inp</span> <span class="o">%=</span> <span class="mi">16</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">inp</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="p">(</span><span class="n">inp</span> <span class="o">&gt;&gt;</span> <span class="mi">1</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">c</span> <span class="o">=</span> <span class="p">(</span><span class="n">inp</span> <span class="o">&gt;&gt;</span> <span class="mi">2</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">d</span> <span class="o">=</span> <span class="p">(</span><span class="n">inp</span> <span class="o">&gt;&gt;</span> <span class="mi">3</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="k">return</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">d</span>
+
+<span class="k">assert</span><span class="p">(</span><span class="n">counter</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span>
+<span class="k">assert</span><span class="p">(</span><span class="n">counter</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">)</span>
+<span class="k">assert</span><span class="p">(</span><span class="n">counter</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">0</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">multiplexer</span><span class="p">(</span><span class="n">c0</span><span class="p">,</span> <span class="n">c1</span><span class="p">,</span> <span class="n">c2</span><span class="p">,</span> <span class="n">c3</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+    <span class="n">match</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">:</span>
+        <span class="n">case</span> <span class="bp">False</span><span class="p">,</span> <span class="bp">False</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">c0</span>
+        <span class="n">case</span> <span class="bp">False</span><span class="p">,</span> <span class="bp">True</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">c1</span>
+        <span class="n">case</span> <span class="bp">True</span><span class="p">,</span> <span class="bp">False</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">c2</span>
+        <span class="n">case</span> <span class="bp">True</span><span class="p">,</span> <span class="bp">True</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">c3</span>
+
+
+<span class="k">def</span> <span class="nf">flip_flop</span><span class="p">(</span><span class="n">d</span><span class="p">,</span> <span class="n">not_clr</span><span class="p">):</span>
+    <span class="n">clr</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">not_clr</span>
+    <span class="k">if</span> <span class="n">clr</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">False</span><span class="p">,</span> <span class="bp">True</span>
+    <span class="k">return</span> <span class="n">d</span><span class="p">,</span> <span class="ow">not</span> <span class="n">d</span>
+
+<span class="k">def</span> <span class="nf">adder</span><span class="p">(</span><span class="n">a0</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">b0</span><span class="p">,</span> <span class="n">b1</span><span class="p">,</span> <span class="n">b2</span><span class="p">,</span> <span class="n">b3</span><span class="p">):</span>
+    <span class="n">a_int</span> <span class="o">=</span> <span class="n">a0</span> <span class="o">+</span> <span class="p">(</span><span class="n">a1</span> <span class="o">&lt;&lt;</span> <span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">a2</span> <span class="o">&lt;&lt;</span> <span class="mi">2</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">a3</span> <span class="o">&lt;&lt;</span> <span class="mi">3</span><span class="p">)</span>
+    <span class="n">b_int</span> <span class="o">=</span> <span class="n">b0</span> <span class="o">+</span> <span class="p">(</span><span class="n">b1</span> <span class="o">&lt;&lt;</span> <span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">b2</span> <span class="o">&lt;&lt;</span> <span class="mi">2</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">b3</span> <span class="o">&lt;&lt;</span> <span class="mi">3</span><span class="p">)</span>
+
+    <span class="n">s_int</span> <span class="o">=</span> <span class="n">a_int</span> <span class="o">+</span> <span class="n">b_int</span>
+
+    <span class="n">s0</span> <span class="o">=</span> <span class="n">s_int</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">s1</span> <span class="o">=</span> <span class="p">(</span><span class="n">s_int</span> <span class="o">&gt;&gt;</span> <span class="mi">1</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">s2</span> <span class="o">=</span> <span class="p">(</span><span class="n">s_int</span> <span class="o">&gt;&gt;</span> <span class="mi">2</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">s3</span> <span class="o">=</span> <span class="p">(</span><span class="n">s_int</span> <span class="o">&gt;&gt;</span> <span class="mi">3</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span>
+    <span class="n">carry_out</span> <span class="o">=</span> <span class="p">(</span><span class="n">s_int</span> <span class="o">&gt;&gt;</span> <span class="mi">4</span><span class="p">)</span> <span class="o">&amp;</span> <span class="mi">1</span>
+
+    <span class="k">return</span> <span class="n">s0</span><span class="p">,</span> <span class="n">s1</span><span class="p">,</span> <span class="n">s2</span><span class="p">,</span> <span class="n">s3</span><span class="p">,</span> <span class="n">carry_out</span>
+
+<span class="c1"># We found a bug in one of the diagrams. It showed 
+</span><span class="k">def</span> <span class="nf">command_decoder</span><span class="p">(</span><span class="n">d4</span><span class="p">,</span> <span class="n">d5</span><span class="p">,</span> <span class="n">d6</span><span class="p">,</span> <span class="n">d7</span><span class="p">,</span> <span class="n">not_c</span><span class="p">):</span>
+    <span class="n">sel_a</span> <span class="o">=</span> <span class="n">d4</span> <span class="ow">or</span> <span class="n">d7</span>
+    <span class="n">sel_b</span> <span class="o">=</span> <span class="n">d5</span>
+    <span class="n">not_load0</span> <span class="o">=</span> <span class="n">d6</span> <span class="ow">or</span> <span class="n">d7</span>
+    <span class="n">not_load1</span> <span class="o">=</span> <span class="p">(</span><span class="ow">not</span> <span class="n">d6</span><span class="p">)</span> <span class="ow">or</span> <span class="n">d7</span>
+    <span class="n">not_load2</span> <span class="o">=</span> <span class="ow">not</span> <span class="p">((</span><span class="ow">not</span> <span class="n">d6</span><span class="p">)</span> <span class="ow">and</span> <span class="n">d7</span><span class="p">)</span>
+    <span class="n">not_load3</span> <span class="o">=</span> <span class="ow">not</span> <span class="p">((</span><span class="n">not_c</span> <span class="ow">or</span> <span class="n">d4</span><span class="p">)</span> <span class="ow">and</span> <span class="n">d6</span> <span class="ow">and</span> <span class="n">d7</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">not_load0</span><span class="p">,</span> <span class="n">not_load1</span><span class="p">,</span> <span class="n">not_load2</span><span class="p">,</span> <span class="n">not_load3</span><span class="p">,</span> <span class="n">sel_a</span><span class="p">,</span> <span class="n">sel_b</span>
+
+<span class="k">def</span> <span class="nf">rom</span><span class="p">():</span>
+    <span class="p">...</span>
+
+<span class="k">def</span> <span class="nf">circuit_step</span><span class="p">(</span><span class="n">state</span><span class="p">):</span>
+    <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">out</span><span class="p">,</span> <span class="n">pc</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">program</span> <span class="o">=</span> <span class="n">state</span>
+
+    <span class="n">adder0</span><span class="p">,</span> <span class="n">adder1</span><span class="p">,</span> <span class="n">adder2</span><span class="p">,</span> <span class="n">adder3</span> <span class="o">=</span> <span class="n">adder</span><span class="p">()</span>
+    <span class="n">a_val</span> <span class="o">=</span> <span class="n">counter</span><span class="p">(</span><span class="n">adder0</span><span class="p">,</span> <span class="n">adder1</span><span class="p">,</span> <span class="n">adder2</span><span class="p">,</span> <span class="n">adder3</span><span class="p">,</span> <span class="n">not_load0</span><span class="p">)</span>
+    <span class="n">b_val</span> <span class="o">=</span> <span class="n">counter</span><span class="p">(</span><span class="n">adder0</span><span class="p">,</span> <span class="n">adder1</span><span class="p">,</span> <span class="n">adder2</span><span class="p">,</span> <span class="n">adder3</span><span class="p">,</span> <span class="n">not_load0</span><span class="p">)</span>
+    <span class="n">out_val</span> <span class="o">=</span> <span class="n">counter</span><span class="p">(</span><span class="n">adder0</span><span class="p">,</span> <span class="n">adder1</span><span class="p">,</span> <span class="n">adder2</span><span class="p">,</span> <span class="n">adder3</span><span class="p">,</span> <span class="n">not_load0</span><span class="p">)</span>
+    <span class="n">pc_val</span> <span class="o">=</span> <span class="n">counter</span><span class="p">(</span><span class="n">adder0</span><span class="p">,</span> <span class="n">adder1</span><span class="p">,</span> <span class="n">adder2</span><span class="p">,</span> <span class="n">adder3</span><span class="p">,</span> <span class="n">not_load0</span><span class="p">)</span>
+    <span class="n">new_state</span> <span class="o">=</span> <span class="n">State</span><span class="p">(</span><span class="n">a_out</span><span class="p">,</span> <span class="n">b_out</span><span class="p">,</span> <span class="n">out_out</span><span class="p">,</span> <span class="p">...)</span>
+</code></pre></div></div>
+<p>Use lark?</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="n">prog</span> <span class="o">=</span> <span class="s">"""
+
+ADD B 1
+"""</span>
+
+<span class="p">{</span>
+    <span class="s">"ADD"</span><span class="p">:</span> <span class="s">"1000"</span><span class="p">,</span>
+    <span class="s">"OUT"</span><span class="p">:</span> <span class="s">"1001"</span><span class="p">,</span>
+    <span class="s">"MOV"</span><span class="p">:</span> <span class="s">"1010"</span><span class="p">,</span>
+    <span class="s">"JNC"</span><span class="p">:</span> <span class="s">"0111"</span><span class="p">,</span>
+    <span class="s">"JMP"</span><span class="p">:</span> <span class="s">"1111"</span>
+<span class="p">}</span>
+
+<span class="k">def</span> <span class="nf">assemble</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+    <span class="n">op</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">match</span> <span class="n">x</span><span class="p">:</span>
+        <span class="n">case</span> <span class="s">"MOV"</span><span class="p">:</span>    
+        <span class="n">case</span> <span class="s">"ADD"</span><span class="p">:</span>
+        <span class="n">case</span> <span class="s">"OUT"</span><span class="p">:</span>
+        <span class="n">case</span> <span class="s">"JNC"</span><span class="p">:</span>
+        <span class="n">case</span> <span class="s">"JMP"</span><span class="p">:</span>
+        <span class="n">case</span> <span class="n">_</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="nb">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s">"Unknown op </span><span class="si">{</span><span class="n">op</span><span class="si">}</span><span class="s">"</span><span class="p">)</span>
+
+<span class="n">grammar</span> <span class="o">=</span> <span class="s">"""
+    "ADD"
+    "MOV"
+    "JNC"
+    "OUT"
+    "JMP"
+    "JNC"
+    "@" name
+ -&gt; label
+
+"""</span>
+
+
+</code></pre></div></div>
+<p>```</p>
+</div>
+</article>
