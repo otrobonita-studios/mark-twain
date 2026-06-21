@@ -1,0 +1,713 @@
+<body>
+<div class="toplevelbody">
+<h1>Rambles around computer science</h1>
+<p>Diverting trains of thought, wasting precious time</p>
+<!--<p>15 06 2026</p>-->
+<h2>Mon, 15 Jun 2026</h2>
+<a name="system-call-instrumentation-on-intel-negative-result"><h3>System call instrumentation on Linux/x86-64 using memory-indirect calls (in vain?), part one</h3></a>
+<p>My <a href="https://github.com/stephenrkell/libsystrap">libsystrap</a> library
+provides a simple instrumentation of system calls
+in Linux x86-64 userland.
+However, its current implementation suffers a double-trap overhead:
+system calls become <tt>ud2</tt>, which generates a <tt>SIGILL</tt> trap.
+Then we run the system call itself from within the signal handler,
+causing a second trap and some
+<a href="https://www.humprog.org/~stephen/blog/devel/clone-calling.html">interesting tricky cases</a>.</p>
+<p>There has been some interesting research in this space in recent years, including
+the <a href="https://dl.acm.org/doi/10.1145/3062341.3062344">Liteinst “instruction punning” paper</a>,
+    the closely related <a href="https://dl.acm.org/doi/abs/10.1145/3385412.3385972">E9Patch paper</a>
+    (though both not specifically about system call instrumentation),
+later the <a href="https://dl.acm.org/doi/abs/10.1145/3385412.3385972">“zpoline” paper</a> (which definitely is),
+and some follow-ups for making the latter more robust
+    (<a href="https://adriaanjacobs.github.io/files/dsn24lazypoline.pdf">lazypoline</a>,
+    <a href="https://dl.acm.org/doi/10.1145/3721462.3770772">K23</a>).</p>
+<p>The core problem that all these approaches are solving is a pure accident
+of the Intel instruction encoding:
+all useful jump instructions are at least 5 bytes long,
+whereas often we want to patch smaller instructions,
+such as system call instructions which are all (essentially)
+two bytes long.
+So if you want to replace a system call with a jump,
+you have a problem.</p>
+<p>The idea of instruction punning, simplifying horribly
+and specialising it to the system-call problem (it is more general),
+is that if we have an instruction sequence containing a two-byte system call
+(here using the <tt>syscall</tt> instruction, <tt>0f 05</tt>)</p>
+<pre>    ... 0f 05 xx yy zz ...
+</pre>
+<p>then when we make it into a jump or call, we might be able to work with the
+bytes of the next instruction, since they form part of the relative jump offset.
+In fact we have one free byte to play with;</p>
+<pre>    ... e9 WW xx yy zz ...
+</pre>
+<p>i.e. we leave the <tt>xx</tt>, <tt>yy</tt> and
+<tt>zz</tt> bytes alone because the belong to the next instruction(s),
+but we can change <tt>WW</tt>.
+<tt>WW xx yy zz</tt> will be interpreted as 32-bit
+displacement and we ideally simply place some kind of trampoline code wherever that lands.</p>
+<p>Unfortunately, with the machine being little-endian,
+<tt>WW</tt> is the least significant byte, so the
+jump target is fixed except for 256 bytes of wiggle room.
+It demands a statistical approach:
+as long as the high-order byte is not zero or very small,
+we have a good chance of jumping far enough away to
+land at some memory that is available to use.
+If not, we can fall back on a signal-generating option like <tt>ud2</tt>,
+or do something else.
+The E9Patch paper presents some head-twisting compound versions of instruction punning
+for increasing its coverage in such scenarios,
+without resorting to trapping approaches like <tt>ud2</tt>.
+Meanwhile, this scattered nature of trampolines will require a lot of virtual
+address space, roughly one page per patch site,
+but we can play virtual memory tricks to colocate multiple trampolines on the same physical page
+(the E9Patch tool also does this)..</p>
+<p>The idea of zpoline is cleaner and does not
+rely on punning or statistical approaches.
+It's quite clever.
+We can always replace a 2-byte system call with</p>
+<pre>    ff d0                   call   *%rax
+</pre>
+<p>... which will generate a call to a small nonnegative address,
+because <tt>%rax</tt> must be holding the system call number
+i.e. a small nonnegative integer.
+That's neat but it means you have to map some instructions
+at the very bottom page (address zero), which undoes the standard hardware-enforced
+protection against null pointer accesses.
+The paper suggests mitigating this by
+(1) using Intel <a href="https://www.kernel.org/doc/html/latest/core-api/protection-keys.html">memory protection keys</a> to make this memory execute-only, and
+(2) catching “jump to null pointer” bugs by validating the return address
+against a bitmap or hash table recording the known patched system call sites.
+However, this is still non-ideal:
+many processors
+don't support memory protection keys,
+validating the return address takes time, and
+on Linux, mapping low memory requires system privileges.
+The approach also behaves unpredictably if buggy code
+invokes a system call with a high value in <tt>%rax</tt>,
+whereas the kernel would fail cleanly (with <tt>ENOSYS</tt>).</p>
+<p>The zpoline work made me think:
+can we find similar tricks with different trade-offs
+by exploring other corners of the instruction encoding?
+In x86 I have always been fascinated by the segmentation features,
+so I was minded to explore there.
+All x86 processors, even 64-bit ones,
+always run with some form of segmentation permanently enabled.
+In protected mode, all memory accesses are first translated through one of two
+segment descriptor tables, global (system-wide) and local (typically per-process).
+These tables select the linear virtual address
+that is then pushed through the page tables, as a second layer of translation.
+Linux lets us modify the process's local descriptor table using the
+<tt>modify_ldt()</tt> system call.
+Could we find a 2-byte form that will indirect through this table to reach, somehow,
+our intended system call instrumentation?</p>
+<p>Spoiler: sort of, but not really as I hoped.
+<!--The gains are at best marginal, and the machinery is fairly complex.-->
+Nevertheless, I learned quite a bit, the near misses are fun enough to go into,
+and there may be some benefits worth having.</p>
+<p>Betraying how poorly I understood
+x86 segmentation at first, I was optimistically hoping that we could use
+a two-byte “long call” instruction (<tt>lcall</tt> in AT&amp;T syntax, <tt>call far</tt> in Intel),
+perhaps (naively) something like this:</p>
+<pre>    ff 18                   lcall  *(%rax)
+</pre>
+<p>to perform an emulated/instrumented system call via the LDT entry whose selector is stored in <tt>%rax</tt>.
+Sadly that is not what the <tt>lcall</tt> instruction does.</p>
+<p>(Among other glaring alarm bells,
+it would be odd to store 16-bit selectors in a full-width register like <tt>%rax</tt>.
+Also, the “l for long” of “lcall” is of course
+not the same “L for Local” of “LDT”. I'll explain all this....)</p>
+<!-- ; the above could only work if we somehow ensured that <tt>%rax</tt>
+could only hold a local and not a <em>global</em> segment selector, since we have no control
+over the latter.) -->
+<p>Backing up slightly: this
+<tt>lcall</tt> instruction lets us call into a different code segment,
+instead of the usual “near call” which stays within one segment.
+What we think of as a memory address in x86 (whether 16-, 32- or 64-bit)
+is really an offset into a segment—it's just that in flat memory models
+(which were the choice of 32-bit Unix environments, and are forced upon us in 64-bit mode)
+the segment base address happens to 0.
+Similarly, an indirect near call in 64-bit mode, such as</p>
+<pre>    ff d0                   call   *%rax
+</pre>
+<p>consumes as its destination operand not a pointer but a 64-bit <em>offset</em>
+within the current code segment.
+<!--The fact that that segment has base address zero is incidental.--></p>
+<!--Far calls make explicit use of this segmentation machinery,
+and let us call into segments that are not the current code segment.-->
+<p>A far call target is specified by not only an offset but also a 16-bit segment selector.
+This indexes into either the global or local table of segment <em>descriptors</em>
+(the actual definitions of the segments, roughly base/limit pairs with permissions),
+the table being chosen by one of the three reserved low bits of the selector value.
+Each table may contain up to 8192 entries, accounting for the remaining 13 bits.</p>
+<p>I should recap a not-so-obvious bit of Intel assembly.
+All indirect calls jump to some memory location, but there are two forms:
+register-indirect and memory-indirect.
+The latter are doubly indirect, in that a memory location is itself specified using a register.
+That is the memory location from which the call target address is loaded;
+I'll call this a “stepping stone” location, although there is probably a better term.
+(As far as I know, memory-indirect jumps and calls are the only memory-indirect operations in the
+entire Intel ISA.)</p>
+<pre>    ff d0                   call  *%rax
+
+    ff 10                   call   *(%rax)
+</pre>
+<p>The first of the above does the obvious (register-indirect) thing:
+call the address (or rather, offset within the code segment)
+held in register <tt>%rax</tt>.
+The second one adds the additional layer of indirection:
+the address (sorry, offset) to be called is itself loaded from memory:
+from the location whose address (sorry, offset) is 
+held in register <tt>%rax</tt>.</p>
+<p>And of course there are two forms of memory-indirect call: near and far.</p>
+<pre>    ff 10                   call   *(%rax)
+
+    ff 18                   lcall  *(%rax)
+</pre>
+<!--
+... because the latter has an extra level of indirection.
+In the former we take the branch target (offset) from the register, here <tt>%rax</tt>.
+In the latter, 
+-->
+<p>There is no simple register-indirect form of far call.
+You might think this is because a register isn't big enough to hold a
+complete far address, i.e. segment selector and offset.
+However, we'll see in a moment that that doesn't explain it.</p>
+<p>(There is an <em>absolute</em> far call, where the full far address
+is appears in the instruction as an immediate operand.
+That is not available in 64-bit mode, however.
+The full reference, in the usual slightly cryptic terms,
+is available <a href="https://www.felixcloutier.com/x86/call">here</a>
+or <a href="https://www.intel.com/content/www/us/en/content-details/671200/intel-64-and-ia-32-architectures-software-developer-s-manual-combined-volumes-1-2a-2b-2c-2d-3a-3b-3c-3d-and-4.html">here</a>.)</p>
+<!--
+The semantics of the instruction are instead to
+read these from memory at the address 
+held in <tt>%rax</tt> (or, strictly speaking, at the <em>offset</em> held there,
+this time relative to the data segment, but which also always begins at linear address 0 in 64-bit mode).
+-->
+<p>The following assembly program
+helped me convince myself I'd understood the mechanics
+of far calls in x86-64 Linux userspace.
+In this example the “long” call
+target is a 48-bit operand:
+a 16-bit selector and a 32-bit offset.
+Even though we are in 64-bit mode, this 16:32 is the default variant of <tt>lcall</tt>.
+(You can, however, do a <tt>rex.W lcall</tt>
+to read a 64-bit offset, i.e. an 80-byte operand in total.
+But this 16:32 form is why “doesn't
+fit into a register” is not an explanation... a plain
+register-indirect version of this 16:32 call
+could have been provided in 64-bit mode but, understandably, wasn't.)</p>
+<pre># How to make a "long call" (lcall) within a user program on x86-64.
+.data
+# global variable to hold our 6-byte address (2-byte segment selector, 4-byte offset)
+tgtlongaddr:
+tgtlongaddr_offs:
+    .long 0          # offset -- only 32 bits!
+tgtlongaddr_sel:
+    .word 0          # segment selector -- 16 bits
+
+.text
+.globl _start
+_start:
+    # we want to make an indirect long call to 'exit'...
+    # borrow our current code segment selector (on Linux it will be 0x33)
+    movw %cs,  tgtlongaddr_sel
+    # set the offset as 'exit'
+    lea exit, %rax
+    movl %eax, tgtlongaddr_offs
+    # make %rax point to our 6-byte global variable
+    lea tgtlongaddr, %rax
+    lcall *(%rax)
+exit:
+    # we will have an extra $cs on the stack, owing to the far call, but we ignore it...
+    # actually it's packed into one 64-bit word together with the 32-bit offset and some
+    # padding in the high-order bits (0x3300401020 in the stack dump below)
+    # Dump of assembler code for function exit:
+    # =&gt; 0x0000000000401020 &lt;+0&gt;:     mov    $0x0,%rdi
+    #    0x0000000000401027 &lt;+7&gt;:     mov    $0x3c,%rax
+    #    0x000000000040102e &lt;+14&gt;:    syscall 
+    # End of assembler dump.
+    # (gdb) x /20ga $rsp
+    # 0x7fffffffcdc8: 0x3300401020    0x1
+    # 0x7fffffffcdd8: 0x7fffffffd307  0x0
+    # 0x7fffffffcde8: 0x7fffffffd355  0x7fffffffd365
+    mov $0, %rdi  # status 0
+    mov $60, %rax # exit syscall
+    syscall
+(END)
+</pre>
+<p>Unfortunately I also convinced myself that the 2-byte <tt>lcall</tt> form isn't useful
+for system call instrumentation.
+Just like zpoline's use of <tt>call</tt>,
+the far call via <tt>%rax</tt>
+always wants to access memory a short distance from the address in that register.
+The fact that this memory access is not for the jump itself,
+but rather than address of the jump target,
+is incidental.
+In fact it's worse, because we
+would have to map the bottom page readably, rather than execute-only.</p>
+<p>Thinking more punningly, there are also 3-byte forms that might help,
+if we can arrange that we don't care about the trailing byte.
+For example, there is:</p>
+<pre>   ff 58 nn                lcall  *0xnn(%rax)
+</pre>
+<p>which will try to load a far pointer from memory at
+some small displacement from the address in <tt>%rax</tt>.
+We could simply leave that byte in place and allow the instructions to overlap.
+But it doesn't help:
+this displacement is always small, so it still doesn't get us out of the bottom page of the address space
+(except, possibly, wrapping downwards into the very top of the address space, which is even less use).
+And the displacement is determined by the reinterpreted instruction byte that happens to follow the
+trap site; we don't control it.</p>
+<p>But then a brainwave: there are some 6-byte forms
+which could be useful if we continue to borrow ideas from instruction punning.
+Let's recap what instruction punning looks like, using the 5-byte near direct call.</p>
+<table border="1px" cellpadding="1px"><tr>
+<td><tt>e8 WW nn nn nn</tt></td><td><tt>call 0xnnnnnnWW(%rip)</tt></td><td>precise, tunable</td><td>nearby</td><td>used as jump target i.e. trampoline</td><td>trampolines likely unique</td><td>not overlappable</td>
+</tr></table>
+<p>To the right in the table I've annotated the instruction with five pieces of information.
+The memory location it references is precise (predictable from just the instruction address)
+    yet tunable (in that we can choose <tt>WW</tt>, the least significant offset bit).
+We're always accessing a location “nearby” i.e. plus or minus 2GB-ish (the immediate 32-bit displacement),
+and we're using that location as the jump target.
+That location is likely unique to the instrumented site,
+although in the unlikely case that
+two such sites' puns happen to land at mutually nearby locations
+(not exactly equal, but say within a few bytes)
+we can't overlap the stuff we want to place there.
+That's trampoline code in this case, and
+usually all bytes of the trampoline need to be different,
+i.e. are unlikely to be mutually overlap-punnable.</p>
+<p>The picture to have in your mind for <tt>%rip</tt>-relative punning is roughly like this,
+much as it is hilariously not to scale.</p>
+<pre>
+      :                    :
+      |____________________|
+      |....|TT|............| \
+      :.|TT|...............| | zone ~2GB above
+      :............|TT|... : | mostly unmapped, but quasi-randomly allocated for trampolines
+      :____________________: /
+      |  x              x  |
+      |    patched text    |  the loaded binary whose text is patched
+      |x          x      x |
+      |____________________|  (data segment somewhere around here too, not shown)
+      :..............|TT|..: \
+      :...|TT|.............: |
+      :....................: | zone ~2GB below similarly
+      |____________________| /
+      |                    |
+      :                    :
+</pre>
+<p>Unique versus shared trampolines have their advantanges and disadvantages.
+A unique trampoline can be tailored to the patch site (e.g. it could literally inline the
+instrumentation required at that specific instruction),
+whereas shared trampolines need to be somehow generic but can help save memory.
+<em>Overlappable</em> shared trampolines are even better, because
+they can pack into smaller extents of memory. The zpoline work
+uses one of these, consisting of a <tt>nop</tt> “sled”—say 512 bytes
+of <tt>nop</tt> if no system call is numbered higher than 511—followed
+by a generic handler.
+This shared, overlappable form of trampoline is necessary since
+many patch sites may land at different yet nearby offsets within the low <tt>%rax</tt>-accessed region.
+Meanwhile, systems like E9Patch instead use unique trampolines, but play tricks to prevent
+them from blowing too much memory, by colocating many of them
+into the same frame of physical memory.
+This colocation can be done so long as they do not overlap in offset-space within the page:
+the same frame is then mapped at each of the virtual addresses required by its incoming patch sites.
+Although few physical frames may be needed,
+there still end up being quite a lot of pages used in the virtual address space.
+This crufts up the memory map of the process
+(specifically the <tt>/proc/self/maps</tt> file).
+That noise is unimportant in many contexts, but I prefer to avoid it
+because it is a pain if you do low-level programming, which I often do.
+Also, generalising wildly,
+introducing new executable instructions into the process introduces new attack
+surface, e.g. as sources of <a href="https://en.wikipedia.org/wiki/Return-oriented_programming">ROP
+gadgets</a> or whatever; it may well not matter, but sometimes it might.</p>
+<p>So, the 5-byte <tt>%rip</tt>-relative form has some good points and bad points.
+Now let's see some six-byte forms, both <tt>call</tt> and <tt>lcall</tt>, that may be useful.
+For each there is a corresponding jump form, which I will ignore for now.</p>
+<table border="1px" cellpadding="1px"><tr>
+<td><tt>ff 15 nn nn nn nn</tt></td><td><tt>call   *0xnnnnnnnn(%rip)</tt></td><td>precise (not tunable)</td><td>nearby</td><td>used as stepping stone near address</td><td>stepping stones likely unique</td><td>stepping stones not overlappable</td>
+</tr></table>
+<p>This is a memory-indirect form of near call.
+A 32-bit displacement applied to <tt>%rip</tt> is used to load an 8-byte near address (offset)
+which is the jump target.</p>
+<p>In contrast to the 5-byte form above,
+we don't even have a single byte of the displacement that we control.
+This can still be a useful alternative to the 5-byte form, however!
+The 6-byte form is likely to have a different high-order byte than in the 5-byte form above,
+since the punned field is shifted along one byte in memory.
+So this gives us another chance to land us somewhere that is free;
+field-shifting second-chance techniques like this are called “jump padding”
+in the E9Patch paper.
+The picture looks like the above, except instead of
+<tt>|TT|</tt> for the trampolines we would have <tt>|S |</tt> for the stepping-stone
+8-byte near address of our handler (probably smaller than a trampoline!
+but we have to map at page granularity, so some space will be free around it).</p>
+<pre>
+      :                    :
+      |____________________|
+      |....|S |............| \
+      :.| S|...............| | zone ~2GB above
+      :..............|S |. : | mostly unmapped, but quasi-randomly allocated for stepping-stone addresses
+      :____________________: /
+      |  x              x  |
+      |    patched text    |  the loaded binary whose text is patched
+      |x          x      x |
+      |____________________|  (data segment somewhere around here too, not shown)
+      :..............| S|..: \
+      :...|S |.............: |
+      :....................: | zone ~2GB below similarly
+      |____________________| /
+      |                    |
+      :                    :
+</pre>
+<p>We don't have to pun relative to <tt>%rip</tt>, of course—<tt>%rax</tt> is another
+obvious choice.</p>
+<table border="1px" cellpadding="1px"><tr>
+<td><tt>ff 90 nn nn nn nn</tt></td><td><tt>call   *0xnnnnnnnn(%rax)</tt></td><td>spread (not tunable)</td><td>low</td><td>used as stepping stone near address</td><td>stepping stones overlap</td><td>not overlappable, nor usable (without known <tt>%rax</tt> value)</td>
+</tr></table>
+<p>This is another memory-indirect near call,
+but the call target is loaded from a location
+addressed by a punned displacement from <tt>%rax</tt>.
+Like zpoline, we know that <tt>%rax</tt> should contain a low nonnegative value.
+The plain zpoline case looks like this.
+(While on the topic of zpoline's 2-byte, displacement-free register-indirect form:
+there is no displacement-free memory-indirect <tt>call</tt> or <tt>lcall</tt>, unfortunately.)</p>
+<pre>
+      :____________________:
+      |  x              x  |
+      |    patched text    |  the loaded binary whose text is patched
+      |x          x      x |
+      |____________________|  (data segment somewhere around here too, not shown)
+      :                    :
+           ~  ~  ~  ~  ~  
+
+           ~  ~  ~  ~  ~      ... a long way down...
+
+           ~  ~  ~  ~  ~
+      :                    :
+      |nnnnnnnH____________|  the bottom of the linear address space: nops followed by handler code
+</pre>
+<p>But now in our 6-byte memory-indirect cases (both near and far),
+we also apply a 32-bit displacement,
+taken punningly from the next instruction's bytes.
+We know less about where in memory it will be looking: the pun bytes span a 4GB range.
+And since we are memory-indirect, we are not directly jumping to that displaced location, but rather
+using it as a stepping stone, to load a jump target from.
+Certainly we can only use this form if the displacement is nonnegative, because a negative
+offset might land us in the top half of memory.
+In nonnegative-displacement cases we will always load from a low-2GB-ish address,
+although exactly where is not known precisely.
+We might imagine a picture like the below.</p>
+<pre>
+      :____________________:
+      |  x              x  |
+      |    patched text    |  the loaded binary whose text is patched
+      |x          x      x |
+      |____________________|  (data segment somewhere around here too, not shown)
+      :                    :
+           ~  ~  ~  ~  ~  
+
+           ~  ~  ~  ~  ~      ... a long way down...
+
+           ~  ~  ~  ~  ~
+      :_ _ _ _ _ _ _ _ _ _ :
+      |. . . . . . . . . . |  the bottom 2GB of the linear address space
+      | . .|-------|. . . .|  ... some ranges identifiable as %rax-relative pun targets
+      |.|-------||-------| |  of the patched instructions
+      | . . . . . . . . . .|
+      |. . . . |-------| . |  since there is a spread of possible %rax values, there is a
+      | . . |-------| . . .|  spread of possible landing addresses
+      .____________________.
+</pre>
+<p>Unfortunately, this form is unusable in practice,
+because of two facts: we don't know <tt>%rax</tt>, and
+our handler address must be loadable from
+byte-adjacent locations, since consecutive integer values of <tt>%rax</tt> are valid system call numbers.
+We want this form to end up calling some handler for system calls;
+we are trying to plonk down
+that handler's address at the necessary stepping-stone locations.
+Say we run this instruction with <tt>%rax</tt> equal to 42 and the following punned bytes
+are <tt>00 56 34 12</tt>.
+The CPU will try to load our handler's address from 0x12345642.
+But we could easily also hit the very next byte, 0x12345643, either by invoking
+a syscall number 0x43 from the very same patch site, or being unlucky with a different combination of
+site, system call number and pun bytes.
+If there are only 512 system calls, say, then we can limit the range of each pun to
+512 possible target bytes.
+But we'd still have to put down an <em>8-byte</em> stepping stone
+at each of those <em>consecutive</em> 512 locations.
+What could its value be?
+There's no such value: only 0x00 and 0xff can be repeated eight times to yield a
+<a href="https://sandpile.org/x86/can_addr.htm">canonical 64-bit linear address</a>,
+but neither of the resulting addresses is useful.</p>
+<!--
+Our handler address cannot consist of the same byte repeated 8 times, because
+there is no such <a href="https://sandpile.org/x86/can_addr.htm">canonical linear address</a> except for zero and 0xffffffffffffffff.)
+-->
+<p>Now do we gain anything when swapping out <tt>call</tt> for <tt>lcall</tt>?
+Let's go back to the <tt>%rip</tt>-relative case first.</p>
+<table border="1px" cellpadding="1px"><tr>
+<td><tt>ff 1d nn nn nn nn</tt></td><td><tt>lcall  *0xnnnnnnnn(%rip)</tt></td><td>precise (not tunable)</td><td>nearby</td><td>used as stepping stone long address</td><td>stepping stones likely unique</td><td>overlappable</td>
+</tr></table>
+<p>This calls out to a location that is loaded, as a 48-bit long address, from somewhere nearby,
+specifically from 0xnnnnnnnn + <tt>%rip</tt>.
+We could place a 6-byte long address of our choosing
+at that location, assuming it is not used already.
+Clearly our handler needs to be placed somewhere addressable by one of these 6-byte
+addresses (a requirement we will return to).
+Otherwise this is all very similar to the plain memory-indirect <tt>call</tt> addressed
+via <tt>%rip</tt>, above.
+Instead of placing an 8-byte address as our stepping stone,
+we have placed the 6-byte address used by the far call,
+but otherwise the picture is the same as the “<tt>|S |</tt>” picture above.</p>
+<p>However, something is different if we consider the <tt>%rax</tt>-relative variant
+of the far call.</p>
+<table border="1px" cellpadding="1px"><tr>
+<td><tt>ff 98 nn nn nn nn</tt></td><td><tt>lcall  *0xnnnnnnnn(%rax)</tt></td><td>spread (not tunable)</td><td>low</td><td>used as stepping stone long address</td><td>stepping stones shared</td><td>overlappable</td>
+</tr></table>
+<p>This loads a 48-bit long address from 0xnnnnnnnn + <tt>%rax</tt>, then jumps to that.
+Because the load is relative to <tt>%rax</tt>,
+we again face the unpredictability and byte-adjacency issues.
+But our plain memory-indirect <tt>call</tt>
+could not use a stepping-stone
+consisting of the same byte repeated eight times.
+In the far-call case we can.
+We can easily arrange that our handler
+has a 6-byte address consisting of the same byte repeated.
+For example, we might give our handler the address 0x1f1f:0x1f1f1f1f.
+This works for <tt>%rip</tt>- and <tt>%rax</tt>-relative cases,
+even though we didn't strictly need it in <tt>%rip</tt> cases (unless we were unlucky enough
+to encounter overlap between distinct trap sites' punned target addresses).
+Using it just for the <tt>%rax</tt>-relative cases would give us a picture like the below.</p>
+<pre>
+      :____________________:
+      |  x              x  |
+      |    patched text    |  the loaded binary whose text is patched
+      |x          x      x |
+      |____________________|  (data segment somewhere around here too, not shown)
+      :                    :
+           ~  ~  ~  ~  ~  
+
+           ~  ~  ~  ~  ~      ... a long way down...
+
+           ~  ~  ~  ~  ~
+      :_ _ _ _ _ _ _ _ _ _ :
+      |1f1f1f1f1f1f1f1f1f1f|  the bottom 2GB of the linear address space
+      |1f1f1f1f1f1f1f1f1f1f|  ... some ranges are identifiable as %rax-relative pun targets
+      |1f1f1f1f1f1f1f1f1f1f|  of the patched instructions, or we can just fill the whole thing
+      |1f1f1f1f1f1f1f1f1f1f|
+      |1f1f1f1f1f1f1f1f1f1f|  since there is a spread of possible %rax values, there is a
+      |..1f1f1f1f1f1f1f1f1f|  spread of possible landing addresses, but two adjacent addresses can work fine
+      .____________________.
+</pre>
+<p>(If you're wondering, 0x1f is not an arbitrary choice of byte value!
+Only values ending in 0x7 or 0xf are usable.
+This is an artifact of the details of segmentation, about which more next time.)</p>
+<p>Unlike zpoline, this approach does not require executing through a sled of
+<tt>nop</tt>s.
+Rather, to make this work we will have filled the target memory ranges
+with a “stepping stone” pattern
+which will always be interpreted as a pointer to the same handler address, no matter
+which six-byte subsequence of it the CPU reads.
+Without benchmarking
+it is unclear to me whether zpoline or the long call is faster; we expect a long call
+to be slower than a near call, not only because of the memory indirection,
+but we also don't have to eat the <tt>nop</tt>s.</p>
+<p>Also, in place of spreading <tt>nop</tt>s over some part of the low 4kB,
+we seem to be spreading our stepping-stone 0x1f bytes over large parts of the low 4GB!
+That's a million times more memory.
+It may sound like a bad trade, but of course we can
+use virtual memory techniques to avoid allocating more than a single physical frame
+of our 0x1f byte.
+I also have found a way of doing this which don't cruft up the memory map
+in the way that E9Patch's overlapped
+trampoline pages do.</p>
+<p>We also avoid a key downside of zpoline, in that
+we can also leave the single bottom page unmapped.
+This means we can keep hardware null pointer checking working as usual,
+and don't need the special privileges that mapping ultra-low requires.
+If we reserve this bottom page,
+it rules out a small fraction of puns.
+But statistically, this is not a significant portion of our low 2GB,
+so it doesn't hurt if we have to use another recipe for instructions whose puns would land us there.</p>
+<!--
+(We also have flexibility about where to put this handler code:
+even if our stepping-stone bytes are 0x1f repeated, the code doesn't need to go at 0x1f1f1f1f.
+I'll cover this next time.)
+-->
+<p>As before, the <tt>%rax</tt> recipe
+doesn't work if our punned displacement is negative.
+That will risk landing us in the top 2GB of the address space
+This cannot be mapped at all by user code on Linux, special privileges or no.
+So the <tt>%rax</tt>-relative pun is only useful in about half of cases, if instruction byte sequences
+are uniformly distributed (they aren't).</p>
+<p>There is a further register that we might want to use: <tt>%rbp</tt>.</p>
+<table border="1px" cellpadding="1px"><tr>
+<td><tt>ff 9d nn nn nn nn</tt></td><td><tt>lcall  *0xnnnnnnnn(%rbp)</tt></td><td>spread location (not tunable)</td><td>low-ish if <tt>%rbp</tt> is low</td><td>used as stepping stone long address</td><td>stepping stones shared</td><td>overlappable</td>
+</tr></table>
+<p>If <tt>%rbp</tt> points into our stack, then we could surround our stack
+with a couple of billion copies of our 0x1f byte to catch these punned calls.
+We'd need to make sure that the punned displacement is large enough to land us outside
+the stack itself, so it wouldn't work for very small punned displacements.
+We need to make sure that it would land in a range known to contain
+our magic byte, not some other code or data (e.gg another stack!),
+for which we'd exploit knowledge of the maximum stack size.
+If that's 8MB, say, then for each pun, we have a precise displacement
+relative some value within that 8MB range, so there is a corresponding 8MB range where
+the pun might land us.</p>
+<p>One hitch, however, is that we'd need to make sure that <tt>%rbp</tt> is actually pointing into the stack,
+rather than being used as a general-purpose register.
+One simple approximate test might be whether the function begins with a standard prologue
+and subsequently refrains from updating <tt>%rbp</tt> (except to pop it before return).
+How often are these true in practice?
+Not very! On my system, the C library is compiled <tt>-fomit-frame-pointer</tt>
+and therefore mostly uses <tt>%rbp</tt> as just another register.
+Then, considering a large non-libc binary—I went for <tt>chrome</tt>—there
+will be few syscall sites.
+In my <tt>chrome</tt> I found 11 system call sites in the whole binary,
+but most of them did appear to have a stack-pointing <tt>%rbp</tt>.
+<!-- no yes yes yes yes yes yes yes yes yes yes --></p>
+<p>You might ask: why not instead use <tt>%rsp</tt>, which definitely does point at the stack?
+The answer is that this requires a 7-byte form of which we control three bytes, so cannot be used
+to patch system calls.
+The only registers we get in the 6-byte form are
+<tt>%rax</tt>, <tt>%rbx</tt>, <tt>%rcx</tt>, <tt>%rdx</tt>,
+<tt>%rdi</tt>, <tt>%rsi</tt>, <tt>%rbp</tt> and <tt>%rip</tt>.
+To pun usefully against these 64-bit registers
+we want some reasonable bound on its range of values.
+At the site of a syscall about which we know
+nothing else (e.g. it may take no arguments),
+the only candidates are <tt>%rax</tt>, <tt>%rbp</tt> and <tt>%rip</tt>.</p>
+<p>Still, let's finish the thought about punning via <tt>%rbp</tt>.
+Unlike with <tt>%rax</tt>, this option can work with displacements
+both <em>above</em> and <em>below</em> <tt>%rbp</tt>, because we can control where the stack is placed.
+As we'll see next time, none of the <tt>lcall</tt> methods will work
+unless we map our stacks in the low 4GB anyhow.
+So in practice we can share some of the same low-2GB 0x1f bytes that the <tt>%rax</tt>-relative
+recipes use—but we have to either
+put stacks only in the 2–4GB range or
+leave holes in among the low-2GB 0x1f areas for the stacks themselves.
+This will create a small extra
+collision hazard for us to manage (also affecting the <tt>%rax</tt>-relative puns),
+but is feasible
+since stacks are only small—typically limited to 8MB in size, i.e. each 0.4%
+of our freely available 2GB region, and few programs create more than a few dozen stacks.
+(The process's initial stack is different, since command-line arguments can get large.
+However, it is possible to split this stack in two, such that the bulky parts remain high
+and only pointers sit low. I will gloss over exactly how to do this, for now.)</p>
+<p>If we tried this <tt>%rbp</tt>-relative pun using a memory-indirect <em>near</em> <tt>call</tt>,
+would it work? Perhaps, yes, but with the same caveat about requiring a genuine stack-pointing <tt>%rbp</tt>.
+We expect the register's value to be 8-byte aligned, so
+we don't have the byte-adjacency issues that a near <tt>%rax</tt>-relative call would have.
+Instead, we could flood the memory around the stack with our handler's 8-byte near address.
+We wouldn't need to map our stacks, since we're doing a near call.
+The end result is quite similar to the <tt>lcall</tt> except that we have an 8-byte repeating
+pattern around a possibly-high stack, in contrast to a 1-byte repeating pattern
+around a definitely-low stack (which therefore has to share the area we've mostly flooded
+with the 1-byte pattern).</p>
+<p>If we apply <tt>%rip</tt>-, <tt>%rax</tt>-, and <tt>%rbp</tt>-relative
+puns all at once, we might get a picture rather like the below.</p>
+<pre>
+      :____________________:
+      |....|S |............| \
+      :....................: | zone ~2GB above
+      :..............|S |. : | mostly unmapped, but quasi-randomly allocated for stepping-stone addresses
+      :____________________: /
+      |  x              x  |
+      |    patched text    |  the loaded binary whose text is patched
+      |x          x      x |
+      |____________________|  (data segment somewhere around here too, not shown)
+      :....................: \
+      :...|S |.............: |
+      :....................: | zone ~2GB below similarly
+      |____________________| /
+      :                    :
+           ~  ~  ~  ~  ~
+
+           ~  ~  ~  ~  ~      ... a long way down...
+
+           ~  ~  ~  ~  ~
+      :_ _ _ _ _ _ _ _ _ _ :  6GB line
+      |1f1f1f1f1f1f1f1f1f1f|
+      |1f1f1f1f1f1f1f1f1f1f|
+      |1f1f1f1f1f1f1f1f1f1f|
+      |1f1f1f1f1f1f1f1f1f1f|
+      |1f1f1f1f1f1f1f1f1f1f|
+      |1f1f1f1f1f1f1f1f1f1f|  4GB line
+      |1f1f1f1f1f1f1f1f1f1f|  area used to allocate stacks... + MAXSTACKSIZE-sized ranges
+      |1f1f1f|stack |1f1f1f|  identifiable as %rbp-relative pun targets (must reach &gt;MAXSTACKSIZE away,
+      |1f1f1f1f1f1f1f1f1f1f|  and not into another allocated stack's MAXSTACKSIZE region)
+      |1f|stack |1f1f1f1f1f|  ... or we can just flood the area with 1f, as shown
+      |1f1f1f1f1f1f1f1f1f1f|
+      |1f1f1f1f1f1f1f1f1f1f|  2GB line
+      |1f1f1f1f1f1f1f1f1f1f|  ... some ranges are identifiable as %rax-relative pun targets
+      |1f1f1f1f1f1f1f1f1f1f|  but again, shown as flooded
+      |1f1f1f1f1f1f1f1f1f1f|
+      |1f1f1f1f1f1f1f1f1f1f|
+      |..1f1f1f1f1f1f1f1f1f|  lowest part is still reserved for NULL check
+      .____________________.
+</pre>
+<p>We can we take away from what we've seen so far?
+Firstly, do we gain anything from doing a memory-indirect <tt>call</tt> or <tt>lcall</tt>,
+relative to doing a plain call or jump?</p>
+<p>Yes, a little:
+we avoid introducing new executable instructions (attack surface) to the program,
+can spend slightly less memory (our stepping-stone pages are likely to be fewer in physical memory),
+and avoid crufting up the memory map (if using <tt>lcall</tt>),
+On the downside, we expecting patching to fail more frequently,
+since our second-chance puns are different but overall more limited than the E9Patch repertoire
+(we can use <tt>%rbp</tt> only if it's definitely stack'd,
+or <tt>%rax</tt> if nonnegative-displacement and using <tt>lcall</tt>).
+We forgo E9Patch's fancier third-chance “neighbour eviction” option,
+although (read the paper for the gory details) that was already a bit nasty.
+We share with E9Patch (and Liteinst) the unfortunate problem of not being transparent to debuggers,
+e.g. the disassembly is effectively corrupted until someone creates a pun-aware disassembler (anyone?).</p>
+<!--already
+strayed outside the control-flow-preserving subset of E9Patch tactics.-->
+<!--
+    XXX: can we avoid the crufting-up just by using a different mechanism for holding
+    the trampolines? E.g. a version of E9Patch that did not rewrite the binary statically
+    but instead used a memfd at run time might not generate so many maps lines.
+-->
+<p>Overall, do we gain anything specifically from doing a (memory-indirect) far call,
+relative to doing a memory-indirect near call?
+Yes, a little: the <tt>%rax</tt>-relative puns become available (albeit
+only for upper-half displacements) and (minor) the <tt>%rip</tt> ones
+become overlappable (thanks to the repeating byte pattern; the gain is marginal).
+We also expect to spend even less physical memory on stepping-stone mappings, and
+(speculative) may gain a tiny bit more hardening from
+from extra secrecy or randomization of the handler address (I'll explain this next time).</p>
+<p>So ends this post.
+I'm on the fence about whether this could or should be put to serious use; perhaps not.
+But for fun I did go ahead and implement a very rough-and-ready
+version of the <tt>%rax</tt>-relative <tt>lcall</tt> instrumentation (only).
+It's on the <a href="https://github.com/stephenrkell/libsystrap/tree/use-lcall">use-lcall
+branch of my libsystrap repository</a>.
+This led to my learning a thing or two
+about Linux, LDTs and far jumps and so on; I'll cover this next time,
+together with various fun facts about segmentation.
+It will also be worth disentangling which of the various hitches
+we run into are “Linux things” versus “Intel things”.
+And I've glossed over one very inconvenient fact about my implementation
+which no doubt many readers can already spot....</p>
+<div style="float: left;"><i>support: <a href="https://donate.stripe.com/3cI5kCeJf2ds3Zq7JD7Zu01">coffee</a> <a href="https://donate.stripe.com/dRm5kCdFbaJY2Vm9RL7Zu00">recurring</a> <a href="https://www.humprog.org/~stephen/support/">more</a></i></div>
+<p style="text-align: right">
+<!--<div style="float: right;">-->
+<i>[<a href="https://www.humprog.org/%7Estephen/blog/research">/research</a>] 
+[<a href="https://www.humprog.org/%7Estephen/blog-all.html">all entries</a>] 
+<a href="https://www.humprog.org/%7Estephen/blog/2026/06/15#system-call-instrumentation-on-intel-negative-result">permalink</a>
+<a href="https://www.humprog.org/~stephen/#contact">contact</a>
+</i>
+</p>
+
+<a href="http://blosxom.sourceforge.net/"></a>
+<p>
+<span style="font-size: smaller;">
+<a href="http://validator.w3.org/check?uri=https://www.humprog.org/%7Estephen/blog">validate this page</a>
+</span>
+</p>
+</div>
+</body>
