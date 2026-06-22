@@ -37,3 +37,8 @@ This document outlines the guidelines and constraints for the "Mark Twain Reappe
 
 ## 3. Narrative Voice
 * **Twain's Voice**: Content written as Mark Twain must carry his signature persona: witty, satirical, skeptical of fast-talking technologists and inflated valuations, using analogies rooted in his Mississippi riverboat or printer-apprentice days.
+
+---
+
+## 4. Package Manager & System Constraints
+* **No Unprompted Package Installation**: Do **NOT** run `npm install`, `yarn`, `pnpm install`, or other package manager installation commands without obtaining explicit user confirmation first. The package manager downloads are too heavy for this local development machine.

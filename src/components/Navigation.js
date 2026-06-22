@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { Menu, X, Home, MessageSquare, BookOpen, Layers, FileText, Eye, Headphones } from 'lucide-react';
+import { Menu, X, Home, MessageSquare, BookOpen, Layers, FileText, Eye, Headphones, Cpu } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 
 export default function Navigation() {
@@ -166,6 +166,27 @@ export default function Navigation() {
                       <span className="nav-link-desc">Following the Equator Images</span>
                     </div>
                     {pathname === '/restoration' && <div className="nav-link-active-dot" />}
+                  </Link>
+                </motion.div>
+
+                {/* Machine Learning */}
+                <motion.div
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.05 + (links.length + 2) * 0.05 }}
+                >
+                  <Link
+                    href="/machine-learning"
+                    className={`global-nav-link-item ${pathname === '/machine-learning' ? 'active' : ''}`}
+                  >
+                    <div className="nav-link-icon-wrapper">
+                      <Cpu size={20} />
+                    </div>
+                    <div className="nav-link-text-wrapper">
+                      <span className="nav-link-label">Machine Learning</span>
+                      <span className="nav-link-desc">Linguistic Style & API Lab</span>
+                    </div>
+                    {pathname === '/machine-learning' && <div className="nav-link-active-dot" />}
                   </Link>
                 </motion.div>
               </div>

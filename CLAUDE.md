@@ -86,3 +86,6 @@ Fill in the exact sung words of whichever clip you use as `REF_TEXT` in `clone_t
 1. Save the audio file in the folder `public/sounds/music/` (e.g. `public/sounds/music/my-song.mp3`).
 2. Add the track metadata to the `soundtrack` array in `src/data/soundtrack.js`. Ensure that the `id` of the track matches the `bookSlug` of the book (e.g. `my-song`) if you want the "Sung Edition" to be automatically enabled for that book.
 
+## Package Manager Constraints
+- **CRITICAL: NEVER run `npm install`, `yarn`, `pnpm`, or other package manager installation commands without explicit user approval. The package manager operations are too heavy for this machine.**
+
