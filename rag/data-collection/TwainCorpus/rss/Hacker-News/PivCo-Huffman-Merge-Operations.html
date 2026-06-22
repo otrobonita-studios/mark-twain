@@ -1,0 +1,668 @@
+<body class="wp-singular post-template-default single single-post postid-7885 single-format-standard wp-theme-pubtitan customizer-styles-applied jetpack-reblog-enabled">
+<div class="skip-content"><a href="#content">Skip to content</a></div>
+<div class="clear" id="header">
+<div id="follow">
+<div class="wrapper clear">
+<dl>
+<dt>Follow:</dt>
+<dd><a class="rss" href="https://fgiesen.wordpress.com/feed/">RSS</a></dd>
+<dd><a class="twitter" href="http://twitter.com/rygorous">Twitter</a></dd>
+</dl>
+</div><!--end wrapper-->
+</div><!--end follow-->
+<div class="wrapper">
+<div id="title">
+<a href="https://fgiesen.wordpress.com/">The ryg blog</a>
+</div>
+<div id="description">
+				When I grow up I'll be an inventor.			</div><!--end description-->
+</div><!--end wrapper-->
+<div id="navigation">
+<ul class="wrapper" id="nav">
+<li class="page_item"><a href="https://fgiesen.wordpress.com/">Home</a></li>
+<li class="page_item page-item-2"><a href="https://fgiesen.wordpress.com/about/">About</a></li>
+<li class="cat-item cat-item-332"><a href="https://fgiesen.wordpress.com/category/coding/">Coding</a>
+</li>
+<li class="cat-item cat-item-174250"><a href="https://fgiesen.wordpress.com/category/compression/">Compression</a>
+</li>
+<li class="cat-item cat-item-36108"><a href="https://fgiesen.wordpress.com/category/computer-architecture/">Computer Architecture</a>
+</li>
+<li class="cat-item cat-item-36474"><a href="https://fgiesen.wordpress.com/category/demoscene/">Demoscene</a>
+</li>
+<li class="cat-item cat-item-33977738"><a href="https://fgiesen.wordpress.com/category/graphics-pipeline/">Graphics Pipeline</a>
+</li>
+<li class="cat-item cat-item-35184"><a href="https://fgiesen.wordpress.com/category/maths/">Maths</a>
+</li>
+<li class="cat-item cat-item-4755"><a href="https://fgiesen.wordpress.com/category/multimedia/">Multimedia</a>
+</li>
+<li class="cat-item cat-item-7426"><a href="https://fgiesen.wordpress.com/category/networking/">Networking</a>
+</li>
+<li class="cat-item cat-item-5281"><a href="https://fgiesen.wordpress.com/category/papers/">Papers</a>
+</li>
+<li class="cat-item cat-item-955"><a href="https://fgiesen.wordpress.com/category/stories/">Stories</a>
+</li>
+<li class="cat-item cat-item-563"><a href="https://fgiesen.wordpress.com/category/thoughts/">Thoughts</a>
+</li>
+<li class="cat-item cat-item-1"><a href="https://fgiesen.wordpress.com/category/uncategorized/">Uncategorized</a>
+</li>
+</ul>
+</div><!--end navigation-->
+</div><!--end header-->
+<div class="content-background">
+<div class="wrapper">
+<!--end notice-->
+<div id="content"> <div class="post-7885 post type-post status-publish format-standard hentry category-coding category-compression" id="post-7885">
+<div class="post-header">
+
+<h1>PivCo-Huffman “merge” operations</h1>
+<div class="author">
+										June 21, 2026				</div>
+</div><!--end post header-->
+<div class="entry clear">
+<p class="wp-block-paragraph">There’s a new paper out called <a href="https://arxiv.org/abs/2606.05765">“PivCo-Huffman”</a> (HTML version with annotations <a href="https://marcinzukowski.github.io/pivco-huffman/paper-1.0/ph.html">here</a>) and it’s very interesting. Normal Huffman decoding (and, to a lesser extent, encoding) is inherently quite serial. We can get explicit parallelism by using <a href="https://fgiesen.wordpress.com/2021/08/30/entropy-coding-in-oodle-data-huffman-coding/">multiple streams</a>, which scales just fine to moderate numbers of streams – something like 4-8 is usually not an issue. Not very suitable for vectorization or wide vector machines like GPUs, though: every extra stream adds signaling overhead in the bitstream, and decoding from many streams at once is a gather-heavy operation. GPUs can cope with gathers okay (although spread-out data accesses still consume a lot more cycles than more compact memory access patterns do), most everything else is very unhappy with extremely gather-heavy patterns.</p>
+<p class="wp-block-paragraph">Especially since our usual table-based decoders will then immediately follow up with another gather, although that part is more easily fixed: <a href="https://en.wikipedia.org/wiki/Canonical_Huffman_code">canonical codes</a> admit reasonably easy table-less decoding (at least for the critical “length determination” part), if desired. These approaches are not particularly juicy in a scalar one-at-a-time decoder, where a single load is very cheap, but if you’re working on 32-wide vectors, doing a bunch of integer math that saves you a gather is a more interesting proposition.</p>
+<p class="wp-block-paragraph">You can also use <a href="https://arxiv.org/abs/1402.3392">ANS-style interleaving</a> to turn many logical bitstreams into a single physical bitstream. This is what <a href="https://docs.nvidia.com/cuda/nvcomp/gdeflate.html">GDeflate</a> does to get a bitstream that has more potential parallelism without gathering from all over the place. Interleaving solves the “reads all over memory” problem and works great on GPUs and CPUs that provide suitable facilities (e.g. AVX-512 “EXPAND” family instructions, or just fast gathers from the same cache line), but is slow without that kind of hardware support. It also forces you to pick a magic number (the interleave factor) as part of the bitstream definition. Too low, and wide vector machines like GPUs get bad utilization when decoding. Too high, and scalar machines can’t efficiently decode the bitstream at all. Worse, numbers that are just right for say AVX-512 or GPUs overlap, but the smallest number of interleaved streams most GPUs or even CPUs with something like AVX-512 can get decent utilization with is around 32, the largest number scalar or narrower vector machines with typical register counts can comfortably decode is around 8-16 (depending on how exactly you do it), and in the middle between 16 and 32 is a valley of tears where nobody’s happy.</p>
+<p class="wp-block-paragraph">That’s why you don’t see much of this style of bitstream outside of GDeflate; it is inherently reliant on you picking a magic number that has a huge influence on every single implementation, yet at the same time is subject to ever-shifting hardware details. Yes, NVidia GPUs have been built around warps with 32 “threads” (more like SIMD lanes) using 32 bits per register each for a good while, but AMD used to prefer 64 (before switching to mostly-32 a few generations ago), Intel GPUs were designed around 8, some mobile GPUs used to do as little as 4, and 4 is also the number of 32-bit lanes you get for something like ARM NEON or SSE4.2 on the x86 side, later widened to 8 with AVX2. Finally, ARM SVE and the RISC-V V extension leave it implementation defined, which is one thing when the model is that you’re running a simple vector math kernel like a SAXPY, but quite another when the physical vector width ends up being a magic constant that is baked into some persistent wire format, potentially for decades.</p>
+<p class="wp-block-paragraph">The final major popular solution to the “this is very serial” conundrum is to completely brute-force it. Fetch a bunch of bits from the input. In parallel, start decoding at bit 0, and at a bit 1, at bit 2, 3, and so forth. Do this for a lot of sequential candidate positions. I’m talking something like 16 or more.</p>
+<p class="wp-block-paragraph">Eventually, we discover that the code starting at bit 0 was 6 bits long. Cool! That means we discard all the work we did at bit offsets 1 through 6, and look at what our already pre-decoded code starting at bit 6 was. That one is 5 bits long, so we discard the speculative work we did for bits 7 through 10, and find that starting at bit 11, there’s another code that’s 5 bits long. Congratulations, we’ve just decoded 3 values for the price of 16.</p>
+<p class="wp-block-paragraph">This works just fine. Believe it or not, this is actually the preferred method of decoding such a sequential bitstream in hardware if a throughput of more than one value per cycle is required. Especially with canonical codes and not-too-large length limits, this can be made reasonably cheap. Chasing down the sequence of actual values to emit at the end is a potential scalability problem, but 3 or 4 at a time isn’t too bad, and if that’s not enough, there’s better algorithms to chase these links that give yet more parallelism. In short, this can be done, and if you build dedicated hardware for it, it’s not bad, but it’s not something you ever want to do in SW on general-purpose hardware. I’ve implemented it out of curiosity, and even on a GPU, it turns out routinely throwing away more than 80% of the work you do is not a recipe for fast code, and let’s not even talk about wasted energy when you try to pull this kind of stunt on a power-constrained battery-powered device.</p>
+<p class="wp-block-paragraph">So far, that’s been our main options: we can decode sequentially one at a time, but that doesn’t scale. We can use multiple separate bitstreams, which theoretically gives us something like thread-level or perhaps instruction-level parallelism, but that amount of parallelism is baked into the bitstream and adds some amount of overhead (since each decoder threads needs to know where to start). It’s also not friendly to SIMD-style implementations because the divergent memory access patterns make us sad. We can use interleaved bitstreams which have much better memory access locality and are a good match to SIMD and GPU architectures in principle, but need us to pick a magic number at bitstream specification time that will forever limit the amount of decoder parallelism we can get, but also ruin our day if the number we pick is high enough to make some of our target HW run out of registers. And even within the same class of device (say, GPUs), there’s not anything resembling agreement on what that number ought to be. Finally, we can shrug, be extremely wasteful, and discard most of the work we did immediately. It’s parallelism all right, but it’s hardly work-efficient.</p>
+<h3 class="wp-block-heading">Enter PivCo</h3>
+<p class="wp-block-paragraph">Marcin Żukowski’s “Pivco-Huffman” turns this on its side. Literally. I’ll go through this rather quickly to get to the meat of this post, refer to the paper for more details. For concreteness, suppose we want to encode the string “abracadabra”. Building the standard Huffman tree (it’s a textbook algorithm that I’m not going to explain here) yields something like this picture:</p>
+<div class="wp-block-image">
+<figure class="aligncenter size-large"><a href="https://fgiesen.wordpress.com/wp-content/uploads/2026/06/hufftree-2.png"></a><figcaption class="wp-element-caption">Huffman tree for “abracadabra”</figcaption></figure>
+</div>
+<p class="wp-block-paragraph">Ordinarily, to code any symbol, you start at the root and send the labels of the edges you need to take to get to the appropriate leaf of the tree. The “a” encodes as just “0” in this tree, “b”  encodes as “100”, r as “101” and so forth. We send each symbol fully before moving on to the next one.</p>
+<p class="wp-block-paragraph">PivCo-Huffman instead conceptually processes the entire string at once, pushing it slowly down the tree. Starting at the root node, we see that every position that contains an “a” sends a “0”, and everything else sends a “1”. Lining the string up, we can see what bits are output for the root node:</p>
+<pre class="wp-block-code"><code>  abracadabra
+  01101010110</code></pre>
+<p class="wp-block-paragraph">These bits go straight into our output bitstream. The left subtree of the root node is just the “a” leaf, so every position that sent a 0 is effectively done. But the positions that weren’t “a” aren’t done yet. Lets work out what those are, and what the next step they need to take is:</p>
+<pre class="wp-block-code"><code>  brcdbr
+  001100</code></pre>
+<p class="wp-block-paragraph">These are the bits output for the right child of the root node. In general, at every internal node, we partition the symbols that got this far into two smaller subsequences: one that descends into the left subtree and one that descends into the right subtree. In our running example, the subsequence that continues left is “brbr”, while the right subsequence is just “cd”. We proceed our preorder tree traversal this way until we’ve pushed everything down to the leaves.</p>
+<p class="wp-block-paragraph">Note this is sending the exact same bits regular Huffman coding using this tree would, just in a different order.</p>
+<p class="wp-block-paragraph">To decode this, we need to know how many symbols are encoded in our bitstream, let’s say N. Every symbol must have passed through the root node, so we know the bit string for the root node has N bits in it. We can count how many 0s and 1s there are in that bit string, which tells us how many symbols make it into the left (0) and right (1) subtrees. Then, recursively, we can do the same thing with these nodes. This lets us locate where the individual nodes’ bits end up in the final bitstream, and how many symbols pass through them.</p>
+<p class="wp-block-paragraph">Finally, on the way back up the tree, now that we have the lengths of the subsequences, we can reconstruct what they might have been in a bottom-up merge process.</p>
+<p class="wp-block-paragraph">Take the parent node for the “b” and “r” leaves, for example. We know that 4 symbols “pass through there”, and the corresponding bitstream turns out to be “0101”. This means that the subsequence of symbols coded in this subtree is “brbr”. Its sibling node just has two bits, “01”, which encodes “cd”.</p>
+<p class="wp-block-paragraph">Their common parent is the 6-symbol node emitting the “001100” bit string that we looked at earlier. We just worked out that the 4 symbols coded by its left (“0”) subtree are “brbr”, and the 2 symbols coded by the right (“1”) subtree are “cd”. That means the symbols coded by the entire node are “brcdbr”. Finally, we keep pushing this up one more level to merge in the a’s, and we get “abracadabra” back.</p>
+<p class="wp-block-paragraph">Fine, but why would we ever do this? This just seems like regular Huffman coding, but in batch-processing mode and with extra steps.</p>
+<p class="wp-block-paragraph">The answer is that we’ve transformed Huffman encoding into a sequence of in-order list partitioning steps, and decoding into a sequence of list merges where instead of doing comparisons, we get a bitstream telling us which of the two lists to take the next element from. Regular Huffman <em>encoding</em> isn’t so bad, but decoding it is, as discussed above, an extremely serial process. This type of list merging is not: figuring out which list elements to grab reduces to a prefix sum, which while not trivial, is the prototype for a class of parallel algorithm (scans) that we can do quite well, and it doesn’t need the bitstream to be written with a particular vector width (or similar) in mind. It easily scales both up and down with the capabilities of the target machine.</p>
+<p class="wp-block-paragraph">There are many other possible optimizations: for example, the tree I showed contains a complete binary tree for the 4 symbols “b”, “r”, “c” and “d”. Sure, you <em>could</em> encode (or decode) this as a sequence of 3 binary list partitions (or merges, on the decoder side), but you could also just send 2 bits per symbol at once and be done with it. Variable-length-to-fixed-alphabet decoding (like Huffman does) is tricky, but a subset that is fixed-length-to-fixed-alphabet is trivially parallelized. If we don’t want to scan over all of these lists to figure out how many “1”s there are, we can store this information for some or all of the Huffman tree nodes, spending extra bits, but saving the decoder having to scan over (potentially) tens of thousands of bits. And so forth.</p>
+<p class="wp-block-paragraph">So while the baseline scalar implementation of this idea is not very interesting, it sits squarely in the subset of tasks that can be mapped well to essentially any data-parallel substrate, be it GPUs, vector instruction sets of any stripe, or even just threads, which makes it worth playing with. And certainly the numbers attained in the paper are encouraging, with the major caveat that the main results are, not surprisingly, on either x86-64 servers with AVX-512 or Apple Silicon CPUs – i.e. very high-end hardware.</p>
+<p class="wp-block-paragraph">This bodes well for the future of the algorithm, but wire formats need to work for everyone, not just the highest-end targets.</p>
+<p class="wp-block-paragraph">Hence the question: how cheap can we get the basic primitives? In this post, I’ll be looking at the “merge” operations in the bottom-up decoder specifically.</p>
+<h3 class="wp-block-heading">The merge operation</h3>
+<p class="wp-block-paragraph">Here’s what one of those merges boils down to, in Python-like pseudocode:</p>
+<pre class="wp-block-code"><code>  def merge(l_list, r_list, bitstream):
+      output = []
+      l_pos, r_pos = 0, 0
+      for bit in bitstream:
+          if bit == 0:
+              output.append(l_list[l_pos])
+              l_pos += 1
+          else:
+              output.append(r_list[r_pos])
+              r_pos += 1
+      return output</code></pre>
+<p class="wp-block-paragraph">That’s all it is. That’s what we’re working with. Note that this algorithm has the invariant that <code>l_pos + r_pos</code> equals the number of elements processed (and output elements written) so far, so really, tracking both of them is overkill. Either implies the other. And <code>r_pos</code> is the (exclusive) prefix sum of all <code>bit</code> values encountered so far.</p>
+<p class="wp-block-paragraph">As noted above, this essentially reduces to a mid-semester homework problem in parallel programming 101. It’s a <em>very</em> simple algorithm, which is good news for us because we really need something fast, and when something is this straightforward, there’s usually many different ways of doing it, and we can pick whatever works best on our current target. But we’ll need something a bit lower-level than our quasi-Python for the remainder of this. In particular, we need to pick some actual data types. In the following, I’ll be assuming that the symbols we’re trying to code are bytes, which is both practically relevant and consistent with my earlier posts on the subject. Our bitstream will be bit-packed in the obvious way.</p>
+<p class="wp-block-paragraph">The most direct match exists with something like AVX512_VBMI2, which offers <a href="https://www.felixcloutier.com/x86/vpexpandb:vpexpandw">VPEXPANDB</a>, giving us a type of byte-level masked load operation where active SIMD lanes (where the corresponding mask bit is 1) load from sequential addresses and inactive lanes are either left alone or zero-initialized, without the load address increasing. It’s intended to load sparse data into a vector register and is essentially a perfect match for what we need. I’ll not use the official intrinsic names in the following because the notation is rather intimidating if you’re not used to it, but the process looks something like this, switching from Pseudo-Python to Pseudo-C:</p>
+<pre class="wp-block-code"><code>  void merge(uint8* output,
+      const uint8* l_list, const uint8* r_list,
+      const uint8* bits, usize count)
+  {
+      // None of these code snippets will handle boundary cases like the
+      // last few elements, nor will they do any bounds checking.
+      // A real implementation absolutely needs to do this, but that's for
+      // real code, not pseudocode in a blog post. You've been warned.
+
+      // AVX-512 can process 64 bytes per iteration!
+      for (usize i = 0; i &lt; count; i += 64)
+      {
+          // Mask has bits set for elements coming from r_list
+          // (LE order is natural here)
+          uint64 mask = read64LE(&amp;bits[i / 8]);
+        
+          // Read l_list entries
+          // leave rest zero-initialized for now
+          uint8x64 result = zero_masked_vexpandb_from_mem(l_list, ~mask);
+
+          // Read r_list entries
+          result = masked_vexpandb_from_mem(result, mask, r_list);
+
+          // Store the result to the output buffer
+          vstore(&amp;output[i], result);
+
+          // Determine population count (number of 1 bits) in mask to
+          // figure out how much to advance the r_list and l_list pointers by
+          uint64 npop = popcount(mask);
+          r_list += npop;
+          l_list += 64 - npop;
+      }
+  }
+
+</code></pre>
+<p class="wp-block-paragraph">There’s a bit of futzing around to load the masks and advance the pointers, but this is pseudocode for a functional AVX512_VBMI2 implementation of the basic merge algorithm. Not necessarily optimal, but I’m not going to get that far into the weeds in this post. It has three actual vector instructions – two loads and one store, the rest is logistics.</p>
+<p class="wp-block-paragraph">There’s not much of a lesson here beyond “this sure is easy when your machine has a ‘do the thing’ instruction”. That’s why I won’t be spending any more words on AVX512 versions of anything in this post; it’s just our high anchor to prove that yes, with a restrictive enough hardware target, this turns into basically nothing.</p>
+<p class="wp-block-paragraph">The one thing I’ll say is that the actual prefix summing turned almost invisible in this version. <code>VPEXPANDB</code> implicitly does a kind of prefix sum over the active lanes to figure out which bytes to route where, and then at the end we do a population count over all 64 mask bits we handled in one go to figure out how much to move the list pointers by. This is going to be how things work.</p>
+<p class="wp-block-paragraph">In essence, all I’ll be doing in the rest of this post is figure out ways to get as close as possible to the loop above <em>without</em> requiring AVX512_VBMI2. On the x86 side, that means we probably want to have some option around AVX2 (256-bit integer vectors) and another around the SSE4.2 feature level. We can do something efficient for slightly lower-end targets as well (SSSE3 is about as low as we can realistically go here), but these are minor variations. On the ARM side, I’ll mostly look at NEON/AdvSIMD; I’ll leave SVE and RVV to people with access to relevant hardware.</p>
+<h3 class="wp-block-heading">The basic approach: 8 bytes at a time</h3>
+<p class="wp-block-paragraph">SSE4.2 and NEON-level vector registers are much narrower than AVX512s name-giving 512 bits. For now, for our lower-end targets, we’re stuck with registers fitting 128 bits (or 16 bytes) at a time. We’ll see how to make use of that full width later, but for now, let’s keep things straightforward so we can familiarize ourselves with our tools.</p>
+<p class="wp-block-paragraph">Our main workhorses will be <a href="https://www.felixcloutier.com/x86/pshufb">PSHUFB</a> (introduced with SSSE3) on the SSE side and <a href="https://developer.arm.com/documentation/dui0801/l/A64-SIMD-Vector-Instructions/TBL--vector---A64-">TBL</a> on the ARM side (I’m only looking at 64-bit ARM here, the relevant instructions also exist in 32-bit ARM, although only producing 8 bytes of output at a time, but I’m working mainly on 64-bit code these days). TBL gets up to four (consecutive) source registers that are interpreted as a table of bytes, another source register that specifies a byte vector of indices into said table, and writes the results of all those table lookups into the destination register. Which is to say, it’s a generic any-byte-to-any-byte shuffle operation. Out-of-range index values produce the number 0.</p>
+<p class="wp-block-paragraph">PSHUFB in x86 is quite similar, with a few differences: first, the “table” is always a single 128-bit vector register (16 bytes). No more, no less. Second, only the bottom 4 bits select the table index; bits 4 through 6 are ignored. Functionally, that means table addressing is mod 16. Third, setting the MSB (bit 7) in the index vector does result in a 0 byte being returned in that SIMD lane.</p>
+<p class="wp-block-paragraph">These properties mean that one-128b-vector TBL in AArch64 and PSHUFB in x86-64 are mostly interchangeable, as long as we avoid indices between 16 and 127 (inclusive) where their behavior differs.</p>
+<p class="wp-block-paragraph">If we process 8 bytes at a time, that also means we process 8 bits from the bitstream at a time, i.e. a single byte’s worth, which is convenient. 8 bits means 256 different combinations, which is small enough that we can reasonably precompute a shuffle index vector for all possible combinations and just store them in a table. That table will be 256*8 bytes = 2KiB. And we can speculatively grab the next 8 bytes from both <code>l_list</code> and <code>r_list</code>, combine them into a single 16-byte (128-bit) vector, and use TBL/PSHUFB to index into it. This results in something like this algorithm:</p>
+<pre class="wp-block-code"><code>  void merge(uint8* output,
+      const uint8* l_list, const uint8* r_list,
+      const uint8* bits, usize count)
+  {
+      // 8 bytes per iteration now
+      for (usize i = 0; i &lt; count; i += 8)
+      {
+          // Load 1 byte's worth of bits from bitstream
+          uint8 in_bits = bits[i / 8];
+
+          // Look up the corresponding index vector
+          uint8x16 index_vec = index_vec_table[in_bits];
+
+          // Speculatively, read 8 bytes from both lists
+          uint8x8 l_bytes = vload64(l_list);
+          uint8x8 r_bytes = vload64(r_list);
+
+          // Concatenate them into a single 128-bit vector
+          uint8x16 lr_bytes = vcombine(l_bytes, r_bytes);
+
+          // Shuffle/table lookup
+          uint8x16 result = vshuffle(lr_bytes, index_vec);
+
+          // Store the result to the output buffer
+          vstore(&amp;output[i], result);
+
+          // Determine population count (number of 1 bits) in
+          // mask to figure out how much to advance the r_list
+          // and l_list pointers by
+          usize npop = popcount(in_bits);
+          r_list += npop;
+          l_list += 8 - npop;
+      }
+  }
+
+</code></pre>
+<p class="wp-block-paragraph">I’m not showing the code to generate the index vector table, but all you have to do is prepare an 8-entry L list containing the values 0 through 7, a corresponding 8-entry R list containing the values 8 through 15, and then use the scalar merge algorithm with all 256 possible 8-bit patterns. The output lists are the index vectors to use to control the shuffle instructions. This basic approach will work for all table-based techniques in this post; I won’t be calling it out explicitly every time.</p>
+<p class="wp-block-paragraph">Also, we might not have a 8-bit <code>popcount</code> instruction available, but a small 256-entry table with byte values will do in that case. Another 256 bytes added to our 2KiB table budget won’t break the bank.</p>
+<p class="wp-block-paragraph">This is straightforward enough, and there is no immediately obvious way to improve it further. Our 256-entry 2KiB table of precomputed index vector is fine. The next larger step up that divides neatly into the operation sizes we have available is to work 16 bits at a time. That would require a 65536-entry table with 16B per table entry (since we’re now producing 16 output bytes), for 1MiB worth of tables. A 2KiB table comfortably fits in any relevant CPU’s L1D cache; 1MiB won’t fit in anyone’s L1, and if every table access is a L1D miss (possibly L2 miss as well), this loop’s performance will take a sharp nosedive.</p>
+<p class="wp-block-paragraph">In short, a single table lookup to retrieve our index vector is completely practical for 8 items at a time, but if we want to get up to 16, we need something different.</p>
+<h3 class="wp-block-heading">Towards 16 bytes at a time</h3>
+<p class="wp-block-paragraph">We have another problem: 64-bit ARM has 2-register TBL, which can index into a table of 32 bytes in one instruction, and 2-register TBL executes as a single uop on many (though not all) implementations, so this is not only available, but also efficient. PSHUFB on x86, however, really only exists as a 16-byte version. (AVX2 <code>VPSHUFB</code> does two parallel 128-bit PSHUFBs; table entries are always fetched from within the same 128-bit slice of the vector the corresponding index value lives in.)</p>
+<p class="wp-block-paragraph">We can synthesize wider PSHUFBs out of regular ones using extra instructions (multiple PSHUFBs into smaller sub-tables and then a branchless select to choose the right sub-table), but this is relatively expensive. It’s much better to just handle the L and R list bytes separately: while the combined L and R list candidate bytes sum up to 32, we can consume at most 16 bytes from either list. And PSHUFB lets us generate 0 bytes if we set the corresponding index MSB. That means we probably want to set up into something like</p>
+<pre class="wp-block-code"><code>    uint8x16 l_result = vshuffle(l_bytes, l_index_vec);
+    uint8x16 r_result = vshuffle(r_bytes, r_index_vec);
+    uint8x16 result = vor(l_result, r_result);</code></pre>
+<p class="wp-block-paragraph">But now we need to come up with two index vectors. Or do we? If we set the MSB of the index vector, it doesn’t matter what the other bits are, PSHUFB (and TBL) will always return 0. And the items coming from the L list are always exactly in the spots where the R list items are not. Therefore, we can use the same index vector for both. We choose one list (in the following, that will be the R list) to use regular shuffle indices, while the other will use shuffle indices with their MSB set. After we use that index vector for one list, we can flip all the index MSBs via exclusive-OR, which gets us the index vector to use for the other list. That yields</p>
+<pre class="wp-block-code"><code>    uint8x16 r_result = vshuffle(r_bytes, index_vec);
+    uint8x16 l_result = vshuffle(l_bytes, vxor(index_vec, 128));
+    uint8x16 result = vor(r_result, l_result);</code></pre>
+<p class="wp-block-paragraph">Cool. A single bitwise operation is much better than having to come up with two separate index vectors. Speaking of which, we now have a plausible way of generating 16 output bytes at a time from a suitable index vector, but where do we get that index vector from in the first place?</p>
+<p class="wp-block-paragraph">For the first half of the index vector, we can use the same kind of table we already have. And, in theory, we could use the same table again for the second half, with just one problem: the second half doesn’t start at the beginning of <code>l_bytes</code> or <code>r_bytes</code>, it has to start right where the first half left off.</p>
+<p class="wp-block-paragraph">That means that if the first byte had say 3 set bits, the index vector for the second half needs to add 3 to every index into <code>r_bytes</code>, and 8 – 3 = 5 to every index into <code>l_bytes</code>. A straightforward implementation of this idea would need to:</p>
+<ul class="wp-block-list">
+<li>do a table lookup for the first half of the mask (8 lanes worth)</li>
+<li>do another table lookup for the second half of the mask (another 8 lanes worth)</li>
+<li>determine the population count for the bitstream byte corresponding to the first 8 vector lanes (probably some ANDing or shifting to isolate that byte, then a table lookup or native popcount instruction where available)</li>
+<li>get this population count over to a vector register and create at least 8 copies of it</li>
+<li>for the second-half-of-vector index vector, determine a bit mask saying whether a given byte comes from the L or R half (we can tell from the index MSB)</li>
+<li>add the replicated population count to all the “R” lane indices for the second half (this will usually by a bitwise AND followed by an ADD)</li>
+<li>calculate 8-vector_popcount</li>
+<li>add 8-vector_popcount to all the “L” lanes indices for the second half (AND-NOT and ADD, or similar)</li>
+<li>finally, combine the two index vector halves</li>
+</ul>
+<p class="wp-block-paragraph">That’s a <em>lot</em> of work. Working 16 bytes at a time is clearly worth something, but as written this is at least 8 instruction equivalents more than processing the data in 8-byte chunks. Sure, we save on some pointer manipulation and such, but on the vector side, this looks pretty dire. We need something better.</p>
+<p class="wp-block-paragraph">We could tune the above a bit to improve it slightly, but saving an instruction here and there is not going to cut it. What we really need is a radical simplification.</p>
+<p class="wp-block-paragraph">Here’s the elevator pitch: we need to add that popcount (which I’ll call <code>pop0</code>) to the R indices, and <code>8 - pop0</code> to the L indices, and it is that sign difference that really causes problems for us. What if the L indices were negated, though? Then we would have to add <code>-(8 - pop0)</code> to them, which is <code>pop0 - 8</code>, which means we would be adding popcount to every lane (the -8 bias portion, we’ll get to in a minute).</p>
+<p class="wp-block-paragraph">Negating the L values doesn’t quite work, because the L index can be 0, and we need to be able to tell from the MSB whether a lane comes from the R or L list to make our “final shuffle” logic work out. But what we can do is agree on the convention that a byte that is supposed to come from <code>r_list[i]</code> stores <code>i</code> in its location in the index vector, and bytes from <code>l_list[i]</code> store <code>255 - i = i ^ 255</code> as an index.</p>
+<p class="wp-block-paragraph">For the shuffle indices in the second half, we still need to add <code>pop0</code> to the R indices to account for what happened in the first half, which is straightforward. For the L indices, we need <code>255 - (i + (8 - pop0)) = (255 - 8) - i + pop0</code>.</p>
+<p class="wp-block-paragraph">We still expect to get the shuffle indices for the second half from a table. If we make a separate table for that second half where the precomputed L indices are <code>(255 - 8) - i</code> not <code>255 - i</code> (R remains the same), this doesn’t cost us any extra computation in the loop. And finally, note that <code>pop0</code> only depends on the first mask byte that we already use for the first-half table lookup. If we make those table entries store 16 bytes not 8, we can just store 8 copies of <code>pop0</code> in the second half of every table entry. Put it all together, and we end up with this pseudocode for our 16-bytes-at-a-time loop:</p>
+<pre class="wp-block-code"><code>  void merge(uint8* output,
+      const uint8* l_list, const uint8* r_list,
+      const uint8* bits, usize count)
+  {
+      for (usize i = 0; i &lt; count; i += 16)
+      {
+          // Load 2 byte's worth of bits from the bitstream
+          uint16 in_bits = read16LE(&amp;bits[i / 8]);
+
+          // Two table lookups
+          uint8x16 index0 = index_vec_tab0[in_bits &amp; 0xff];
+          uint8x8 index1 = index_vec_tab1[in_bits &gt;&gt; 8];
+
+          // index1 needs to go into the second half of the 128-bit vector
+          uint8x16 index1_wide = vcombine(vzero_uint8x8(), index1);
+
+          // Add the two values together to perform the pop count adjustment
+          uint8x16 index_vec = vadd(index0, index1_wide);
+
+          // Speculatively, read the next 16 bytes from both l_list and r_list
+          uint8x16 l_bytes = vload128(l_list);
+          uint8x16 r_bytes = vload128(r_list);
+
+          // Shuffle bytes to combine
+          uint8x16 r_result = vshuffle(r_bytes, index_vec);
+          uint8x16 l_result = vshuffle(l_bytes, vnot(index_vec));
+          uint8x16 result = vor(r_result, l_result);        
+
+          // Store the result to the output buffer
+          vstore(&amp;output[i], result);
+
+          // Determine population count (number of 1 bits) in mask to
+          // figure out how much to advance the r_list and l_list pointers by
+          usize npop = popcount(in_bits);
+          r_list += npop;
+          l_list += 16 - npop;
+      }
+  }
+
+</code></pre>
+<p class="wp-block-paragraph">As mentioned in the text, <code>index_vec_tab0</code> has 256 16-byte entries, where the first 8 bytes of every table entry are the index permutation from doing a scalar merge of <code>r_list = { 0, 1, ... , 7 }</code> and <code>l_list = { 255 - 0, 255 - 1, ..., 255 - 7 }</code>. The second 8 bytes are just the population count of the table index repeated 8 times.</p>
+<p class="wp-block-paragraph"><code>index_vec_tab1</code> as accessed in this code has 256 8-byte entries corresponding to the scalar merge results with the same <code>r_list</code> as before and a modified <code>l_list = { 247 - 0, 247 - 1, ..., 247 - 7 }</code>. So this version needs around 6KiB of tables, more than before but still a reasonably comfortable amount.</p>
+<p class="wp-block-paragraph">If you don’t want that “combine” operation (which usually itself turns into some kind of vector shuffle internal to the CPU), you can also make the second table have 16-byte entries where every entry has 8 bytes of zeros followed by the actual shuffle indices (now properly aligned in the second half). That means you save some shuffling but add another 2KiB of table size, and, it turns out, some extra uops from address computation. Both x86 and AArch64 implementations can usually multiply indices by 8 “for free” as part of load address generation, but not by 16, so this doesn’t normally save an instruction, it just trades a vector shuffle/shift operation for an address generation operation. In practice they’re usually close, but the smaller load tends to do a bit better, and between that and the 2KiB smaller table size, it’s the variant I prefer.</p>
+<p class="wp-block-paragraph">For a SSSE3/SSE4.2 target, this general approach is the best I’ve managed to come up so far. The exactly implementation details get a bit tweaky, and you might want to unroll some more to save on loop overhead, but this is the gist of it.</p>
+<p class="wp-block-paragraph">AVX2 still does, basically, this – now just on two 128-bit vectors at once. Due to the way AVX2 works (crossing 128-bit boundaries is hard and relatively expensive), this is your best bet. In effect, it’s functionally mostly an unrolled version of the 128-bit approach. Building the index vectors is really a 128-bit vector operation (arguably, it’s really a 64-bit vector operation and we’re already combining two 64-bit halves into a 128-bit vector in the computation above, although it may not look like it), and in AVX2 we do all that work twice, then pay an extra shuffle to merge the two 128-bit halves into a 256-bit register.</p>
+<p class="wp-block-paragraph">Likewise, we end up having to load <code>l_list</code> and <code>r_list</code> as two separate 128-bit halves, which is also no real win over working with 128-bit vectors. The only real 256-bit vector operations are in the “shuffle bytes to combine” and “store” stage. As a result, AVX2 is a bit faster than SSE4.2, but not by anything like 2x. It’s closer to 1.2x for me, and even that much took a lot of care.</p>
+<p class="wp-block-paragraph">I’ve looked into other approaches for AVX2 that don’t use any big tables at all and compute the shuffle vectors instead. These approach are more “naturally 256-bit” if that makes sense, and they do have better vector width utilization, but doing it this way also takes several extra instructions, and while I managed to get fairly close to the performance of the table-based approach, I never managed to beat it. I might write it up at some point.</p>
+<p class="wp-block-paragraph">Ironically, I am positive that approach would easily come out ahead once you step up to 512-bit vectors, but there’s just not much reason to. With AVX512_VBMI2, we have a full hardware solution that we’re never going to beat in software, and “AVX512 but not VBMI2” is a relatively small niche at this point of almost exclusively server CPUs that are 6+ years old and tend to drastically down-clock when 512-bit vector code is used anyway. Maybe some day? But I haven’t spent much though on it.</p>
+<h3 class="wp-block-heading">The NEON special</h3>
+<p class="wp-block-paragraph">The algorithm as written above works just fine on NEON, and its performance is good. There’s nothing wrong with it.</p>
+<p class="wp-block-paragraph">It’s just that it happens we can do a bit better on machines where 2-table 128-bit TBL is fast (which includes Apple Silicon and newer high-end ARM Cortex/Neoverse cores). Our load-shuffle-and-store portion can be just this (and this time I’m using straight NEON intrinsics because this is actually NEON-specific):</p>
+<pre class="wp-block-code"><code>    // Load source bytes
+    uint8x16x2_t src;
+    src.val[0] = vld1q_u8(r_list);
+    src.val[1] = vld1q_u8(l_list);
+
+    // Shuffle to form result
+    uint8x16_t result = vqtbl2q_u8(src, index_vec);
+
+    // store results
+    vst1q_u8(dest, result);</code></pre>
+<p class="wp-block-paragraph">Okay, that part is very nice, but how do we get the index vectors for this? We still want fetches from <code>r_list</code> to use positive indices and fetches from <code>l_list</code> to use negative indices so that our “add <code>pop0</code> to everything” gambit continues to work. But, if we’re using 2-vector TBL, we also need the final <code>l_list</code> indices to be 16-based, because the <code>l_list</code> bytes go into indices 16 through 31 of the table.</p>
+<p class="wp-block-paragraph">So, this time, our index vectors are actual int8s, and store either <code>i</code> for a byte coming from <code>r_list[i]</code> or <code>-(16 + i)</code> for an entry coming from <code>l_list[i]</code>. We can just use this convention, and keep the table setup otherwise the same as in the previous step. Right before we do the shuffle, we want to negate our table indices for L list entries, which boils down to taking the absolute value of everything. That’ll leave the (positive) <code>r_list</code> indices alone and negate the (currently negative) <code>l_list</code> indices like we need.</p>
+<p class="wp-block-paragraph">Therefore, if we did that, we would end up with something like</p>
+<pre class="wp-block-code"><code>    // Load index vector parts
+    int8x16_t index0 = vld1q_s8(index_vec_tab0[in_bits &amp; 0xff]);
+    int8x16_t index1 = vld1q_s8(index_vec_tab1[in_bits &gt;&gt; 8]);
+
+    // Form merged control
+    int8x16_t summed = vaddq_s8(index0, index1);
+    uint8x16_t index_vec = vreinterpretq_u8_s8(vabsq_s8(summed));</code></pre>
+<p class="wp-block-paragraph">This is assuming we use the variant with full 128-bit table entries. As before, we can make the second table have 64-bit entries, making it smaller but taking one more vector shuffle-type operation at runtime (usually <code>vextq</code>).</p>
+<p class="wp-block-paragraph">The final trick is realizing that NEON has an instruction for |a[i] – b[i]| for signed values, and what we need is |a[i] + b[i]|. But b[i] comes out of a table that we control. We can just negate that entire table, and now the final index vector is two loads and a single arithmetic instruction, giving this full merge operation:</p>
+<pre class="wp-block-code"><code>    // Load index vector parts
+    int8x16_t index0 = vld1q_s8(index_vec_tab0[in_bits &amp; 0xff]);
+    int8x16_t index1 = vld1q_s8(index_vec_tab1[in_bits &gt;&gt; 8]);
+
+    // Form merged control
+    uint8x16_t index_vec = vreinterpretq_u8_s8(vabdq_s8(index0, index1));
+    
+    // Load source bytes
+    uint8x16x2_t src;
+    src.val[0] = vld1q_u8(r_list);
+    src.val[1] = vld1q_u8(l_list);
+
+    // Shuffle to form result
+    uint8x16_t result = vqtbl2q_u8(src, index_vec);
+
+    // store results
+    vst1q_u8(dest, result);</code></pre>
+<p class="wp-block-paragraph">I think this 16-byte merge operation might actually be capital-O Optimal on current NEON implementations. The loads from the two lists and the store are strictly necessary; using a single 1-uop (on many uArchs) instruction to do the byte shuffling is the minimum amount of work we can do once we have those source vectors; I’ve explained above that a 1MiB LUT from full 16-bit indices is not practical; if we can’t do it in a single table load, it has to be at least two; and if we have two separate table loads, there needs to be at least one instruction to combine them.</p>
+<p class="wp-block-paragraph">There is some uncertainty around the rest of the loop (figuring out the popcounts, the pointer advancing, and such), the “control plane” so to speak, but I think the “data plane” side of this operation is airtight.</p>
+<p class="wp-block-paragraph">And I think that’s it for today! I won’t be linking to any code of my own for this, since I’ve been talking to Marcin, he’s tried the things I described in this post out in his <a href="https://github.com/MarcinZukowski/pivco-huffman">GitHub repository for PivCo-Huffman</a> and confirmed they’re faster in his tests, so just go there if you want to see this actually implemented. They might not be up immediately depending on when you read this, but they should land shortly.</p>
+<div class="sharedaddy sd-like-enabled" id="jp-post-flair">
+<div class="jp-relatedposts" id="jp-relatedposts">
+<h3 class="jp-relatedposts-headline"><em>Related</em></h3>
+</div></div> </div><!--end entry-->
+<div class="meta clear">
+<p>From → <a href="https://fgiesen.wordpress.com/category/coding/" rel="category tag">Coding</a>, <a href="https://fgiesen.wordpress.com/category/compression/" rel="category tag">Compression</a></p>
+</div><!--end meta-->
+</div><!--end post-->
+<!-- You can start editing here. -->
+<div id="comments">
+<!-- If comments are open, but there are no comments. -->
+<div class="comment-number">
+<span>Leave a Comment</span>
+</div>
+</div><!--end comments-->
+<div class="comment-respond" id="respond">
+<h3 class="comment-reply-title" id="reply-title">Leave a comment <small><a href="/2026/06/21/pivco-huffman-merge-operations/#respond" id="cancel-comment-reply-link" rel="nofollow" style="display:none;">Cancel reply</a></small></h3> </div><!-- #respond -->
+<div class="navigation index">
+
+<div class="alignright"><a href="https://fgiesen.wordpress.com/2026/05/30/simple-batch-decoding-of-unary-codes/" rel="prev">Simple batch decoding of unary codes</a> »</div>
+</div><!--end navigation-->
+</div><!--end content-->
+<div id="sidebar">
+<ul>
+<li class="widget widget_recent_entries">
+<h2 class="widgettitle">Recent Posts</h2>
+<ul>
+<li><a href="https://fgiesen.wordpress.com/2026/06/21/pivco-huffman-merge-operations/">PivCo-Huffman “merge” operations</a></li>
+<li><a href="https://fgiesen.wordpress.com/2026/05/30/simple-batch-decoding-of-unary-codes/">Simple batch decoding of unary codes</a></li>
+<li><a href="https://fgiesen.wordpress.com/2026/05/29/why-does-astc-use-ise-when-almost-nothing-else-does/">Why does ASTC use ISE when almost nothing else does?</a></li>
+<li><a href="https://fgiesen.wordpress.com/2025/07/06/content-creator/">Content creator</a></li>
+<li><a href="https://fgiesen.wordpress.com/2025/05/21/oodle-2-9-14-and-intel-13th-14th-gen-cpus/">Oodle 2.9.14 and Intel 13th/14th gen CPUs</a></li>
+<li><a href="https://fgiesen.wordpress.com/2024/12/24/unorm-and-snorm-to-float-hardware-edition/">UNORM and SNORM to float, hardware edition</a></li>
+<li><a href="https://fgiesen.wordpress.com/2024/11/14/mrsse/">MRSSE</a></li>
+<li><a href="https://fgiesen.wordpress.com/2024/11/06/exact-unorm8-to-float/">Exact UNORM8 to float</a></li>
+<li><a href="https://fgiesen.wordpress.com/2024/11/03/bc7-optimal-solid-color-blocks/">BC7 optimal solid-color blocks</a></li>
+<li><a href="https://fgiesen.wordpress.com/2024/10/26/why-those-particular-integer-multiplies/">Why those particular integer multiplies?</a></li>
+</ul>
+</li>
+<li class="widget widget_categories">
+<h2 class="widgettitle">Categories</h2>
+<ul>
+<li class="cat-item cat-item-332"><a href="https://fgiesen.wordpress.com/category/coding/">Coding</a>
+</li>
+<li class="cat-item cat-item-174250"><a href="https://fgiesen.wordpress.com/category/compression/">Compression</a>
+</li>
+<li class="cat-item cat-item-36108"><a href="https://fgiesen.wordpress.com/category/computer-architecture/">Computer Architecture</a>
+</li>
+<li class="cat-item cat-item-36474"><a href="https://fgiesen.wordpress.com/category/demoscene/">Demoscene</a>
+</li>
+<li class="cat-item cat-item-33977738"><a href="https://fgiesen.wordpress.com/category/graphics-pipeline/">Graphics Pipeline</a>
+</li>
+<li class="cat-item cat-item-35184"><a href="https://fgiesen.wordpress.com/category/maths/">Maths</a>
+</li>
+<li class="cat-item cat-item-4755"><a href="https://fgiesen.wordpress.com/category/multimedia/">Multimedia</a>
+</li>
+<li class="cat-item cat-item-7426"><a href="https://fgiesen.wordpress.com/category/networking/">Networking</a>
+</li>
+<li class="cat-item cat-item-5281"><a href="https://fgiesen.wordpress.com/category/papers/">Papers</a>
+</li>
+<li class="cat-item cat-item-955"><a href="https://fgiesen.wordpress.com/category/stories/">Stories</a>
+</li>
+<li class="cat-item cat-item-563"><a href="https://fgiesen.wordpress.com/category/thoughts/">Thoughts</a>
+</li>
+<li class="cat-item cat-item-1"><a href="https://fgiesen.wordpress.com/category/uncategorized/">Uncategorized</a>
+</li>
+</ul>
+</li>
+<li class="widget widget_archive">
+<h2 class="widgettitle">Archives</h2>
+<ul>
+<li><a href="https://fgiesen.wordpress.com/2026/06/">June 2026</a></li>
+<li><a href="https://fgiesen.wordpress.com/2026/05/">May 2026</a></li>
+<li><a href="https://fgiesen.wordpress.com/2025/07/">July 2025</a></li>
+<li><a href="https://fgiesen.wordpress.com/2025/05/">May 2025</a></li>
+<li><a href="https://fgiesen.wordpress.com/2024/12/">December 2024</a></li>
+<li><a href="https://fgiesen.wordpress.com/2024/11/">November 2024</a></li>
+<li><a href="https://fgiesen.wordpress.com/2024/10/">October 2024</a></li>
+<li><a href="https://fgiesen.wordpress.com/2024/08/">August 2024</a></li>
+<li><a href="https://fgiesen.wordpress.com/2023/10/">October 2023</a></li>
+<li><a href="https://fgiesen.wordpress.com/2023/07/">July 2023</a></li>
+<li><a href="https://fgiesen.wordpress.com/2023/05/">May 2023</a></li>
+<li><a href="https://fgiesen.wordpress.com/2023/03/">March 2023</a></li>
+<li><a href="https://fgiesen.wordpress.com/2022/11/">November 2022</a></li>
+<li><a href="https://fgiesen.wordpress.com/2022/10/">October 2022</a></li>
+<li><a href="https://fgiesen.wordpress.com/2022/09/">September 2022</a></li>
+<li><a href="https://fgiesen.wordpress.com/2022/04/">April 2022</a></li>
+<li><a href="https://fgiesen.wordpress.com/2021/10/">October 2021</a></li>
+<li><a href="https://fgiesen.wordpress.com/2021/08/">August 2021</a></li>
+<li><a href="https://fgiesen.wordpress.com/2021/07/">July 2021</a></li>
+<li><a href="https://fgiesen.wordpress.com/2019/07/">July 2019</a></li>
+<li><a href="https://fgiesen.wordpress.com/2019/04/">April 2019</a></li>
+<li><a href="https://fgiesen.wordpress.com/2019/02/">February 2019</a></li>
+<li><a href="https://fgiesen.wordpress.com/2018/12/">December 2018</a></li>
+<li><a href="https://fgiesen.wordpress.com/2018/09/">September 2018</a></li>
+<li><a href="https://fgiesen.wordpress.com/2018/03/">March 2018</a></li>
+<li><a href="https://fgiesen.wordpress.com/2018/02/">February 2018</a></li>
+<li><a href="https://fgiesen.wordpress.com/2018/01/">January 2018</a></li>
+<li><a href="https://fgiesen.wordpress.com/2017/12/">December 2017</a></li>
+<li><a href="https://fgiesen.wordpress.com/2017/11/">November 2017</a></li>
+<li><a href="https://fgiesen.wordpress.com/2017/09/">September 2017</a></li>
+<li><a href="https://fgiesen.wordpress.com/2017/08/">August 2017</a></li>
+<li><a href="https://fgiesen.wordpress.com/2017/04/">April 2017</a></li>
+<li><a href="https://fgiesen.wordpress.com/2016/10/">October 2016</a></li>
+<li><a href="https://fgiesen.wordpress.com/2016/08/">August 2016</a></li>
+<li><a href="https://fgiesen.wordpress.com/2016/04/">April 2016</a></li>
+<li><a href="https://fgiesen.wordpress.com/2016/03/">March 2016</a></li>
+<li><a href="https://fgiesen.wordpress.com/2016/02/">February 2016</a></li>
+<li><a href="https://fgiesen.wordpress.com/2016/01/">January 2016</a></li>
+<li><a href="https://fgiesen.wordpress.com/2015/12/">December 2015</a></li>
+<li><a href="https://fgiesen.wordpress.com/2015/10/">October 2015</a></li>
+<li><a href="https://fgiesen.wordpress.com/2015/09/">September 2015</a></li>
+<li><a href="https://fgiesen.wordpress.com/2015/07/">July 2015</a></li>
+<li><a href="https://fgiesen.wordpress.com/2015/05/">May 2015</a></li>
+<li><a href="https://fgiesen.wordpress.com/2015/02/">February 2015</a></li>
+<li><a href="https://fgiesen.wordpress.com/2014/12/">December 2014</a></li>
+<li><a href="https://fgiesen.wordpress.com/2014/10/">October 2014</a></li>
+<li><a href="https://fgiesen.wordpress.com/2014/08/">August 2014</a></li>
+<li><a href="https://fgiesen.wordpress.com/2014/07/">July 2014</a></li>
+<li><a href="https://fgiesen.wordpress.com/2014/06/">June 2014</a></li>
+<li><a href="https://fgiesen.wordpress.com/2014/05/">May 2014</a></li>
+<li><a href="https://fgiesen.wordpress.com/2014/03/">March 2014</a></li>
+<li><a href="https://fgiesen.wordpress.com/2014/02/">February 2014</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/12/">December 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/11/">November 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/10/">October 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/09/">September 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/08/">August 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/07/">July 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/06/">June 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/05/">May 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/03/">March 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/02/">February 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2013/01/">January 2013</a></li>
+<li><a href="https://fgiesen.wordpress.com/2012/08/">August 2012</a></li>
+<li><a href="https://fgiesen.wordpress.com/2012/07/">July 2012</a></li>
+<li><a href="https://fgiesen.wordpress.com/2012/06/">June 2012</a></li>
+<li><a href="https://fgiesen.wordpress.com/2012/04/">April 2012</a></li>
+<li><a href="https://fgiesen.wordpress.com/2012/03/">March 2012</a></li>
+<li><a href="https://fgiesen.wordpress.com/2012/02/">February 2012</a></li>
+<li><a href="https://fgiesen.wordpress.com/2011/11/">November 2011</a></li>
+<li><a href="https://fgiesen.wordpress.com/2011/10/">October 2011</a></li>
+<li><a href="https://fgiesen.wordpress.com/2011/09/">September 2011</a></li>
+<li><a href="https://fgiesen.wordpress.com/2011/08/">August 2011</a></li>
+<li><a href="https://fgiesen.wordpress.com/2011/07/">July 2011</a></li>
+<li><a href="https://fgiesen.wordpress.com/2011/05/">May 2011</a></li>
+<li><a href="https://fgiesen.wordpress.com/2011/02/">February 2011</a></li>
+<li><a href="https://fgiesen.wordpress.com/2011/01/">January 2011</a></li>
+<li><a href="https://fgiesen.wordpress.com/2010/12/">December 2010</a></li>
+<li><a href="https://fgiesen.wordpress.com/2010/11/">November 2010</a></li>
+<li><a href="https://fgiesen.wordpress.com/2010/10/">October 2010</a></li>
+<li><a href="https://fgiesen.wordpress.com/2010/09/">September 2010</a></li>
+<li><a href="https://fgiesen.wordpress.com/2010/08/">August 2010</a></li>
+<li><a href="https://fgiesen.wordpress.com/2010/03/">March 2010</a></li>
+<li><a href="https://fgiesen.wordpress.com/2009/12/">December 2009</a></li>
+<li><a href="https://fgiesen.wordpress.com/2009/10/">October 2009</a></li>
+</ul>
+</li>
+</ul>
+</div><!--end sidebar--></div><!--end wrapper-->
+</div><!--end content-background-->
+<div id="footer">
+<div class="wrapper clear">
+<div id="copyright">
+<p class="copyright-notice"><a href="https://wordpress.com/?ref=footer_blog" rel="nofollow">Blog at WordPress.com.</a></p>
+</div>
+</div><!--end wrapper-->
+</div><!--end footer-->
+<!-- -->
+
+
+
+
+
+
+<div class="actnbr-pub-titan actnbr-has-follow actnbr-has-actions" dir="ltr" id="actionbar" style="display: none;">
+<ul>
+<li class="actnbr-btn actnbr-hidden">
+<a class="actnbr-action actnbr-actn-comment" href="https://fgiesen.wordpress.com/2026/06/21/pivco-huffman-merge-operations/#respond">
+ <span>Comment						</span>
+</a>
+</li>
+<li class="actnbr-btn actnbr-hidden">
+<a class="actnbr-action actnbr-actn-follow" href="">
+
+<span>Subscribe</span>
+</a>
+<a class="actnbr-action actnbr-actn-following no-display" href="">
+
+<span>Subscribed</span>
+</a>
+<div class="actnbr-popover tip tip-top-left actnbr-notice" id="follow-bubble">
+
+<div class="tip-inner actnbr-follow-bubble">
+<ul>
+<li class="actnbr-sitename">
+<a href="https://fgiesen.wordpress.com">
+				The ryg blog			</a>
+</li>
+
+
+<li class="actnbr-login-nudge">
+<div>
+											Already have a WordPress.com account? <a href="https://wordpress.com/log-in?redirect_to=https%3A%2F%2Ffgiesen.wordpress.com%2F2026%2F06%2F21%2Fpivco-huffman-merge-operations%2F&amp;signup_flow=account">Log in now.</a> </div>
+</li>
+</ul>
+</div>
+</div>
+</li>
+<li class="actnbr-btn actnbr-hidden no-display" onclick="javascript:__tcfapi( 'showUi' );">
+<a class="actnbr-action actnbr-actn-privacy" href="#">
+ <span>Privacy						</span>
+</a>
+</li>
+<li class="actnbr-ellipsis actnbr-hidden">
+ <div class="actnbr-popover tip tip-top-left actnbr-more">
+
+<div class="tip-inner">
+<ul>
+<li class="actnbr-sitename">
+<a href="https://fgiesen.wordpress.com">
+				The ryg blog			</a>
+</li>
+<li class="actnbr-folded-follow">
+<a class="actnbr-action actnbr-actn-follow" href="">
+
+<span>Subscribe</span>
+</a>
+<a class="actnbr-action actnbr-actn-following no-display" href="">
+
+<span>Subscribed</span>
+</a>
+</li>
+<li class="actnbr-signup"><a href="https://wordpress.com/start/">Sign up</a></li>
+<li class="actnbr-login"><a href="https://wordpress.com/log-in?redirect_to=https%3A%2F%2Ffgiesen.wordpress.com%2F2026%2F06%2F21%2Fpivco-huffman-merge-operations%2F&amp;signup_flow=account">Log in</a></li>
+<li class="actnbr-shortlink">
+<a href="https://wp.me/pF1Ai-23b">
+<span class="actnbr-shortlink__text">Copy shortlink</span>
+
+</a>
+</li>
+<li class="flb-report">
+<a href="https://wordpress.com/abuse/?report_url=https://fgiesen.wordpress.com/2026/06/21/pivco-huffman-merge-operations/" rel="noopener noreferrer" target="_blank">
+										Report this content									</a>
+</li>
+<li class="actnbr-reader">
+<a href="https://wordpress.com/reader/blogs/9777542/posts/7885">
+										View post in Reader									</a>
+</li>
+<li class="actnbr-subs">
+<a href="https://subscribe.wordpress.com/">Manage subscriptions</a>
+</li>
+<li class="actnbr-fold"><a href="">Collapse this bar</a></li>
+</ul>
+</div>
+</div>
+</li>
+</ul>
+</div>
+
+<div id="jp-carousel-loading-overlay">
+<div id="jp-carousel-loading-wrapper">
+
+</div>
+</div>
+<div class="jp-carousel-overlay" style="display: none;">
+<div class="jp-carousel-container">
+<!-- The Carousel Swiper -->
+<div class="jp-carousel-wrap swiper jp-carousel-swiper-container jp-carousel-transitions" itemscope="" itemtype="https://schema.org/ImageGallery">
+
+
+
+</div>
+<!-- The main close buton -->
+
+<!-- Image info, comments and meta -->
+<div class="jp-carousel-info">
+<div class="jp-carousel-info-footer">
+<div class="jp-carousel-pagination-container">
+
+
+</div>
+<div class="jp-carousel-photo-title-container">
+
+</div>
+<div class="jp-carousel-photo-icons-container">
+<a aria-label="Toggle photo metadata visibility" class="jp-carousel-icon-btn jp-carousel-icon-info" href="#">
+
+</a>
+<a aria-label="Toggle photo comments visibility" class="jp-carousel-icon-btn jp-carousel-icon-comments" href="#">
+<span class="jp-carousel-icon">
+
+
+</span>
+</a>
+</div>
+</div>
+<div class="jp-carousel-info-extra">
+<div class="jp-carousel-info-content-wrapper">
+<div class="jp-carousel-photo-title-container">
+
+</div>
+<div class="jp-carousel-comments-wrapper">
+<div id="jp-carousel-comments-loading">
+<span>Loading Comments...</span>
+</div>
+
+<div id="jp-carousel-comment-form-container">
+
+
+
+</div>
+</div>
+<div class="jp-carousel-image-meta">
+<div class="jp-carousel-title-and-caption">
+<div class="jp-carousel-photo-info">
+
+</div>
+
+</div>
+
+<a class="jp-carousel-image-download" href="#" style="display: none;" target="_blank">
+
+
+</a>
+
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+</body>
