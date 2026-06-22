@@ -1,0 +1,77 @@
+<body>
+<div class="site">
+<div class="title">
+<h1><a href="/blog/">Marc's Blog</a></h1>
+</div>
+<div class="about">
+<h1>About Me</h1>
+    My name is Marc Brooker. I like to build things that work, and do cool stuff. I like building big things. I also dabble in machining, welding, cooking, and skiing.
+
+    I am an engineer at Amazon Web Services (AWS) in Seattle, where I work on agentic AI, especially safety and policy for agentic AI. Before that, I worked on EC2, EBS, databases, serverless, and serverless databases.
+
+All opinions are my own.
+    <h1>Links</h1>
+<a href="https://brooker.co.za/blog/publications.html">My Publications and Videos</a>
+<a href="https://fediscience.org/@marcbrooker" rel="me">@marcbrooker on Mastodon</a>
+<a href="https://twitter.com/MarcJBrooker">@MarcJBrooker on Twitter</a>
+
+<a href="https://brooker.co.za/blog/2026/06/18/my-blog-and-ai.html">Is this blog written by AI?</a>
+</div>
+<div id="post">
+<h1 id="surprising-economics-of-load-balanced-systems">Surprising Economics of Load-Balanced Systems</h1>
+<p class="meta">The M/M/c model may not behave like you expect.</p>
+<p>I have a system with <code class="language-plaintext highlighter-rouge">c</code> servers, each of which can only handle a single concurrent request, and has no internal queuing. The servers sit behind a load balancer, which contains an infinite queue. An unlimited number of clients offer <code class="language-plaintext highlighter-rouge">c * 0.8</code> requests per second to the load balancer on average. In other words, we increase the offered load linearly with <code class="language-plaintext highlighter-rouge">c</code> to keep the per-server load constant. Once a request arrives at a server, it takes one second to process, on average. How does the client-observed mean request time vary with <code class="language-plaintext highlighter-rouge">c</code>?</p>
+<p></p>
+<p>Option A is that the mean latency decreases quickly, asymptotically approaching one second as <code class="language-plaintext highlighter-rouge">c</code> increases (in other words, the time spent in queue approaches zero). Option B is constant. Option C is a linear improvement, and D is a linear degradation in latency. Which curve do you, intuitively, think that the latency will follow?</p>
+<p>I asked my Twitter followers the same question, and got an interestingly mixed result:
+</p>
+<p>Breaking down the problem a bit will help figure out which is the right answer. First, names. In the terminology of queue theory, this is an <a href="https://en.wikipedia.org/wiki/M/M/c_queue">M/M/c</a> queuing system: Poisson arrival process, exponentially distributed client service time, and <code class="language-plaintext highlighter-rouge">c</code> backend servers. In teletraffic engineering, itâs <a href="https://en.wikipedia.org/wiki/Agner_Krarup_Erlang">Erlangâs</a> delay system (or, because terminology is fun, M/M/n). We can use a classic result of queuing theory to analyze this system: Erlangâs C formula <em>E<sub>2,n</sub>(A)</em>, which calculates the probability that an incoming customer request is enqueued (rather than handled immediately), based on the number of servers (<code class="language-plaintext highlighter-rouge">n</code> aka <code class="language-plaintext highlighter-rouge">c</code>), and the offered traffic <code class="language-plaintext highlighter-rouge">A</code>. For the details, see page 194 of the <a href="https://www.itu.int/dms_pub/itu-d/opb/stg/D-STG-SG02.16.1-2001-PDF-E.pdf">Teletraffic Engineering Handbook</a>. Hereâs the basic shape of the curve (using our same parameters):</p>
+<p></p>
+<p>Follow the blue line up to half the saturation point, at 2.5 rps offered load, and see how the probability is around 13%. Now look at the purple line at half its saturation point, at 5 rps. Just 3.6%. So at half load the 5-server system is handling 87% of traffic without queuing, with double the load and double the servers, we handle 96.4% without queuing. Which means only 3.6% see any additional latency.</p>
+<p>It turns out this improvement is, indeed, asymptotically approaching 1. The right answer to the Twitter poll is A.</p>
+<p>Using the mean to measure latency is controversial (although <a href="http://brooker.co.za/blog/2017/12/28/mean.html">perhaps it shouldnât be</a>). To avoid that controversy, we need to know whether the percentiles get better at the same rate. Doing that in closed form is somewhat complicated, but this system is super simple, so we can plot them out using a Monte-Carlo simulation. The results look like this:</p>
+<p></p>
+<p>Thatâs entirely good news. The median (p50) follows the mean line nicely, and the high percentiles (99<sup>th</sup> and 99.9<sup>th</sup>) have a similar shape. No hidden problems.</p>
+<p>Itâs also good news for cloud and service economics. With larger <code class="language-plaintext highlighter-rouge">c</code> we get better latency at the same utilization, or better utilization for the same latency, all at the same per-server throughput. Thatâs not good news only for giant services, because most of this goodness happens at relatively modest <code class="language-plaintext highlighter-rouge">c</code>. There are few problems related to scale and distributed systems that get easier as <code class="language-plaintext highlighter-rouge">c</code> increases. This is one of them.</p>
+<p>There are some reasonable follow-up questions. Are the results robust to our arbitrary choice of 0.8? Yes, they are<sup><a href="#foot1">1</a></sup>. Are the M/M/c assumptions of Poisson arrivals and exponential service time reasonable for typical services? Iâd say they are reasonable, albeit wrong. Exponential service time is especially wrong: realistic services tend to be something more like log-normal. It may not matter. More on that another time.</p>
+<p><em>Update:</em> Dan Ports responded to my thread with a fascinating <a href="https://twitter.com/danrkports/status/1291517540280070144">Twitter thread</a> pointing to <a href="https://drkp.net/papers/latency-socc14.pdf">Tales of the Tail: Hardware, OS, and Application-level Sources of Tail Latency</a> from SoCCâ14 which looks at this effect in the wild.</p>
+<p><strong>Footnotes</strong></p>
+<ol>
+<li> Up to a point. As soon as the mean arrival rate exceeds the systemâs ability to complete requests, the queue grows without bound and latency goes to infinity. In our case, that happens when the request load exceeds <code class="language-plaintext highlighter-rouge">c</code>. More generally, for this system to be stable <code class="language-plaintext highlighter-rouge">Î»/cÎ¼</code> must be less than 1, where <code class="language-plaintext highlighter-rouge">Î»</code> is the mean arrival rate, and <code class="language-plaintext highlighter-rouge">Î¼</code> is the mean time taken for a server to process a request.</li>
+</ol>
+</div>
+<div id="related">
+  « <a href="/blog">Back to the blog index</a>
+
+<!-- Similar Posts -->
+<h4>Similar Posts</h4>
+<ul class="posts">
+<li><span>05 Aug 2021</span> » <a href="/blog/2021/08/05/utilization.html">Latency Sneaks Up On You</a></li>
+<li><span>19 Apr 2021</span> » <a href="/blog/2021/04/19/latency.html">Tail Latency Might Matter More Than You Think</a></li>
+<li><span>19 Jun 2026</span> » <a href="/blog/2026/06/19/waiting.html">Meet Alice. Alice is impatient.</a></li>
+</ul>
+<!-- Dissimilar Posts -->
+<h4>Something Completely Different</h4>
+<ul class="posts">
+<li><span>24 May 2015</span> » <a href="/blog/2015/05/24/sodium-carbonate.html">Sodium Carbonate, and Ramenized Pasta</a></li>
+</ul>
+</div>
+<div class="footer">
+<div class="contact">
+<p>
+        Marc Brooker
+        The opinions on this site are my own. They do not necessarily represent those of my employer.
+        marcbrooker@gmail.com
+      </p>
+<p>
+<a href="https://brooker.co.za/blog/rss.xml"> RSS</a>
+<a href="https://brooker.co.za/blog/atom.xml"> Atom</a>
+</p>
+</div>
+<div class="license">
+<!-- <a rel="license" href="http://creativecommons.org/licenses/by/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by/4.0/88x31.png" /></a><br /> -->
+      This work is licensed under a <a href="http://creativecommons.org/licenses/by/4.0/" rel="license">Creative Commons Attribution 4.0 International License</a>.
+    </div>
+</div>
+</div>
+</body>

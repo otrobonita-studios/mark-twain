@@ -1,0 +1,735 @@
+<body onload="prettyPrint()" style="max-width: 49em; margin-left: 2em">
+<h1>(How to Write a (Lisp) Interpreter (in Python))</h1>
+
+This page has two purposes: to describe how to implement computer
+language interpreters in general, and in particular to build an interpreter
+for most of the <a href="http://en.wikipedia.org/wiki/Scheme_(programming_language)"><i>Scheme</i></a>
+dialect of Lisp using <a href="http://python.org">Python 3</a> as the implementation language. 
+I call my language and interpreter <i>Lispy</i> (<a href="lis.py"><b>lis.py</b></a>). Years ago, I showed how to write a semi-practical Scheme interpreter  <a (in="" href="jscheme.html">Java</a> and in <a href="http://books.google.com/books?id=QzGuHnDhvZIC&amp;lpg=PA756&amp;vq=scheme%20interpreter&amp;dq=Paradigms%20of%20Artificial%20Intelligence%20Programming&amp;pg=PA753#v=onepage&amp;q&amp;f=false">in Common
+Lisp</a>).  This time around the goal is to demonstrate, as concisely
+and simply as possible, what
+<a href="http://queue.acm.org/detail.cfm?id=1039523">Alan Kay called</a> "<a href="http://www.righto.com/2008/07/maxwells-equations-of-software-examined.html"><i>Maxwell's Equations of Software</i></a>."
+
+<p>Why does this  matter? As <a href="http://steve-yegge.blogspot.com/2007/06/rich-programmer-food.html">Steve
+  Yegge said</a>, <i>"If you don't know how compilers work, then you
+  don't know how computers work."</i> Yegge describes 8 problems that
+  can be solved with compilers (or equally well with interpreters, or
+   with Yegge's
+  typical heavy dosage of cynicism).
+
+
+<h2>Syntax and Semantics of Scheme Programs</h2>
+
+The <i>syntax</i> of a language is the arrangement of characters to form correct statements or expressions; the
+<i>semantics</i> is the meaning of those statements or expressions.  For example, in the language of
+mathematical expressions (and in many programming languages), the syntax for adding one plus two is "1 +
+2" and the semantics is the application of the addition operation to the two numbers, yielding the value 3. We say we
+are <i>evaluating</i> an expression when we determine its
+value; we would say that "1 + 2" evaluates to 3, and write
+that as "1 + 2" ⇒ 3.
+
+<p>Scheme syntax is different from most other programming languages. Consider:
+
+
+<blockquote>
+<table border="0" cellpadding="3" cellspacing="0"><tr><th style="background-color:#EEEEEE">Java<th>      <th style="background-color:#EEEEEE">Scheme
+    <tr><td>
+<tr><td style="background-color:#EEEEEE">
+<tt><b>if</b> (x.val() &gt; 0) {
+  <b>return</b> fn(A[i] + 3 * i, 
+            <b>new</b> String[] {"one", "two"});
+}
+  <td> 
+  <td style="background-color:#EEEEEE" valign="top"><tt>(<b>if</b> (&gt; (val x) 0)
+        (fn (+ (aref A i) (* 3 i)) 
+        (<b>quote</b> (one two)))
+   </tt></td></td></tt></td></tr></td></tr></th></th></th></tr></table>
+</blockquote>
+
+Java has a wide variety
+of syntactic conventions (keywords, infix operators, three kinds of brackets,
+operator precedence, dot notation, quotes, commas,
+semicolons), but Scheme syntax is much simpler: 
+<ul>
+<li> Scheme programs consist solely of <i>expressions</i>.  There is no statement/expression distinction.
+<li> Numbers (e.g. <tt>1</tt>) and symbols (e.g. <tt>A</tt>) are called <i>atomic expressions</i>;
+they cannot be broken into pieces.  These are similar to their Java counterparts, except that in
+Scheme, operators such as <tt>+</tt> and <tt>&gt;</tt> are symbols too, and are treated the same
+way as <tt>A</tt> and <tt>fn</tt>.
+<li> Everything else is a <i>list expression</i>: a "(", followed by zero or more expressions,
+followed by a ")".  The first element of the list determines what it means:
+<ul>
+<li>A list starting with a keyword, e.g. <tt>(if ...)</tt>, is a <i>special form</i>;
+the meaning depends on the keyword.
+<li>A list starting with a non-keyword, e.g. <tt>(fn ...)</tt>, is a function call.
+</li></li></ul>
+</li></li></li></ul>
+The beauty of Scheme is that the full language only needs 5 keywords and 8 syntactic
+forms.  In comparison, Python has 33 keywords and <a href="https://docs.python.org/3/reference/grammar.html">110</a>
+syntactic forms, 
+and Java has 50 keywords and <a href="https://docs.oracle.com/javase/specs/jls/se7/html/jls-18.html">133</a> syntactic forms.
+All those parentheses
+may seem intimidating, but Scheme syntax has the virtues of
+simplicity and consistency. (Some have joked that "Lisp" stands for
+"<a href="http://www.google.com/search?q=Lots+of+Irritating+Silly+Parentheses"><i><b>L</b>ots
+of <b>I</b>rritating <b>S</b>illy <b>P</b>arentheses</i></a>"; I think it stand for
+"<a href="http://www.google.com/search?hl=en&amp;as_q=&amp;as_epq=Lisp+Is+Syntactically+Pure"><i><b>L</b>isp
+<b>I</b>s <b>S</b>yntactically <b>P</b>ure</i></a>".)  
+
+
+<p>In this page we will cover all the important points of the Scheme language and its interpretation
+(omitting some minor details), but we will take two steps to get there,
+defining a simplified language first, before defining the near-full Scheme language. 
+
+<h2>Language 1: Lispy Calculator</h2>
+<i>Lispy Calculator</i> is a subset of Scheme using only five syntactic forms (two atomic, two special forms, and the procedure call).
+Lispy Calculator lets you do any computation you could do on a typical calculator—as long as you are comfortable with prefix notation. 
+And you can do two things that are not offered in typical calculator languages: "if" expressions, and the definition of new variables.  
+Here's an example program, that computes the area of a circle of radius 10, using the formula π <i>r</i><sup>2</sup>:
+
+<pre class="prettyprint">
+(define r 10)
+(* pi (* r r))
+</pre>
+
+Here is a table of all the allowable expressions:
+
+<p>
+<table border="1" cellpadding="3" cellspacing="0">
+<tr style="background-color:#EEEEEE"><th>Expression<th width="23%">Syntax<th>Semantics and Example
+
+  <tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.1">variable reference</a><td><i>symbol</i><td>A symbol is interpreted as a variable name;
+  its value is the variable's
+  value. Example: <tt>r</tt> ⇒ <tt>10</tt> (assuming <tt>r</tt> was previously defined to be 10)
+
+    <tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.2">constant
+  literal</a><td><i>number</i><td>A number 
+  evaluates to itself. Examples: <tt>12 ⇒ 12</tt> <i>or</i>
+<tt>-3.45e+6 ⇒ -3.45e+6</tt>
+<tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.5">conditional</a><td><tt>(if</tt> <i>test conseq
+  alt</i><tt>) </tt><td>Evaluate <i>test</i>; if true,
+  evaluate and return <i>conseq</i>; otherwise  
+  <i>alt</i>. Example: <tt>(if (&gt; 10 20) (+ 1 1) (+ 3 3)) ⇒ 6</tt>
+<tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-8.html#%_sec_5.2">definition</a>
+<td><tt>(define</tt> <i>symbol</i> <i>exp</i><tt>)</tt>
+<td>Define a new variable and give it
+  the value of evaluating the expression <i>exp</i>. 
+      Examples: <tt>(define r 10)</tt>
+<tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.3">procedure
+   call</a><td><tt>(</tt><i>proc arg...</i><tt>)</tt> <td>If <i>proc</i> is
+   anything other than one of the symbols <tt>if,  define,
+   </tt> or <tt>quote</tt> then it is treated as a procedure.  Evaluate <i>proc</i>
+   and all the <i>args</i>, and then the procedure is applied to the list of <i>arg</i> values. Example: <tt>(sqrt (* 2 8)) ⇒ 4.0</tt>
+</td></td></td></tr></td></td></td></tr></td></td></td></tr></td></td></td></tr></td></td></td></tr></th></th></th></tr></table>
+<p>In the Syntax column of this table, <i>symbol</i> must be a
+   symbol,
+   <i>number</i> must be an integer or floating point number,
+   and the other italicized words can be any
+   expression. The notation <i>arg...</i> means zero or more repetitions
+   of <i>arg</i>. 
+   
+
+
+
+
+<h2>What A Language Interpreter Does</h2>
+
+A language interpreter has two parts:
+<ol>
+<li> <b>Parsing:</b> The parsing component takes an input program in
+the form of a sequence of characters, verifies it according to the
+<i>syntactic rules</i> of the language, and translates the program
+into an internal representation.  In a simple interpreter the internal
+representation is a tree structure (often called an <i>abstract syntax tree</i>) 
+that closely mirrors the nested
+structure of statements or expressions in the program. In a language
+translator called a <i>compiler</i> there is often a series of internal representations,
+starting with an abstract syntax tree, and progressing to a
+sequence of instructions that can be directly executed by the
+computer. The Lispy parser is implemented with the function <tt>parse</tt>.<p>
+<li> <b>Execution:</b> The internal representation is then
+  processed according to the <i>semantic rules</i> of the
+  language, thereby carrying out the computation. Lispy's execution function is called <tt>eval</tt> (note this shadows
+  Python's built-in function of the same name).
+  
+</li></p></li></ol>
+
+Here is a picture of the interpretation process:
+
+<blockquote>program  ➡ <span style="border: 2px solid; padding: 4px"><tt>parse</tt></span>
+➡ abstract-syntax-tree 
+➡ <span style="border: 2px solid; padding: 4px"><tt>eval</tt></span>
+➡ result 
+</blockquote>
+<p>And here is a short example of what we want <tt>parse</tt> and <tt>eval</tt> to be able to do (<tt>begin</tt> evaluates each expression in order and returns the final one):
+
+<pre class="prettyprint">
+&gt;&gt; program = "(begin (define r 10) (* pi (* r r)))"
+
+&gt;&gt;&gt; parse(program)
+['begin', ['define', 'r', 10], ['*', 'pi', ['*', 'r', 'r']]]
+
+&gt;&gt;&gt; eval(parse(program))
+314.1592653589793
+</pre>
+<h2>Type Definitions</h2>
+
+Let's be explicit about our representations for Scheme objects:
+
+<pre class="prettyprint">
+Symbol = str              # A Scheme Symbol is implemented as a Python str
+Number = (int, float)     # A Scheme Number is implemented as a Python int or float
+Atom   = (Symbol, Number) # A Scheme Atom is a Symbol or Number
+List   = list             # A Scheme List is implemented as a Python list
+Exp    = (Atom, List)     # A Scheme expression is an Atom or List
+Env    = dict             # A Scheme environment (defined below) 
+                          # is a mapping of {variable: value}
+
+</pre>
+<h2>Parsing: <tt>parse</tt>, <tt>tokenize</tt> and <tt>read_from_tokens</tt></h2>
+
+
+Parsing is traditionally separated into two parts: <i>lexical
+analysis</i>, in which the input character string is broken up into a
+sequence of <i>tokens</i>, and <i>syntactic analysis</i>, in which the
+tokens are assembled into an abstract syntax tree.  
+The Lispy tokens are parentheses, symbols, and numbers.
+There are
+many tools for lexical analysis (such as Mike Lesk and Eric Schmidt's
+<a href="http://dinosaur.compilertools.net/#lex">lex</a>), but for now we'll
+use a very simple tool: Python's <tt>str.split</tt>. The function <tt>tokenize</tt> takes
+as input a string of characters; it
+adds spaces around each paren, and then calls <tt>str.split</tt> to get a
+list of tokens:
+
+<pre class="prettyprint">
+def tokenize(chars: str) -&gt; list:
+    "Convert a string of characters into a list of tokens."
+    return chars.replace('(', ' ( ').replace(')', ' ) ').split()
+</pre>
+
+Here we apply tokenize to our sample program:
+
+<pre class="prettyprint">
+&gt;&gt;&gt; program = "(begin (define r 10) (* pi (* r r)))"
+&gt;&gt;&gt; tokenize(program)
+['(', 'begin', '(', 'define', 'r', '10', ')', '(', '*', 'pi', '(', '*', 'r', 'r', ')', ')', ')']
+</pre>
+<p>Our function <tt>parse</tt> will take a string representation of a program as input, call <tt>tokenize</tt>
+to get a list of tokens, and then call <tt>read_from_tokens</tt> to assemble an abstract syntax tree.
+<tt>read_from_tokens</tt> looks at the first token; if
+it is a <tt>')'</tt> that's a syntax error. If it is a <tt>'('</tt>, then we start
+building up a list of sub-expressions until we hit a matching <tt>')'</tt>.
+Any non-parenthesis token must be a symbol or number. 
+We'll let Python make the distinction between them: for each non-paren token,
+first try to interpret it as an int, then as a float, and if it is neither
+of those, it must be a
+symbol. Here is the parser:
+
+<pre class="prettyprint">
+def parse(program: str) -&gt; Exp:
+    "Read a Scheme expression from a string."
+    return read_from_tokens(tokenize(program))
+
+def read_from_tokens(tokens: list) -&gt; Exp:
+    "Read an expression from a sequence of tokens."
+    if len(tokens) == 0:
+        raise SyntaxError('unexpected EOF')
+    token = tokens.pop(0)
+    if token == '(':
+        L = []
+        while tokens[0] != ')':
+            L.append(read_from_tokens(tokens))
+        tokens.pop(0) # pop off ')'
+        return L
+    elif token == ')':
+        raise SyntaxError('unexpected )')
+    else:
+        return atom(token)
+
+def atom(token: str) -&gt; Atom:
+    "Numbers become numbers; every other token is a symbol."
+    try: return int(token)
+    except ValueError:
+        try: return float(token)
+        except ValueError:
+            return Symbol(token)
+</pre>
+<tt>parse</tt> works like this:
+
+<pre class="prettyprint">
+&gt;&gt;&gt; program = "(begin (define r 10) (* pi (* r r)))"
+
+&gt;&gt;&gt; parse(program)
+['begin', ['define', 'r', 10], ['*', 'pi', ['*', 'r', 'r']]]
+</pre>
+
+
+ 
+We're almost ready to define <tt>eval</tt>. But we need one more concept first.
+
+<h2>Environments</h2>
+
+An environment is a mapping from variable names to their values.
+By default, <tt>eval</tt> will use a global environment that includes the names for a bunch of standard functions (like <tt>sqrt</tt> and <tt>max</tt>,
+and also operators like <tt>*</tt>).  This environment can be augmented with user-defined variables,
+using the expression <tt>(define <i>symbol value</i>)</tt>.  
+
+<pre class="prettyprint">
+import math
+import operator as op
+
+def standard_env() -&gt; Env:
+    "An environment with some Scheme standard procedures."
+    env = Env()
+    env.update(vars(math)) # sin, cos, sqrt, pi, ...
+    env.update({
+        '+':op.add, '-':op.sub, '*':op.mul, '/':op.truediv, 
+        '&gt;':op.gt, '&lt;':op.lt, '&gt;=':op.ge, '&lt;=':op.le, '=':op.eq, 
+        'abs':     abs,
+        'append':  op.add,  
+        'apply':   lambda proc, args: proc(*args),
+        'begin':   lambda *x: x[-1],
+        'car':     lambda x: x[0],
+        'cdr':     lambda x: x[1:], 
+        'cons':    lambda x,y: [x] + y,
+        'eq?':     op.is_, 
+        'expt':    pow,
+        'equal?':  op.eq, 
+        'length':  len, 
+        'list':    lambda *x: List(x), 
+        'list?':   lambda x: isinstance(x, List), 
+        'map':     map,
+        'max':     max,
+        'min':     min,
+        'not':     op.not_,
+        'null?':   lambda x: x == [], 
+        'number?': lambda x: isinstance(x, Number),  
+		'print':   print,
+        'procedure?': callable,
+        'round':   round,
+        'symbol?': lambda x: isinstance(x, Symbol),
+    })
+    return env
+
+global_env = standard_env()
+</pre>
+<h2>Evaluation: <tt>eval</tt></h2>
+<p>We are now ready for the implementation of <tt>eval</tt>.
+As a refresher, we repeat the table of Lispy Calculator forms:
+
+<p>
+<table border="1" cellpadding="3" cellspacing="0">
+<tr style="background-color:#EEEEEE"><th>Expression<th width="23%">Syntax<th>Semantics and Example
+
+  <tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.1">variable reference</a><td><i>symbol</i><td>A symbol is interpreted as a variable name;
+  its value is the variable's
+  value. Example: <tt>r</tt> ⇒ <tt>10</tt> (assuming <tt>r</tt> was previously defined to be 10)
+
+    <tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.2">constant
+  literal</a><td><i>number</i><td>A number 
+  evaluates to itself. Examples: <tt>12 ⇒ 12</tt> <i>or</i>
+<tt>-3.45e+6 ⇒ -3.45e+6</tt>
+<tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.5">conditional</a><td><tt>(if</tt> <i>test conseq
+  alt</i><tt>) </tt><td>Evaluate <i>test</i>; if true,
+  evaluate and return <i>conseq</i>; otherwise  
+  <i>alt</i>. Example: <tt>(if (&gt; 10 20) (+ 1 1) (+ 3 3)) ⇒ 6</tt>
+<tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-8.html#%_sec_5.2">definition</a>
+<td><tt>(define</tt> <i>symbol</i> <i>exp</i><tt>)</tt>
+<td>Define a new variable and give it
+  the value of evaluating the expression <i>exp</i>. 
+      Examples: <tt>(define r 10)</tt>
+<tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.3">procedure
+   call</a><td><tt>(</tt><i>proc arg...</i><tt>)</tt> <td>If <i>proc</i> is
+   anything other than one of the symbols <tt>if,  define,
+   </tt> or <tt>quote</tt> then it is treated as a procedure.  Evaluate <i>proc</i>
+   and all the <i>args</i>, and then the procedure is applied to the list of <i>arg</i> values. Example: <tt>(sqrt (* 2 8)) ⇒ 4.0</tt>
+</td></td></td></tr></td></td></td></tr></td></td></td></tr></td></td></td></tr></td></td></td></tr></th></th></th></tr></table>
+<p>Here is the code for <tt>eval</tt>, which closely follows the table:
+
+<pre class="prettyprint">
+def eval(x: Exp, env=global_env) -&gt; Exp:
+    "Evaluate an expression in an environment."
+    if isinstance(x, Symbol):        # variable reference
+        return env[x]
+    elif isinstance(x, Number):      # constant number
+        return x                
+    elif x[0] == 'if':               # conditional
+        (_, test, conseq, alt) = x
+        exp = (conseq if eval(test, env) else alt)
+        return eval(exp, env)
+    elif x[0] == 'define':           # definition
+        (_, symbol, exp) = x
+        env[symbol] = eval(exp, env)
+    else:                            # procedure call
+        proc = eval(x[0], env)
+        args = [eval(arg, env) for arg in x[1:]]
+        return proc(*args)
+</pre>
+<p><i>We're done!</i> You can see it all in action:
+
+<pre class="prettyprint">
+&gt;&gt;&gt; eval(parse("(begin (define r 10) (* pi (* r r)))"))
+314.1592653589793
+</pre>
+<h2>Interaction: A REPL</h2>
+
+It is tedious to have to enter <tt>eval(parse("..."))</tt> all the time.
+One of Lisp's great legacies is the notion of an interactive read-eval-print loop:
+a way for a programmer to enter an expression, and see it immediately read, evaluated, and printed, without having to go through a lengthy build/compile/run cycle.  So let's define the function <tt>repl</tt> (which stands for read-eval-print-loop), and the function <tt>schemestr</tt> which returns a string representing a Scheme object.
+
+<pre class="prettyprint">
+def repl(prompt='lis.py&gt; '):
+    "A prompt-read-eval-print loop."
+    while True:
+        val = eval(parse(raw_input(prompt)))
+        if val is not None: 
+            print(schemestr(val))
+
+def schemestr(exp):
+    "Convert a Python object back into a Scheme-readable string."
+    if isinstance(exp, List):
+        return '(' + ' '.join(map(schemestr, exp)) + ')' 
+    else:
+        return str(exp)
+</pre>
+
+Here is <tt>repl</tt> in action:
+
+<pre class="prettyprint">
+&gt;&gt;&gt; repl()
+lis.py&gt; (define r 10)
+lis.py&gt; (* pi (* r r))
+314.159265359
+lis.py&gt; (if (&gt; (* 11 11) 120) (* 7 6) oops)
+42
+lis.py&gt; (list (+ 1 1) (+ 2 2) (* 2 3) (expt 2 3))
+lis.py&gt; 
+</pre>
+<h2>Language 2: Full Lispy</h2>
+
+We will now extend our language with three new special forms, giving us a much more nearly-complete Scheme subset:
+
+<p><table border="1" cellpadding="3" cellspacing="0">
+<tr style="background-color:#EEEEEE"><th>Expression<th width="23%">Syntax<th>Semantics and Example
+
+          <tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.2">quotation</a><td><tt>(quote </tt><i>exp</i><tt>)<td>
+Return the <i>exp</i> literally; do not evaluate it. Example:
+	<tt>(quote (+ 1 2)) ⇒ (+ 1 2)</tt>
+<tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.6">assignment</a><td><tt>(set!</tt> <i>symbol
+  exp</i><tt>)</tt><td>Evaluate <i>exp</i> and assign that value to
+  <i>symbol</i>, which must have been previously defined (with a
+  <tt>define</tt> or as a parameter to an enclosing procedure).
+    Example: <tt>(set! r2 (* r r))</tt>
+<tr><td align="center"><a href="http://www.schemers.org/Documents/Standards/R5RS/HTML/r5rs-Z-H-7.html#%_sec_4.1.4">procedure</a><td><tt>(lambda (</tt><i>symbol...</i><tt>)</tt>
+<i>exp</i><tt>)</tt><td>Create a procedure
+  with parameter(s) named <i>symbol...</i> and <i>exp</i> as the body. Example: <tt>(lambda (r)
+  (* pi (* r r)))</tt>
+</td></td></td></tr></td></td></td></tr></td></tt></td></td></tr></th></th></th></tr></table>
+<p>The <tt>lambda</tt> special form (an obscure nomenclature choice that refers to Alonzo Church's <a href="http://en.wikipedia.org/wiki/Lambda_calculus">lambda calculus</a>) creates a procedure.  
+We want procedures to work like this:
+
+<pre class="prettyprint">
+lis.py&gt; (define circle-area (lambda (r) (* pi (* r r)))
+lis.py&gt; (circle-area (+ 5 5))
+314.159265359
+</pre>
+
+There are two steps here. In the first step,  the <tt>lambda</tt> expression is evaluated to 
+create a procedure, one which refers to the global variables <tt>pi</tt> and <tt>*</tt>, takes a single parameter, which it calls <tt>r</tt>.
+This procedure is used as the value of the new variable <tt>circle-area</tt>. In the second step,  
+the procedure we just defined is the value of <tt>circle-area</tt>, so it is called, with the value 10 as the argument.
+We want <tt>r</tt> to take on the value 10,
+but it wouldn't do to just set <tt>r</tt> to 10 in the global environment.  
+What if we were using <tt>r</tt> for some other purpose? We wouldn't want a call to <tt>circle-area</tt> to alter that value.  Instead, we want to arrange for there to be a <i>local</i> variable named <tt>r</tt> that we can set to 10 without worrying about interfering with any global variable that happens to have the same name.
+The process for calling a procedure introduces these new local variable(s), binding each symbol in the parameter list of. the function 
+to the corresponding value in the argument list of the function call.
+
+<h2>Redefining <tt>Env</tt> as a Class</h2>
+
+To handle local variables, we will redefine <tt>Env</tt> to be a subclass of <tt>dict</tt>.
+When we evaluate <tt>(circle-area (+ 5 5))</tt>, we will fetch the procedure body, <tt>(* pi (* r r))</tt>,
+and evaluate it in an environment that has <tt>r</tt> as the sole local variable (with value 10), but also has the global environment as the "outer" 
+environment; it is there that we will find the values of <tt>*</tt> and <tt>pi</tt>.  
+In other words, we want an environment that looks like this, with the local (blue) environment nested inside the outer (red) global environment:
+
+<p><table border="1" bordercolor="red" cellpadding="5" cellspacing="1"><tr><td>
+<tt>pi: 3.141592653589793
+*: &lt;built-in function mul&gt;
+...
+
+<table border="1" bordercolor="blue" cellpadding="5" cellspacing="1">
+<tr><td>r: 10
+</td></tr></table>
+</tt></td></tr></table>
+<p>When we look up a variable in such a nested environment, we look first at the innermost level, but if
+we don't find the variable name there, we move to the next outer level.
+Procedures and environments are intertwined, so let's define them together:
+
+<pre class="prettyprint">
+class Env(dict):
+    "An environment: a dict of {'var': val} pairs, with an outer Env."
+    def __init__(self, parms=(), args=(), outer=None):
+        self.update(zip(parms, args))
+        self.outer = outer
+    def find(self, var):
+        "Find the innermost Env where var appears."
+        return self if (var in self) else self.outer.find(var)
+
+class Procedure(object):
+    "A user-defined Scheme procedure."
+    def __init__(self, parms, body, env):
+        self.parms, self.body, self.env = parms, body, env
+    def __call__(self, *args): 
+        return eval(self.body, Env(self.parms, args, self.env))
+
+global_env = standard_env()
+</pre>
+
+We see that every procedure has three components: a list of parameter names,  a body expression, and an environment
+that tells us what other variables are accessible from the body. For a procedure defined at the top level this will be
+the global environment, but it is also possible for a procedure to refer to the local variables of the environment
+in which it was <i>defined</i> (and not the environment in which it is <i>called</i>). 
+
+<p>An environment is a subclass of <tt>dict</tt>, so it has
+all the methods that <tt>dict</tt> has. In addition there are two methods: the constructor
+<tt>__init__</tt> builds a new environment by taking a list of parameter names
+and a corresponding list of argument values, and creating a new environment that has those
+{variable: value} pairs as the inner part, and also refers to the given <tt>outer</tt> environment.
+The method <tt>find</tt> is used to find the right environment for
+a variable: either the inner one or an outer one. 
+
+<p>To see how these all go together, here is the new definition of <tt>eval</tt>. Note that
+the clause for variable reference has changed: we now have to call <tt>env.find(x)</tt> to find at what level
+the variable <tt>x</tt> exists; then we can fetch the value of <tt>x</tt> from that level. (The clause for
+<tt>define</tt> has not changed, because a <tt>define</tt> always adds a new variable
+to the innermost environment.)  There are two new clauses: for <tt>set!</tt>, we find the environment level
+where the variable exists and set it to a new value.  With <tt>lambda</tt>, we create a new procedure object with the given
+parameter list, body, and environment.
+
+<pre class="prettyprint">
+def eval(x, env=global_env):
+    "Evaluate an expression in an environment."
+    if isinstance(x, Symbol):    # variable reference
+        return env.find(x)[x]
+    elif not isinstance(x, List):# constant 
+        return x   
+    op, *args = x       
+    if op == 'quote':            # quotation
+        return args[0]
+    elif op == 'if':             # conditional
+        (test, conseq, alt) = args
+        exp = (conseq if eval(test, env) else alt)
+        return eval(exp, env)
+    elif op == 'define':         # definition
+        (symbol, exp) = args
+        env[symbol] = eval(exp, env)
+    elif op == 'set!':           # assignment
+        (symbol, exp) = args
+        env.find(symbol)[symbol] = eval(exp, env)
+    elif op == 'lambda':         # procedure
+        (parms, body) = args
+        return Procedure(parms, body, env)
+    else:                        # procedure call
+        proc = eval(op, env)
+        vals = [eval(arg, env) for arg in args]
+        return proc(*vals)
+</pre>
+<p>To appreciate how procedures and environments work together, consider this program and the environment that gets formed when we evaluate <tt>(account1 -20.00)</tt>:
+
+<p><table><tr><td>
+<p>
+<table border="1" bordercolor="red" cellpadding="5" cellspacing="1">
+<tr><td valign="top"><tt>(define <b style="color:red">make-account</b>
+<table border="1" bordercolor="blue" cellpadding="5" cellspacing="1">
+<tr><td>  (lambda (<b style="color:blue">balance</b>)
+<table border="1" bordercolor="green" cellpadding="5" cellspacing="1">
+<tr><td>    (lambda (<b style="color:green">amt</b>)
+      (begin <b style="background-color:yellow">(set! balance (+ balance amt))</b>
+             balance))))
+  </td></tr></table></td></tr></table>
+<tt>(define <b style="color:red">account1</b> (make-account 100.00))
+  (account1 -20.00)
+</tt></tt></td></tr></table>
+<td>   <td valign="top">
+<table border="1" bordercolor="red" cellpadding="5" cellspacing="1">
+<tr><td valign="top"><b style="color:red"><tt>+</tt></b>: &lt;built-in operator add&gt;
+<tt><b style="color:red">make-account</b>: &lt;a Procedure&gt;
+<table border="1" bordercolor="blue" cellpadding="5" cellspacing="1">
+<tr><td><tt><b style="color:blue">balance</b>: 100.00
+<table border="1" bordercolor="green" cellpadding="5" cellspacing="1">
+<tr><td><tt><b style="color:green">amt</b>: -20.00
+  </tt></td></tr></table></tt></td></tr></table>
+<tt><tt><b style="color:red">account1</b>: &lt;a Procedure&gt;
+</tt></tt></tt></td></tr></table>
+</td></td></p></td></tr></table>
+<p>Each rectangular box represents an environment, and the color of
+the box matches the color of the variables that are newly defined in
+the environment.  In the last two lines of the program we define <tt>account1</tt> and call
+<tt>(account1 -20.00)</tt>; this represents the creation of a bank account
+with a 100 dollar opening balance, followed by a 20 dollar withdrawal.
+In the process of evaluating <tt>(account1 -20.00)</tt>, we will eval the
+expression highlighted in yellow.  There are three variables in that
+expression.  <tt>amt</tt> can be found immediately in the innermost
+(green) environment. But <tt>balance</tt> is not defined there: we
+have to look at the green environment's outer <tt>env</tt>, the blue
+one. And finally, the variable <tt>+</tt> is not found in either of
+those; we need to do one more outer step, to the global (red) environment.
+This process of looking first in inner environments and then in
+outer ones is called <i>lexical scoping</i>.  
+<tt>Env.find(var)</tt> finds the right environment according to
+lexical scoping rules.
+
+
+
+<p>Let's see what we can do now:
+
+<pre class="prettyprint">
+&gt;&gt;&gt; repl()
+lis.py&gt; (define circle-area (lambda (r) (* pi (* r r))))
+lis.py&gt; (circle-area 3)
+28.274333877
+lis.py&gt; (define fact (lambda (n) (if (&lt;= n 1) 1 (* n (fact (- n 1))))))
+lis.py&gt; (fact 10)
+3628800
+lis.py&gt; (fact 100)
+9332621544394415268169923885626670049071596826438162146859296389521759999322991
+5608941463976156518286253697920827223758251185210916864000000000000000000000000
+lis.py&gt; (circle-area (fact 10))
+4.1369087198e+13
+lis.py&gt; (define first car)
+lis.py&gt; (define rest cdr)
+lis.py&gt; (define count (lambda (item L) (if L (+ (equal? item (first L)) (count item (rest L))) 0)))
+lis.py&gt; (count 0 (list 0 1 2 3 0 0))
+3
+lis.py&gt; (count (quote the) (quote (the more the merrier the bigger the better)))
+4
+lis.py&gt; (define twice (lambda (x) (* 2 x)))
+lis.py&gt; (twice 5)
+10
+lis.py&gt; (define repeat (lambda (f) (lambda (x) (f (f x)))))
+lis.py&gt; ((repeat twice) 10)
+40
+lis.py&gt; ((repeat (repeat twice)) 10)
+160
+lis.py&gt; ((repeat (repeat (repeat twice))) 10)
+2560
+lis.py&gt; ((repeat (repeat (repeat (repeat twice)))) 10)
+655360
+lis.py&gt; (pow 2 16)
+65536.0
+lis.py&gt; (define fib (lambda (n) (if (&lt; n 2) 1 (+ (fib (- n 1)) (fib (- n 2))))))
+lis.py&gt; (define range (lambda (a b) (if (= a b) (quote ()) (cons a (range (+ a 1) b)))))
+lis.py&gt; (range 0 10)
+(0 1 2 3 4 5 6 7 8 9)
+lis.py&gt; (map fib (range 0 10))
+(1 1 2 3 5 8 13 21 34 55)
+lis.py&gt; (map fib (range 0 20))
+(1 1 2 3 5 8 13 21 34 55 89 144 233 377 610 987 1597 2584 4181 6765)
+</pre>
+
+We now have a language with procedures, variables, conditionals (<tt>if</tt>), and sequential execution (the <tt>begin</tt> procedure).  If you are familiar with other languages, you might think that a <tt>while</tt> or <tt>for</tt> loop would be needed, but
+Scheme manages to do without these just fine. The Scheme report says "Scheme demonstrates that a very small number of rules for forming expressions, with no restrictions on how they are composed, suffice to form a practical and efficient programming language." In Scheme
+you iterate by defining recursive functions.
+
+<h2>How Small/Fast/Complete/Good is Lispy?</h2>
+
+In which we judge Lispy on several criteria:
+
+<ul>
+<li><b><i>Small:</i></b> Lispy is <i>very</i> small: 117 non-comment
+  non-blank lines; 4K of source code. (An earlier version was just 90 lines, but had fewer standard procedures
+and was perhaps a bit too terse.)   The smallest version of
+  my Scheme in Java, <a href="http://norvig.com/jscheme.html">Jscheme</a>, was 1664 lines and 57K of source. Jscheme was
+  originally called SILK (Scheme in Fifty Kilobytes), but I only kept
+  under that limit by counting bytecode rather than source code. Lispy does much
+  better; I think it meets Alan Kay's 1972 <a href="http://gagne.homedns.org/~tgagne/contrib/EarlyHistoryST.html">claim</a>
+  that <i>you could define the
+  "most powerful language in the world" in "a page of code."</i> (However,
+  I think Alan would disagree, because he would count the Python compiler as part of the code, putting me <i>well</i> over a page.)
+
+<pre class="prettyprint">
+bash$ grep "^\s*[^#\s]" lis.py | wc
+     117     497    4276
+</pre><p>
+<li><b><i>Fast:</i></b> Lispy computes <tt>(fact 100)</tt> exactly in 0.003
+seconds.  That's fast enough for me (although far slower than most
+other ways of computing it). <p>
+<li><b><i>Complete:</i></b> Lispy is not very complete compared to the
+Scheme standard.  Some major shortcomings:
+<ul>
+<li> <b><i>Syntax</i></b>: Missing comments, quote and quasiquote notation, # literals, the derived
+  expression types (such as <tt>cond</tt>, derived from <tt>if</tt>,
+  or <tt>let</tt>, derived from <tt>lambda</tt>), and dotted list notation.
+<li> <b><i>Semantics</i></b>: Missing call/cc and tail recursion.  
+<li> <b><i>Data Types</i></b>: Missing strings, characters, booleans, ports,
+  vectors, exact/inexact numbers.
+  Python lists are actually closer to Scheme
+  vectors than to the Scheme pairs and lists that we implement with them.
+<li> <b><i>Procedures</i></b>: Missing over 100 primitive procedures.
+  
+ <li> <b><i>Error recovery</i></b>: Lispy does not attempt to detect,
+  reasonably report, or recover from errors.  Lispy expects the
+  programmer to be perfect.
+</li></li></li></li></li></ul><p>
+<li><b><i>Good:</i></b> That's up to the readers to decide.  I found it
+was good for my purpose of explaining Lisp interpreters.
+</li></p></li></p></li></p></li></ul>
+<h2>True Story</h2>
+
+To back up the idea that it can be very helpful to know how
+interpreters work, here's a story.  Way back in 1984 I was writing a
+Ph.D. thesis.  This was before LaTeX, before Microsoft Word for Windows—we used
+troff. Unfortunately, troff had no facility for forward references
+to symbolic labels: I wanted to be able to write "As we will see on
+page @theorem-x" and then write something like "@(set theorem-x \n%)" in
+the appropriate place (the troff register \n% holds the page number). My
+fellow grad student Tony DeRose felt the same need, and together we
+sketched out a simple Lisp program that would handle this as a preprocessor.  However,
+it turned out that the Lisp we had at the time was good at reading
+Lisp expressions, but so slow at reading character-at-a-time non-Lisp
+expressions that our program was annoying to use.  
+<p>
+From there Tony and I split paths.  He reasoned that the hard part was
+the interpreter for expressions; he needed Lisp for that, but he knew
+how to write a tiny C routine
+for reading and echoing the non-Lisp characters and link it in to the Lisp
+program.  I didn't know how to do that linking, but I reasoned that writing an
+interpreter for this trivial language (all it had was set variable,
+fetch variable, and string concatenate) was easy, so I wrote an
+interpreter in C. So, ironically, Tony wrote a Lisp program (with one small routine in C) because he was a
+C programmer, and I wrote a C program because I was a Lisp programmer.
+<p>
+In the end, we both got our theses done (<a href="http://www.eecs.berkeley.edu/Pubs/TechRpts/1985/6081.html">Tony</a>, <a href="http://www.eecs.berkeley.edu/Pubs/TechRpts/1987/5995.html">Peter</a>).
+
+<h2>The Whole Thing</h2>
+
+The whole program is here: <a href="lis.py">lis.py</a>.
+
+<h2>Further Reading</h2>
+<p>To learn more about Scheme consult some of the fine books (by
+   <a href="http://books.google.com/books?id=xyO-KLexVnMC&amp;lpg=PP1&amp;dq=scheme%20programming%20book&amp;pg=PP1#v=onepage&amp;q&amp;f=false">Friedman
+   and Fellesein</a>,
+   <a href="http://books.google.com/books?id=wftS4tj4XFMC&amp;lpg=PA300&amp;dq=scheme%20programming%20book&amp;pg=PP1#v=onepage&amp;q&amp;f=false">Dybvig</a>,
+   <a href="http://books.google.com/books?id=81mFK8pqh5EC&amp;lpg=PP1&amp;dq=scheme%20programming%20book&amp;pg=PP1#v=onepage&amp;q&amp;f=false">Queinnec</a>,
+   <a href="http://www.eecs.berkeley.edu/~bh/ss-toc2.html">Harvey and
+   Wright</a> or
+   <a href="http://mitpress.mit.edu/sicp/">Sussman and Abelson</a>),
+   videos (by <a href="http://groups.csail.mit.edu/mac/classes/6.001/abelson-sussman-lectures/">Abelson
+   and Sussman</a>),
+   tutorials (by
+      <a href="http://www.ccs.neu.edu/home/dorai/t-y-scheme/t-y-scheme.html">Dorai</a>,
+   <a href="http://docs.racket-lang.org/quick/index.html">PLT</a>, or
+   <a href="http://cs.gettysburg.edu/~tneller/cs341/scheme-intro/index.html">Neller</a>),
+   or the
+      <a href="http://www.schemers.org/Documents/Standards/R5RS/HTML">reference
+   manual</a>.
+
+<p>I also have another page describing a <a href="http://norvig.com/lispy2.html">more advanced version of Lispy</a>.
+
+
+
+<i><a href="http://norvig.com">Peter Norvig</a></i>
+<p>
+
+ </p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></body>

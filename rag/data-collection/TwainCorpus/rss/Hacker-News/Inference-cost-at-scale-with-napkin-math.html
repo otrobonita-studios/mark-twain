@@ -1,0 +1,319 @@
+<body>
+<div class="main">
+
+<div class="leader">
+<h1> Inference cost at scale with napkin math </h1>
+<div class="post-date"> Jun 14 </div>
+<div class="tags" id="tags">
+<a class="tag" href="/tags/gpu.html">gpu</a>
+<a class="tag" href="/tags/ai.html">ai</a>
+<a class="tag" href="/tags/math.html">math</a>
+</div>
+</div>
+<p>If you serve AI models as a part of your product stack,
+you've likely wondered what kind of scale your GPU cluster tops out at.</p>
+<p>With some rudimentary knowledge about your hardware and model architecture,
+we can work out the dollar cost-per-user on the back of a napkin<sup class="footnote-ref"><a href="#fn-1" id="fnref-1">1</a></sup>.</p>
+<p>If you're comfortable reasoning about GPUs and/or LLMs,
+use this legend to skip to sections of relevance:</p>
+<ul>
+<li><a href="#resources-on-a-single-gpu">Resources on a single GPU</a>
+</li>
+<li><a href="#cost-of-a-matrix-multiplication">Cost of a Matrix Multiplication</a>
+</li>
+<li><a href="#an-overview-of-language-models">An Overview of Language Models</a>
+</li>
+<li><a href="#attention-in-greater-detail">Attention in Greater Detail</a>
+</li>
+<li><a href="#reducing-compute-with-kv-cache">Reducing Compute with KV-Cache</a>
+</li>
+<li><a href="#how-much-does-a-token-cost">How much does a token cost?</a>
+</li>
+<li><a href="#how-many-users-can-you-serve-realistically">How many users can you serve realistically?</a>
+</li>
+<li><a href="#optimizing-for-hundreds-of-users-on-a-gpu">Optimizing for hundreds of users on a GPU</a>
+</li>
+<li><a href="#tokens-per-second">Tokens Per Second</a>
+</li>
+<li><a href="#dollar-cost-per-user">Dollar cost per user</a>
+</li>
+</ul>
+<h2 id="resources-on-a-single-gpu">Resources on a single GPU</h2>
+<p>On any GPU's spec-sheet you can find these metrics:</p>
+<ul>
+<li><strong>Peak throughput:</strong> Number of floating-point operations per second. Usually in TeraFLOPs
+(1 TFLOP/s = \(10^{12}\) ops/sec).
+</li>
+<li><strong>Memory bandwidth</strong>: Amount of data that can be moved from global memory (VRAM) to registers (SRAM).Usually in TB/sec.
+</li>
+</ul>
+<p>We'll assume FP-8 quantization to compute throughput,
+though it's easy to adjust the math for FP-16 as well.</p>
+<h2 id="cost-of-a-matrix-multiplication">Cost of a Matrix Multiplication</h2>
+<p>If you bothered to click on this article
+you know that AI models do <em>many</em> matrix multiplications on <em>massive</em> matrices.
+That we start by finding the cost of a matmul should be no surprise then.</p>
+<p>Assume two matrices: \(A_{N \times d} \) and \(B_{d \times M}\).
+Let their product be the matrix \( O_{N \times M} \).
+From high school algebra, we know that each element of \(O\) can be computed as:</p>
+<div class="tex">
+$$
+O^{i,k} = \sum_{j=1}^{d} A^{i,j} * {B}^{j,k}
+$$
+</div>
+<p>In this, we find our first insight into the "cost" of a matrix multiplication.
+For each \( O^{i,k}\), we need to start with an initial value of 0 and:</p>
+<ol>
+<li>Load \(A^{i,j}\) from memory.
+</li>
+<li>Load \(B^{j,k}\) from memory.
+</li>
+<li>Multiply them.
+</li>
+<li>Add result of #3 to the cumulative sum.
+</li>
+</ol>
+<p>And this is done a total of \(d\) times <em>per item.</em>
+So, the cost of a <code>(N,d)*(d,M)</code> matrix product
+is \( 2NMd \) memory accesses and \(2NMd\) floating-point operations.</p>
+<p>With an optimization called tiling,
+the memory access goes down to about \( d(N+M) \).
+The details aren't necessary to proceed, but <a href="https://alvinwan.com/how-to-tile-matrix-multiplication/">Alvin's blog post</a>
+has them for those curious.</p>
+<h2 id="an-overview-of-language-models">An Overview of Language Models.</h2>
+<p>At their core, LLMs are simple –
+they receive a sequence of <code>N</code> words and generate the <code>N+1</code>th.
+Each word is represented as a <code>d</code>-dimensional vector.
+Using repeated applications of a function called "attention" (explained later), they predict the next word.</p>
+<p>A single forward pass looks roughly like this:</p>
+<code class="language-python"><div class="sourceCode"><pre class="sourceCode"><code class="sourceCode"><span id="1">y <span class="op">=</span> <span class="bu">input</span>() <span class="co"># y = a (N x d) matrix</span></span>
+<span id="2"><span class="cf">for</span> each layer <span class="kw">in</span> the network:</span>
+<span id="3">  y <span class="op">=</span> attention(y)</span>
+<span id="4"> </span>
+<span id="5"><span class="co"># Convert the final layer's output to word-probs.</span></span>
+<span id="6"><span class="co"># W_vocab = matrix of size d x vocab_len,</span></span>
+<span id="7"><span class="co"># and vocab_len is the number of all words</span></span>
+<span id="8"><span class="co"># in the model's vocabulary.</span></span>
+<span id="9">token_probs <span class="op">=</span> softmax(y <span class="op">*</span> W_vocab)</span>
+<span id="10">next_tok    <span class="op">=</span> token_probs(argmax(token_probs))</span>
+<span id="11"><span class="co"># next_tok is a (1 x d) vector</span></span></code></pre></div></code>
+<p>This is also why LLMs are called auto-regressive.
+They can keep doing multiple forward passes over their own output until a <code>&lt;stop&gt;</code> token is generated.</p>
+<p>This is a simplified overview of where I'm skipping RoPE,
+the MLP layers in between, token sampling at the end,
+and much more.</p>
+<p>As a fun exercise: you should try to price them in and
+verify that our math still works by a <a href="https://en.wikipedia.org/wiki/Fermi_problem">Fermi estimation</a>.</p>
+<h2 id="attention-in-greater-detail">Attention in Greater Detail</h2>
+<p>I'm going to assume that you have some familiarity with attention,
+and provide only a refresher here.</p>
+<p>As mentioned, the input is a matrix \(X \in \mathbb{R}^{N \times d}\), and \(X_i\) is a single \(d\) dimensional vector.
+For every "layer" in the network, the model stores matrices \( W_Q,W_K, W_V \in \mathbb{R}^{d \times d} \), and computes "attention" as follows:</p>
+<p>\( Q = X.W_Q \),   \( K = X.W_K\) and \( V = X.W_v\)</p>
+<p>\( Attention(Q,K,V) = softmax(Q.K^T/\sqrt{d}).V\)</p>
+<p>Or, in python:</p>
+<code class="language-python"><div class="sourceCode"><pre class="sourceCode"><code class="sourceCode"><span id="1"><span class="kw">def</span> attention(X, W_q, W_k, W_v):</span>
+<span id="2">    Q,K,V <span class="op">=</span> X <span class="op">@</span> W_q, X <span class="op">@</span> W_k, X <span class="op">@</span> W_v</span>
+<span id="3">    Q_KT <span class="op">=</span> Q <span class="op">@</span> K.transpose(<span class="dv">2</span>,<span class="dv">1</span>)</span>
+<span id="4">    <span class="cf">return</span> softmax(Q_KT <span class="op">/</span> sqrt(d_model)) <span class="op">@</span> V</span></code></pre></div></code>
+<p>Where <code>@</code> is the dot-product of two matrices.</p>
+<p>In reality, multiple LLM conversations are processed in parallel.
+So inference is batched—where we process \(B\) chats concurrently.
+This means our input sequence \( X \in \mathbb{R}_{B \times N \times d}\).</p>
+<p>Work the math out on paper to verify it tracks.</p>
+<p>In our Python code, just the transpose arguments change:</p>
+<code class="language-diff"><div class="sourceCode"><pre class="sourceCode"><code class="sourceCode"><span id="1"><span class="st">- Q_KT = Q @ K.transpose(2, 1)</span></span>
+<span id="2"><span class="va">+ Q_KT = Q @ K.transpose(0, 2, 1)</span></span></code></pre></div></code>
+<p>Only, there's one trouble with our implementation of attention: it <strong>reads too much data from memory.</strong>
+Let's look at a single matmul, the \(K = X.W_k\).
+Companies that serve models will allow you to chat with them for up to 200k or so tokens.
+For a single <code>K@W_k</code> matmul, it looks like this:</p>
+<code class="language-python"><div class="sourceCode"><pre class="sourceCode"><code class="sourceCode"><span id="1">X   <span class="op">=</span> tensor(B, N, d) <span class="co"># "B" chats, each with a maximum of "N" 'tokens'.</span></span>
+<span id="2">W_k <span class="op">=</span> tensor(d, d)    <span class="co"># weights have no batch dimension</span></span>
+<span id="3">O   <span class="op">=</span> tensor(B, N, d) <span class="co"># result of X @ W_k</span></span></code></pre></div></code>
+<p>Notice that the output is another \(\mathbb{R}_{B \times N \times d}\) tensor.</p>
+<p>As established in the matmul cost section, to compute each \(O^b \in \mathbb{R}_{N \times d}\), we need \(d(N+d)\) memory reads and \(2Nd^2\) compute operations.</p>
+<p>For a batch size of \( B \) (number of concurrent conversations), we get:</p>
+<ol>
+<li><strong>Floating-point operations:</strong> \(2BNd^{2}\).
+</li>
+<li><strong>Memory accesses:</strong> \(Bd(N+d)\).
+</li>
+</ol>
+<p>Assume N to be roughly 200k, and d to be <code>8192</code> (most common outside frontier labs).
+Meaning that to generate one token for a single user, we need <strong>26 trillion floating-point ops</strong> and <strong>1.7 billion memory accesses.</strong> This is <em>with</em> the tiled matmuls. That's <strong>way</strong> more compute ops than memory reads. In fact, we're doing four orders of magnitude more compute than memory accesses. The next batch of input will have to wait tens of thousands of cycles for the GPU to finish with the current batch.</p>
+<p>On diagramming the above matmuls out on paper, you'll notice a key detail— we're wasting far too many resources to re-compute the matmul products for tokens that <strong>were already processed in a previous iteration</strong>.</p>
+<p>Recall that LLMs are auto-regressive. They:</p>
+<ol>
+<li>Take a list of tokens \(X\), do a bunch of matmuls.
+</li>
+<li>Repeatedly do <code>attention(X, weights)</code> at L (for L layers), and generate a new token \(x\)
+</li>
+<li>append \(x\) to \(X\) (the chat thus far).
+</li>
+<li>Put the output of 3 back into step 1, until a "STOP" token is generated.
+</li>
+</ol>
+<p>To avoid re-processing the entire chat history <em>again</em> for every new word,
+inference engines will cache the \(K,V\) pairs for reuse.</p>
+<h2 id="reducing-compute-with-kv-cache">Reducing Compute with KV-Cache</h2>
+<p>The intermediate output on every chat, namely \(K\) and \(V\),
+is cached at every layer, and stored in a region of VRAM called the
+<strong>KV Cache.</strong>
+Inference engines like vLLM allow programmers to decide what
+percentage of VRAM should be pre-allocated for this.</p>
+<p>Of course, it's not as easy as I made it sound. There's a lot of cleverness applied to make optimal use of the memory vLLM is handed, the details for which you can find in <a href="https://youtu.be/5ZlavKF_98U">this presentation</a> by the original authors.</p>
+<p>For our napkin math,
+the existence of KV-cache allows one simplification:
+<strong>for every forward pass, we get to process only the most recently generated word, rather than the entire history</strong>.
+i.e., instead of processing a \(X \in R_{N \times d}\),
+we get \(X \in R_{1 \times d}\) (the most recent token).</p>
+<p>The math for <code>X @ W_k</code> now becomes:</p>
+<code class="language-python"><div class="sourceCode"><pre class="sourceCode"><code class="sourceCode"><span id="1">X   <span class="op">=</span> tensor(B, <span class="dv">1</span>, d)</span>
+<span id="2">W_k <span class="op">=</span> tensor(d, d)</span>
+<span id="3">O   <span class="op">=</span> tensor(B, <span class="dv">1</span>, d)</span></code></pre></div></code>
+<p>For a batch size of \( B \) (number of concurrent conversations), we get:</p>
+<ol>
+<li>~26.2 million memory accesses
+</li>
+<li>~52.4 million ops
+</li>
+</ol>
+<p>Meaning that for every memory access made, we need only perform <em>two</em> operations rather than 10 thousand.
+For the entire batch, we're doing <strong>2*B operations per memory access.</strong>
+This is fantastic! Now, let's pull out the spec-sheet for the fastest GPU available and figure out how many tokens we can generate per second (and for how many users).</p>
+<h2 id="how-much-does-a-token-cost">How much does a token cost?</h2>
+<p>Let's take the NVIDIA B200 as our leading example for the remainder of this. From a web search, you'll find that it has the following specs:</p>
+<ol>
+<li>Memory bandwidth: 8 TB/s (Or \(8*10^{12} \) bytes accessed per second).
+</li>
+<li>Compute intensity: 4500 TFLOP/s (Or  \(4500 * 10^{12}\) bytes crunched per second).<sup class="footnote-ref"><a href="#fn-2" id="fnref-2">2</a></sup>
+</li>
+</ol>
+<p>See that?
+A Blackwell class GPU can crunch bytes <strong>562 times faster</strong> than it can load them.
+Put differently, to get the most out of such a chip, we should be doing <strong>562 computations for every byte loaded.</strong>
+Any more, and we have memory bandwidth sitting idle (e.g: without a KV-cache).
+Any less, and we have compute cores sitting idle.</p>
+<p>Currently, we're doing <strong>2*B</strong> compute-ops per byte read.
+So, how many users should we serve to fully exhaust a B200's compute and bandwidth budget?</p>
+<p>\( 2B = 562 \implies B = 331 \)</p>
+<p>With a single NVIDIA B200 GPU, we should be serving <strong>331 users concurrently</strong> to get the most out of our investment.
+Of course, this is a theoretical ceiling.
+In reality, VRAM is limited. We'll have to squeeze the model weights in there along with the huge KV-cache.</p>
+<h2 id="how-many-users-can-you-serve-realistically">How many users can you serve realistically?</h2>
+<p>We'll assume a 32B dense model, as they've have gotten quite good for production use
+and a B200 can comfortably serve them.
+This could be a Gemma, Qwen, DeepSeek, whatever.</p>
+<p>Note that we're assuming a pure transformer architecture,
+even though a lot of open-weight models use "tricks" to reduce KV-cache pressure on long contexts
+(see: <a href="https://sebastianraschka.com/llms-from-scratch/ch04/08_deltanet/">Gated Delta-Nets</a>, and the <a href="https://arxiv.org/pdf/2503.19786">Gemma 3 technical report</a>).
+You can chat with your favorite LLM to figure out how this affects your inference math.</p>
+<p>Back to our problem: we have a 32B model.
+This is 32GB (<code>32*10^9</code> bytes) in VRAM.
+Let's assume a context window of \(N\)=200k tokens.
+The input is \(N \times d\)–dimensional at every layer.</p>
+<p>For each layer, we need to store \(2Nd\) bytes for a pair of K and V matrices.
+A model of our size will typically have <code>d=8192</code> and <code>L=64</code>. Giving us:</p>
+<code class="language-python"><div class="sourceCode"><pre class="sourceCode"><code class="sourceCode"><span id="1">KV cache size <span class="op">=</span> <span class="dv">2</span> <span class="op">*</span>    N    <span class="op">*</span>  L <span class="op">*</span>  d</span>
+<span id="2">              <span class="op">=</span> <span class="dv">2</span> <span class="op">*</span> <span class="dv">200_000</span> <span class="op">*</span> <span class="dv">64</span> <span class="op">*</span> <span class="dv">8196</span></span>
+<span id="3">              <span class="op">=</span> <span class="dv">210</span> GB (<span class="op">!!</span>)</span></code></pre></div></code>
+<p>That's more VRAM than our GPU has!</p>
+<p>Here, I'll invoke another optimization that models of this size use: <a href="https://arxiv.org/pdf/2305.13245">Grouped-Query-Attention</a>. If attention was new to you, you may save this for future reading and rely on my claim that it cuts down the KV cache size by about 8x.</p>
+<p>But if you're familiar with Multi-Head-Attention then GQA is simple: It shares the same KV-head across multiple Query heads. So for 64 query heads, we'll use a total of only 8 KV-heads; i.e: Q-heads 0-7 share the first KV-head, Q-heads 8-15 the next one, and so on.</p>
+<p>With GQA our KV-cache is now at ~<strong>26GB</strong> <em>per chat sequence (or per user)</em>.</p>
+<p>We're already using <strong>32GB</strong> for weights,
+so how many concurrent chat contexts can we store in the KV-cache in the remaining 160GB?
+That's 160/26 = 6.</p>
+<p>So about six chat's going parallely. That seems… low.</p>
+<h2 id="optimizing-for-hundreds-of-users-on-a-gpu">Optimizing for hundreds of users on a GPU.</h2>
+<p>Most contexts will never reach the 200k length.
+Depending on your product, the median LLM-conversation can be anywhere between 4-40k tokens.</p>
+<p>To account for variable-length conversations,
+we can split the KV-cache into chunks,
+and incrementally allocate those chunks to different users as their token use grows.
+Conversation threads that are abandoned/cold can be flushed out of the cache.
+This is what vLLM does with <a href="https://hamzaelshafie.bearblog.dev/paged-attention-from-first-principles-a-view-inside-vllm/">PagedAttention</a>.
+Depending on the median user activity,
+you can serve anywhere between <strong>40-60 users per Blackwell chip</strong>.</p>
+<p>Remember that the nature of your product matters too.
+In most ChatGPT-style apps the user spends more time reading than prompting.
+For a median chat session, a user will likely have 80% idle time.
+Here, the GPU has a duty cycle of 20% (!).</p>
+<p>Realistically, one chip can serve ~300-800 users comfortably depending on the style your app.
+For non-chat apps, measuring duty-cycles is not optional.</p>
+<h2 id="tokens-per-second">Tokens Per Second</h2>
+<p>Earlier, we saw that we can comfortably support 6 users at 100% duty cycle.
+But would their experience be snappy?</p>
+<p>Again, this is a direct consequence of our memory-to-compute ratio.
+For a single forward pass we move all the model weights + KV-cache from
+VRAM to registers <em>once</em>.
+Then, we do 2*B operations for every byte loaded.</p>
+<p>So the total time spent is:</p>
+<code><div class="sourceCode"><pre class="sourceCode"><code class="sourceCode"><span id="1">time spent moving data</span>
+<span id="2">    = memory in GB  / bandwidth in GBps </span>
+<span id="3">    = 190GB / (8*10**3) GBps </span>
+<span id="4">    = 0.02375 seconds</span>
+<span id="5">    = 23.75 ms </span>
+<span id="6"></span>
+<span id="7">time spent computing </span>
+<span id="8">    = 190 * 2 * 6 / 4500 TFLOPs</span>
+<span id="9">    = 0.5ms</span></code></pre></div></code>
+<p>Since both happen in parallel,
+the compute cores are idle 98% of the time.</p>
+<p>Every 24ms, we generate B=6 tokens.
+For 1s (=1000ms), we generate roughly 250 tokens for 6 users,
+or about 40 tokens per user per second.</p>
+<p>Assuming the LLM output is meant for reading
+(unlike, say, building SQL queries in the background),
+40 tokens per second is beyond most people's reading speed.</p>
+<h2 id="dollar-cost-per-user">Dollar cost per user</h2>
+<p>This largely depends on whether you own or rent your hardware.
+At $40,000 per B200, your lifetime cost per user is <code>40_000/num_users</code>.</p>
+<p>In the 100% duty cycle case (worst for cost), that's 6k$ per user.
+Realistically, serving 300 users per GPU  you'll spend a lifetime
+cost of about $133 per user, plus the datacenter/upkeep bill.</p>
+<p>If you rent the GPU, the cost is more straightforward.
+At an hourly rate of $4<sup class="footnote-ref"><a href="#fn-3" id="fnref-3">3</a></sup>, your hourly cost per user is <code>4/num_users</code>.
+For <code>num_users=300</code> you get an hourly rate of about $0.013 per user,
+or <code>$9.36</code> per month.</p>
+<details>
+<summary>Ballpark accuracy of our estimate</summary>
+For a 32B model on a B200, this is a rather conservative estimate.
+<p>I've left some headroom for workflows with high duty cycles, like
+an agent loops over tool-calls and runs queries.</p>
+</details>
+<p>As an AI company, you'll have more than one GPU (I pray).
+For model-sizes that span multiple GPUs, our math is still directionally valid,
+but the use of napkins is ill-advised.</p>
+<h2 id="backmatter">Backmatter</h2>
+
+<section class="footnotes">
+<div class="footnote" id="fn-1">
+<div class="footnote-number">
+<a href="#fnref-1">1</a>
+</div>
+<div class="footnote-contents">
+<p>Or two napkins, realistically. This is how I worked it out over coffee with a friend, which is how this post came to be.</p>
+</div>
+</div>
+<div class="footnote" id="fn-2">
+<div class="footnote-number">
+<a href="#fnref-2">2</a>
+</div>
+<div class="footnote-contents">
+<p>This is the <em>dense</em> compute throughput of the B200. For sparse matrices, it goes upto 9000 TFLOPs.</p>
+</div>
+</div>
+<div class="footnote" id="fn-3">
+<div class="footnote-number">
+<a href="#fnref-3">3</a>
+</div>
+<div class="footnote-contents">
+<p>At the time of writing, you'll only find this price on bulk rentals with time commitments.</p>
+</div>
+</div>
+</section>
+
+</div>
+</body>
