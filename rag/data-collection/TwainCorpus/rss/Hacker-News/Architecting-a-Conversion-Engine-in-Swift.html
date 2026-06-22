@@ -1,0 +1,253 @@
+<article class="post single-post">
+
+<div class="gh-content gh-canvas">
+<div class="kg-card kg-callout-card kg-callout-card-blue"><div class="kg-callout-text"><i><em class="italic" style="white-space: pre-wrap;">Minimal now supports importing and exporting across Markdown, Rich Text, HTML, PDF, plain text, and our proprietary format MNML. The following essay describes how we accomplished this system in the Swift programming language. To read about the human-centered design and how we fit this new technology into our iOS and macOS app, read the design-centric essay </em></i><a href="https://blog.minimal.app/designing-import-export/" rel="noreferrer"><u><i><em class="italic underline" style="white-space: pre-wrap;">right here</em></i></u></a><i><em class="italic" style="white-space: pre-wrap;">.</em></i></div></div><p>It’s not easy to coerce one file format into another, and adding support for more and more file formats gets ever more complex. To manage this complexity, we built a cohesive system that relies on an Intermediate Representation to serve as a middleman across file formats. The <a href="https://en.wikipedia.org/wiki/Intermediate_representation?ref=blog.minimal.app" rel="noreferrer">Intermediate Representation</a> (or “IR”) allows us to simply convert a given file format to and from the IR, instead of across every possible file format pair. </p><h3 id="intermediate-representation">Intermediate Representation</h3><p>If we were to convert notes directly from one format to another, we’d be caught in a complex web of conversions that only gets more complex as we add more file formats. To avoid this mess, we first built a system called Intermediate Representation. </p><figure class="kg-card kg-image-card kg-card-hascaption"><figcaption><b><strong style="white-space: pre-wrap;">Mess vs elegance.</strong></b><span style="white-space: pre-wrap;"> Without the IR, six file formats would produce 30 relationships (N^2 - N). With the IR, six file formats produces 12 distinct relationships (N * 2).</span></figcaption></figure><p>The IR sits in the middle of all file formats. With this architecture, adding support for a new format simply requires building that format’s own bespoke converter, without any concern for other file formats. Complexity grows linearly as we expand support to new types of data. </p><h3 id="nature-does-this">Nature does this. </h3><p>Biologists call this the <a href="https://en.wikipedia.org/wiki/Bow_tie_(biology)?ref=blog.minimal.app" rel="noreferrer">bow-tie</a> or hourglass architecture. In gist, a simplified intermediary stage allows the two sides of the interaction to be independently complex. </p><p>For example, a cell consumes an incredible array of molecules that is then digested into a smaller set of shared intermediaries (<a href="https://en.wikipedia.org/wiki/Catabolism?ref=blog.minimal.app" rel="noreferrer">catabolism</a>). On the other side, the cell then assembles these intermediaries back into the complex array of molecules that the cell puts to use (<a href="https://en.wikipedia.org/wiki/Anabolism?ref=blog.minimal.app" rel="noreferrer">anabolism</a>). If the cell had to map all of the input molecules to the required output molecules, it would need multiple times more internal processes to fully metabolize. The Intermediate Representation makes it simpler and makes either side of the operation more evolvable. </p><p>However, nature provides a powerful lesson for programmers and designers: systems that depend on a shared intermediary often get frozen. While the IR makes it easier for any side of the equation to evolve on its own, it makes it harder for the broader system to evolve: changing the definition of the IR requires everything that interacts with it to update to the new shape. </p><p>An excellent example of architectural lock-in is the genetic code, often described as a "frozen accident." Nucleic-acid information (stored in DNA and copied as RNA) is read in 3-unit sequences called codons, and each codon is an instruction for the assembly of amino acid chains. The meaning of these symbols is so deeply embedded in the machinery of life that it cannot simply be changed or re-interpreted; if the meaning of a codon were changed, proteins would be misconstructed by the cell. </p><p>The genetic code – the shared mapping of codons to amino acids – is like a biological Intermediate Representation. It sits between the nucleic-acid sequences and the construction of proteins, determining how complex life is expressed via a standardized code. This standard is <em>nearly universal across life</em> for a reason: once it became central to the expression of cellular machinery, it became increasingly improbable that the shared logic and rules might change.</p><h3 id="code">Code</h3><p>Below is our IR's document structure, written in Swift. We placed it in its own "IR" namespace to prevent naming collisions without creating a dedicated package (this code lives alongside the rest of our code). </p><figure class="kg-card kg-code-card"><pre><code class="language-Swift">/// Namespace for the Intermediate-Representation.
+enum IR {
+    // Intentionally has no cases. Exists purely to scope the types below.
+}
+ 
+ 
+// MARK: - Document
+ 
+extension IR {
+    
+    /// A parsed note in dialect-neutral form.
+    struct Document: Equatable {
+        
+        /// A sequence of `Block` (stacks vertically), each containing a sequence of `Inline` (stacks horizontally).
+        var blocks: [Block]
+        
+        var resources: [String: Resource]
+        
+        init(blocks: [Block] = [],
+             resources: [String: Resource] = [:]) {
+            ...
+        }
+    }
+}
+ 
+ 
+// MARK: - Blocks
+ 
+extension IR {
+    
+    /// A unit of textual content that stacks vertically.
+    indirect enum Block: Equatable {
+        case blankLine
+        case paragraph([Inline])
+        case codeBlock(language: String?, content: String)
+        case heading(level: Int, inlines: [Inline])
+        case bulletList([ListItem])
+        case orderedList(items: [ListItem], start: Int)
+        case todoList([TodoItem])
+        case blockquote([Block])
+        case pullquote([Inline])
+        case horizontalRule
+        case embed(resourceId: String)
+    }
+    
+    struct ListItem: Equatable {
+        var blocks: [Block]
+        init(blocks: [Block]) { self.blocks = blocks }
+    }
+    
+    struct TodoItem: Equatable {
+        var checked: Bool
+        var blocks: [Block]
+        init(checked: Bool, blocks: [Block]) {
+            ...
+        }
+    }
+}
+ 
+ 
+// MARK: - Inlines
+ 
+extension IR {
+    
+    /// Content that flows horizontally inside a block.
+    indirect enum Inline: Equatable {
+        case text(String)
+        case strong([Inline])
+        case emphasis([Inline])
+        case underline([Inline])
+        case link(url: String, inlines: [Inline])
+        case inlineCode(String)
+        case folder(name: String)
+        case embed(resourceId: String)
+        case lineBreak
+    }
+}
+ 
+ 
+// MARK: - Resources
+ 
+extension IR {
+    
+    /// An embed payload. Held off the tree and referenced by id.
+    struct Resource: Equatable {
+        
+        var kind: String
+        
+        var mimeType: String?
+        
+        var data: Data?
+        
+        var url: String?
+        
+        var attributes: [String: String]
+        
+        init(kind: String,
+             mimeType: String? = nil,
+             data: Data? = nil,
+             url: String? = nil,
+             attributes: [String: String] = [:]) {
+            ...
+        }
+    }
+}</code></pre><figcaption><p><span style="white-space: pre-wrap;">Real code describing the IR (Intermediate Representation) structure.</span></p></figcaption></figure><p>Not all file formats support the same conventions (eg, Markdown doesn’t represent colored text, and MNML doesn’t support tables), so during conversion we’ll often emit concessions.</p><figure class="kg-card kg-code-card"><pre><code class="language-Swift">/// A record of something the engine simplified, downgraded, or set aside during conversion.
+struct Concession: Equatable {
+    
+    var category: Category
+    
+    var description: String
+    
+    var count: Int?
+    
+    init(category: Category,
+         description: String,
+         count: Int? = nil) {
+        ...
+    }
+    
+    enum Category: Equatable {
+        case unsupportedFormatting
+        case downgraded
+        case dropped
+        case truncated
+    }
+}
+
+extension Array where Element == Concession {
+    
+    mutating func appendOrIncrement(_ concession: Concession) {
+        ...
+    }
+}</code></pre><figcaption><p><span style="white-space: pre-wrap;">Real code describing the structure of concession aggregation and reporting. </span></p></figcaption></figure><h3 id="parsing-and-rendering">Parsing and Rendering</h3><p>Conversion begins by parsing the source file into the IR, and ends by rendering the IR into the target file format. Below are <code>DocumentParser</code> and <code>DocumentRenderer</code> protocols. Each file format needs to implement its parsing and rendering logic by crafting bespoke implementations of these protocols.</p><figure class="kg-card kg-code-card"><pre><code class="language-Swift">/// Protocol for producing an `IR.Document` from source text of a specific `Format`.
+/// Each parser handles exactly one input format — `DocumentParserMinimal` reads MNML, `DocumentParserHTML` reads HTML, and so on. The orchestrator picks the right one based on the caller's `Format`.
+/// Parsers never render. Their only output is the Intermediate-Representation and any concessions.
+protocol DocumentParser {
+    
+    /// The input format this parser handles.
+    var format: Format { get }
+    
+    /// Parse `source` into an IR document.
+    /// Any content the IR can't represent is recorded in the result's concessions.
+    func parse(_ source: String) throws -&gt; ParseResult
+}
+
+/// The outcome of a parse: the IR document, plus a record of what was simplified.
+struct ParseResult: Equatable {
+    var document: IR.Document
+    var concessions: [Concession]
+    
+    init(document: IR.Document, concessions: [Concession] = []) {
+        self.document = document
+        self.concessions = concessions
+    }
+}</code></pre><figcaption><p><span style="white-space: pre-wrap;">DocumentParser protocol. Real code.</span></p></figcaption></figure><figure class="kg-card kg-code-card"><pre><code class="language-Swift">/// Protocol for producing output of a specific `Format` from an `IR.Document`.
+/// Each renderer handles exactly one output format: `HTMLRenderer` emits HTML, `MNMLRenderer` emits MNML, and so on. The orchestrator picks the right one based on the caller's `Format`.
+/// Renderers never parse. Their only input is the Intermediate-Representation; their only output is the rendered form and the concessions incurred producing it (see `RenderResult`).
+protocol DocumentRenderer {
+    
+    /// The output format this renderer produces.
+    var format: Format { get }
+    
+    /// Render `document` into this renderer's format.
+    /// Any IR content the target format can't express is recorded in the result's concessions.
+    func render(_ document: IR.Document) throws -&gt; RenderResult
+}
+
+/// The outcome of a render: the output payload, plus a record of what was simplified.
+/// Output is carried as `Data` so this struct can serve text and binary formats alike.
+/// Text formats (HTML, Markdown, MNML, plain text, RTF) populate `data` with UTF-8 bytes; binary formats (PDF) populate it directly.
+struct RenderResult: Equatable {
+    var data: Data
+    var concessions: [Concession]
+    
+    init(data: Data, concessions: [Concession] = []) {
+        self.data = data
+        self.concessions = concessions
+    }
+}</code></pre><figcaption><p><span style="white-space: pre-wrap;">DocumentRenderer protocol. Real code.</span></p></figcaption></figure><p>For example, to support HTML we implemented <code>DocumentParserHTML</code> and <code>DocumentRendererHTML</code>, and to support Markdown we implemented <code>DocumentParserMarkdown</code> and <code>DocumentRendererMarkdown</code>, allowing us to convert between HTML and Markdown files. Building parsers and renderers for each file type, we can convert from one to the other with ease.</p><p>Here is how we coerce an HTML file into Markdown:</p><figure class="kg-card kg-code-card"><pre><code>let content = try readFile(at: url)
+let parseResult = try? DocumentParserHTML().parse(content)
+let renderResult = try? DocumentRendererMarkdown().render(parseResult.document)
+let renderedMarkdownText = String(decoding: renderResult.data, as: UTF8.self)</code></pre><figcaption><p><span style="white-space: pre-wrap;">With deep modules and shallow interfaces (shout out to John Ousterhout), using the conversion engine is very easy. </span></p></figcaption></figure><h3 id="integration-in-our-notes-app">Integration in Our Notes App</h3><p>Making our conversion engine a well-appreciated feature within the Minimal app took careful consideration. The obvious case is simple: export notes, and import notes, but we realized there's opportunity for more subtle capabilities – which are the kind of opportunities that our app is all about (if can deliver a feature without an interface, we're thrilled).</p><figure class="kg-card kg-image-card kg-card-hascaption"><figcaption><span style="white-space: pre-wrap;">Export one or more notes. Import one or more files. </span></figcaption></figure><p>We originally built the conversion engine in response to a deluge of requests to support imports from other writing apps as well as exports to the Mac file system. Once we had the conversion engine working, we realized that it deserves to be used throughout Minimal, and not just in a formal “Export” or “Import” dialogue.</p><p>We encountered the following Import surface areas, and built first-class support for each case:</p><ul><li>Drag into the Notes List</li><li>Drag into a note</li><li>Paste on the Notes list</li><li>Paste files into a note, and paste Rich Text into a note (eg, copy from Pages and paste in Minimal)</li><li>Importing notes with the Share extension from apps that support system sharing</li><li>Menu &gt; File &gt; Import</li></ul><p>Similarly for exports:</p><ul><li>Via Note Action button &gt; Export</li><li>Notes List &gt; right-click/long-press &gt; Export</li><li>Command-shift-E export keyboard shortcut</li><li>Quick Export, exporting a note instantly using the most recently used export settings, via command-option-E</li><li>Menu &gt; File &gt; Export</li></ul><figure class="kg-card kg-image-card kg-card-hascaption"><figcaption><span style="white-space: pre-wrap;">Writers can simply drag files into the Notes List to create new, elegant notes that preserve the original formatting and structure.</span></figcaption></figure><p>To serve all of these scenarios, we built a series of utilities to detect file types, recursively handle folders, emit concessions and report import/export degradation, stage files during bulk import/export, and support roundtrip export-import flows.</p><p>To support the export-import roundtrip we built a proprietary <code>.mnml</code> file type. When writers import these files, Minimal knows to import notes verbatim, avoiding concessions entirely while perfectly re-importing, 100% of the time. </p><figure class="kg-card kg-code-card"><pre><code class="language-Swift">extension UTType {
+
+	 // (Declared in Info.plist via `UTExportedTypeDeclarations`)
+    
+    /// Minimal's first-class file format. Preserves MNML conventions verbatim.
+    /// Round-trips through Minimal with full fidelity.
+    static let mnml: UTType = UTType("app.minimal.mnml") ?? .plainText
+    
+    /// The de facto Markdown UTI adopted broadly across Markdown tooling.
+    static let markdown = UTType(importedAs: "net.daringfireball.markdown")
+}</code></pre><figcaption><p><span style="white-space: pre-wrap;">Proprietary MNML file type. Real code.</span></p></figcaption></figure><p>To support Rich Text copy-and-paste, we built our own pasteboard that accommodates multiple formats while ensuring that within-app pastes will avoid lossy conversion-engine roundtrips:</p><figure class="kg-card kg-code-card"><pre><code class="language-Swift">/// Provides various data types (plain text, RTF, HTML, native Minimal plain text) so writers can copy from Minimal and paste anywhere.
+/// Includes a native Minimal-specific data type so that within-Minimal copy-paste's do not roundtrip through RTF.
+enum MinimalPasteboard {
+    
+    /// Pasteboard types for which we enable Paste, richest first.
+    static let pasteableTypeIdentifiers: [String] = [
+        UTType.rtf.identifier,
+        UTType.html.identifier,
+        UTType.utf8PlainText.identifier,
+        UTType.plainText.identifier,
+        UTType.text.identifier,
+    ]
+    
+    /// Builds the pasteboard item for copying `source` (text in the writer's dialect).
+    /// The native and plain representations are always present; RTF/HTML are best-effort.
+    static func pasteboardItem(for source: String) -&gt; [String: Any] {
+        var item = MinimalPasteboard.nativeItem(for: source)
+        item[UTType.utf8PlainText.identifier] = source
+        if let document = try? StyleSettings.preferredParser().parse(source).document {
+            if let rtf  = try? DocumentRendererRTF().render(document).data  { item[UTType.rtf.identifier]  = rtf }
+            if let html = try? DocumentRendererHTML().render(document).data { item[UTType.html.identifier] = html }
+        }
+        return item
+    }
+    
+    
+    // MARK: Native Source
+    
+    private static let nativeType = UTType.mnml.identifier
+    
+    /// The native entry to merge into a pasteboard item on copy.
+    private static func nativeItem(for source: String) -&gt; [String: Any] { [nativeType: Data(source.utf8)] }
+    
+    /// Minimal's own source carried on `pasteboard`, if present.
+    static func nativeSource(from pasteboard: UIPasteboard) -&gt; String? {
+        guard let data = pasteboard.data(forPasteboardType: nativeType) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}</code></pre><figcaption><p><span style="white-space: pre-wrap;">Pasteboard overrides to accommodate numerous file formats. Real code.</span></p></figcaption></figure><p>These features combine powerfully. For example, a writer can bulk export thousands of notes with confidence as they change Apple ID’s or move notes from a work computer to a personal device. As another example, writers can store technical documentation in Minimal and use the Quick Export keyboard shortcut to rapidly copy/paste Markdown files directly into LLMs like <a href="https://claude.ai/?ref=blog.minimal.app" rel="noreferrer">Claude</a> or <a href="https://chatgpt.com/?ref=blog.minimal.app" rel="noreferrer">ChatGPT</a>. </p><figure class="kg-card kg-code-card"><pre><code class="language-Swift">let quickExport = UIKeyCommand(title: "Quick Export",
+                                       action: #selector(quickExportNoteViaCommand),
+                                       input: "E",
+                                       modifierFlags: [.command, .alternate],
+                                       discoverabilityTitle: "Quick Export")</code></pre><figcaption><p><span style="white-space: pre-wrap;">UIKeyCommand for Quick Export. Real code.</span></p></figcaption></figure><p>This is the outcome of a Quick Export. Claude is ready to read the file into context and produce a more relevant response.</p><figure class="kg-card kg-image-card kg-card-hascaption"><figcaption><span style="white-space: pre-wrap;">With command-option-E (Quick Export) and command-v (paste) notes can be rapidly shared with Large Language Models as .md files.</span></figcaption></figure><p>The conversion engine itself is a powerful piece of code, but the real utility exists where the engine gets integrated throughout the Minimal app. You can read about our design choices <a href="https://blog.minimal.app/designing-import-export/" rel="noreferrer">right here</a>.</p><p>Written by a <a href="https://arthurvansiclen.com/?ref=blog.minimal.app" rel="noreferrer">human</a>.</p>
+</div>
+<div class="gh-canvas">
+<section class="author">
+<div class="author-image-placeholder u-placeholder">
+
+</div>
+<div class="author-wrapper">
+<h4 class="author-name"><a href="/author/arthur/">Arthur Van Siclen</a></h4>
+<div class="author-bio">Designing and building Minimal. Rock climbing, meditation, design. </div>
+<div class="author-location">
+                    Teton Valley, Idaho
+                </div>
+</div>
+</section>
+</div>
+</article>
