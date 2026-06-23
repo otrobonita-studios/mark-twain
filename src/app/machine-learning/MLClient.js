@@ -355,9 +355,9 @@ export default function MLClient() {
   };
 
   return (
-    <div className="min-h-screen bg-[#15110d] text-[rgba(255,244,223,0.95)] font-mono pb-20 p-4 sm:p-8">
+    <div className="min-h-screen bg-[#15110d] text-[rgba(255,244,223,0.95)] font-sans pb-20 p-4 sm:p-8">
       {/* Page Header */}
-      <header className="max-w-6xl mx-auto mb-10 border-b border-[rgba(255,244,223,0.08)] pb-6">
+      <header className="max-w-7xl mx-auto mb-10 border-b border-[rgba(255,244,223,0.08)] pb-6">
         <div className="flex items-center gap-3 mb-2">
           <Link href="/" className="hover:opacity-85 transition-opacity">
             <img
@@ -368,24 +368,24 @@ export default function MLClient() {
               src="/images/MarkTwainSoloLogo.webp"
             />
           </Link>
-          <span className="text-[10px] uppercase tracking-widest text-[#d9a34a] font-bold">Linguistic Lab & API Desk</span>
+          <span className="text-xs uppercase tracking-widest text-[#d9a34a] font-bold">Linguistic Lab & API Desk</span>
         </div>
-        <h1 className="font-serif text-3xl font-bold text-[#d9a34a] tracking-wide">
+        <h1 className="font-serif text-3xl sm:text-4xl font-bold text-[#d9a34a] tracking-wide">
           Machine Learning Playground
         </h1>
-        <p className="text-xs text-[rgba(255,244,223,0.6)] mt-2 leading-relaxed">
+        <p className="text-sm text-[rgba(255,244,223,0.6)] mt-2 leading-relaxed">
           Expose the RAG vector store, perform client-side stylistic comparisons, and examine the linguistic structures of Samuel Clemens' output.
         </p>
       </header>
 
       {/* Main Layout Grid */}
-      <main className="max-w-6xl mx-auto flex flex-col gap-8">
+      <main className="max-w-7xl mx-auto flex flex-col gap-8">
         
         {/* Navigation Tabs */}
         <div className="flex border-b border-[rgba(255,244,223,0.08)] bg-[#1d1611]">
           <button
             onClick={() => setActiveTab('linguistics')}
-            className={`flex items-center gap-2 px-6 py-4 text-xs uppercase tracking-wider font-bold transition-all border-b-2 ${
+            className={`flex items-center gap-2 px-6 py-4 text-xs sm:text-sm uppercase tracking-wider font-bold transition-all border-b-2 ${
               activeTab === 'linguistics'
                 ? 'border-[#d9a34a] text-[#d9a34a] bg-black/20'
                 : 'border-transparent text-[rgba(255,244,223,0.6)] hover:text-[rgba(255,244,223,0.9)]'
@@ -396,7 +396,7 @@ export default function MLClient() {
           </button>
           <button
             onClick={() => setActiveTab('slurs')}
-            className={`flex items-center gap-2 px-6 py-4 text-xs uppercase tracking-wider font-bold transition-all border-b-2 ${
+            className={`flex items-center gap-2 px-6 py-4 text-xs sm:text-sm uppercase tracking-wider font-bold transition-all border-b-2 ${
               activeTab === 'slurs'
                 ? 'border-[#d9a34a] text-[#d9a34a] bg-black/20'
                 : 'border-transparent text-[rgba(255,244,223,0.6)] hover:text-[rgba(255,244,223,0.9)]'
@@ -407,7 +407,7 @@ export default function MLClient() {
           </button>
           <button
             onClick={() => setActiveTab('api')}
-            className={`flex items-center gap-2 px-6 py-4 text-xs uppercase tracking-wider font-bold transition-all border-b-2 ${
+            className={`flex items-center gap-2 px-6 py-4 text-xs sm:text-sm uppercase tracking-wider font-bold transition-all border-b-2 ${
               activeTab === 'api'
                 ? 'border-[#d9a34a] text-[#d9a34a] bg-black/20'
                 : 'border-transparent text-[rgba(255,244,223,0.6)] hover:text-[rgba(255,244,223,0.9)]'
@@ -434,7 +434,7 @@ export default function MLClient() {
                 {/* Left Panel: Inputs & Selection */}
                 <div className="lg:col-span-2 flex flex-col gap-6">
                   <div className="bg-[#1d1611] border border-[rgba(255,244,223,0.08)] p-6">
-                    <h2 className="font-serif text-lg font-bold text-[#d9a34a] mb-4">Sample Selection</h2>
+                    <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#d9a34a] mb-4">Sample Selection</h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
                       {LINGUISTIC_SAMPLES.map(sample => (
                         <button
@@ -443,7 +443,7 @@ export default function MLClient() {
                             setLinguisticInput(sample.text);
                             setTimeout(handleLinguisticAnalyze, 50);
                           }}
-                          className={`text-left p-3 border text-xs leading-relaxed transition-all ${
+                          className={`text-left p-4 border text-sm leading-relaxed transition-all ${
                             linguisticInput === sample.text
                               ? 'border-[#d9a34a] bg-[#d9a34a]/5'
                               : 'border-[rgba(255,244,223,0.08)] bg-black/20 hover:border-amber-500/30'
@@ -456,28 +456,28 @@ export default function MLClient() {
                     </div>
 
                     <div className="flex flex-col gap-2">
-                      <label className="text-xs uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
+                      <label className="text-xs sm:text-sm uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
                         Analyze Custom Text
                       </label>
                       <textarea
                         value={linguisticInput}
                         onChange={(e) => setLinguisticInput(e.target.value)}
                         placeholder="Paste Twain passages or write your own to test tone alignment..."
-                        className="w-full h-40 bg-black/40 border border-[rgba(255,244,223,0.08)] p-4 text-xs font-mono focus:border-[#d9a34a] focus:outline-none text-[rgba(255,244,223,0.9)]"
+                        className="w-full h-40 bg-black/40 border border-[rgba(255,244,223,0.08)] p-4 text-sm font-mono focus:border-[#d9a34a] focus:outline-none text-[rgba(255,244,223,0.9)]"
                       />
                     </div>
 
                     <div className="flex justify-between items-center mt-4">
                       <button
                         onClick={() => setLinguisticInput('')}
-                        className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider border border-[rgba(255,244,223,0.15)] px-3 py-2 bg-black/10 hover:border-[#d9a34a]/50 text-[rgba(255,244,223,0.7)]"
+                        className="flex items-center gap-1.5 text-xs sm:text-sm uppercase tracking-wider border border-[rgba(255,244,223,0.15)] px-4 py-2.5 bg-black/10 hover:border-[#d9a34a]/50 text-[rgba(255,244,223,0.7)]"
                       >
                         <RotateCcw size={12} />
                         Clear Input
                       </button>
                       <button
                         onClick={handleLinguisticAnalyze}
-                        className="flex items-center gap-2 text-xs uppercase tracking-wider px-5 py-2.5 bg-[#d9a34a] text-black font-bold hover:opacity-90"
+                        className="flex items-center gap-2 text-xs sm:text-sm uppercase tracking-wider px-6 py-3 bg-[#d9a34a] text-black font-bold hover:opacity-90"
                       >
                         <Play size={12} fill="black" />
                         Run Style Audit
@@ -488,10 +488,10 @@ export default function MLClient() {
                   {/* Recommendation Box */}
                   {linguisticAnalysis && (
                     <div className="bg-[#1d1611]/60 border-l-4 border-[#d9a34a] p-5">
-                      <h3 className="font-serif text-[#d9a34a] text-sm font-bold uppercase tracking-wider mb-2">
+                      <h3 className="font-serif text-[#d9a34a] text-base font-bold uppercase tracking-wider mb-2">
                         Tone Recommendation for the Next Book
                       </h3>
-                      <p className="text-xs leading-relaxed opacity-85">
+                      <p className="text-sm leading-relaxed opacity-85">
                         {linguisticAnalysis.score > 55 ? (
                           <>
                             <strong>Private Samuel Clemens Tone Detected.</strong> Samuel's letters are highly self-reflective, conversational, and direct. Writing the next book in this tone will construct a deeply intimate, raw, and biographical narrative. However, historical readers might miss the grand caricature and structural satirical devices. <em>Recommendation: Use this tone strictly for personal diaries, introspective monologues, or letters.</em>
@@ -508,7 +508,7 @@ export default function MLClient() {
 
                 {/* Right Panel: Analysis Gauge & Metrics */}
                 <div className="bg-[#1d1611] border border-[rgba(255,244,223,0.08)] p-6 flex flex-col gap-6">
-                  <h2 className="font-serif text-lg font-bold text-[#d9a34a] border-b border-[rgba(255,244,223,0.08)] pb-3">
+                  <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#d9a34a] border-b border-[rgba(255,244,223,0.08)] pb-3">
                     Style Match Metrics
                   </h2>
 
@@ -516,7 +516,7 @@ export default function MLClient() {
                     <div className="flex flex-col gap-6">
                       {/* Gauge representation */}
                       <div className="flex flex-col gap-2">
-                        <div className="flex justify-between items-center text-[10px] uppercase font-bold tracking-widest text-[rgba(255,244,223,0.6)]">
+                        <div className="flex justify-between items-center text-xs uppercase font-bold tracking-widest text-[rgba(255,244,223,0.6)]">
                           <span>Book (Public)</span>
                           <span>Letter (Private)</span>
                         </div>
@@ -534,7 +534,7 @@ export default function MLClient() {
                           />
                         </div>
 
-                        <div className="flex justify-between text-xs font-bold text-[#d9a34a] mt-1 select-none">
+                        <div className="flex justify-between text-xs sm:text-sm font-bold text-[#d9a34a] mt-1 select-none">
                           <span>{(100 - linguisticAnalysis.score).toFixed(0)}% Author</span>
                           <span>{linguisticAnalysis.score.toFixed(0)}% Private Sam</span>
                         </div>
@@ -542,12 +542,12 @@ export default function MLClient() {
 
                       {/* Result Box */}
                       <div className="p-3 bg-black/40 border border-[rgba(255,244,223,0.05)] text-center rounded">
-                        <span className="text-[10px] uppercase tracking-wider opacity-60 block mb-1">Classifier Output</span>
-                        <span className="text-sm font-bold text-[#d9a34a] font-serif">{linguisticAnalysis.matchType}</span>
+                        <span className="text-xs uppercase tracking-wider opacity-60 block mb-1">Classifier Output</span>
+                        <span className="text-base sm:text-lg font-bold text-[#d9a34a] font-serif">{linguisticAnalysis.matchType}</span>
                       </div>
 
                       {/* Stat Rows */}
-                      <div className="flex flex-col gap-4 text-xs">
+                      <div className="flex flex-col gap-4 text-xs sm:text-sm">
                         <div className="flex justify-between items-center border-b border-black/35 pb-2">
                           <span className="opacity-70">Word Count</span>
                           <span className="font-bold text-[#fff4df]">{linguisticAnalysis.wordCount}</span>
@@ -575,7 +575,7 @@ export default function MLClient() {
                       </div>
                     </div>
                   ) : (
-                    <div className="text-center py-10 opacity-50 text-xs">
+                    <div className="text-center py-10 opacity-50 text-xs sm:text-sm">
                       Run the audit to compute metrics...
                     </div>
                   )}
@@ -594,8 +594,8 @@ export default function MLClient() {
               >
                 {/* Upper Section: Quantitative Slur Chart */}
                 <div className="bg-[#1d1611] border border-[rgba(255,244,223,0.08)] p-6">
-                  <h2 className="font-serif text-lg font-bold text-[#d9a34a] mb-2">Quantitative Analysis: Slur Frequencies</h2>
-                  <p className="text-xs opacity-60 mb-6 leading-relaxed">
+                  <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#d9a34a] mb-2">Quantitative Analysis: Slur Frequencies</h2>
+                  <p className="text-sm opacity-60 mb-6 leading-relaxed">
                     A comparison of offensive terms (slurs) in Twain's texts vs. 19th-century racist tracts and theatrical minstrel scripts.
                   </p>
 
@@ -603,8 +603,8 @@ export default function MLClient() {
                     {HISTORICAL_SLUR_DATA.map((data, idx) => (
                       <div key={idx} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-6">
                         <div className="w-full sm:w-1/3 flex flex-col">
-                          <span className="text-xs font-bold text-[#fff4df]">{data.source}</span>
-                          <span className="text-[10px] text-[#d9a34a] font-bold uppercase mt-0.5 tracking-wider">{data.type}</span>
+                          <span className="text-xs sm:text-sm font-bold text-[#fff4df]">{data.source}</span>
+                          <span className="text-xs text-[#d9a34a] font-bold uppercase mt-0.5 tracking-wider">{data.type}</span>
                         </div>
 
                         {/* Histogram Bar */}
@@ -619,7 +619,7 @@ export default function MLClient() {
                               style={{ width: `${(data.count / 850) * 100}%` }}
                             />
                           </div>
-                          <span className="text-xs font-bold font-mono min-w-[70px]">
+                          <span className="text-xs sm:text-sm font-bold font-mono min-w-[70px]">
                             {data.count} times
                           </span>
                         </div>
@@ -627,7 +627,7 @@ export default function MLClient() {
                     ))}
                   </div>
 
-                  <div className="mt-8 p-4 bg-black/40 border border-[rgba(255,244,223,0.05)] border-l-4 border-[#d9a34a] text-xs leading-relaxed text-[rgba(255,244,223,0.8)]">
+                  <div className="mt-8 p-4 bg-black/40 border border-[rgba(255,244,223,0.05)] border-l-4 border-[#d9a34a] text-sm leading-relaxed text-[rgba(255,244,223,0.8)]">
                     <h3 className="font-bold text-[#d9a34a] uppercase mb-1">Qualitative Distinctions: Satirical Subversion vs. Dehumanization</h3>
                     <p className="mb-2">
                       <strong>Pro-slavery / Scientific Racist Tracts</strong> utilized slurs dogmatically as literal, biological descriptors to build arguments that Black people lacked souls or moral capacity, justifying chattel slavery.
@@ -645,26 +645,26 @@ export default function MLClient() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   {/* Left Column: Input text */}
                   <div className="lg:col-span-2 bg-[#1d1611] border border-[rgba(255,244,223,0.08)] p-6 flex flex-col gap-6">
-                    <h2 className="font-serif text-lg font-bold text-[#d9a34a] border-b border-[rgba(255,244,223,0.08)] pb-3">
+                    <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#d9a34a] border-b border-[rgba(255,244,223,0.08)] pb-3">
                       Scholarly Critique Audit
                     </h2>
 
                     <div className="flex flex-col gap-2">
-                      <label className="text-xs uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
+                      <label className="text-xs sm:text-sm uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
                         Drafted Text / Lyric to Audit
                       </label>
                       <textarea
                         value={auditInput}
                         onChange={(e) => setAuditInput(e.target.value)}
                         placeholder="Type standard or sanitized lyrics to see how the scholars evaluate it..."
-                        className="w-full h-32 bg-black/40 border border-[rgba(255,244,223,0.08)] p-4 text-xs font-mono focus:border-[#d9a34a] focus:outline-none text-[rgba(255,244,223,0.9)]"
+                        className="w-full h-32 bg-black/40 border border-[rgba(255,244,223,0.08)] p-4 text-sm font-mono focus:border-[#d9a34a] focus:outline-none text-[rgba(255,244,223,0.9)]"
                       />
                     </div>
 
                     <div className="flex justify-end">
                       <button
                         onClick={handleAuditAnalyze}
-                        className="flex items-center gap-2 text-xs uppercase tracking-wider px-5 py-2.5 bg-[#d9a34a] text-black font-bold hover:opacity-90"
+                        className="flex items-center gap-2 text-xs sm:text-sm uppercase tracking-wider px-6 py-3 bg-[#d9a34a] text-black font-bold hover:opacity-90"
                       >
                         <Play size={12} fill="black" />
                         Run Bias & Scholarly Audit
@@ -674,7 +674,7 @@ export default function MLClient() {
                     {/* Results table */}
                     {auditResult && (
                       <div className="flex flex-col gap-4 mt-2">
-                        <h3 className="text-xs font-bold uppercase tracking-wider opacity-60">Scholarly Evaluations</h3>
+                        <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider opacity-60">Scholarly Evaluations</h3>
                         
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           {auditResult.map((res, idx) => {
@@ -686,12 +686,12 @@ export default function MLClient() {
                             return (
                               <div key={idx} className="p-4 bg-black/20 border border-[rgba(255,244,223,0.05)] flex flex-col gap-2 rounded">
                                 <div className="flex justify-between items-center">
-                                  <span className="text-xs font-bold text-[#d9a34a]">{res.name}</span>
-                                  <span className={`text-[8px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${badgeColor}`}>
+                                  <span className="text-xs sm:text-sm font-bold text-[#d9a34a]">{res.name}</span>
+                                  <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border ${badgeColor}`}>
                                     {res.alignment}
                                   </span>
                                 </div>
-                                <p className="text-[11px] leading-relaxed opacity-75">{res.reaction}</p>
+                                <p className="text-xs sm:text-sm leading-relaxed opacity-75">{res.reaction}</p>
                               </div>
                             );
                           })}
@@ -702,7 +702,7 @@ export default function MLClient() {
 
                   {/* Right Column: Scholar Profiles */}
                   <div className="bg-[#1d1611] border border-[rgba(255,244,223,0.08)] p-6 flex flex-col gap-4">
-                    <h2 className="font-serif text-lg font-bold text-[#d9a34a] border-b border-[rgba(255,244,223,0.08)] pb-3">
+                    <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#d9a34a] border-b border-[rgba(255,244,223,0.08)] pb-3">
                       Scholarly Perspectives
                     </h2>
 
@@ -711,14 +711,14 @@ export default function MLClient() {
                         <button
                           key={idx}
                           onClick={() => setSelectedScholar(s)}
-                          className={`text-left p-2 border text-xs transition-all flex items-center justify-between ${
+                          className={`text-left p-2.5 border text-xs sm:text-sm transition-all flex items-center justify-between ${
                             selectedScholar.name === s.name
                               ? 'border-[#d9a34a] bg-[#d9a34a]/5 text-[#d9a34a] font-bold'
                               : 'border-[rgba(255,244,223,0.08)] bg-black/20 text-[rgba(255,244,223,0.7)] hover:border-amber-500/30'
                           }`}
                         >
                           <span>{s.name}</span>
-                          <span className="text-[9px] opacity-65 font-normal">{s.role}</span>
+                          <span className="text-[11px] opacity-65 font-normal">{s.role}</span>
                         </button>
                       ))}
                     </div>
@@ -726,27 +726,27 @@ export default function MLClient() {
                     {selectedScholar && (
                       <div className="mt-4 border-t border-[rgba(255,244,223,0.08)] pt-4 flex flex-col gap-3 text-xs leading-relaxed">
                         <div className="flex flex-col">
-                          <span className="text-[10px] uppercase opacity-55">Scholar & Core Thesis</span>
-                          <span className="font-bold text-[#d9a34a] text-sm mt-0.5">{selectedScholar.name}</span>
-                          <span className="italic text-[11px] opacity-75">{selectedScholar.role}</span>
+                          <span className="text-xs uppercase opacity-55">Scholar & Core Thesis</span>
+                          <span className="font-bold text-[#d9a34a] text-base mt-0.5">{selectedScholar.name}</span>
+                          <span className="italic text-xs sm:text-sm opacity-75">{selectedScholar.role}</span>
                         </div>
 
                         <div className="p-3 bg-black/35 border border-[rgba(255,244,223,0.05)] rounded">
-                          <span className="text-[9px] uppercase font-bold text-[#d9a34a] block mb-1">Core Position</span>
-                          <p className="text-[11px]">{selectedScholar.position}</p>
+                          <span className="text-xs uppercase font-bold text-[#d9a34a] block mb-1">Core Position</span>
+                          <p className="text-xs sm:text-sm">{selectedScholar.position}</p>
                         </div>
 
-                        <div className="flex justify-between items-center text-[11px] border-b border-black/30 pb-2">
+                        <div className="flex justify-between items-center text-xs sm:text-sm border-b border-black/30 pb-2">
                           <span className="opacity-60">On Classroom Teaching</span>
                           <span className="font-bold text-[#fff4df]">{selectedScholar.teaching}</span>
                         </div>
 
-                        <div className="flex justify-between items-center text-[11px] border-b border-black/30 pb-2">
+                        <div className="flex justify-between items-center text-xs sm:text-sm border-b border-black/30 pb-2">
                           <span className="opacity-60">Pedagogical Move</span>
                           <span className="font-bold text-[#fff4df]">{selectedScholar.move}</span>
                         </div>
 
-                        <div className="italic text-[11px] text-[#d9a34a]/90 mt-1 select-none">
+                        <div className="italic text-xs sm:text-sm text-[#d9a34a]/90 mt-1 select-none">
                           {selectedScholar.quote}
                         </div>
                       </div>
@@ -767,19 +767,19 @@ export default function MLClient() {
               >
                 {/* Left Column: API Console Inputs (5 cols) */}
                 <div className="lg:col-span-5 bg-[#1d1611] border border-[rgba(255,244,223,0.08)] p-6 flex flex-col gap-6">
-                  <h2 className="font-serif text-lg font-bold text-[#d9a34a] border-b border-[rgba(255,244,223,0.08)] pb-3">
+                  <h2 className="font-serif text-xl sm:text-2xl font-bold text-[#d9a34a] border-b border-[rgba(255,244,223,0.08)] pb-3">
                     API Console
                   </h2>
 
                   {/* Action Selection */}
                   <div className="flex flex-col gap-2">
-                    <label className="text-[10px] uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
+                    <label className="text-xs uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
                       Endpoint Action
                     </label>
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         onClick={() => setApiAction('search')}
-                        className={`py-2 text-xs font-bold border transition-all ${
+                        className={`py-2 text-xs sm:text-sm font-bold border transition-all ${
                           apiAction === 'search'
                             ? 'border-[#d9a34a] bg-[#d9a34a]/10 text-[#d9a34a]'
                             : 'border-[rgba(255,244,223,0.08)] bg-black/20 text-[rgba(255,244,223,0.6)]'
@@ -789,7 +789,7 @@ export default function MLClient() {
                       </button>
                       <button
                         onClick={() => setApiAction('scroll')}
-                        className={`py-2 text-xs font-bold border transition-all ${
+                        className={`py-2 text-xs sm:text-sm font-bold border transition-all ${
                           apiAction === 'scroll'
                             ? 'border-[#d9a34a] bg-[#d9a34a]/10 text-[#d9a34a]'
                             : 'border-[rgba(255,244,223,0.08)] bg-black/20 text-[rgba(255,244,223,0.6)]'
@@ -803,7 +803,7 @@ export default function MLClient() {
                   {/* Conditional inputs */}
                   {apiAction === 'search' ? (
                     <div className="flex flex-col gap-2">
-                      <label className="text-[10px] uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
+                      <label className="text-xs uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
                         Query String
                       </label>
                       <input
@@ -811,12 +811,12 @@ export default function MLClient() {
                         value={apiQuery}
                         onChange={(e) => setApiQuery(e.target.value)}
                         placeholder="e.g. Mississippi riverboat..."
-                        className="bg-black/40 border border-[rgba(255,244,223,0.08)] p-2.5 text-xs font-mono text-[rgba(255,244,223,0.9)] focus:border-[#d9a34a] focus:outline-none"
+                        className="bg-black/40 border border-[rgba(255,244,223,0.08)] p-2.5 text-xs sm:text-sm font-mono text-[rgba(255,244,223,0.9)] focus:border-[#d9a34a] focus:outline-none"
                       />
                     </div>
                   ) : (
                     <div className="flex flex-col gap-2">
-                      <label className="text-[10px] uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
+                      <label className="text-xs uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
                         Page Offset (Token ID)
                       </label>
                       <input
@@ -824,14 +824,14 @@ export default function MLClient() {
                         value={apiOffset}
                         onChange={(e) => setApiOffset(e.target.value)}
                         placeholder="Leave empty for page 1..."
-                        className="bg-black/40 border border-[rgba(255,244,223,0.08)] p-2.5 text-xs font-mono text-[rgba(255,244,223,0.9)] focus:border-[#d9a34a] focus:outline-none"
+                        className="bg-black/40 border border-[rgba(255,244,223,0.08)] p-2.5 text-xs sm:text-sm font-mono text-[rgba(255,244,223,0.9)] focus:border-[#d9a34a] focus:outline-none"
                       />
                     </div>
                   )}
 
                   {/* Limit input */}
                   <div className="flex flex-col gap-2">
-                    <label className="text-[10px] uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
+                    <label className="text-xs uppercase tracking-wider text-[rgba(255,244,223,0.6)] font-bold">
                       Result Count Limit
                     </label>
                     <input
@@ -840,7 +840,7 @@ export default function MLClient() {
                       max={100}
                       value={apiLimit}
                       onChange={(e) => setApiLimit(e.target.value)}
-                      className="bg-black/40 border border-[rgba(255,244,223,0.08)] p-2.5 text-xs font-mono text-[rgba(255,244,223,0.9)] focus:border-[#d9a34a] focus:outline-none"
+                      className="bg-black/40 border border-[rgba(255,244,223,0.08)] p-2.5 text-xs sm:text-sm font-mono text-[rgba(255,244,223,0.9)] focus:border-[#d9a34a] focus:outline-none"
                     />
                   </div>
 
@@ -853,7 +853,7 @@ export default function MLClient() {
                       onChange={(e) => setApiWithVector(e.target.checked)}
                       className="accent-[#d9a34a] cursor-pointer"
                     />
-                    <label htmlFor="api-with-vector-checkbox" className="text-xs opacity-75 cursor-pointer">
+                    <label htmlFor="api-with-vector-checkbox" className="text-xs sm:text-sm opacity-75 cursor-pointer">
                       Return raw 1024-dimension float vectors
                     </label>
                   </div>
@@ -862,7 +862,7 @@ export default function MLClient() {
                   <button
                     onClick={handleRunAPI}
                     disabled={apiLoading}
-                    className="flex items-center justify-center gap-2 text-xs uppercase tracking-wider py-3 bg-[#d9a34a] text-black font-bold hover:opacity-90 disabled:opacity-50"
+                    className="flex items-center justify-center gap-2 text-xs sm:text-sm uppercase tracking-wider py-3 bg-[#d9a34a] text-black font-bold hover:opacity-90 disabled:opacity-50 cursor-pointer"
                   >
                     {apiLoading ? 'Executing request...' : 'Execute API Request'}
                     {!apiLoading && <Play size={12} fill="black" />}
@@ -874,33 +874,33 @@ export default function MLClient() {
                   
                   {/* Console screen */}
                   <div className="bg-[#0f0b08] border border-[rgba(255,244,223,0.08)] p-5 flex flex-col gap-4 flex-1">
-                    <div className="flex justify-between items-center border-b border-[rgba(255,244,223,0.08)] pb-2 text-[10px] uppercase tracking-wider text-[rgba(255,244,223,0.5)]">
+                    <div className="flex justify-between items-center border-b border-[rgba(255,244,223,0.08)] pb-2 text-xs uppercase tracking-wider text-[rgba(255,244,223,0.5)]">
                       <span>Live Response Output</span>
                       <span>POST /api/research</span>
                     </div>
 
                     {apiLoading && (
-                      <div className="flex flex-col items-center justify-center py-20 gap-3 text-xs opacity-65">
+                      <div className="flex flex-col items-center justify-center py-20 gap-3 text-xs sm:text-sm opacity-65">
                         <div className="h-6 w-6 border-2 border-[#d9a34a] border-t-transparent rounded-full animate-spin" />
                         Querying Qdrant index...
                       </div>
                     )}
 
                     {apiError && (
-                      <div className="text-red-400 bg-red-900/10 border border-red-500/20 p-4 text-xs flex flex-col gap-2 rounded">
+                      <div className="text-red-400 bg-red-900/10 border border-red-500/20 p-4 text-xs sm:text-sm flex flex-col gap-2 rounded">
                         <div className="flex items-center gap-2 font-bold uppercase">
                           <AlertTriangle size={14} />
                           Query Execution Failed
                         </div>
                         <p className="leading-relaxed">{apiError}</p>
-                        <p className="opacity-60 text-[10px] border-t border-red-500/10 pt-2 mt-1">
+                        <p className="opacity-60 text-[11px] border-t border-red-500/10 pt-2 mt-1">
                           Make sure your local Next.js dev server is running and configured with `QDRANT_URL` and `QDRANT_API_KEY` in `.env.local`.
                         </p>
                       </div>
                     )}
 
                     {!apiLoading && !apiError && !apiResponse && (
-                      <div className="flex flex-col items-center justify-center py-20 text-xs opacity-40 text-center">
+                      <div className="flex flex-col items-center justify-center py-20 text-xs sm:text-sm opacity-40 text-center">
                         <Terminal size={24} className="mb-2" />
                         Execute an API request on the left panel to fetch live Qdrant embeddings context.
                       </div>
@@ -911,15 +911,15 @@ export default function MLClient() {
                         {/* Compact points view */}
                         {apiResponse.results && (
                           <div className="flex flex-col gap-2">
-                            <span className="text-[10px] uppercase tracking-wider text-[#d9a34a] font-bold">Similarity Search Results ({apiResponse.results.length})</span>
+                            <span className="text-xs uppercase tracking-wider text-[#d9a34a] font-bold">Similarity Search Results ({apiResponse.results.length})</span>
                             <div className="flex flex-col gap-2 max-h-[30vh] overflow-y-auto pr-1 custom-scrollbar text-xs">
                               {apiResponse.results.map((res, idx) => (
                                 <div key={idx} className="bg-white/5 border border-white/5 p-3 rounded flex flex-col gap-1.5">
-                                  <div className="flex justify-between items-center text-[10px] border-b border-white/5 pb-1">
+                                  <div className="flex justify-between items-center text-xs border-b border-white/5 pb-1">
                                     <span className="text-[#d9a34a] font-bold">{res.payload?.filename || 'Unknown'} (idx: {res.payload?.chunk_index})</span>
                                     <span className="font-bold opacity-60">Score: {res.score?.toFixed(4)}</span>
                                   </div>
-                                  <p className="line-clamp-3 text-[11px] leading-relaxed opacity-85">{res.payload?.text}</p>
+                                  <p className="line-clamp-3 text-xs sm:text-sm leading-relaxed opacity-85">{res.payload?.text}</p>
                                 </div>
                               ))}
                             </div>
@@ -928,18 +928,18 @@ export default function MLClient() {
 
                         {apiResponse.points && (
                           <div className="flex flex-col gap-2">
-                            <span className="text-[10px] uppercase tracking-wider text-[#d9a34a] font-bold">Scrolled Points ({apiResponse.points.length})</span>
+                            <span className="text-xs uppercase tracking-wider text-[#d9a34a] font-bold">Scrolled Points ({apiResponse.points.length})</span>
                             {apiResponse.next_page_offset && (
-                              <span className="text-[9px] opacity-65 font-mono">Next Page Token: {apiResponse.next_page_offset}</span>
+                              <span className="text-[11px] opacity-65 font-mono">Next Page Token: {apiResponse.next_page_offset}</span>
                             )}
                             <div className="flex flex-col gap-2 max-h-[30vh] overflow-y-auto pr-1 custom-scrollbar text-xs">
                               {apiResponse.points.map((pt, idx) => (
                                 <div key={idx} className="bg-white/5 border border-white/5 p-3 rounded flex flex-col gap-1.5">
-                                  <div className="flex justify-between items-center text-[10px] border-b border-white/5 pb-1">
+                                  <div className="flex justify-between items-center text-xs border-b border-white/5 pb-1">
                                     <span className="text-[#d9a34a] font-bold">{pt.payload?.filename || 'Unknown'} (idx: {pt.payload?.chunk_index})</span>
-                                    <span className="font-mono text-[9px] opacity-40">id: {pt.id?.substring(0, 8)}...</span>
+                                    <span className="font-mono text-[11px] opacity-40">id: {pt.id?.substring(0, 8)}...</span>
                                   </div>
-                                  <p className="line-clamp-2 text-[11px] leading-relaxed opacity-85">{pt.payload?.text}</p>
+                                  <p className="line-clamp-2 text-xs sm:text-sm leading-relaxed opacity-85">{pt.payload?.text}</p>
                                 </div>
                               ))}
                             </div>
@@ -949,10 +949,10 @@ export default function MLClient() {
                         {/* Raw JSON Details */}
                         <div className="flex flex-col gap-1.5">
                           <div className="flex justify-between items-center">
-                            <span className="text-[10px] uppercase tracking-wider text-[rgba(255,244,223,0.5)] font-bold">Raw JSON (Truncated Vectors)</span>
+                            <span className="text-xs uppercase tracking-wider text-[rgba(255,244,223,0.5)] font-bold">Raw JSON (Truncated Vectors)</span>
                             <button
                               onClick={() => copyToClipboard(JSON.stringify(apiResponse, null, 2))}
-                              className="text-[10px] hover:text-[#d9a34a] transition-all flex items-center gap-1 opacity-70"
+                              className="text-xs hover:text-[#d9a34a] transition-all flex items-center gap-1 opacity-70"
                             >
                               <Copy size={10} />
                               Copy JSON
@@ -960,7 +960,7 @@ export default function MLClient() {
                           </div>
                           
                           {/* Truncated code render */}
-                          <pre className="bg-[#050403] border border-white/5 p-3 text-[10px] font-mono text-green-400 overflow-x-auto rounded max-h-36 overflow-y-auto custom-scrollbar">
+                          <pre className="bg-[#050403] border border-white/5 p-3 text-xs font-mono text-green-400 overflow-x-auto rounded max-h-36 overflow-y-auto custom-scrollbar">
                             <code>
                               {JSON.stringify(
                                 {
@@ -986,19 +986,19 @@ export default function MLClient() {
 
                   {/* Integration Snippets */}
                   <div className="bg-[#1d1611] border border-[rgba(255,244,223,0.08)] p-5 flex flex-col gap-3">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-[#d9a34a] flex items-center gap-1.5">
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-[#d9a34a] flex items-center gap-1.5">
                       <Code size={14} />
                       Getting Started with the Embeddings API
                     </h3>
                     
-                    <div className="flex flex-col gap-3 text-xs leading-relaxed">
+                    <div className="flex flex-col gap-3 text-xs sm:text-sm leading-relaxed">
                       <p className="opacity-75">
                         Perform a semantic search programmatically against the collection index via cURL, Node.js, or Python:
                       </p>
                       
                       {/* cURL Tab */}
                       <div className="flex flex-col gap-1.5">
-                        <div className="flex justify-between items-center text-[10px] opacity-60">
+                        <div className="flex justify-between items-center text-xs opacity-60">
                           <span>cURL Request Example</span>
                           <button 
                             onClick={() => copyToClipboard(`curl -X POST http://localhost:3000/api/research \\\n  -H "Content-Type: application/json" \\\n  -d '{"action": "search", "query": "Mississippi riverboat", "limit": 3}'`)} 
@@ -1008,7 +1008,7 @@ export default function MLClient() {
                             Copy
                           </button>
                         </div>
-                        <pre className="bg-black/60 border border-white/5 p-3 text-[10px] font-mono text-[rgba(255,244,223,0.85)] overflow-x-auto rounded select-all">
+                        <pre className="bg-black/60 border border-white/5 p-3 text-xs font-mono text-[rgba(255,244,223,0.85)] overflow-x-auto rounded select-all">
 {`curl -X POST http://localhost:3000/api/research \\
   -H "Content-Type: application/json" \\
   -d '{"action": "search", "query": "Mississippi riverboat", "limit": 3}'`}
@@ -1017,7 +1017,7 @@ export default function MLClient() {
 
                       {/* JS Tab */}
                       <div className="flex flex-col gap-1.5">
-                        <div className="flex justify-between items-center text-[10px] opacity-60">
+                        <div className="flex justify-between items-center text-xs opacity-60">
                           <span>JavaScript Fetch Example</span>
                           <button 
                             onClick={() => copyToClipboard(`async function queryArchive(prompt) {\n  const res = await fetch('http://localhost:3000/api/research', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ action: 'search', query: prompt, limit: 3 })\n  });\n  const data = await res.json();\n  return data.results;\n}`)} 
@@ -1027,7 +1027,7 @@ export default function MLClient() {
                             Copy
                           </button>
                         </div>
-                        <pre className="bg-black/60 border border-white/5 p-3 text-[10px] font-mono text-[rgba(255,244,223,0.85)] overflow-x-auto rounded select-all">
+                        <pre className="bg-black/60 border border-white/5 p-3 text-xs font-mono text-[rgba(255,244,223,0.85)] overflow-x-auto rounded select-all">
 {`async function queryArchive(prompt) {
   const res = await fetch('http://localhost:3000/api/research', {
     method: 'POST',
@@ -1046,7 +1046,7 @@ export default function MLClient() {
 
                       {/* Python Tab */}
                       <div className="flex flex-col gap-1.5">
-                        <div className="flex justify-between items-center text-[10px] opacity-60">
+                        <div className="flex justify-between items-center text-xs opacity-60">
                           <span>Python Requests Example</span>
                           <button 
                             onClick={() => copyToClipboard(`import requests\n\ndef query_archive(prompt):\n    url = "http://localhost:3000/api/research"\n    payload = {"action": "search", "query": prompt, "limit": 3}\n    res = requests.post(url, json=payload)\n    return res.json().get("results", [])`)} 
@@ -1056,7 +1056,7 @@ export default function MLClient() {
                             Copy
                           </button>
                         </div>
-                        <pre className="bg-black/60 border border-white/5 p-3 text-[10px] font-mono text-[rgba(255,244,223,0.85)] overflow-x-auto rounded select-all">
+                        <pre className="bg-black/60 border border-white/5 p-3 text-xs font-mono text-[rgba(255,244,223,0.85)] overflow-x-auto rounded select-all">
 {`import requests
 
 def query_archive(prompt):
