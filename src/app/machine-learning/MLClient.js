@@ -384,6 +384,17 @@ export default function MLClient() {
         {/* Navigation Tabs */}
         <div className="flex border-b border-[rgba(255,244,223,0.08)] bg-[#1d1611]">
           <button
+            onClick={() => setActiveTab('api')}
+            className={`flex items-center gap-2 px-6 py-4 text-xs sm:text-sm uppercase tracking-wider font-bold transition-all border-b-2 ${
+              activeTab === 'api'
+                ? 'border-[#d9a34a] text-[#d9a34a] bg-black/20'
+                : 'border-transparent text-[rgba(255,244,223,0.6)] hover:text-[rgba(255,244,223,0.9)]'
+            }`}
+          >
+            <Terminal size={16} />
+            Embeddings API Playground
+          </button>
+          <button
             onClick={() => setActiveTab('linguistics')}
             className={`flex items-center gap-2 px-6 py-4 text-xs sm:text-sm uppercase tracking-wider font-bold transition-all border-b-2 ${
               activeTab === 'linguistics'
@@ -404,17 +415,6 @@ export default function MLClient() {
           >
             <BarChart2 size={16} />
             Huck Finn Pedagogy Lab
-          </button>
-          <button
-            onClick={() => setActiveTab('api')}
-            className={`flex items-center gap-2 px-6 py-4 text-xs sm:text-sm uppercase tracking-wider font-bold transition-all border-b-2 ${
-              activeTab === 'api'
-                ? 'border-[#d9a34a] text-[#d9a34a] bg-black/20'
-                : 'border-transparent text-[rgba(255,244,223,0.6)] hover:text-[rgba(255,244,223,0.9)]'
-            }`}
-          >
-            <Terminal size={16} />
-            Embeddings API Playground
           </button>
         </div>
 
