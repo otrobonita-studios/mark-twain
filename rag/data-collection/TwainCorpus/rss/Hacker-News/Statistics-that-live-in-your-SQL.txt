@@ -1,0 +1,472 @@
+← All posts
+
+the-stats-duck
+ â our open-source DuckDB extension â just shipped 
+v0.6.0
+, and in keeping with the whole operation, the release is named 
+i-m-not-dead
+. It very much isn't!
+
+In case you haven't met it before: 
+the-stats-duck
+ is the statistics engine that 
+Bedevere
+ and 
+KoliLang
+ lean on. It allows DuckDB to do real statistics â distributions, tests, regression, even plots â without ever leaving SQL. MIT-licensed, and it runs anywhere DuckDB runs â including a browser!
+
+Which is quite handy, because 
+every demo below is a live 
+Bedevere
+ instance
+ running 
+the-stats-duck
+ right here in your browser. The dataset is the famous 
+Palmer Penguins
+ â change the SQL and re-run it.
+
+SELECT
+ *
+ FROM
+ 'penguins'
+;
+Copy
+
+Profile a whole table in one shot: 
+meta()
+
+The first thing anyone would usually do with a new dataset is 
+squint
+ at it. 
+meta()
+ squints for you the full profile â one row per column:
+
+SELECT
+
+  column_name, kind, n_missing
+
+  , n_distinct, mean, median, stddev, 
+top
+
+FROM
+ meta(
+'penguins'
+)
+
+;
+Copy
+
+It overlaps with DuckDB's built-in 
+SUMMARIZE
+, but 
+meta()
+ is a 
+table function
+ â so you can join it, filter it, and compose it in CTEs. Do you need to know "how many numeric columns, and how many missing values total?" That's just aggregation over 
+meta()
+.
+
+Regression without leaving SQL: 
+lm
+ + an R-style formula
+
+Yes, ordinary least squares, in a SQL query, with the formula syntax you already know:
+
+SELECT
+ *
+
+FROM
+ lm_summary(
+
+  'penguins'
+
+  , formula :
+=
+ 'body_mass_g ~ flipper_length_mm + bill_length_mm'
+
+);
+Copy
+
+lm()
+ gives you the coefficient table (
+estimate
+, 
+std_error
+, 
+t_statistic
+, 
+p_value
+ per term); 
+lm_summary()
+ gives the model-level line (RÂ², adjusted RÂ², F and its p-value, residual df, sigma). The formula language handles additive predictors and intercept removal (
+- 1
+); interactions and inline transforms aren't in v0.6 yet, but we might add them soon!
+
+Under the hood it's a Cholesky solve of 
+X'X
+, complete-case filtered, and cross-verified against R on 
+cars
+ and 
+mtcars
+ to four decimals.
+
+Confidence intervals by brute force: 
+bootstrap()
+
+Don't want to assume normality? Resample:
+
+WITH
+ b 
+AS
+ (
+
+  SELECT
+ bootstrap(body_mass_g, 
+'mean'
+, 
+2000
+, 
+42
+) 
+AS
+ samples
+
+  FROM
+ penguins
+
+)
+
+SELECT
+
+  list_aggregate(samples, 
+'quantile_cont'
+, 
+0
+.
+025
+) 
+AS
+ lo
+
+  , list_aggregate(samples, 
+'quantile_cont'
+, 
+0
+.
+975
+) 
+AS
+ hi
+
+FROM
+ b
+
+;
+Copy
+
+bootstrap(value, statistic, n_iters [, seed])
+ resamples with replacement and hands back a 
+LIST<DOUBLE>
+ of the statistic from each resample (
+mean
+, 
+median
+, 
+stddev
+, â¦). Pair it with 
+list_aggregate(list, 'quantile_cont', p)
+ for a percentile interval. Pass a seed and it's reproducible â even across 
+GROUP BY
+ groups.
+
+Charts, straight from SQL: 
+VISUALIZE â¦ DRAW
+
+the-stats-duck also speaks a small â for now â plot grammar (ggsql) that compiles to Vega-Lite, which Bedevere renders. v0.6.0 adds 
+violin
+ marks, 
+2-D facets
+ (
+FACET BY row, col
+), and a per-layer 
+STAT smooth
+ (LOESS) â so 
+DRAW point DRAW line STAT smooth
+ is your scatter-with-trend in one line.
+
+VISUALIZE
+
+  species 
+AS
+ x
+
+  , body_mass_g 
+AS
+ y
+
+FROM
+ penguins
+
+DRAW violin
+
+TITLE 
+'Body Mass (g) by species'
+
+;
+Copy
+
+Scatter with a fitted line: 
+STAT smooth
+
+The other half of v0.6.0's chart story is the per-layer 
+STAT
+ modifier â appended after a mark as 
+DRAW <mark> STAT <name>
+. It transforms 
+that layer only
+, so you can stack a raw mark under a statistical one. The canonical use is a scatter with a LOESS overlay:
+
+VISUALIZE
+
+  bill_depth_mm 
+AS
+ x
+
+  , bill_length_mm 
+AS
+ y
+
+  , species 
+AS
+ color
+
+FROM
+ penguins
+
+DRAW 
+point
+
+DRAW 
+line
+ STAT smooth
+
+SCALE x ZERO false
+
+SCALE x LABEL 
+'Bill Depth (mm)'
+
+SCALE y ZERO false
+
+SCALE y LABEL 
+'Bill Length (mm)'
+
+TITLE 
+'Penguins Bill Depth VS Bill Length (Smooth)'
+
+;
+Copy
+
+Three modifiers ship. 
+smooth
+ injects a Vega-Lite LOESS transform on 
+(x, y)
+, grouped by 
+color
+ when it's mapped â one fitted curve per species above. 
+summary
+ rewrites the layer's data SQL to 
+AVG(y) GROUP BY x [, color, facet, facet2] ORDER BY x
+, collapsing each cell to its mean. 
+identity
+ is the explicit no-op. 
+smooth
+ is rejected on marks that already emit their own transform â 
+regression
+, 
+density
+, 
+violin
+, 
+histogram
+ â which bake the statistic in themselves.
+
+A straight-line fit: 
+DRAW regression
+
+Where 
+STAT smooth
+ traces the data's local shape, the 
+regression
+ mark draws a single straight line â a least-squares 
+y ~ x
+ fit, grouped by 
+color
+. Same axes as above, but each species gets a linear trend instead of a LOESS curve:
+
+VISUALIZE
+
+  bill_depth_mm 
+AS
+ x
+
+  , bill_length_mm 
+AS
+ y
+
+  , species 
+AS
+ color
+
+FROM
+ penguins
+
+DRAW 
+point
+
+DRAW regression
+
+SCALE x ZERO false
+
+SCALE x LABEL 
+'Bill Depth (mm)'
+
+SCALE y ZERO false
+
+SCALE y LABEL 
+'Bill Length (mm)'
+
+TITLE 
+'Penguins Bill Depth VS Bill Length (Regression)'
+
+;
+Copy
+
+Ten new distributions (and the full d/p/q/r)
+
+The distribution zoo grew: 
+negative binomial
+, 
+hypergeometric
+, 
+Weibull
+, 
+log-normal
+, and 
+Poisson
+, each with the R-style 
+d
+ / 
+p
+ / 
+q
+ triple â plus a complete set of 
+random samplers
+: 
+rnorm
+, 
+rt
+, 
+rchisq
+, 
+rf
+, 
+rgamma
+, 
+rbeta
+, 
+rexp
+, 
+rweibull
+, 
+rlnorm
+, 
+rpois
+. Every one cross-checked against R to six decimals. Simulate, fit, and test without round-tripping to another language.
+
+Here's the Poisson(Î» = 3) probability mass function â 
+dpois
+ evaluated over 
+0â¦10
+ and drawn as a bar chart, all in SQL:
+
+WITH
+ pois 
+AS
+ (
+
+  SELECT
+ k, dpois(k, 
+3
+) 
+AS
+ pmf
+
+  FROM
+ range
+(
+0
+, 
+11
+) 
+AS
+ t(k)
+
+)
+
+VISUALIZE
+
+  k 
+AS
+ x
+
+  , pmf 
+AS
+ y
+
+FROM
+ pois
+
+DRAW bar
+
+;
+Copy
+
+And it got fast: 
+read_stat
+ is 52x quicker
+
+Last, and this one's for the 
+XPT crowd
+: reading SAS / SPSS / Stata files used to be accidentally 
+O(NÂ²)
+: the reader re-parsed the file from byte zero for every 2,048-row chunk! ð±
+
+v0.6.0 parses each file exactly once into a buffered, spillable column store and streams from it. Here are the numbers:
+
+a 200k-row, 7 MB XPT: 
+~67 s â ~1.3 s
+ (52x)
+
+the real CDISC pilot 
+qs.xpt
+ (122k rows): 
+~39 s â ~1.1 s
+ (36x)
+
+1.6M rows: 
+~70 min â ~15 s
+
+Go play
+
+the-stats-duck
+ is open source: 
+github.com/KoliStat/the-stats-duck
+ (full 
+v0.6.0 notes here
+). It powers 
+Bedevere
+ and 
+KoliLang
+, but it's just a DuckDB extension: drop it into any DuckDB and your SQL grows a statistics department.
+
+Not dead. Doing your statistics.

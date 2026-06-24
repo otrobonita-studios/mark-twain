@@ -1,0 +1,100 @@
+
+
+<h1 id="vectorgraphicsinlil">Vector Graphics in Lil</h1>
+<p>Dr. Allen Vincent Hershey developed some of the first digital typefaces, described by simple sequences of straight line-segments. These were originally published in his 1967 report <a href="https://archive.org/details/hershey-calligraphy_for_computers/"><em>Calligraphy for Computers</em></a>.</p>
+<center></center>
+<p>The <a href="http://beyondloom.com/decker/hershey.html">hershey</a> module for the <a href="http://beyondloom.com/decker/index.html">Decker</a> ecosystem is concerned with laying out text using these typefaces. Decker’s scripting language, <a href="http://beyondloom.com/tools/trylil.html">Lil</a>, is of an unusual APL-influenced design. This article will explore Lil in the context of 2-dimensional vector graphics, expanding upon examples also discussed in the interactive documentation linked above.</p>
+<h2 id="foundations">Foundations</h2>
+<p>A <em>point</em> is an <code>(x,y)</code> pair of numbers describing rectangular coordinates on a <em>canvas</em>- a drawing surface. Points are represented in Lil as lists with a length of 2:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">point:(3,-5)</pre>
+<center></center>
+<p>A <em>stroke</em> is a list of points representing a sequence of lines to draw on the canvas, and thus also a list of lists of numbers. Given a list of four points, the stroke connects the first point to the second, the second point to the third, and the third point to the fourth. If there are <em>N</em> points in a stroke, it describes <em>N-1</em> connected lines. We might also call a stroke a “polyline”:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">stroke:((<span style="color:#66d9ef;">list</span> 3,-5),(<span style="color:#66d9ef;">list</span> 2,5),(<span style="color:#66d9ef;">list</span> 0,3))</pre>
+<center></center>
+<p>A <em>path</em> is a list of strokes, and thus also a list of lists of points, and a list of lists of lists of numbers. A path can represent the strokes that make up a single shape- like the letter “A”- or a sequence of letters representing an entire word or sentence. The strokes within a path are <em>ragged</em>: they may vary in length.</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">path:(<span style="color:#66d9ef;">list</span> (<span style="color:#66d9ef;">list</span> 1,2),(<span style="color:#66d9ef;">list</span> 3,4)),     (<span style="color:#66d9ef;">list</span> (<span style="color:#66d9ef;">list</span> 5,6),(<span style="color:#66d9ef;">list</span> 7,8),(<span style="color:#66d9ef;">list</span> 9,10))</pre>
+<center></center>
+<p>The <a href="http://beyondloom.com/decker/hershey.html#hershey_textpath"><code>hershey.textpath[]</code></a> function assembles a complex path based on a Lil string using the glyphs of a font, each of which is a simpler path:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p:hershey.<span style="color:#66d9ef;">textpath</span>[hf_futura <span style="color:#e6db74;">"ABC"</span>]</pre>
+<p>Thus constructed, we can draw the text path to a canvas <code>c</code> using either an explicit <code>each</code> loop or the equivalent shorthand <code>@</code> operator. The Decker <a href="http://beyondloom.com/decker/decker.html#canvasinterface">canvas widget</a> can draw strokes with the <code>canvas.line[]</code> function, given an appropriate list of lists of numbers:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;"><span style="color:#f92672;">each</span> stroke <span style="color:#66d9ef;">in</span> p c.<span style="color:#66d9ef;">line</span>[stroke]<span style="color:#f92672;">end</span>c.line @ p</pre>
+<p>Wherever possible, Decker’s scripting APIs are designed to work as <em>collective operations</em>, applying to a large data structure at once. Drawing a single straight line-segment is the <em>simple case</em> for a more general polyline-drawing operation. If <code>canvas.line[]</code> could only draw a single straight line-segment, we would have to explicitly manage the off-by-one relationship between the <em>N</em> points of a path and the <em>N-1</em> lines they represent. For example,</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;"><span style="color:#f92672;">each</span> stroke <span style="color:#66d9ef;">in</span> p <span style="color:#f92672;">each</span> point i <span style="color:#66d9ef;">in</span> stroke  <span style="color:#f92672;">if</span> i&gt;0   canvas.<span style="color:#66d9ef;">line</span>[<span style="color:#66d9ef;">stroke</span>[i-1] point]  <span style="color:#f92672;">end</span> <span style="color:#f92672;">end</span><span style="color:#f92672;">end</span></pre>
+<p>A small ergonomic flaw like this would be magnified as it appeared throughout a program, obscuring the simplicity of the programmer’s actual intent.<a class="footnote" href="#fn:1" id="fnref:1" title="see footnote"><sup>1</sup></a></p>
+<h2 id="path-mangling">Path-Mangling</h2>
+<p>Now that we can obtain and render interesting paths, let’s look at manipulating them.</p>
+<p>Combining paths is easy: Lil’s <code>,</code> operator concatenates lists. Concatenating a list of strokes and a list of strokes results in a list of strokes.</p>
+<p>Scaling paths is more interesting. As <a href="conforming.html">discussed previously</a>, many of Lil’s arithmetic operators will implicitly <em>conform</em> over nested listy structures. Multiplying a scalar number by a list of numbers <em>spreads</em> the multiplication to each element of the list, and the same process works recursively for nested lists. We can therefore uniformly scale points, strokes, or paths with simple multiplication<a class="footnote" href="#fn:2" id="fnref:2" title="see footnote"><sup>2</sup></a>:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">(11,22,33)*2<span style="color:#75715e;"># (22,44,66)</span>((<span style="color:#66d9ef;">list</span> 3,-5),(<span style="color:#66d9ef;">list</span> 2,5),(<span style="color:#66d9ef;">list</span> 0,3))*2<span style="color:#75715e;"># ((6,-10),(4,10),(0,6))</span></pre>
+<p>A non-uniform scale runs into trouble. We now want to multiply the x-coordinates of every point nested inside the path with a different value from the y-coordinates. If we multiply our path by a pair of numbers, the <code>*</code> operator doesn’t implicitly know that we want to “push” that conforming process down to the innermost pairs. When <code>*</code> is given lists to the left and to the right with different lengths, it treats the right list as if it were repeated or truncated to match the length of the left list:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">(1,2,3,4)*(10,100)<span style="color:#75715e;"># (10,200,30,400)</span></pre>
+<p>If we first <em>enclose</em> the right operand with <code>list</code>, <code>*</code> will repeat the element contained in that length-1 list and pair it up with each element of the left argument:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">(1,2,3,4)*<span style="color:#66d9ef;">list</span>(10,100)<span style="color:#75715e;"># ((10,100),(20,200),(30,300),(40,400))</span></pre>
+<p>For a path, we need to enclose the right operand twice: once to spread the scale to each stroke of the path, and then again to spread the scale to each point of the stroke:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p * <span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> scalex,scaley</pre>
+<center></center>
+<p>Scaling the x or y axis by a negative number will mirror a path horizontally or vertically, respectively:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p * <span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> -1,1</pre>
+<center></center>
+<p>Translating a path can use the same trick as scaling, but with <code>+</code> instead of <code>*</code>:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p + <span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> transx,transy</pre>
+<center></center>
+<p>To shear horizontally, we need to offset the x coordinate of every point in a path proportionally to the y-coordinate. We can use the <code>last</code> primitive to extract the y-coordinates of all the points in a path. The <code>@</code> operator allows us to “push” <code>last</code> down into the right operand. The <code>last</code> of a path is a stroke. The <code>last</code> of each stroke is a list of points. The <code>last</code> of each of each path is a list of lists of y-coordinates:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p: (<span style="color:#66d9ef;">list</span> (<span style="color:#66d9ef;">list</span> 1,2),(<span style="color:#66d9ef;">list</span> 3,4)),(<span style="color:#66d9ef;">list</span> (<span style="color:#66d9ef;">list</span> 5,6),(<span style="color:#66d9ef;">list</span> 7,8),(<span style="color:#66d9ef;">list</span> 9,10))<span style="color:#66d9ef;">last</span> p<span style="color:#75715e;"># ((5,6),(7,8),(9,10))</span><span style="color:#66d9ef;">last</span> @ p<span style="color:#75715e;"># ((3,4),(9,10))</span><span style="color:#66d9ef;">last</span> @ @ p<span style="color:#75715e;"># ((2,4),(6,8,10))</span></pre>
+<p>Let’s call this kind of list of lists of scalars derived from the points in a path a <em>peel</em>.</p>
+<p>To turn the y-coordinate peel back into a proper path, we can multiply each scalar by a pair, reusing our nonuniform scaling idiom:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">(<span style="color:#66d9ef;">last</span> @ @ p)*<span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span>(10,0)<span style="color:#75715e;"># (((20,0),(40,0)),((60,0),(80,0),(100,0)))</span></pre>
+<p>Thus, for a complete horizontal shear:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p + (<span style="color:#66d9ef;">last</span> @ @ p)*<span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> shearx,0</pre>
+<center></center>
+<p>A vertical shear looks very similar:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p + (<span style="color:#66d9ef;">first</span> @ @ p)*<span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> 0,sheary</pre>
+<center></center>
+<p>If you wanted to transpose a path, you could peel out the x and y coordinates separately and blend them back together using the same sort of idiom, but you could also use the <code>rev</code> (reverse) primitive directly to swap the elements of each point:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;"><span style="color:#66d9ef;">rev</span> @ @ p</pre>
+<center></center>
+<p>Transpositions aren’t often useful alone, but combining a mirror and a transpose produces a 90 degree rotation.</p>
+<p>A more general way to rotate a path is to take advantage of Lil’s <code>heading</code>, <code>mag</code>, and <code>unit</code> primitives.</p>
+<p>The <code>mag</code> primitive calculates the vector magnitude of a number or list of numbers. For a single number, this is the absolute value. For a pair of numbers- like a point- it gives the Euclidean distance between that point and the origin. It also has special conforming behavior: it descends recursively through nested lists until it arrives at a number or flat list of numbers. This behavior makes it perfect for producing a peel from a path:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p: (<span style="color:#66d9ef;">list</span> (<span style="color:#66d9ef;">list</span> 1,2),(<span style="color:#66d9ef;">list</span> 3,4)),(<span style="color:#66d9ef;">list</span> (<span style="color:#66d9ef;">list</span> 5,6),(<span style="color:#66d9ef;">list</span> 7,8),(<span style="color:#66d9ef;">list</span> 9,10))<span style="color:#66d9ef;">mag</span> p<span style="color:#75715e;"># ((2.236068,5),(7.81025,10.630146,13.453624))</span></pre>
+<p>The <code>heading</code> primitive conforms like <code>mag</code>, but produces a peel of angles (in radians) between the origin and each point:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;"><span style="color:#66d9ef;">heading</span> p<span style="color:#75715e;"># ((1.107149,0.927295),(0.876058,0.851966,0.837981))</span></pre>
+<p>Used together, <code>mag</code> and <code>heading</code> decompose a path (in rectangular coordinates) into polar coordinates. The <code>unit</code> primitive converts a peel of angles as obtained from <code>heading</code> and produces a path where every point has <em>unit distance</em> from the origin (<code>mag</code> 1). For any path <code>p</code><a class="footnote" href="#fn:3" id="fnref:3" title="see footnote"><sup>3</sup></a>,</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p ~ (<span style="color:#66d9ef;">mag</span> p)*<span style="color:#66d9ef;">unit</span> <span style="color:#66d9ef;">heading</span> p</pre>
+<p>A complete path rotation around the origin by <code>angle</code> radians is therefore:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">(<span style="color:#66d9ef;">mag</span> p)*<span style="color:#66d9ef;">unit</span> angle+<span style="color:#66d9ef;">heading</span> p</pre>
+<center></center>
+<p>Primitives like <code>unit</code> also offer a loop-free way to construct various strokes like regular polygons, arcs, and ovals. Enclosing the result with <code>list</code> gives us a path:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;"><span style="color:#f92672;">on</span> <span style="color:#a6e22e;">ngon</span> sides radius <span style="color:#f92672;">do</span> <span style="color:#66d9ef;">list</span> radius*<span style="color:#66d9ef;">unit</span> 2*pi*(<span style="color:#66d9ef;">range</span> sides+1)/sides<span style="color:#f92672;">end</span></pre>
+<p>This completes a set of Lil idioms for affine transformations of paths.</p>
+<h2 id="complexeffects:">Complex Effects:</h2>
+<p>What else can we do?</p>
+<p>If we start with a path that is centered about its origin, we could scale every point in the path by its own <code>mag</code>, producing a perspective distortion. Given a tween value <code>t</code> that varies between 0 and 1 and a few appropriately-chosen constants,</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p*.3+(<span style="color:#66d9ef;">mag</span> p)*.01*t</pre>
+<center></center>
+<p>If we generate a stroke of random [-1,1] offsets, we could add it to every stroke in a path in order to create a rudimentary line-boil-like effect. The length of our random stroke doesn’t matter, since it will be truncated or extended automatically by <code>+</code>, but having roughly as many points as the maximum stroke in the path will make the results look a bit better. Let’s say 25 points:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">p+<span style="color:#66d9ef;">list</span> 2 <span style="color:#66d9ef;">window</span> <span style="color:#66d9ef;">random</span>[3 2*25]-1</pre>
+<center></center>
+<p>Offsetting the points of a path by multiple offset sinusoids produces a different kind of wiggly effect, more like a flag flapping in the wind or the rippling surface of a liquid. To manipulate each axis separately, we’ll use a similar idiom to our shear effect. In this example <code>f</code> is a frame counter that continuously increments, like <code>sys.frame</code>:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">px:<span style="color:#66d9ef;">first</span> @ @ p((<span style="color:#66d9ef;">sin</span>(f/4)+.20*px)*<span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> 1,0)+((<span style="color:#66d9ef;">sin</span>(f/5)+.30*px)*<span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> 0,1)+p</pre>
+<center></center>
+<p>Combine more sinusoids blended into both axes for a more chaotic, subtly richer effect:</p>
+<pre style="background:#272822;color:#f8f8f2;padding:.5em;">px:<span style="color:#66d9ef;">first</span> @ @ ppy:<span style="color:#66d9ef;">last</span>  @ @ p((<span style="color:#66d9ef;">sin</span>(f/4)+.20*px)*<span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> 1.5,0.6)+((<span style="color:#66d9ef;">sin</span>(f/5)+.30*px)*<span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> 0.6,0.2)+((<span style="color:#66d9ef;">cos</span>(f/7)+.05*py)*<span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> 0.0,1.2)+((<span style="color:#66d9ef;">cos</span>(f/2)+.04*py)*<span style="color:#66d9ef;">list</span> <span style="color:#66d9ef;">list</span> 0.1,0.2)+p</pre>
+<center></center>
+<p>These techniques are just scratching the surface of what’s possible in a few lines of Lil!</p>
+<p>Why not do some tinkering of your own with the examples in <a href="http://beyondloom.com/decker/hershey.html#path_wave">the hershey module’s interactive docs</a>?</p>
+<p><a href="index.html">back</a></p>
+<div class="footnotes">
+
+<ol>
+<li id="fn:1">
+<p>Fencepost errors are a particularly odious class of programming mistake that APL–family languages often avoid by using abstract iteration patterns and a rich set of primitive operators instead of loop–carried indices. Lil can handle this specific situation without resorting to explicit list indexing by using <code>-2 window stroke</code> to slice the list <code>stroke</code> into overlapping length–2 “windows”, pairing up each point with its immediate successor. <a class="reversefootnote" href="#fnref:1" title="return to body"> ↩︎</a></p>
+</li>
+<li id="fn:2">
+<p>If two paths <em>happen to have</em> an identical ragged structure, we can blend them with any of the primitive arithmetic operators at our disposal– <code>+</code>, <code>*</code>, <code>|</code> (max), <code>&amp;</code> (min), etc. The same applies to strokes of the same length or any pair of points. <a class="reversefootnote" href="#fnref:2" title="return to body"> ↩︎</a></p>
+</li>
+<li id="fn:3">
+<p>Modulo floating–point error, naturally. <a class="reversefootnote" href="#fnref:3" title="return to body"> ↩︎</a></p>
+</li>
+</ol>
+</div>
