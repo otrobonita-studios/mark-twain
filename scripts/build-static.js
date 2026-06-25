@@ -6,7 +6,11 @@ const root = path.join(__dirname, '..');
 const routesToDisable = [
   'src/app/api/txt/route.js',
   'src/app/api/epub/route.js',
-  'src/app/api/chat/route.js'
+  'src/app/api/chat/route.js',
+  'src/app/api/research/route.js',
+  'src/app/api/proxy/route.js',
+  'src/app/api/agents/agent-twain/route.js',
+  'src/app/api/agents/quote-collector/route.js'
 ];
 
 console.log('--- Preparing Static HTML Export ---');
@@ -27,6 +31,7 @@ routesToDisable.forEach(routeRelPath => {
   }
 });
 
+let buildSuccess = true;
 try {
   console.log('Executing build: "npm run build" with BUILDING_FOR_FIREBASE=true...');
   execSync('npm run build', {
@@ -37,7 +42,7 @@ try {
   console.log('Build completed successfully.');
 } catch (err) {
   console.error('Build execution failed:', err);
-  process.exit(1);
+  buildSuccess = false;
 } finally {
   disabledRoutes.forEach(route => {
     if (fs.existsSync(route.temp)) {
@@ -49,4 +54,7 @@ try {
       }
     }
   });
+  if (!buildSuccess) {
+    process.exit(1);
+  }
 }
