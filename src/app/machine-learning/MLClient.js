@@ -124,7 +124,7 @@ const SCHOLARS = [
 ];
 
 export default function MLClient() {
-  const [activeTab, setActiveTab] = useState('linguistics'); // 'linguistics' | 'slurs' | 'api'
+  const [activeTab, setActiveTab] = useState('api'); // 'linguistics' | 'slurs' | 'api'
   
   // Tab 1: Linguistics state
   const [linguisticInput, setLinguisticInput] = useState(LINGUISTIC_SAMPLES[0].text);
