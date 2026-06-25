@@ -1,0 +1,867 @@
+An oral history of Bank Python
+
+November 2021
+
+The strange world of Python, as used by big investment banks
+
+High finance is a foreign country; they do things differently there
+
+Today will I take you 
+through the keyhole
+
+to look at a group of software systems not well known to the public, which I
+call "Bank Python".  Bank Python implementations are effectively proprietary
+forks of the 
+entire
+ Python ecosystem which are in use at many (but not all)
+of the biggest investment banks.  Bank Python differs considerably from the
+common, or garden-variety Python that most people know and love (or hate).
+
+Thousands of people work on - or rather, inside - these systems but there is
+not a lot about them on the public web.  When I've tried to explain Bank Python
+in conversations people have often dismissed what I've said as the ravings of a
+swivel-eyed loon.  It all just sounds too bonkers.
+
+I will discuss a fictional, amalgamated, imaginary Bank Python system called
+"Minerva".  The names of subsystems will be changed and though I'll try to be
+accurate I will have to stylise some details and - of course: I don't know
+every single detail. I might even make the odd mistake.  Hopefully I get the
+broad strokes.
+
+Barbara, the great key value store
+
+The first thing to know about Minerva is that it is built on a global database
+of Python objects.
+
+import
+ 
+barbara
+
+# open a connection to the default database "ring"
+
+db
+ 
+=
+ 
+barbara
+.
+open
+()
+
+# pull out some bond
+
+my_gilt
+ 
+=
+ 
+db
+[
+"/Instruments/UKGILT201510yZXhhbXBsZQ=="
+]
+
+# calculate the current value of the bond (according to
+
+# the bank's modellers)
+
+current_value
+:
+ 
+float
+ 
+=
+ 
+my_gilt
+.
+value
+()
+
+Barbara is a simple key value store with a hierarchical key space.  It's
+brutally simple: made just from
+
+pickle
+ and
+
+zip
+.
+
+Barbara has multiple "rings", or namespaces, but the default ring is more or
+less a single, global, object database for the entire bank.  From the default
+ring you can pull out trade data, instrument data (as above), market data and
+so on.  A huge fraction, the majority, of data used day-to-day comes out of
+Barbara.
+
+Applications also commonly store their 
+internal
+ state in Barbara - writing
+dataclasses straight in and out with only very simple locking and transactions
+(if any).  There is no filesystem available to Minerva scripts and the little
+bits of data that scripts pick up has to be put into Barbara.
+
+Internally, Barbara nodes replicate writes within their rings, a bit like how
+
+Dynamo
+
+and 
+BigTable
+ work.
+When you call 
+barbara.open()
+ it connects to the nearest working instance of
+the default ring.  Within that single instance reads and writes are strongly
+consistent.  Reads and writes from other instances turn up quickly, but not
+straight away.  If consistency matters you simply ensure that you are always
+connecting to a specific instance - a practice which is discouraged if not
+necessary.  Barbara is surprisingly robust, probably because it is so simple.
+Outright failures are exceptionally rare and degraded states only a little more
+common.
+
+Some example paths from the default ring:
+
+Path
+
+Description
+
+/Instruments
+
+Directory for financial instruments (bonds, stocks, etc)
+
+/Deals
+
+Directory for Deals (trades that happened)
+
+/FX
+
+Foreign exchange divisions' general area
+
+/Equities/XLON/VODA/
+
+Directory for things to do with Vodaphones shar es
+
+/MIFID2/TR/20180103/01
+
+Intermediate object from some business process
+
+Barbara also has some "overlay" features:
+
+# connect to multiple rings: keys are 'overlaid' in order of
+
+# the provided ring names
+
+db
+ 
+=
+ 
+barbara
+.
+open
+(
+"middleoffice;ficc;default"
+)
+
+# get /Etc/Something from the 'middleoffice' ring if it exists there,
+
+# otherwise try 'ficc' and finally the default ring
+
+some_obj
+ 
+=
+ 
+db
+[
+"/Etc/Something"
+]
+
+You can list rings in a stack and then each read will try the first ring, and
+then, if the key is absent there, it will try the second ring, then the third
+and so on.  Writes can either always go to the first ring or to the uppermost
+ring where that key already exists (determined by configuration that I have not
+shown).
+
+There are some good reasons 
+not
+ to use Barbara.  If your dataset is large it
+may be a good idea to look elsewhere - perhaps a traditional SQL database or
+
+kdb+
+.  The soft limit on (compressed)
+Barbara object sizes is about 16MB.  Zipped pickles are pretty small already so
+this is actually quite a large size.  Barbara does feature secondary indices
+on object attributes but if secondary indices are a very important part of
+your program, it is also a good idea to look elsewhere.
+
+Dagger, a directed, acyclic graph of financial instruments
+
+One important thing that investment banks do is estimate the value of financial
+instruments - "asset pricing".  For example a bond is valued as all the money
+that you'll get for owning it, discounted a bit for the danger of the issuer of
+the bond going bust.  Bonds are probably (conceptually!) the simplest
+instrument going and of much greater interest is the valuation of other,
+"derivative", financial instruments, such as credit default swaps, interest
+rate swaps, and synthetic versions of real instruments.  These are all based on
+an "underlying" instrument but pay out differently somehow.
+
+The specifics of how derivatives are valued does not matter, except to say that
+there are both a lot of specifics and a lot of derivatives.  The dependencies
+between instruments forms a directed, acyclic graph.  An example hierarchy for
+some derivative financial instruments might look like this:
+
+Some financial instruments derive their value from others.
+    That makes them derivatives.  You can get derivatives of derivatives and
+    some derivatives derive their value from multiple
+    
+underliers
+.
+
+Dagger is a subsystem in Minerva which serves to help keep these data
+dependencies straight.  You write a class like so:
+
+class
+ 
+CreditDefaultSwap
+(
+Instrument
+):
+
+"""A credit default swap pays some money when a bond goes into
+
+    default"""
+
+def
+ 
+__init__
+(
+self
+,
+ 
+bond
+:
+ 
+Bond
+):
+
+super
+()
+.
+__init__
+(
+underliers
+=
+[
+bond
+])
+
+self
+.
+bond
+ 
+=
+ 
+bond
+
+def
+ 
+value
+(
+self
+)
+ 
+->
+ 
+float
+:
+
+# return the (cached) valuation, according to some
+
+# asset pricing model
+
+return
+ 
+...
+
+Dagger tracks the edges in the graph of underlying instruments and
+automatically reprices derivatives in Barbara when the value of the underlying
+instruments changes.  If some bad news about a company is published and a
+credit agency downgrades their credit rating then someone in bonds will update
+the relevant 
+Bond
+ object via Dagger and Dagger will automatically revalue
+everything that is affected.  That might mean hundreds of other derivative
+instruments.  Credit downgrades can be rather exciting.
+
+Individual instruments are composed into positions.  The Position class looks a
+bit like this:
+
+class
+ 
+Position
+:
+
+"""A position is an instrument and how many of it"""
+
+def
+ 
+__init__
+(
+self
+,
+ 
+inst
+:
+ 
+Instrument
+,
+ 
+quantity
+:
+ 
+float
+):
+
+self
+.
+inst
+ 
+=
+ 
+inst
+
+self
+.
+quantity
+ 
+=
+ 
+quantity
+
+def
+ 
+value
+(
+self
+)
+ 
+->
+ 
+float
+:
+
+# return the (cached) valuation, which basically is
+
+# self.inst.value() * self.quantity
+
+return
+ 
+...
+
+Again, note that a position is something you can also value.  It is also
+something whose value changes when the value of things it contains changes.  It
+it also automatically revalued by Dagger.
+
+And a set of positions is called a "book" which is an immensely overloaded word
+in finance but in this context is just a set of positions:
+
+class
+ 
+Book
+:
+
+"""A book is a set of positions"""
+
+def
+ 
+__init__
+(
+self
+,
+ 
+contents
+:
+ 
+Set
+[
+Valuable
+]):
+
+# the type Valuable is a "protocol" in python terms,
+
+# or an "interface" in java terms - anything
+
+# with value()
+
+self
+.
+contents
+ 
+=
+ 
+contents
+
+def
+ 
+value
+(
+self
+)
+ 
+->
+ 
+float
+:
+
+# again, return the (cached) valuation, which is more
+
+# or less: sum(p.value() for p in self.contents)
+
+return
+ 
+...
+
+Books can contain other books.  There is a hierarchy of nested books all the
+way up the bank from the smallest bond desk to a single book for the entire
+bank.  To value the bank you would execute:
+
+# this is the top level book for the whole bank which
+
+# recursively contains everything else in the whole bank
+
+bank
+ 
+=
+ 
+db
+[
+"/Books/BigBankPlc"
+]
+
+# this prints the valuation of the whole bank
+
+print
+(
+bank
+.
+value
+())
+
+That's the dream anyway.  In reality the CFO probably uses a different system
+to generate the accounts.  Valuations of subsidiary books are still well used
+though.
+
+If you understand excel you will be starting to recognise similarities.  In
+Excel, spreadsheets cells are also updated based on their dependencies, also as
+a directed acyclic graph.  Dagger allows people to put their Excel-style
+modelling calculations into Python, write tests for them, control their
+versioning without having to mess around with files like 
+CDS-OF-CDS EURO DESK
+20180103 Final (final) (2).xlsx
+.  Dagger is a key technology to get financial
+models out of Excel, into a programming language and under tests and version
+control.
+
+Dagger doesn't just handle valuations.  It also handles the various "risk
+metrics" that banks use to try to keep a handle on how exposed they are to
+various bad things that might happen.  For example, Dagger makes it relatively
+easy to find all positions on, say, Compu-Global-Hyper-Mega-Net Plc, which is
+rumoured to be going bust.  That's counting all options, futures, credit
+instruments and all of it "netted out" to find the complete position on that
+company for the whole bank.  Never again be surprised by your exposure to dodgy
+subprime lenders!
+
+Walpole, a bank-wide job runner
+
+I've said so far that a lot of data is stored in Barbara.  Time to drop a bit
+of a bombshell: the source code is in Barbara too, not on disk.  Remain
+composed.  It's kept in a special Barbara ring called 
+sourcecode
+.
+
+Not keeping the source code on the filesystem breaks a lot of assumptions.  How
+does such a program run?  The answer is Walpole, the bankwide job runner.
+Walpole is a general purpose runner of jobs, like a mega Jenkins combined with
+a mega systemd.
+
+As with many things in Minerva, Walpole is not deployed per-team: there is but
+one, single, bankwide instance.  Walpole is suitable for both long
+lived-services as well as periodic jobs and is even used for builds.  Periodic
+jobs come up a 
+lot
+ in banks: there are many, many, many end of day or weekly
+jobs to run to update data, check things, send email digests, etc.
+
+Walpole does all the usual stuff you need to run your software.  It can restart
+your software if it crashes and sends out alerts if it keeps crashing.  It
+stores logs.  It understands dependencies between jobs (much like systemd does)
+so if the job that generates the data your job needs fails, you job doesn't
+even try starting up but instead fires more alerts.
+
+One real advantage is that Walpole considerably lowers the bar for getting your
+stuff deployed.  Anyone can put a job into Walpole - you need only a small
+ini-style config file explaining what time to run your script, where your main
+function is and your entire application is deployed with no further
+negotiation.
+
+This is a big deal because negotiating anything in large bank is an exercise in
+frustration: lead times on hardware can be measured in months.  Getting people
+to agree with you takes of course much longer than that.
+
+One of the great drawbacks of "Cloud Native Computing" as it now exists is that
+it's really, really complicated.  It is often more complicated than the old,
+non-cloud, sort of computing.  In order to deploy your app outside of Minerva
+you now need to know something about k8s, or Cloud Formation, or Terraform.
+This is a skillset so distinct from that of a normal programmer (let alone a
+financial modeller) that there is no overlap.  Conversely, anyone can work out
+an ini-file.
+
+MnTable, the ubiquitous table library
+
+I always feel that it's a shame that programming languages rarely, if ever,
+come with a built-in table datastructure.  Programmers have an unfortunate
+tendency to gravitate towards hash tables - particularly in Python and
+Javascript where they are used to such extent that it is hard to find anything
+which is 
+not
+ made out of hash tables.
+
+Hash tables have some serious drawbacks.  First, most implementations are
+in-memory only and sit sparsely there, which makes it a pain in the bum to work
+even with medium sized data sets; a problem Python programs very commonly run
+into in practice.  More importantly they require you to know your access
+patterns up front and they really had better be by a single primary key.
+
+Tables are the
+reverse
+: they are memory-dense and easy to
+spool to and from disk.  They can use b-tree indices to allow efficient access
+by any route; so you never end up having to invert your dictionary in the
+middle of your program just so that you can access by something other than the
+key.  They can support bulk operations and can make use of lazy evaluation.
+
+In open source land the popular library for this is
+
+pandas
+ but pandas has some serious drawbacks:
+
+It did not exist when Minerva was originally implemented
+
+It is less efficient than you might hope, particularly with memory
+
+It's not brilliant with datasets larger than memory
+
+(Arguably) it has a baroque API
+
+Instead of pandas there is a proprietary table library in Minerva: MnTable.
+
+# make a new table with three columns of the types provided
+
+t1
+ 
+=
+ 
+mntable
+.
+Table
+([(
+'counterparty'
+,
+ 
+str
+),
+
+(
+'instrument'
+,
+ 
+str
+),
+
+(
+'quantity'
+,
+ 
+float
+)])
+
+# put some stuff in the table (in place, tables are
+
+# immutable by default)
+
+t1
+.
+extend
+(
+
+[
+
+[
+'Cleon Partners'
+,
+ 
+'xlon:voda'
+,
+ 
+1200.0
+],
+
+[
+'Cleon Partners'
+,
+ 
+'xlon:spd'
+,
+ 
+1200.0
+],
+
+[
+'Blackpebble'
+,
+ 
+'xlon:voda'
+,
+ 
+1200.0
+],
+
+],
+
+in_place
+=
+True
+)
+
+# return a new table (without changing the original)
+
+# that only includes vodafone.  this is lazy and
+
+# won't get evaluated until you look at it
+
+t1
+.
+restrict
+(
+instrument
+=
+'xlon:voda'
+)
+
+MnTable gets used 
+everywhere
+ in Bank Python.  Some implementations are lumps
+of C++ (not atypical of financial software) and some are thin veneers over
+sqlite3.  There are many, many programs which start with an MnTable, apply some
+list of operations to it and then forward the resulting table somewhere else.
+
+This is convenient as data is everywhere in banks and most of it is "medium"
+sized: in the gigabytes range.  A lot is talked about high-frequency traders
+but the majority of financiers are not looking at tick level or frankly even
+intra-day level data.  "Medium-sized" is big enough that you cannot create an
+object for every row but not so big that you are going to need some distributed
+compute cluster thingy.
+
+A measure of the pain
+
+It would be wrong to imply that working with any financial software is pure and
+untrammelled joy.  Minerva is no different.
+
+New starters take an exceptionally long time to get up to speed - and that's if
+they don't resign in fit of pique as soon as they see the special, mandatory,
+in-house IDE (as I nearly did).  Even 
+months
+ in, new starters are still
+learning quite fundamental new things: there is a lot that is different.
+
+Over time the divergence between Bank Python and Open Source Python grows.
+Technology churns on both sides, much faster outside than in of course, but
+they do not get closer.  The rest of the world is not going to adopt any of
+Minerva's ideas, not least because they've never heard of them.  Minerva is
+also not adopting many of the ideas from the outside.  There is an uncharitable
+view (sometimes expressed internally too) that Minerva as a whole is a grand
+exercise in NIH syndrome.
+
+By nature, Minerva is holistic and all encompassing.  That's great if you're
+inside but if you're outside, interacting with Minerva is a pain.  Occasionally
+a non-Minerva developer would ask me how he might read some specific piece of
+data out of Barbara.  I would tell him that the best way would be to use the
+Minerva source code to do that.  Ok, he would reply, maybe he could get away
+with adding a Python script to a cronjob to do that - could I help him get the
+code?  That's easy, I would reply: just read it out of Barbara.
+
+I can just about understand why Minerva has its own IDE - no other IDEs work if
+you keep your source files in a giant global database.  What I can't understand
+is why it contains its own web framework.  Investment banks have a one-way
+approach to open source software: (some of) it can come in, but none of it can
+go out.  The github profiles of the bulge bracket investment banks are anaemic
+compared to those of comparably sized companies in different industries.  This
+highly proprietary 
+attitude
+ has remained even as the 
+Volcker
+Rule
+ has forced nearly all of the
+proprietary 
+trading
+ out of investment banks.  It is a curse.
+
+It could be that the biggest disadvantage is professional.  Every year you
+spend in the Minerva monoculture the skills you need interact with normal
+software atrophy.  By the time I left I had pretty much forgotten how to
+wrestle pip and virtualenv into shape (essential skills for normal Python).
+When everything is in the same repo and all code is just an 
+import
+ away,
+software packaging just does not not come up.
+
+What makes it different
+
+I haven't covered everything that's in a typical Bank Python implementation.
+For example, I've skipped over things like:
+
+the proprietary timeseries data-structure
+
+the "vouch" system for getting your changes into prod
+
+time travel in Dagger
+
+the semi-bespoke (non-git) version control system
+
+the Prolog-based permission system
+
+replay-oriented financial message buses
+
+existential ennui arising from prolonged exposure to Windows 7 and MS Outlook
+  2010
+
+You'll just have to use your imagination.
+
+That said, I hope that I've given a view of the most important central parts:
+Barbara, Dagger, Walpole and MnTable.  Of those four subsystems, three pertain
+to data.  (The other can be seen as a database of jobs.)
+
+One of the slightly odd things about Minerva is that a lot of it is
+"data-first", rather than "code-first".  This is odd because the majority of
+software engineering is the reverse.  For example, in object oriented design
+the aim is to organise the program around "classes", which are coherent
+groupings of 
+behaviour
+ (ie: code), the data is often simply along for the
+ride.  Writing programs with MnTable is different: you group the data into
+
+tables
+ and then the code lives separately.  These two lenses for organising
+computations are at the heart of the object relational impedance mismatch which
+has caused 
+such grief
+.  The force is out of balance: many
+more programmers can design decent object-oriented classes than can bring a set
+of tables into third normal form.  This is a large part of the reason that that
+annoying impedance mismatch keeps coming up.
+
+The other unusual thing about Minerva is that it opts, in many cases, to have
+one big something rather than many small somethings.  One big codebase.  One
+big database.  One big job runner.  Clubbing it all together removes a lot of
+accidental complexity: you already have a language runtime (and the version in
+prod is the same as on your computer), a basic database and a place for your
+code to run before you even start.  That means it's possible to sit down, write
+a script and get it running in prod within the hour, which is a big deal.
+
+Minerva is obviously heavily influenced by the technological path dependency of
+the financial sector, which is another way of saying: there is a lot of MS
+Excel.  Any new software solution is going to be compared with MS Excel and if
+the result is unfavourable people will often just use continue to use Excel
+instead.  Many, many technologists have taken one look at an existing workflow
+of spreadsheets, reacted with performative disgust, and proposed the trifecta
+of microservices, Kubernetes and something called a "service mesh".
+
+This kind of Big Enterprise technology however takes away that basic agency of
+those Excel users, who no longer understand the business process they run and
+now have to negotiate with 
+ludicrous technology
+dweebs
+ for each software change.
+The previous pliability of the spreadsheets has been completely lost.  Using
+simple Python functions, in a source controlled system, is a better middle
+ground than the modern-day equivalent of J2EE.  Financiers are able to learn
+Python, and while they may never be amazing at it they can contribute to a much
+higher level and even make their own changes and get them deployed.
+
+Crib ideas from existing systems
+
+One thing I regret about software as a field is how little time is spent
+learning from existing systems and judging what they did well, or badly.  There
+are only a 
+small number
+ of books
+discussing, in detail, real systems that exist.
+
+Even when the public details of systems are available they can still be
+strangely understudied.  Email has been around a long time: it predates the
+internet by a decade.  And in that time it has not changed enormously fast and
+is still mostly the same as 
+it was in the
+80s
+.  Despite that, a lot of
+programmers are still a hazy about what happens when you click "send".  Some of
+them, I'm sure, will keep trying to "disrupt" email regardless.
+
+This is a shame as foreign systems, like foreign countries, can be mind
+expanding when experienced firsthand.  Their customs can differ so enormously
+from yours that it can lead you to rethink your own practices.  But when you
+just hear it second hand, it can sound like nonsense.
+
+I once described Minerva's "vouch" system, briefly, to another programmer who
+had never seen it.  I explained that when you had a code change, you just had
+to convince any one of the code owners for the file in question to sign it off.
+If the change was very urgent, they might sign off your change sight unseen,
+based on your reputation alone.  As soon as they clicked that "vouch" button -
+bang - your new change was in prod: after all, there is no such thing as a
+deployment step when your code is stored in a database.  Disbelieving me, he
+asked who in the world would trust such a bank.  The answer is a lot of people.
+They are a very big bank.  You have certainly heard of them.
+
+Contact/etc
+
+Other notes
+
+If you're curious to try an MnTable-style table library, my friend Sal released
+a pure-python, API compatible, version called
+
+eztable
+.
+
+I've mentioned that programmers are far too dismissive of MS Excel.  You can
+achieve a awful lot with Excel: more, even, than some programmers can achieve
+without it.  There exist trading systems in "tier one" investment banks where
+the way that trades are executed is by clicking on special cells in certain
+special xlsx files.
+
+Even I would accept that that is too far but if you don't already know Excel it
+is one of the highest value things you can learn.  For programmers the best way
+to find out what you are missing is Joel Spolsky's 
+overview
+talk
+, aimed directly at
+programmers.  If you decide to take the red pill after that, I'm told that
+Coursera's 
+Excel Skills for Business
+Specialisation
+ is excellent.
+
+One of things that tends to boggle programmer brains is while most software
+dealing with money uses 
+multiple-precision
+numbers
+ to make
+sure the pennies are accurate, financial modelling uses
+
+floats
+
+instead.  This is because clients generally do not ring up about pennies.
+
+I've mentioned Barbara overlays.  They also work for source code.  You can tell
+Walpole to mount your own ring in front of 
+sourcecode
+ when it's importing
+code for a job and then you can push source files to that instead of getting
+them vouched into 
+sourcecode
+.  All manner of crazy, bananas, tutti frutti
+hacks lie down this dark path.  Do it, but only a little.

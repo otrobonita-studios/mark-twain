@@ -1,0 +1,420 @@
+A few months ago I became obsessed with a silly question: why does my Emacs, on a laptop with a perfectly capable GPU, draw all of its text using the CPU? And that led to others: why can't I play a video inside a buffer? Why can't I have animated cursor effects? Why can't I cross-fade between buffers? I needed to satisfy my curiosity, so I started digging.
+
+I started reading the code, with an AI as my companion. I discovered that every glyph, every underline, every scroll is recomputed and repainted by the processor. Emacs's redisplay engine (
+xdisp.c
+) was born in an era when there was no other option, and it is tuned to the millimeter for exactly that. And nobody had managed to slip a GPU underneath without rewriting half of Emacs... until recently.
+
+So I decided to try. What began as a weekend experiment ended up being a complete display backend for macOS with Metal, a second backend for GNU/Linux with OpenGL, a video player inside the buffer, shader-based cursor effects, and a debate of more than a hundred messages on the Emacs developers' mailing list that ranged from cairo's performance to software freedom and the ethics of artificial intelligence.
+
+This article exists because I feel like telling the story, and it might be useful for future implementations. At the end I leave the lessons I take away and a conclusion that is not the one I expected when I started.
+
+A note of honesty up front: I built this project with the help of an LLM as a copilot, from start to finish. I say it here just as I said it in public when I was asked. I will come back to it, because it turned out to be the most important plot twist of the whole journey.
+
+Phase 1: the architecture decision
+
+Anyone's first instinct would be to open the macOS code, the Cocoa backend (
+nsterm.m
+), and start replacing CoreGraphics calls with Metal calls. It is the most direct path. And it is exactly what I decided not to do.
+
+The problem with that approach is that it ties you to one platform. If I write "Emacs with Metal", I have an Emacs for Mac and nothing else. I needed to write a display-backend abstraction that would let me have one driver per platform. So I sketched a three-layer architecture on a Post-it:
+
+flowchart TD
+    X["Redisplay engine
+(xdisp.c, untouched)"]:::core --> P["src/gfxterm.c
+Neutral drawing policy (plain C)"]:::policy
+    P --> D["src/gfxdrv.h
+Driver interface (~25 operations)"]:::iface
+    D --> M["src/mtlterm.m (macOS)
+Metal driver"]:::mtl
+    D --> G["src/glterm.c (GNU/Linux, X11)
+OpenGL ES / EGL driver"]:::gl
+
+    classDef core fill:#37474F,stroke:#263238,stroke-width:2px,color:#fff
+    classDef policy fill:#00897B,stroke:#00695C,stroke-width:2px,color:#fff
+    classDef iface fill:#7CB342,stroke:#558B2F,stroke-width:2px,color:#fff
+    classDef mtl fill:#8E24AA,stroke:#6A1B9A,stroke-width:2px,color:#fff
+    classDef gl fill:#D32F2F,stroke:#B71C1C,stroke-width:2px,color:#fff
+
+The idea is that all the drawing 
+logic
+ (how a glyph string is composed, where the wavy underline goes, how an image is clipped to the window, how scrolling works) lives in a plain-C file, without a single platform-specific line. And that each platform only has to implement a small contract: about 25 primitive operations of the kind "upload this texture", "draw this quad", "present the frame". That contract is 
+gfxdrv.h
+. The first driver would be Metal, in 
+mtlterm.m
+.
+
+The golden rule, the one I imposed on myself and never broke once: 
+xdisp.c
+ is not touched
+. The redisplay engine computes the glyph matrices exactly as always; I only hook into the drawing interface that already exists. If the experiment went wrong, Emacs was still Emacs.
+
+In hindsight, this was the best decision of the whole project!
+
+Phase 2: the Metal backend and the tyranny of the pixel
+
+With the architecture clear, I dove into Metal. The technical plan was that of any modern text renderer:
+
+Rasterize each glyph just once, via CoreText, into a grayscale texture (a glyph atlas in R8 format).
+
+Draw the text as textured quads that sample that atlas.
+
+Upload images (PNG, JPEG, SVG, GIF) as textures.
+
+Composite the whole frame on the GPU, in a persistent texture, and present it.
+
+On paper, two afternoons. In practice, weeks. The reason has a name: 
+pixel parity
+.
+
+My success criterion was not "it looks good". It was that the result be 
+identical, pixel for pixel
+, to the original Cocoa backend. Same binary, with the GPU on and off, and the diff between the two captures had to be practically zero. I built a harness that launched the same Emacs twice, loaded an identical scenario, captured the screen on both and compared them with Python and PIL. The bar landed around 0.055% of differing pixels in the baseline, and anything that strayed from there was a bug to hunt down.
+
+That harness was relentless, and it surfaced a collection of details I had to look at under a magnifying glass:
+
+The 
+ink weight
+. CoreText and my shader applied antialiasing differently.
+
+The 
+relief colors
+ (the 3D borders of buttons and the mode-line) were not coming out right.
+
+There was an 
+off-by-one
+ in the vertical position of the glyphs.
+
+We should not overlook that the way of drawing is completely different, both in approach and in architecture. That makes the bugs subtle and hard to detect.
+
+Phase 3: the cursor that froze
+
+Of all the bugs, the one that taught me the most was the cursor one.
+
+I wanted animated cursor effects: a ring that expands when it jumps, a comet-like trail, that kind of visual candy the GPU does almost for free. I implemented them as a compositor layer on top of the frame, without touching the buffer content underneath. They worked perfectly... while I was typing. The moment I stopped touching the keyboard, the animation froze halfway. The culprit was Apple's synchronization mechanism, 
+CADisplayLink
+: 
+it dies at rest
+, Emacs's event loop does not feed it when there is no user input. While I typed, the keyboard events pumped the run loop and everything ran fine; the moment I stopped, there was no one to move the clock.
+
+The solution was to stop depending on the system and move 
+everything continuous to a Lisp timer
+. Cursor, buffer cross-fade and video, everything advances from a single "pump" in Emacs Lisp that ticks periodically and tells the driver "advance everything you have and present at most once". Later I unified the three timers into one with auto-pacing (60 Hz when there is a fade, 30 Hz otherwise, and it shuts itself off when there is nothing to animate).
+
+Once this was solved, macOS was complete. Text, decorations, images, animated GIF, line numbers, fringes with custom bitmaps, mode-line, header-line, tab-bar, Retina/HiDPI at 2x, the four cursor types, splits, dynamic 
+text-scale
+. Everything pixel-perfect against Cocoa.
+
+Now it was time to add the things only the GPU can do:
+
+Video inside the buffer
+
+Shader-based cursor effects
+
+Cross-fade when switching buffers.
+
+As an experiment I even put together a small YouTube frontend inside Emacs: it searched for the video and played it directly in a buffer, with the GPU compositing the frames over the text. A fun little silliness that is only possible when the frame is painted by the graphics card.
+
+And the cross-fade when switching buffers, a smooth fade that on the GPU is just one more shader pass:
+
+It was relatively simple, since the redisplay engine neither knows nor cares what I do on top of it; they are just compositing operations on the GPU.
+
+Phase 4: packaging is half the work
+
+Having the binary working on my machine and having something another person can install are two different planets. This phase has no glamour but it ate whole days.
+
+Apple's signing and notarization were a labyrinth of their own. And when I added native-comp (AOT native compilation), about 1564 
+.eln
+ files appeared that are also Mach-O code and also have to be signed one by one, with a secure timestamp, for notarization to accept them.
+
+I published the first signed and notarized release, a Homebrew cask, and started using it daily along with a colleague. It worked. I was happy. I thought the hard part was behind me.
+
+Then I decided to show it to the Emacs mailing list.
+
+Phase 5: emacs-devel, or how to learn humility in an email thread
+
+On June 8, 2026 I sent an 
+[RFC PATCH]
+ to 
+emacs-devel
+ with the subject 
+"GPU display backend with a neutral driver layer (Metal on macOS)"
+. I framed it carefully: I was not selling "Emacs with Metal", I was selling the 
+abstraction
+. A neutral drawing layer plus a thin per-platform driver behind a small vtable, with Metal as the first driver, 
+xdisp.c
+ untouched, parity verified with an automatic harness, and the FSF copyright assignment already on file.
+
+My first mistake was sending the complete patch, rather than an RFC with the idea, the design and a minimal demo. The response came fast:
+
+Sean Whitton
+ wrote:
+
+"People don't normally post such large patches at once without first discussing the design issues with people on the list. Given this, I just have to ask, this isn't LLM-generated, is it?"
+
+I answered honestly:
+
+"100% created with LLM.
+
+I understand that this is a rather large addition, and if it's rejected, I won't be offended. My intention was to share it because it's fully developed [...]; I'm using it daily without any problems (along with other colleagues)."
+
+Whitton's reply was courteous and final:
+
+"I'm afraid there is a policy conflict. The GNU project does not accept any LLM-generated contributions at present. Thank you for your interest in Emacs, anyway."
+
+And there, in terms of "does this get merged?", the project died in less than a day. The GNU project does not, as of today, accept LLM-generated contributions. Period. No technical debate matters when it collides with a hard policy.
+
+What I did not expect is that, far from closing the thread, it opened in three directions at once.
+
+The turn toward "study subject"
+
+Dmitry Gutov
+ set the tone for what was coming:
+
+"We cannot accept this as code contribution, but if you are already using it locally, it might be useful as a study subject. It might be more useful to test with a Linux port, though."
+
+In other words: as code it does not get in, but as a reference or an experiment it might be worth something. And there, too, was the seed of what I would do next.
+
+The freedom debate
+
+And then Richard Stallman stepped in, forking the thread's subject to 
+"GPU-specific code with no GPU-specific features?"
+ and raising it to a moral question:
+
+"In general the GPU is a disaster for software freedom: it turns your computer into a prison."
+
+Later, insisting:
+
+"They don't put physical chains on the user, but they do put digital chains on the user's computing. GPUs are a substantial part of what we are fighting to free people from."
+
+Not everyone bought it. 
+Arsen Arsenović
+ answered with the sharpest technical objection in the thread:
+
+"This is a bizarre comparison based on frivolous word association. GPU programming APIs such as Vulkan or OpenGL [...] can be implemented fully in software, and indeed are implemented using fully free software in Mesa, so there's no downside to using them from this perspective."
+
+And 
+Madhu
+ brought up the uncomfortable fact that dismantles half the discussion:
+
+"If you are using X11 on a modern (say post 2021) intel machine on linux, all your 2d graphics probably goes through the GPU backend, X11 windows are just textures."
+
+They were right about something I could demonstrate: my OpenGL driver also runs on Mesa's software rasterizer (
+llvmpipe
+). In fact, the parity suite runs headless on it. In other words, the code does not require non-free GPU firmware to be exercised. I said so in the thread, although by then the debate had a life of its own.
+
+The underlying technical doubt
+
+The most substantive criticism, and the one that made me think the most, was neither the political nor the ideological one. It came from 
+Eli Zaretskii
+, one of the historical maintainers:
+
+"I'm not really surprised that using a GPU in the display backend yields performance gains that are not really spectacular with reasonable sizes of the frame: the design of the current display engine is optimized towards CPU-driven redisplay, so taking a better advantage of GPUs will probably need a more thorough redesign, not just a separate backend."
+
+And 
+Gerd Möllmann
+, the redisplay maintainer, finished it off with elegant indifference:
+
+"It looks to me as if this adds GPU support without adding GPU-only features or changing the architecture of redisplay [...]. Can have performance benefits, maybe, don't know, but it's outside of my field of interest."
+
+They were partly right. The engine is built to repaint small dirty rectangles on the CPU, and cairo does that extraordinarily well. Slipping a GPU underneath without redesigning the engine has a ceiling. But they were also partly making a point that can only be seen with a second backend and with numbers. And I had neither one yet.
+
+The community had, without knowing it, written my roadmap for the following weeks: 
+build a second backend
+ (to validate the abstraction) and 
+bring honest numbers
+ (to settle Eli's doubt).
+
+Phase 6: the OpenGL driver, or how to cash in the architecture bet
+
+If my design's big promise was "the neutral layer is reused as-is, you only change the driver", the only way to prove it was to write a second driver from scratch and see how much shared code survived untouched.
+
+I chose GNU/Linux over 
+OpenGL ES 3 with EGL
+, on X11. The cross-platform counterpart of the Metal driver: I rasterize the glyphs with FreeType into a GPU atlas, render to an FBO and present by blitting to the window surface with 
+eglSwapBuffers
+. The drawing policy, 
+gfxterm.c
+, I reused entirely. And it worked: the second backend came out pixel-perfect against the stock GTK/cairo Emacs, on the same exhaustive test battery as macOS, running both on a real X server with a GPU and headless under Xvfb for the harness.
+
+That was the moment the architecture stopped being a promise and became a fact. Writing the whole driver, with all its EGL and FreeType quirks, took me far less than the first one, because all the hard logic was already written and tested in the neutral layer.
+
+But Linux brought its own hell, with the hardest bugs of the entire project. The worst one: when switching buffers, during a single flicker (one vblank), the 
+half-painted startup dashboard
+ leaked through, ghost images of other content. It took me days to discover that the root cause was not my GPU code, but the back buffer of X11's double-buffer extension (XDBE), which Emacs painted at startup and my backend never touched again.
+
+Still, after a while of work and debugging, the OpenGL driver became stable and functional. Not perfect, but good enough to run the performance harness and compare it against cairo.
+
+Phase 7: optimizing and bringing honest numbers
+
+The results, on a laptop with an integrated 
+AMD Radeon (Renoir)
+ GPU, a 1616x912 frame, an 8000-line font-locked buffer:
+
+Workload
+
+Stock (X/cairo)
+
+GPU (OpenGL)
+
+Ratio
+
+Line scroll
+
+530 fps
+
+487 fps
+
+0.92x
+
+Page scroll
+
+297 fps
+
+296 fps
+
+1.00x
+
+Full-frame redraw
+
+247 fps
+
+294 fps
+
+1.19x
+
+Typing
+
+1857 fps
+
+1311 fps
+
+0.71x
+
+Image scroll
+
+1359 fps
+
+1239 fps
+
+0.91x
+
+On a laptop-sized frame, typing and line scroll 
+are still slower than cairo
+, which is excellent at clipping small rectangles. My floor is one EGL buffer swap per redisplay; cairo's is a tiny damage rectangle with no swapchain. In absolute terms, everything is far above what is perceptible (the worst case, typing, is ~0.8 ms per keystroke), so it is a matter of throughput, not of responsiveness.
+
+In short: a GPU backend does not beat a mature CPU rasterizer at 
+static text
+.
+
+But the same workloads at 
+4K
+ (3760x2210) flip the result:
+
+Workload
+
+cairo (CPU)
+
+GPU
+
+Speedup
+
+Line scroll
+
+117 fps
+
+240 fps
+
+2.05x
+
+Page scroll
+
+102 fps
+
+124 fps
+
+1.22x
+
+Full-frame redraw
+
+66 fps
+
+121 fps
+
+1.84x
+
+Typing
+
+238 fps
+
+1766 fps
+
+7.4x
+
+Image scroll
+
+115 fps
+
+1328 fps
+
+11.5x
+
+cairo's cost grows linearly with the pixel count; the GPU's barely moves. Image scroll is the extreme case: cairo re-blits the image from CPU memory every frame, the GPU re-composites an already-cached texture. There, plus the features that only exist on the GPU (video, cross-fades, cursor effects), is where the real value lies. Text throughput on a small screen is not.
+
+Conclusion
+
+Let's be honest, for everyday text on a normal screen there is no reason to switch; the CPU backend is just as fast or faster. The GPU earns its place in motion, effects and video at high pixel counts, things the CPU does more expensively or cannot do at all.
+
+The backend will never be merged into Emacs, and that is fine. It collides with the policy of not accepting LLM-generated contributions, and that is a legitimate decision by the project that I respect. I keep it as a personal fork, behind 
+--with-gpu
+, opt-in and disablable with an environment variable, and I use it daily.
+
+Was it worth it, then? For me, without a doubt. I came out with a complete display backend on two platforms, with video inside the buffer and effects that stock Emacs cannot draw, with an architecture that proved it could hold up across two implementations, and with a pile of technical scars worth their weight in gold. But above all I came out with something I was not looking for: a public, hard and honest conversation, with people who have maintained this editor for decades, about performance, about software freedom and about the role of AI in the code we write. That conversation, quoted above in their exact words, is worth more than any merge.
+
+Right now I am focusing my efforts on the OpenGL backend for GNU/Linux, where there is still much to polish and optimize. If you are interested in trying it, in the repository you will find a 
+.deb
+ with the test binaries.
+
+My final advice, if you are considering something similar: chase the experiment that obsesses you even if you know it might not end where you imagined. I started out wanting my GPU to draw text and ended up learning about architecture, about rasterization, about packaging, about the culture of a 40-year-old project and about myself. The destination turned out to be irrelevant. The journey did not.
+
+The code is at 
+github.com/tanrax/emacs-gpu
+, and the full 
+emacs-devel
+ thread can be read in the 
+June 2026 archive
+.
+
+Phase 1: the architecture decision
+
+Phase 2: the Metal backend and the tyranny of the pixel
+
+Phase 3: the cursor that froze
+
+Phase 4: packaging is half the work
+
+Phase 5: emacs-devel, or how to learn humility in an email thread
+
+The turn toward "study subject"
+
+The freedom debate
+
+The underlying technical doubt
+
+Phase 6: the OpenGL driver, or how to cash in the architecture bet
+
+Phase 7: optimizing and bringing honest numbers
+
+Conclusion
+
+This work is under a 
+Attribution-NonCommercial-NoDerivatives 4.0 International license.
+
+Will you buy me a coffee?
+
+Support me on Ko-fi
+
+Comments
+
+Leave a comment
+
+There are no comments yet.
