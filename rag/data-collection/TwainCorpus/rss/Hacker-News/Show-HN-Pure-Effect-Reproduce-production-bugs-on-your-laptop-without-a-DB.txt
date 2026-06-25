@@ -1,0 +1,649 @@
+Reproduce a production bug 
+on your laptop
+, no database
+              required.
+
+              Pure Effect is a zero-dependency effect library for JavaScript and
+              TypeScript. Your business logic returns plain objects describing
+              the I/O it would perform, instead of performing it. You can read
+              those objects in a test or replay them from a failed production
+              run, and the database is never touched until the interpreter runs
+              them.
+
+$
+
+npm install pure-effect
+
+01
+  /  problem
+
+              It works on your machine. It broke in production. You can't
+              reproduce it.
+
+              The cause is usually the same: business logic and I/O are tangled
+              together. When you write 
+await
+              db.findUser(email)
+, the call fires immediately, mid-logic.
+              So a test can only check what happened by making the I/O happen
+              too, against a mock, a fake, or a container. And when production
+              fails, all you have is a stack trace, because the calls the
+              request actually made were never captured to replay.
+
+async / await: the I/O is the logic
+
+// The call fires immediately, mid-logic.
+
+async function
+ 
+registerUser
+(input) {
+  
+const
+ found = 
+await
+ db.
+findUser
+(input.email);
+  
+if
+ (found) 
+throw new
+ Error(
+'Email in use'
+);
+  
+return
+ db.
+saveUser
+(input);
+}
+
+// To test it you must run it. When it fails
+
+// in prod, nothing was recorded to replay.
+
+              You check behavior by 
+executing it
+. The failed run
+              leaves no trace you can step through.
+
+pure-effect: the logic returns I/O as data
+
+// Read what it would do first. Nothing ran.
+
+const
+ flow = 
+registerUserFlow
+(input);
+assert.equal(flow.cmd.name, 
+'cmdFindUser'
+);
+
+// Feed in what production saw and walk the
+
+// exact same path, no database is touched.
+
+const
+ next = flow.
+next
+(recordedUser);
+assert.equal(next.cmd.name, 
+'cmdSaveUser'
+);
+
+              You check it by 
+reading the tree
+. The same calls can
+              be recorded in prod and replayed here, with no infrastructure.
+
+02
+  /  primitives
+
+Six pieces. Learnable in an afternoon.
+
+              Every Effect is one of these shapes. They compose into trees the
+              interpreter walks at the edge of your system.
+
+i.
+
+Success
+(value)
+
+OK
+
+              A successful computation result. Returns
+              
+{ type: 'Success', value }
+. Any pipeline
+              step can return one to feed the next.
+
+ii.
+
+Failure
+(error)
+
+ERR
+
+              Stops the pipeline immediately and short-circuits remaining steps.
+              Optional
+              
+initialInput
+ is preserved for
+              diagnostics.
+
+iii.
+
+Command
+(cmd, next)
+
+deferred I/O
+
+              A side effect described as data. 
+cmd
+ is
+              the function that 
+would
+ run;
+              
+next
+ turns its result into the next
+              Effect.
+
+iv.
+
+Ask
+(next)
+
+context Â· DI
+
+              Reads the 
+context
+ object passed to
+              
+runEffect
+ such as tenant, request id,
+              and config without threading it through every signature.
+
+v.
+
+Retry
+(effect, opts)
+
+resilience
+
+              Wraps any Effect with retry-on-failure. Configure
+              
+attempts
+,
+              
+delay
+,
+              
+backoff
+. On exhaustion: a structured
+              Failure.
+
+vi.
+
+Parallel
+(effects, next)
+
+concurrency
+
+              Runs Effect trees concurrently via
+              
+Promise.all
+. Ask context flows into
+              every branch. First Failure short-circuits.
+
+plus the composers:
+
+effectPipe(...fns)
+:
+            sequential
+
+runEffect(effect, ctx?)
+:
+            the interpreter
+
+configureEffect(opts)
+:
+            global hooks
+
+            Complete example: user registration flow
+
+import
+ { Success, Failure, Command, effectPipe, runEffect } 
+from
+ 
+'pure-effect'
+;
+
+// Pure functions, no I/O, no imports, instantly testable.
+
+function
+ 
+validateRegistration
+(input) {
+  
+if
+ (!input.email?.
+includes
+(
+'@'
+)) 
+return
+ 
+Failure
+(
+'Invalid email.'
+);
+  
+if
+ (input.password?.length < 
+8
+)  
+return
+ 
+Failure
+(
+'Password too short.'
+);
+  
+return
+ 
+Success
+(input);
+}
+
+function
+ 
+ensureEmailAvailable
+(found) {
+  
+return
+ found ? 
+Failure
+(
+'Email already in use.'
+) : 
+Success
+(
+true
+);
+}
+
+// Commands: side effects described as data, executed by the interpreter.
+
+function
+ 
+findUserByEmail
+(email) {
+  
+const
+ cmdFindUser = () => db.
+findUserByEmail
+(email);
+  
+return
+ 
+Command
+(cmdFindUser, (found) => 
+Success
+(found));
+}
+
+function
+ 
+saveUser
+(input) {
+  
+const
+ cmdSaveUser = () => db.
+saveUser
+(input);
+  
+return
+ 
+Command
+(cmdSaveUser, (saved) => 
+Success
+(saved));
+}
+
+// Pipeline: compose into a single flow.
+
+const
+ 
+registerUserFlow
+ = (input) =>
+  
+effectPipe
+(
+    validateRegistration,
+    () => 
+findUserByEmail
+(input.email),
+    ensureEmailAvailable,
+    () => 
+saveUser
+(input)
+  )(input);
+
+// Test: assert on structure, no mocks, no I/O.
+
+const
+ flow = 
+registerUserFlow
+({ email: 
+'
+[email protected]
+'
+, password: 
+'password123'
+ });
+assert.
+equal
+(flow.cmd.name, 
+'cmdFindUser'
+);
+assert.
+equal
+(flow.
+next
+(
+null
+).cmd.name, 
+'cmdSaveUser'
+);
+
+// Run: hand the tree to the interpreter at the boundary.
+
+const
+ saved = 
+await
+ 
+runEffect
+(
+registerUserFlow
+(input), { flowName: 
+'register'
+ });
+
+03
+  /  features
+
+What you get out of the box.
+
+Test without a database
+
+Assert what your code would do.
+
+              Pipelines return inert objects. Walk the tree and check each step:
+              no mock, no in-memory fake, no container.
+
+assert
+.equal(step.cmd.name,
+              
+'cmdFindUser'
+);
+              
+assert
+.equal(step.
+type
+,
+              
+'Command'
+);
+
+Replay production runs
+
+Step through the failed request locally.
+
+              Record what each command returned in production, then feed those
+              results back into the same tree to retrace the exact path, no
+              infrastructure attached.
+
+let
+ step = flow;
+              
+while
+ (step.type ===
+              
+'Command'
+) step =
+              step.next(recorded[step.cmd.name]);
+              
+// replays the recorded path, no I/O
+
+Retry as data
+
+Test resilience without waiting.
+
+              Wrap any Effect with retry semantics. Because the config is plain
+              data, tests assert on it directly: no timers, no sleeps, no flaky
+              timing.
+
+Retry
+(effect, { attempts:
+              
+3
+, delay:
+              
+200
+, backoff:
+              
+2
+ });
+              
+// 200Â·400Â·800
+
+Parallel execution
+
+Concurrent branches, ordered results.
+
+Promise.all
+ semantics with first-failure
+              short-circuiting. Ask context flows into every branch
+              automatically.
+
+Parallel
+( [
+getUser
+(id),
+              
+getPerms
+(id)], ([user, perms]) =>
+              
+Success
+({ user, perms }) );
+
+Dependency injection
+
+Context without polluting signatures.
+
+              Resolve tenant, trace id, or config from the framework layer.
+              Domain functions stay clean and just 
+Ask
+.
+
+Ask
+((ctx) => {
+              
+// ctx.tenant comes from runEffect
+
+return
+ 
+Command
+(...)
+              });
+
+OpenTelemetry
+
+Lifecycle hooks for tracing.
+
+onRun
+, 
+onStep
+,
+              and 
+onBeforeCommand
+ let you wrap
+              workflows in spans without touching domain code.
+
+configureEffect
+({ onRun: (eff, pipeline,
+              name) => tracer.
+startActiveSpan
+(name,
+              pipeline) });
+
+04
+  /  positioning
+
+Where it fits, and where it doesn't.
+
+              Pure Effect describes one finite operation as a tree you read
+              before it runs. That is its strength and its boundary: it is
+              for request-shaped operations, not background processes.
+
+Library
+
+DESCRIPTION
+
+Choose pure-effect ifâ¦
+
+Effect-TS
+
+              A full functional ecosystem with fibers, streaming, schema
+              validation, and structured concurrency. Powerful, with a steep
+              learning curve.
+
+              â¦you need testable pipelines, retry, and dependency injection that
+              can be learned in an afternoon.
+
+fp-ts
+
+              Brings category-theory abstractions such as functors, monads, and
+              applicatives to TypeScript. Teaches a lot of vocabulary along with
+              effects.
+
+              â¦you want effects-as-data without the academic vocabulary.
+
+async/await + mocks
+
+              The default. Simple for small surfaces. Falls apart when test
+              isolation matters: mocks drift from real drivers and tests turn
+              into theater.
+
+              â¦test isolation is a real pain point in your codebase.
+
+05
+  /  ai
+
+AI writes the flow. You read it before it runs.
+
+              AI code generators emit async/await: to see what it does you run it,
+              and every check touches infrastructure. Because a Pure Effect
+              flow is plain data, you can read its control flow before anything
+              executes: which commands it issues, in what order, down which
+              branch.
+
+async / await: run to verify
+
+// Did the AI handle the error path?
+
+// Did it thread context correctly?
+
+// You won't know until you run it.
+
+async function
+ 
+registerUser
+(input) {
+  
+const
+ found = 
+await
+ db.
+findUser
+(input.email);
+  
+if
+ (found) 
+throw new
+ Error(
+'Email in use'
+);
+  
+return
+ db.
+saveUser
+(input); 
+// awaited? who knows.
+
+}
+
+              You audit by executing.
+              
+Every verification touches infrastructure.
+
+pure-effect: read to verify
+
+// AI generated this flow. Inspect it before it runs.
+
+const
+ flow = 
+registerUserFlow
+(input);
+
+assert.
+equal
+(flow.type, 
+'Command'
+);
+assert.
+equal
+(flow.cmd.name, 
+'cmdFindUser'
+);
+
+const
+ step2 = flow.
+next
+(
+null
+);
+assert.
+equal
+(step2.cmd.name, 
+'cmdSaveUser'
+);
+
+// Control flow confirmed. Nothing executed.
+
+              You audit by reading the tree.
+              
+No database, no network.
+
+          This confirms the 
+shape
+ of
+          generated code, not its correctness, but it rules out a wrong code
+          path before anything runs.
+
+06
+  /  install
+
+              Six primitives.
+Zero dependencies.
+See what your code does before it runs.
+
+Star on GitHub
+
+Read the docs
+
+$
+
+npm install pure-effect
