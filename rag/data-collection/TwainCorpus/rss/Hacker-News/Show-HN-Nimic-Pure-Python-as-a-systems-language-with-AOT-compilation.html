@@ -1,0 +1,246 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">Nimic</h1></div>
+<p dir="auto">Nimic is a pure Python module that facilitates writing AOT compilable code with a subset of Python (domain specific language), aiming to get C-level performance without leaving Python. Based on ctypes built-in module, it includes emulation of native types, pointers and operations on them, implementing dispatch, operator overloading, and templates. Nimic closely follows Nim programming language, to which nimic code transpiles.</p>
+<p dir="auto"><strong>Key principle:</strong> nimic code is valid Python that runs natively <em>and</em> transpiles to equivalent Nim code.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Module Architecture</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="nimic/
+├── ntypes.py       — Public API: re-exports type system + Nim keyword/builtin shims
+├── ntypesystem.py  — Core type system (Object, NScalar, seq, dispatch, distinct, converter)
+├── transpiler.py   — AST-based Python → Nim source code transpiler
+├── inliner.py      — Template function inlining (@template, @template_expand)
+├── ncode/          — Nim definitions (pydefs.nim, pystd/)
+├── nimpy/          — API for generating Python libraries
+├── std/            — Python shims for Nim stdlib (math, options, os, paths, strformat, ...)
+└── system/         — Python shims for Nim system modules (ansi_c)"><pre class="notranslate"><code>nimic/
+├── ntypes.py       — Public API: re-exports type system + Nim keyword/builtin shims
+├── ntypesystem.py  — Core type system (Object, NScalar, seq, dispatch, distinct, converter)
+├── transpiler.py   — AST-based Python → Nim source code transpiler
+├── inliner.py      — Template function inlining (@template, @template_expand)
+├── ncode/          — Nim definitions (pydefs.nim, pystd/)
+├── nimpy/          — API for generating Python libraries
+├── std/            — Python shims for Nim stdlib (math, options, os, paths, strformat, ...)
+└── system/         — Python shims for Nim system modules (ansi_c)
+</code></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">ntypesystem.py — Core Type System</h3></div>
+<p dir="auto">Organized in layers from low-level memory to high-level abstractions:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Classes</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Memory</td>
+<td><code>Ntype</code>, <code>NTypeRegistry</code></td>
+<td>ctypes-backed buffers with value semantics</td>
+</tr>
+<tr>
+<td>Scalars</td>
+<td><code>NScalar</code> → <code>NInteger</code> / <code>NFloat</code></td>
+<td>Fixed-width types (<code>int8</code>..<code>int64</code>, <code>uint8</code>..<code>uint64</code>, <code>float16</code>..<code>float64</code>) with arithmetic promotion</td>
+</tr>
+<tr>
+<td>Structs</td>
+<td><code>Object</code></td>
+<td>Nim "object" — fields via annotations, backed by <code>ctypes.Structure</code></td>
+</tr>
+<tr>
+<td>Enums</td>
+<td><code>NIntEnum</code></td>
+<td>Nim integer enums with auto-registration</td>
+</tr>
+<tr>
+<td>Variants</td>
+<td><code>Object</code> + <code>match kind:</code></td>
+<td>Nim "case object" — discriminated unions</td>
+</tr>
+<tr>
+<td>Containers</td>
+<td><code>seq[T]</code>, <code>UncheckedArray[T]</code></td>
+<td>Growable sequence and pointer-indexed array</td>
+</tr>
+<tr>
+<td>Dispatch</td>
+<td><code>@dispatch</code>, <code>DispDict</code>, <code>NMetaClass</code></td>
+<td>Nim-style multi-dispatch via type annotations</td>
+</tr>
+<tr>
+<td>Modifiers</td>
+<td><code>@distinct</code>, <code>@converter</code></td>
+<td>Type distinctness and trivial type conversions</td>
+</tr>
+<tr>
+<td>Strings</td>
+<td><code>string</code></td>
+<td><code>str</code> subclass with Nim-compatible <code>&amp;</code>, <code>%</code>, <code>isEmpty</code></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">ntypes.py — Public API &amp; Keywords</h3></div>
+<p dir="auto">Re-exports all of <code>ntypesystem</code> and adds Nim keyword/builtin emulation:</p>
+<ul dir="auto">
+<li><strong>Compiler hints</strong> — <code>const</code>, <code>let</code>, <code>var</code>, <code>block</code>, <code>export</code>, <code>alias</code> (no-ops in Python, scoping in Nim)</li>
+<li><strong>Reference types</strong> — <code>ref</code>, <code>ptr</code>, <code>mut@</code> (<code>@</code> operator returns identity)</li>
+<li><strong>Enum utilities</strong> — <code>NStrEnum</code> with <code>succ</code>/<code>pred</code>/<code>ord</code>/<code>nrange</code>/<code>low</code>/<code>high</code></li>
+<li><strong>Cast &amp; memory</strong> — <code>cast[T](x)</code>, <code>sizeof(x)</code>, <code>addr(x)</code>, <code>unsafe_addr(x)</code></li>
+<li><strong>Type aliases</strong> — <code>SomeInteger</code>, <code>SomeFloat</code>, <code>untyped</code>, <code>char</code>, <code>u64</code>, <code>i64</code>, <code>f64</code></li>
+<li><strong>Iteration</strong> — <code>fields(obj)</code>, <code>fields(a, b)</code>, <code>countdown(a, b)</code></li>
+<li><strong>Compile-time</strong> — <code>comptime(x)</code>, <code>defined(varname)</code>, <code>static</code></li>
+<li><strong>Templates</strong> — <code>@template</code>, <code>@template_expand</code> (re-exported from <code>inliner</code>)</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">transpiler.py — Python → Nim Transpiler</h3></div>
+<p dir="auto">A modified CPython <code>ast.py</code> where <code>_Unparser</code> is extended to emit Nim syntax.
+Implements 30+ transformation rules for indentation, type definitions, function
+signatures, operators, imports, and control flow.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">inliner.py — Template Inlining</h3></div>
+<p dir="auto"><code>@template</code> + <code>@template_expand</code> decorators perform AST-level function inlining
+for untyped templates, substituting parameter names with call arguments.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">DSL Conventions</h2></div>
+<p dir="auto">Nimic uses Python syntax with specific conventions that have dual meaning — runtime behavior in Python and transpilation semantics for Nim:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Convention</th>
+<th>Example</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>with let/var/const:</code></td>
+<td><code>with let: x = vec3(1,2,3)</code></td>
+<td>Variable declaration scope qualifier</td>
+</tr>
+<tr>
+<td><code>mut @</code> annotation</td>
+<td><code>def f(x: mut @ Vec3):</code></td>
+<td>Mutable argument (<code>var</code> in Nim)</td>
+</tr>
+<tr>
+<td><code>{.pragma.}</code> docstring</td>
+<td><code>"""{.inline.}"""</code></td>
+<td>Nim pragma (inline, borrow, noSideEffect)</td>
+</tr>
+<tr>
+<td><code>@dispatch</code></td>
+<td><code>@dispatch</code>  <code>def f(x: float64):</code></td>
+<td>Multi-dispatch by argument types</td>
+</tr>
+<tr>
+<td><code>@distinct</code></td>
+<td><code>@distinct</code>  <code>class Color(Vec3):</code></td>
+<td>Distinct type (no implicit conversion)</td>
+</tr>
+<tr>
+<td><code>@template</code></td>
+<td><code>@template</code>  <code>def toUV(v):</code></td>
+<td>Template (inlined at call site)</td>
+</tr>
+<tr>
+<td><code>@converter</code></td>
+<td><code>@converter</code>  <code>def toVec3(uv):</code></td>
+<td>Implicit type converter</td>
+</tr>
+<tr>
+<td><code>&lt;&lt;=</code></td>
+<td><code>dst &lt;&lt;= -src</code></td>
+<td>Value assignment to mutable variable</td>
+</tr>
+<tr>
+<td><code>match kind:</code></td>
+<td><code>match kind:</code>    <code>case K.a: ...</code></td>
+<td>Variant type definition (case object)</td>
+</tr>
+<tr>
+<td><code>comptime(expr)</code></td>
+<td><code>if comptime(cond):</code></td>
+<td>Compile-time evaluation (<code>when</code> in Nim)</td>
+</tr>
+<tr>
+<td><code>fields(obj)</code></td>
+<td><code>for f in fields(obj):</code></td>
+<td>Iterate over object fields</td>
+</tr>
+<tr>
+<td><code>with export:</code></td>
+<td><code>with export: mod1, mod2</code></td>
+<td>Re-export modules</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Projects built with nimic</h2></div>
+<ul dir="auto">
+<li><a href="http://github.com/dima-quant/ndsl_raytracer">Raytracer, including a ppm to mp4 converter</a></li>
+<li><a href="/dima-quant/nimic/blob/main/examples">Python module for preprocessing image data</a></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Quick Example</h2></div>
+<div class="highlight highlight-source-python notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='from __future__ import annotations
+from nimic.ntypes import *
+
+# Struct definition (Nim object)
+class Vec3(Object):
+    x: float64
+    y: float64
+    z: float64
+
+    def __add__(self: Vec3, v: Vec3) -&gt; Vec3:
+        """{.inline.}"""
+        result = Vec3()
+        result.x = self.x + v.x
+        result.y = self.y + v.y
+        result.z = self.z + v.z
+        return result
+
+# Distinct type
+@distinct
+class Point3(Vec3):
+    """{.borrow: `.`.}"""
+
+# Multi-dispatch
+@dispatch
+def point3(x: float64, y: float64, z: float64) -&gt; Point3:
+    result = Point3(Vec3())
+    result.x = x; result.y = y; result.z = z
+    return result
+
+# Usage
+with let:
+    a = point3(1.0, 2.0, 3.0)
+    b = point3(4.0, 5.0, 6.0)
+    c = Vec3(a) + Vec3(b)' dir="auto"><pre><span class="pl-k">from</span> __future__ <span class="pl-k">import</span> <span class="pl-s1">annotations</span>
+<span class="pl-k">from</span> <span class="pl-s1">nimic</span>.<span class="pl-s1">ntypes</span> <span class="pl-k">import</span> <span class="pl-c1">*</span>
+
+<span class="pl-c"># Struct definition (Nim object)</span>
+<span class="pl-k">class</span> <span class="pl-v">Vec3</span>(<span class="pl-v">Object</span>):
+    <span class="pl-s1">x</span>: <span class="pl-smi">float64</span>
+    <span class="pl-s1">y</span>: <span class="pl-smi">float64</span>
+    <span class="pl-s1">z</span>: <span class="pl-smi">float64</span>
+
+    <span class="pl-k">def</span> <span class="pl-en">__add__</span>(<span class="pl-s1">self</span>: <span class="pl-smi">Vec3</span>, <span class="pl-s1">v</span>: <span class="pl-smi">Vec3</span>) <span class="pl-c1">-&gt;</span> <span class="pl-smi">Vec3</span>:
+        <span class="pl-s">"""{.inline.}"""</span>
+        <span class="pl-s1">result</span> <span class="pl-c1">=</span> <span class="pl-en">Vec3</span>()
+        <span class="pl-s1">result</span>.<span class="pl-c1">x</span> <span class="pl-c1">=</span> <span class="pl-s1">self</span>.<span class="pl-c1">x</span> <span class="pl-c1">+</span> <span class="pl-s1">v</span>.<span class="pl-c1">x</span>
+        <span class="pl-s1">result</span>.<span class="pl-c1">y</span> <span class="pl-c1">=</span> <span class="pl-s1">self</span>.<span class="pl-c1">y</span> <span class="pl-c1">+</span> <span class="pl-s1">v</span>.<span class="pl-c1">y</span>
+        <span class="pl-s1">result</span>.<span class="pl-c1">z</span> <span class="pl-c1">=</span> <span class="pl-s1">self</span>.<span class="pl-c1">z</span> <span class="pl-c1">+</span> <span class="pl-s1">v</span>.<span class="pl-c1">z</span>
+        <span class="pl-k">return</span> <span class="pl-s1">result</span>
+
+<span class="pl-c"># Distinct type</span>
+<span class="pl-en">@<span class="pl-s1">distinct</span></span>
+<span class="pl-k">class</span> <span class="pl-v">Point3</span>(<span class="pl-v">Vec3</span>):
+    <span class="pl-s">"""{.borrow: `.`.}"""</span>
+
+<span class="pl-c"># Multi-dispatch</span>
+<span class="pl-en">@<span class="pl-s1">dispatch</span></span>
+<span class="pl-k">def</span> <span class="pl-en">point3</span>(<span class="pl-s1">x</span>: <span class="pl-smi">float64</span>, <span class="pl-s1">y</span>: <span class="pl-smi">float64</span>, <span class="pl-s1">z</span>: <span class="pl-smi">float64</span>) <span class="pl-c1">-&gt;</span> <span class="pl-smi">Point3</span>:
+    <span class="pl-s1">result</span> <span class="pl-c1">=</span> <span class="pl-en">Point3</span>(<span class="pl-en">Vec3</span>())
+    <span class="pl-s1">result</span>.<span class="pl-c1">x</span> <span class="pl-c1">=</span> <span class="pl-s1">x</span>; <span class="pl-s1">result</span>.<span class="pl-c1">y</span> <span class="pl-c1">=</span> <span class="pl-s1">y</span>; <span class="pl-s1">result</span>.<span class="pl-c1">z</span> <span class="pl-c1">=</span> <span class="pl-s1">z</span>
+    <span class="pl-k">return</span> <span class="pl-s1">result</span>
+
+<span class="pl-c"># Usage</span>
+<span class="pl-k">with</span> <span class="pl-s1">let</span>:
+    <span class="pl-s1">a</span> <span class="pl-c1">=</span> <span class="pl-en">point3</span>(<span class="pl-c1">1.0</span>, <span class="pl-c1">2.0</span>, <span class="pl-c1">3.0</span>)
+    <span class="pl-s1">b</span> <span class="pl-c1">=</span> <span class="pl-en">point3</span>(<span class="pl-c1">4.0</span>, <span class="pl-c1">5.0</span>, <span class="pl-c1">6.0</span>)
+    <span class="pl-s1">c</span> <span class="pl-c1">=</span> <span class="pl-en">Vec3</span>(<span class="pl-s1">a</span>) <span class="pl-c1">+</span> <span class="pl-en">Vec3</span>(<span class="pl-s1">b</span>)</pre></div>
+</article>
