@@ -161,6 +161,61 @@ export async function POST(request) {
         headers: corsHeaders,
       });
 
+    } else if (action === "keyword" || action === "exact") {
+      const query = body.query;
+      const limit = Math.min(parseInt(body.limit || 10, 10), 100);
+
+      if (!query || typeof query !== 'string') {
+        return new Response(JSON.stringify({ error: "Query must be a non-empty string for keyword search" }), {
+          status: 400,
+          headers: corsHeaders,
+        });
+      }
+
+      // Query Qdrant scroll REST API with text match filter
+      const scrollUrl = `${baseUrl}/collections/${collectionName}/points/scroll`;
+      const response = await fetch(scrollUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": qdrantApiKey || "",
+        },
+        body: JSON.stringify({
+          limit: limit,
+          filter: {
+            must: [
+              {
+                key: "text",
+                match: {
+                  text: query
+                }
+              }
+            ]
+          },
+          with_payload: true,
+          with_vector: false,
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Qdrant keyword scroll failed: ${response.status} - ${errText}`);
+      }
+
+      const data = await response.json();
+      const results = (data.result?.points || []).map(pt => ({
+        id: pt.id,
+        score: 1.0,
+        payload: pt.payload
+      }));
+
+      return new Response(JSON.stringify({
+        results,
+      }), {
+        status: 200,
+        headers: corsHeaders,
+      });
+
     } else if (action === "scroll" || action === "points") {
       const limit = Math.min(parseInt(body.limit || 100, 10), 500);
       const offset = body.offset || null;
