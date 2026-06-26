@@ -1,0 +1,827 @@
+How I taught Rust’s type system to refuse my own parallel-Redux data races, with one false start and one mind-shift.
+
+There’s a class of bug I’ve spent more nights chasing than I care to remember. The kind that only happens under load, vanishes when you attach a debugger, and takes three engineers a weekend to corner. Data races.
+
+Rust’s borrow checker prevents most of them at the value level. But not all of them, and definitely not the question that interested me here: can the compiler refuse to build a 
+parallel reducer pipeline
+ where two reducers might write to the same piece of state?
+
+Turns out yes. This post is the story of how I got there in 
+ruxe
+, my Redux-flavored Rust learning library.
+
+What is Redux?
+#
+
+Redux is a state management pattern. It got famous in frontend JavaScript but the shape is more general; any system where state changes through discrete events fits the model.
+
+flowchart LR
+    User([User code]) -->|dispatch event| Store
+    Store -->|state + event| Reducer
+    Reducer -->|new state| Store
+    Store -->|read| User
+
+Three rules make Redux what it is.
+
+One: a single source of truth. The state is owned by the store, nothing else.
+
+Two: the state is immutable from outside. You don’t poke it directly. You dispatch 
+events
+ (the JS world calls them “actions”) that describe what happened.
+
+Three: state transitions go through a pure 
+reducer
+, a function 
+(state, event) → new state
+. Same input, same output, no side effects.
+
+That third rule is what makes Redux famously debuggable. Record the event stream, replay it, and you get the same final state every time. Time-travel debugging. Crash diagnosis from production traces. Reproducible bugs. Anyone who has ever tried to debug a stateful UI without that property knows why people keep reinventing Redux.
+
+Why I cared
+#
+
+At my day job I work on energy-management systems running on industrial sites. One brick of the stack uses a Redux-like pattern in Python: the control layer, where several controllers run concurrently and need a shared, consistent view of the plant state. Events flow in, a reducer pipeline computes the new state, controllers read from it.
+
+The numbers add up faster than you’d think. A typical site has dozens of pieces of equipment, each polled on its own period, and some periods go down to 50ms. Each device can publish several dozen registers per read. That’s a continuous, high-volume event stream, and a pure Python Redux struggles to keep up.
+
+We worked around it. We cache reads and trigger the reduction at a coarser frequency than the underlying telemetry. It works, but the pattern gets less pure: the state is no longer up-to-date with the latest telemetry, and we trade away part of what made Redux attractive in the first place.
+
+Profiling told us where the time was actually spent: the reducer phase. The plant has many independent subsystems. Solar, battery, meter, grid controller, and so on. Each subsystem holds a 
+slice
+ of the global state, and each has its own reducer that only touches its slice.
+
+flowchart LR
+    Event[Event] --> R1[Solar reducer] --> S1[Solar slice]
+    Event --> R2[Battery reducer] --> S2[Battery slice]
+    Event --> R3[Meter reducer] --> S3[Meter slice]
+
+Here’s the observation that started everything: the reducers are independent. Solar’s reducer never touches the battery slice. Battery’s reducer never touches the meter slice. Each event is a single pass through all of them.
+
+Run them sequentially and you get N times the latency. Run them in parallel and you get max(latency_i).
+
+So: parallelize the reducers. Same event flow from the outside, same deterministic results, just N times less wall-clock time per dispatch.
+
+There’s one catch.
+
+Parallel plus shared state equals data races. If a reducer accidentally writes to another slice, you have a classic concurrency bug. Non-deterministic outputs, heisenbugs in production, debug sessions you’ll remember on your deathbed.
+
+In most languages, that’s where the type system gives up. C++ hands you mutexes and atomics and wishes you luck. Higher-level languages give you synchronisation primitives and a memory model, but the burden of avoiding races stays on the developer; the compiler doesn’t enforce anything, the team’s discipline does.
+
+Rust’s type system can encode the property directly. The compiler itself can refuse to build code that would race. That’s what I set out to prove in ruxe.
+
+The mental model: slices and disjointness
+#
+
+Two concepts power everything that follows. Worth defining clearly before we go further.
+
+A 
+slice
+ is a sub-field of the state. If your state holds a 
+counter
+, a 
+user
+, and a 
+notifications
+ field, those are three slices.
+
+A 
+slice reducer
+ is a reducer that only sees its slice. It cannot touch other slices. The type system forbids it: the function signature exposes only 
+&Slice
+, nothing else.
+
+flowchart LR
+    subgraph State
+        SA[counter]
+        SB[user]
+        SC[notifications]
+    end
+    R1[CounterReducer] -.touches.-> SA
+    R2[UserReducer] -.touches.-> SB
+    R3[NotificationsReducer] -.touches.-> SC
+
+The property we want is 
+disjointness
+: for any pair of slice reducers in our setup, they target different slices. No two reducers ever touch the same slice.
+
+flowchart LR
+    subgraph Disjoint["✅ Disjoint — safe to parallelize"]
+        D1[Reducer A] -.-> SA1[Slice A]
+        D2[Reducer B] -.-> SB1[Slice B]
+    end
+    subgraph NotDisjoint["❌ Overlap — data race possible"]
+        N1[Reducer A] -.-> SX[Slice X]
+        N2[Reducer B] -.-> SX
+    end
+
+Disjointness is necessary and sufficient for safe parallel execution. If it holds, parallel is sound. If it doesn’t, parallel races.
+
+The engineering question becomes: can I get the compiler to refuse a parallel root reducer that violates disjointness?
+
+First idea: AllDistinct
+#
+
+Here’s what I had in mind when I started, and why I thought it would work.
+
+I came to Rust from C++. In C++, this kind of check is template metaprogramming bread and butter. 
+std::is_same_v<H, T>
+ gives you type equality at compile time. 
+!std::is_same_v<H, T>
+ gives you inequality. You wrap that in a 
+static_assert
+ (or a concept in C++20) and the compiler does the rest. The pattern transfers naturally to any sufficiently rich type system.
+
+Rust looked similar enough on the surface. Recursive trait impls are everywhere. 
+Vec<T>
+ is 
+Clone
+ if 
+T
+ is 
+Clone
+. 
+Option<T>
+ is 
+Send
+ if 
+T
+ is 
+Send
+. The pattern of “this type has property P if its parts have property P” is built into the language.
+
+So if I write a list of reducer types, say a tuple 
+(R1, R2, R3)
+, I should be able to define a trait 
+AllDistinct
+ that holds when no two 
+Ri::Slice
+ types are the same. Walk the tuple recursively. At each step, check that the head’s slice is different from every slice in the tail. Recurse.
+
+The shape I had in mind, in pseudo-Rust (real tuples can’t be recursed over like this; I was hand-waving the walking part, which the negation wall ends up making moot anyway):
+
+trait
+ AllDistinct {}
+
+impl
+ AllDistinct 
+for
+ () {}  
+// empty tuple is trivially distinct
+
+impl
+<
+H, Tail
+>
+ AllDistinct 
+for
+ (H, Tail)
+
+where
+
+    Tail: 
+AllDistinct
+,
+
+    H: 
+NotIn
+<
+Tail
+>
+,         
+// and H is not in the tail
+
+{}
+
+Looks reasonable. The recursion bottoms out on the empty tuple. Each step requires the rest to be distinct and the head to not be in the rest. Standard structural recursion.
+
+I built it. Got to 
+NotIn<H>
+. Froze.
+
+NotIn<H>
+ requires saying “for every element X in the tail, H ≠ X”. In Rust syntax, that would be something like:
+
+trait
+ NotIn
+<
+T
+>
+ {}
+
+impl
+<
+H, Tail, T
+>
+ NotIn
+<
+T
+>
+ 
+for
+ (H, Tail)
+
+where
+
+    Tail: 
+NotIn
+<
+T
+>
+,
+
+    H 
+!=
+ T,                 
+// ← this is not a thing
+
+{}
+
+The compiler:
+
+error: expected one of `!`, `(`, `+`, `::`, `:`, `<`, `==`, or `=`, found `!=`
+
+Stable Rust has no syntax for type inequality in bounds. No 
+H != T
+. No way to write “this trait is implemented if that other one is 
+not
+ implemented”. The unstable feature 
+negative_impls
+ has existed for years but stays parked behind coherence concerns. Don’t hold your breath.
+
+This isn’t just a missing operator. The trait system reasons about impls 
+monotonically
+: adding more impls in the codebase can only enable more code to compile, never disable any existing code. Negative reasoning (“this trait is 
+not
+ implemented”) would break that property: someone adding a new positive impl could retroactively invalidate code elsewhere that relied on the absence. Rust sidesteps the whole class of issues by not allowing the reasoning in the first place.
+
+This is where Rust diverges sharply from C++. In C++, 
+!std::is_same_v<H, T>
+ is a value you can compute and 
+static_assert
+ on. The equivalent in Rust has no surface syntax, and the reason isn’t carelessness — it’s a design choice.
+
+AllDistinct, in stable Rust, isn’t expressible. At least not the shape I sketched.
+
+The pivot
+#
+
+I sat with this for a while. The wall was real. But sometimes a wall is just the wrong door.
+
+I was trying to prove a 
+negative
+ (no duplicates). Rust speaks positives. What if I reformulated the same property the other way around?
+
+Formulation
+
+Form
+
+In stable Rust
+
+“No two reducers target the same slice”
+
+Negative
+
+Impossible (needs negation)
+
+“Each state slice has exactly one matching reducer”
+
+Positive (bijection)
+
+Achievable (existence of impls)
+
+These are logically equivalent: a bijection between slices and reducers means each slice has exactly one match 
+and
+ no two reducers share a slice. The second condition falls out of the first. So instead of asking “are there duplicates?”, I should ask “is there a perfect matching?”. The first question requires the impossible negation. The second only asks for the 
+existence
+ of certain trait impls, which is Rust’s bread and butter.
+
+Concretely: walk the state’s slice list (which the user declares explicitly), and for each slice type, find the reducer in the tuple whose 
+Slice
+ associated type matches it. Three outcomes:
+
+Lookup result
+
+Action
+
+Compile-time outcome
+
+Exactly one reducer matches
+
+Use it, move on
+
+OK
+
+Two or more match
+
+—
+
+Ambiguous impl error
+
+Zero match
+
+—
+
+Trait bound not satisfied
+
+The errors come from Rust’s trait coherence rules. I don’t have to write explicit checks; the trait resolver enforces them on every lookup it performs.
+
+HList: the right tool
+#
+
+To walk a slice list at compile time I need a structure the compiler can walk recursively. Tuples don’t qualify: each arity is a distinct type, and you’d need a separate impl for 
+(A,)
+, 
+(A, B)
+, 
+(A, B, C)
+, and so on. What I want is a list whose recursive structure is 
+part of its type
+, so trait resolution can descend it on its own.
+
+That structure exists in the Rust ecosystem. It’s called an HList, and it’s a known pattern.
+
+A heterogeneous list is what it sounds like. A linked list where each cell can hold a value of a different type. The shape:
+
+struct
+ 
+HCons
+<
+H, T
+>
+ { head: 
+H
+, tail: 
+T
+ }
+
+struct
+ 
+HNil
+;
+
+If you squint, this is a Lisp cons cell, but typed and at the type level.
+
+A three-element HList looks like:
+
+HCons
+<
+i32
+, HCons
+<
+String, HCons
+<
+f64
+, HNil
+>>>
+
+//    ^      ^             ^             ^
+
+//    head   nested cons   nested cons   terminator
+
+A macro lets you write this less painfully:
+
+HList!(
+i32
+, String, 
+f64
+)
+
+// expands to:
+
+// HCons<i32, HCons<String, HCons<f64, HNil>>>
+
+Visually it’s a nested doll:
+
+flowchart LR
+    L1[HCons] --> H1[i32] & T1[HCons]
+    T1 --> H2[String] & T2[HCons]
+    T2 --> H3[f64] & T3[HNil]
+
+This structure is what tuples can’t be. Walkable by the compiler via recursive trait impls. Why? Every HList is either 
+HNil
+ (terminator, match for the base case) or 
+HCons<H, T>
+ where 
+T
+ is itself an HList (match for the recursive step).
+
+You write two impls, one per case. You’ve handled any arity. Tuples would need a separate impl for every arity you want to support, typically capped at 12 via a macro.
+
+The crate 
+frunk
+ is the canonical Rust HList library. I borrowed the structure and the patterns. Reimplemented a minimal version inside ruxe to avoid a transitive dependency for what’s ultimately an internal detail. The vocabulary that follows (HCons, HNil, Sculptor, position witnesses) all comes from there.
+
+Now I have a list the compiler can walk. Time to apply it.
+
+The breakthrough: Sculptor for slice reducers
+#
+
+frunk has a pattern called 
+Sculptor
+. Take an HList, extract certain elements by their type, return the matched elements plus the leftovers.
+
+let
+ list 
+=
+ hlist![
+1
+i32
+, 
+"hello"
+, 
+3.14
+f64
+];
+
+let
+ (matched, leftover) 
+=
+ list.sculpt::
+<
+HList!(
+f64
+, 
+i32
+), _
+>
+();
+
+// matched  : HList!(3.14f64, 1i32)
+
+// leftover : HList!("hello")
+
+The compiler walks the source HList, plucks each requested type by recursing until it finds a match, builds the matched tuple, returns what’s left.
+
+Two failure modes the resolver catches for free. Ask for a type that doesn’t exist in the source: compile error. Ask for a type that appears multiple times: compile error (ambiguity).
+
+Adapt this to my problem. I have a state’s slice list (declared by the user, something like 
+HList!(CounterSlice, UserSlice, NotificationSlice)
+) and a reducer HList (derived from the tuple the user passed).
+
+I walk the slice list. For each slice, I look up the reducer in the reducer HList whose 
+Slice
+ associated type matches that slice. Sculptor-flavored lookup, but matching on an associated type instead of a concrete type.
+
+flowchart LR
+    subgraph Slices
+        S1[CounterSlice]
+        S2[UserSlice]
+        S3[NotificationSlice]
+    end
+    subgraph Reducers
+        R1[CounterReducer]
+        R2[UserReducer]
+        R3[NotificationReducer]
+    end
+    S1 -.match.-> R1
+    S2 -.match.-> R2
+    S3 -.match.-> R3
+
+The failure modes I want fall out of the resolver naturally.
+
+flowchart TB
+    subgraph Happy["✅ Happy path — unique match"]
+        direction LR
+        H1[Slice A] --> H2[Reducer for A found at position 0]
+    end
+    subgraph Duplicate["❌ Two reducers for the same slice"]
+        direction LR
+        D1[Slice A] --> D2{Reducer for A?}
+        D2 --> D3[Match at position 0]
+        D2 --> D4[Match at position 2]
+        D3 & D4 --> D5[Ambiguous: compile error]
+    end
+    subgraph Missing["❌ State slice without a reducer"]
+        direction LR
+        M1[Slice B] --> M2{Reducer for B?}
+        M2 --> M3[No match anywhere]
+        M3 --> M4[No impl: compile error]
+    end
+
+    Happy ~~~ Duplicate
+    Duplicate ~~~ Missing
+
+I never wrote a single check for “are there duplicates?” or “is everything covered?”. The resolver did it because it does it for every other lookup. I just had to phrase the question in a way it could answer.
+
+Position witnesses: Peano in the type system
+#
+
+A detail that matters when you implement this. The recursive trait for “find the reducer for target slice T” has two impls:
+
+// Base case: head matches the target
+
+impl
+ FindReducerBySlice
+<
+TargetSlice
+>
+ 
+for
+ HCons
+<
+HeadReducer, Tail
+>
+
+where
+ HeadReducer: 
+SliceReducer
+<
+Slice 
+=
+ TargetSlice
+>
+ { 
+..
+. }
+
+// Recursive case: head doesn't match, look in tail
+
+impl
+ FindReducerBySlice
+<
+TargetSlice
+>
+ 
+for
+ HCons
+<
+HeadReducer, Tail
+>
+
+where
+ Tail: 
+FindReducerBySlice
+<
+TargetSlice
+>
+ { 
+..
+. }
+
+Without a disambiguator these impls overlap. Both have signature 
+impl ... for HCons<H, T>
+. Rust’s coherence rule says no.
+
+frunk’s solution: add a positional witness to the trait.
+
+struct
+ 
+Here
+;
+
+struct
+ 
+There
+<
+I
+>
+ { _marker: 
+PhantomData
+<
+I
+>
+ }
+
+trait
+ FindReducerBySlice
+<
+TargetSlice, Index
+>
+ { 
+..
+. }
+
+impl
+ 
+..
+. 
+for
+ HCons
+<..
+.
+>
+ { 
+..
+. }     
+// Index = Here       (matched at this level)
+
+impl
+ 
+..
+. 
+for
+ HCons
+<..
+.
+>
+ { 
+..
+. }     
+// Index = There<I>   (recurse, with inner index I)
+
+Here
+ and 
+There<I>
+ are Peano numerals at the type level.
+
+Peano numerals
+: a way to define natural numbers from two ingredients only — 
+zero
+ and a 
+successor
+ function. The number 0 is just “zero”. 1 is “successor of zero”. 2 is “successor of successor of zero”. 3 is one more 
+successor
+ deeper, and so on. The whole positive integer line is built by stacking successors on top of zero. Useful in math (it’s how Peano formalized the natural numbers in 1889) and in type-level programming whenever you need to encode a count without resorting to runtime values.
+
+In our case: 
+Here
+ plays the role of zero. 
+There<I>
+ plays the role of successor, wrapping a smaller numeral inside. 
+There<Here>
+ is 1, 
+There<There<Here>>
+ is 2, and so on. They encode the path the compiler took to find the match — how many 
+tail
+ hops did it take before the head matched the target slice.
+
+flowchart LR
+    A[Here = 0] -.successor.-> B["There<Here> = 1"]
+    B -.successor.-> C["There<There<Here>> = 2"]
+    C -.successor.-> D[...]
+
+The user never writes these. The compiler infers them during trait resolution. They exist to disambiguate impls that would otherwise overlap.
+
+Real-world friction
+#
+
+I’m going to gloss this part because it’s mostly mechanical. If you build something like this yourself, expect to meet:
+
+E0207
+: 
+the type parameter X is not constrained by the impl trait, self type, or predicates
+. Rust requires every generic parameter on an impl to be uniquely determined. If you write 
+impl<I> SomeTrait for SomeStruct where SomeStruct: SomeOtherTrait<I>
+ and 
+I
+ appears nowhere else in the signature, Rust refuses. The fix is usually to convert the problematic parameter to an associated type, or to drag it into the 
+Self
+ type via 
+PhantomData
+.
+
+PhantomData
+: a zero-sized marker that lets you “use” a type parameter without holding a value of it. Sounds esoteric. It’s actually one of the load-bearing tools in Rust’s type system. Most generic structs that “carry” a phantom type around use it.
+
+Neither of these is conceptual. They’re plumbing. But if you go this road, budget half an afternoon for each. Watching the compiler refuse increasingly clever attempts is humbling.
+
+The payoff
+#
+
+The user-facing API ends up looking like this:
+
+struct
+ 
+AppState
+ {
+
+    counter: 
+CounterSlice
+,
+
+    user: 
+UserSlice
+,
+
+}
+
+impl
+ HasSlice
+<
+CounterSlice
+>
+ 
+for
+ AppState { 
+/* ... */
+ }
+
+impl
+ HasSlice
+<
+UserSlice
+>
+    
+for
+ AppState { 
+/* ... */
+ }
+
+impl
+ StateSlices 
+for
+ AppState {
+
+type
+ 
+Slices
+ 
+=
+ HList!(CounterSlice, UserSlice);
+
+}
+
+let
+ root 
+=
+ ParallelRootReducer::new((counter_reducer, user_reducer));
+
+That compiles, runs in parallel via Rayon, and is provably race-free for every slice declared in 
+StateSlices
+.
+
+Now make a typo. Pass 
+counter_reducer
+ twice:
+
+let
+ root 
+=
+ ParallelRootReducer::new((counter_reducer, counter_reducer));
+
+//                                                    ^^^^^^^^^^^^^^^
+
+//                                                    same slice as the first
+
+The compiler:
+
+error[E0283]: type annotations needed
+
+  |
+
+  | let _ = root.reduce(&state, &event);
+
+  |              ^^^^^^ cannot infer type of the type parameter `I`
+
+  |
+
+note: multiple `impl`s satisfying `HCons<CounterReducer, ...>: FindReducerBySlice<CounterSlice, _>` found
+
+Forget a reducer:
+
+let
+ root 
+=
+ ParallelRootReducer::new((counter_reducer,));   
+// user reducer missing
+
+The compiler:
+
+error[E0277]: the trait bound `HCons<CounterReducer, HNil>: FindReducerBySlice<UserSlice, _>` is not satisfied
+
+In both cases the build fails before a binary is even produced. The disjointness guarantee isn’t enforced at runtime because it doesn’t need to be: the compiler refuses to assemble a parallel reducer that would race in the first place.
+
+A small nuance worth flagging: the error surfaces at the 
+.reduce()
+ call site, not at 
+ParallelRootReducer::new(...)
+. The constructor itself is unconstrained, so it happily accepts any tuple. The slice-to-reducer bijection is only checked when 
+.reduce()
+ resolves its trait bounds, which is the first point where Rust needs to figure out the 
+Indices
+ and 
+Event
+ types. In practice that means a 
+ParallelRootReducer
+ you build but never dispatch will compile silently — once you actually use it, the compiler kicks in.
+
+For a runnable side-by-side comparison showing the actual parallel speedup, the 
+EMS example in ruxe
+ runs the same scenario sequentially and in parallel. Roughly 3x faster with three slice reducers each doing about 50ms of work.
+
+Take-aways
+#
+
+The Sculptor pattern is transferable. Anywhere you want a unique compile-time lookup in a heterogeneous collection, this shape applies. A positive lookup whose ambiguity or absence becomes your safety check. ECS query systems use related tricks. Type-safe dependency injection containers can too. Whenever you’d reach for “check there are no duplicates at runtime”, consider phrasing it as “check there’s exactly one match at compile time” instead.
+
+Negation in stable Rust is genuinely hard. If you find yourself wanting 
+H != T
+, stop and try to reformulate. It’s almost always possible. The reformulation often turns out clearer than the original.
+
+Rust’s trait system is more expressive than it looks. Things you’d reach for unsafe, 
+Box<dyn>
+, or runtime checks in other languages can often be encoded in the type system. The cost is mental gymnastics. The payoff is bugs that can’t exist.
+
+frunk normalized these patterns for the ecosystem. If you go deeper into type-level Rust, frunk is the reference. I reimplemented a minimal subset inside ruxe to keep the dependency footprint small, but the design vocabulary all comes from there.
+
+The whole journey, including the false start with AllDistinct, took several afternoons. The final code is about 200 lines of recursive trait impls. The amount of refactoring per insight was high. The result is dense and a little intimidating to read.
+
+But the compiler now refuses to assemble code that would have raced, which is exactly what I’d set out to make it do.
+
+Source code: 
+ruxe on GitHub
+. Pull request that landed this: 
+#26
+.
+
+Note on authorship: drafted with Claude (Anthropic) and rewritten across multiple passes. The decisions and the journey itself are mine.

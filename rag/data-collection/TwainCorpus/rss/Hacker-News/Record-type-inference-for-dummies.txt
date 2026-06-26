@@ -1,0 +1,1396 @@
+Haskell for all
+Tuesday, June 23, 2026
+Record type inference for dummies
+The reason I'm writing this post is because I actually wanted to write a more advanced post on type inference for anonymous records, but then I realized that most of my readers wouldn't understand the latter post in isolation.  So I figured I would write this introductory post to teach people new to type theory the basics.
+
+The reason I'm writing 
+both
+ posts is because I believe that good type inference for anonymous records is one of the big things holding back statically typed languages
+1
+ and not enough people appreciate this or understand why.  I also think that there is a large disconnect between what programming language experts understand is possible and what lay programmers are comfortable or familiar with.  To make a play on 
+XKCD #2501
+:
+
+So this post (and the next one) are going to be an exposition of where the field of type theory was at 
+over three decades ago
+, which our industry still hasn't really caught up to, yet.
+
+Anonymous records
+
+I mentioned that this is a post about type inference for 
+anonymous records
+ and I've met some programmers who either don't know what anonymous records are or at least don't recognize them by that name, so I'll briefly touch upon them.
+
+An anonymous record is a record that doesn't require an associated datatype declaration, and they're quite common in dynamically typed languages.  For example, JavaScript calls them "objects":
+
+{
+ name
+:
+ "Alice"
+,
+ age
+:
+ 25
+ }
+
+Python calls them "dictionaries":
+
+{
+ "name"
+:
+ "Alice"
+,
+ "age"
+:
+ 25
+ }
+
+Ruby calls them "hashes":
+
+{
+ :
+name
+ =>
+ "Alice"
+,
+ :
+age
+ =>
+ 25
+ }
+
+# â¦ or equivalently:
+
+{
+ name
+:
+ "Alice"
+,
+ age
+:
+ 25
+ }
+
+â¦, and Nix calls them "attribute sets":
+
+{
+ name
+ =
+ "Alice"
+;
+ age
+ =
+ 25
+;
+ }
+
+If you've ever worked with JSON then you've worked with anonymous records because JSON objects (just like JavaScript objects) are anonymous records.
+
+Static typing
+
+A smaller number of statically typed programming languages support anonymous records because statically typed languages usually prefer named datatypes.
+
+For example, Haskell does not support anonymous records and requires a datatype declaration for all records, like this:
+
+data
+ Person
+ =
+ Person
+{
+ name 
+::
+ Text
+,
+ age 
+::
+ Integer
+ }
+
+example
+ ::
+ Person
+
+example 
+=
+ Person
+{
+ name 
+=
+ "Alice"
+,
+ age 
+=
+ 25
+ }
+
+â¦ but there are still some statically typed programming languages that do support anonymous records, like TypeScript:
+
+{
+ name
+:
+ "Alice"
+,
+ age
+:
+ 25
+ }
+ : 
+{
+ name
+:
+ string
+,
+ age
+:
+ number 
+}
+
+â¦ or C# (which calls them "anonymous types"):
+
+new
+ {
+ Name 
+=
+ "Alice"
+;
+ Age 
+=
+ 25
+ }
+
+â¦ or PureScript (which calls them records):
+
+{ name
+:
+ "Alice"
+,
+ age
+:
+ 25
+ } 
+::
+ { name 
+::
+ String
+,
+ age 
+::
+ Int
+ }
+
+If all we needed was language support for record literals without any operations on records then it's fairly easy to infer their types.  To do so, though, I'm going to introduce some type theory notation.
+
+Let's start by defining a basic abstract syntax tree that says that an expression (
+) can be either:
+
+a 
+ (e.g. 
+)
+
+a 
+ (e.g. 
+)
+
+a record containing 0 or more fields (e.g. 
+)
+
+The way we would write that
+2
+ formally is:
+
+â¦ and the equivalent Haskell code would be something like:
+
+type
+ Identifier
+ =
+ Text
+
+data
+ Expression
+
+    =
+ Boolean 
+Bool
+
+    |
+ String 
+Text
+
+    |
+ Number 
+Double
+
+    |
+ Record 
+(
+Map
+ Identifier
+ Expression
+)
+
+Fields can store arbitrary expressions, which means you can nest records, like:
+
+We'll also need to define an abstract syntax tree for our inferred types, which can be either:
+
+the 
+ type
+
+the 
+ type
+
+the 
+ type
+
+a record type containing 0 or more fields (e.g. 
+)
+
+The notation we'd use for that is:
+
+The equivalent Haskell code would be something like:
+
+data
+ Type
+
+    =
+ BooleanType
+
+    |
+ StringType
+
+    |
+ NumberType
+
+    |
+ RecordType 
+(
+Map
+ Identifier
+ Type
+)
+
+Now that we have a syntax for expressions and types we can define some
+type inference rules:
+
+ and 
+ always have type 
+
+a 
+ (like 
+) always has type 
+
+a 
+ (like 
+) always has type 
+
+We write out those rules using this notation:
+
+If you've never seen this notation before, you can think of it as mathematical pseudocode for how to implement a type inference function. The equivalent Haskell function would be something like:
+
+infer
+
+    ::
+ [(
+Identifier
+,
+ Type
+)]
+
+    -- ^ context, a.k.a. "Î" (currrently unused)
+
+    ->
+ Expression
+
+    -- ^ input expression
+
+    ->
+ Either
+ Text
+ Type
+
+    -- ^ output inferred type (currently never fails)
+
+infer context 
+(
+Boolean _
+)
+ =
+ return BooleanType
+
+infer context 
+(
+String _
+)
+ =
+ return StringType
+
+infer context 
+(
+Number _
+)
+ =
+ return NumberType
+
+Note:
+ You can find the complete Haskell code in the Appendix.
+
+Now suppose that we wanted to infer the type of a record literal like this one:
+
+Normally we'd reason about the expression's type by hand like this:
+
+to infer the type of 
+ we need to infer the type of each field:
+
+A. first, infer the type of 
+ (which is 
+)
+
+B. then, infer the type of 
+ (which is 
+)
+
+now combine those into the final record type: 
+
+Type theorists have a notation for that sort of reasoning process, which looks like this:
+
+That is known as a "typing derivation" and the way it works is that "outer" reasoning steps (like steps 1 and 2) go on the bottom and "inner" reasoning steps (like steps A and B) go on top.
+
+If we take that reasoning process and generalize it to all records we might write something like this:
+
+â¦ which you can read as saying "if you want to infer the type of a record then infer the type of each field and replace each field with its inferred type".  In Haskell this would be:
+
+infer context 
+(
+Record fields
+)
+ =
+ do
+
+    fieldTypes 
+<-
+ traverse 
+(
+infer context
+)
+ fields
+
+    return 
+(
+RecordType fieldTypes
+)
+
+â¦ and we can verify this all works in the Haskell REPL:
+
+ghci
+>
+ :
+set 
+-
+XOverloadedStrings 
+-
+XOverloadedLists
+
+ghci
+>
+ infer 
+[]
+ (
+Record 
+[(
+"name"
+,
+ String 
+"Alice"
+),
+ (
+"age"
+,
+ Number 
+25
+)])
+
+Right 
+(
+RecordType 
+(
+fromList 
+[(
+"age"
+,
+NumberType
+),(
+"name"
+,
+StringType
+)]))
+
+Field access
+
+Any programming language worth its salt
+3
+ will also support record field access using something like dot notation (e.g. 
+).
+
+For example, in Nix that would look like this:
+
+nix-repl
+>
+ {
+ name
+ =
+ "Alice"
+;
+ age
+ =
+ 25
+;
+ }
+.
+name
+
+"Alice"
+
+So we'll add a type inference rule for field access, but first we need to extend our expression syntax to support dot notation:
+
+â¦ and now we can add this type inference rule:
+
+This says that we can access a field named 
+ from an expression 
+ if 
+'s inferred type is a record with a field named 
+.  The inferred type of the field 
+ becomes the inferred type of the field access.
+
+The equivalent Haskell code would be something like:
+
+data
+ Expression
+ =
+
+    â¦
+
+    | FieldAccess 
+Expression
+ Identifier
+
+â¦
+
+infer context 
+(
+FieldAccess expression field
+)
+ =
+ do
+
+    expressionType 
+<-
+ infer context expression
+
+    case
+ expressionType 
+of
+
+        RecordType fieldTypes 
+->
+
+            case
+ Map.
+lookup field fieldTypes 
+of
+
+                Just fieldType 
+->
+
+                    return fieldType
+
+                Nothing 
+->
+
+                    Left 
+"missing field"
+
+        _ 
+->
+
+            Left 
+"not a record"
+
+This is the first type inference rule we've added that can fail.  If we were to infer the type of an expression like 
+ then that wouldn't match that type inference rule (or any other rule) so we would reject the expression with a type error ("not a record").
+
+However, the rule would also reject a field access if the field is missing, too.  If we were to infer the type of 
+ that 
+also
+ doesn't match our type inference rule so we would reject the expression with a type error ("missing field").
+
+Before we move on, let's test out this type inference rule on an example.  Suppose that we want to infer the type of this expression:
+
+Our reasoning process might go something like:
+
+to know the type of the field access (
+) I need the type of the record
+
+to know the type of the record I need the type of the 
+ field
+
+the type of the 
+ field (set to 
+) is 
+
+the type of the record is 
+
+the type of the field access (
+) is 
+
+â¦ and the equivalent formal derivation would be:
+
+â¦ and we can confirm in Haskell that the inferred type is indeed 
+:
+
+exampleRecord
+ ::
+ Expression
+
+exampleRecord 
+=
+ Record 
+[(
+"name"
+,
+ String 
+"Alice"
+),
+ (
+"age"
+,
+ Number 
+25
+)]
+
+exampleAccess
+ ::
+ Expression
+
+exampleAccess 
+=
+ FieldAccess exampleRecord 
+"age"
+
+ghci
+>
+ infer 
+[]
+ exampleAccess
+
+Right NumberType
+
+Variables
+
+You might wonder why we don't just write the rule like this:
+
+In other words, why don't we consult the expression's 
+value
+ instead of the expression's 
+type
+ when inferring the field's type?  After all, that would make our reasoning process much more direct for that last example:
+
+to know the type of the field access (
+) I need the type of the 
+ field (set to 
+)
+
+the type of 
+ is 
+
+the type of the field access (
+) is 
+
+â¦ and the equivalent formal derivation would also be simpler:
+
+Consulting the value instead of the type would work for our current (incredibly simple) programming language, but would no longer work once we add support for variables because then an expression like this would be rejected:
+
+You can read that as assigning an expression (
+) to a local variable (
+) and then accessing the 
+ field from that variable.  We can only infer a type for this expression if we consult 
+'s type.
+
+We can't consult 
+'s value because right now 
+ is just an unevaluated variable (not a record literal).  We 
+could
+ evaluate our expression first to get 
+'s value but that would defeat the purpose of type checking: normally you type check an expression 
+before
+ you evaluate the expression in order to catch mistakes before evaluation begins
+4
+.
+
+On that note, let's go ahead and add variables and variable assignment to our very minimal language:
+
+Now 
+ is a valid expression (which evaluates to 
+) and so is:
+
+â¦ which evaluates to 
+.
+
+Note:
+ I'm not going to spell out the rules for evaluation in this post since I'm just focused on explaining type inference.
+
+The type inference rule for 
+ is the first time we'll actually use the context (
+) that we've ignored so far:
+
+This says that in order to infer the type of a 
+ expression we need to first infer the type of the right-hand side of each local variable assignment (
+, 
+, â¦).  We then extend our type inference context (
+) with the inferred type of each assigned local variable (
+) while inferring the type of the final result (
+).
+
+data
+ Expression
+ =
+
+    â¦
+
+    | Let 
+[(
+Identifier
+,
+ Expression
+)]
+ Expression
+
+â¦
+
+infer context 
+(
+Let 
+[]
+ expression
+)
+ =
+ do
+
+    infer context expression
+
+infer context 
+(
+Let 
+((
+x
+,
+ assignment
+)
+ :
+ assignments
+)
+ expression
+)
+ =
+ do
+
+    assignmentType 
+<-
+ infer context assignment
+
+    infer 
+((
+x
+,
+ assignmentType
+)
+ :
+ context
+)
+ (
+Let assignments expression
+)
+
+This rule pairs with the type inference rule for variables, which is:
+
+â¦ which you can read as saying "to infer the type of a variable named 
+, look up 
+'s inferred type in the context".  If 
+ is missing from the context then this rule does not match and we reject the expression with a type error ("unbound variable").  The 
+ here is acting like a "named ellipsis" standing in for other inferred types that we don't care about right now.
+
+data
+ Expression
+ =
+
+    â¦
+
+    | Variable 
+Identifier
+
+infer context 
+(
+Variable identifier
+)
+ =
+ do
+
+    case
+ lookup identifier context 
+of
+
+        Just assignmentType 
+->
+
+            return assignmentType
+
+        Nothing 
+->
+
+            Left 
+"unbound variable"
+
+Armed with those two new rules we can now write out a typing derivation to infer the type of our earlier example:
+
+This is essentially saying:
+
+ has type 
+ becauseâ¦
+
+ has type 
+ because â¦
+
+ has type 
+
+â¦ therefore 
+ has type 
+
+â¦ therefore 
+ has type 
+
+â¦ and we can confirm that in Haskell, too:
+
+exampleLet
+ ::
+ Expression
+
+exampleLet 
+=
+
+    Let 
+[(
+"r"
+,
+ Record 
+[(
+"x"
+,
+ Number 
+1
+)])]
+
+        (
+FieldAccess 
+(
+Variable 
+"r"
+)
+ "x"
+)
+
+ghci
+>
+ infer 
+[]
+ exampleLet
+
+Right NumberType
+
+Functions
+
+If that's all our programming language needed then type inference for anonymous records would be easy and most statically typed programming languages would support anonymous records.  However, every programming language also supports functions and that's where type inference begins to get tricky.
+
+To see why, consider this TypeScript function:
+
+const
+ getName
+ =
+ person
+ =>
+ person
+.
+name
+;
+
+â¦ which in the lambda calculus would be written as 
+ or in Nix would be written as:
+
+getName = 
+person
+:
+ person
+.
+name;
+
+What type would we infer for the function 
+?
+
+In order to answer that question we need to first extend our syntax to use 
+ to denote an anonymous function:
+
+â¦ and we also need to add a new syntax for function types:
+
+â¦ where 
+ means a function whose input type is 
+ and whose output type is 
+.
+
+Then we can add a type inference rule for functions:
+
+This is the first type inference rule we've written that can't just be directly translated to Haskell code as written (it 
+is
+ possible to codify using 
+unification
+ or similar, but that's outside the scope of this post).  However, you can read that rule as saying that 
+ has type 
+ if 
+ has type 
+ when 
+ has type 
+.
+
+Even without code, we can still use that rule to reason through what the type for 
+ should be:
+
+In other words, 
+ is a function whose input type is 
+ (a record with at least a 
+ field of type 
+) and whose output type is 
+.  That makes sense!  So far, so good.
+
+However, this is not 
+exactly
+ the type most programming languages would infer or expect.  Specifically, most programming languages do not support an ellipsis like 
+  in a record type, but that's because there are two slightly better ways to handle types like that.
+
+Subtyping
+
+Some statically typed programming languages (like TypeScript) treat a record type like 
+ as a subtype of all larger records that share the same fields.  In other words:
+
+Under this approach the ellipsis is redundant because all record types have an implied ellipsis.
+
+That means that in TypeScript you can write:
+
+const
+ getName
+ =
+ (
+person
+:
+ {
+ name
+:
+ string
+ })
+ =>
+ person
+.
+name
+;
+
+â¦ and 
+getName
+ will still work even if you call it on a larger record (e.g. 
+{ name: "Alice", age: 25 }
+)
+5
+.
+
+This approach works okay, but there is an even better approach for handling extra record fields, which brings us to:
+
+Row polymorphism
+
+The second approach is that instead of 
+dropping
+ the ellipsis we 
+name
+ the ellipsis, meaning that instead of this:
+
+â¦ we write something like this:
+
+This is the approach taken by languages like PureScript and Elm, where
+PureScript will write that type like this:
+
+{ name 
+::
+ String
+ |
+ other }
+
+â¦ and Elm uses a similar syntax:
+
+{
+ other 
+|
+ name 
+:
+ String 
+}
+
+This has some nice upsides, which we'll get to in the next section, but first let's formalize what it means to "name the ellipsis".
+
+First, we'd create a new class of identifier (known as a "row variable"):
+
+"Row" is an antiquated name for "a set of fields".  Remember that the research into this sort of type inference occurred a long time ago, before JSON even existed.  However, the upside of the name is that type theorists get to be a little cheeky and use the greek letter 
+ ("rho") to represent a "row".
+
+Then we'd change the abstract syntax for record types to permit an optional row variable:
+
+â¦ and update our type inference rule for field access to use a row variable instead of an ellipsis:
+
+This approach of using named ellipses is known as "row polymorphism" because it lets us abstract (be "polymorphic") over the set of other fields ("row").
+
+Record extension
+
+You might wonder: why do we want to abstract over the set of other fields?  In
+particular, why do we need to give a 
+name
+ to these other fields?
+
+One reason why is to support our next record operator: record extension.  We'll
+use this syntax:
+
+â¦ which you can read as "extend the record 
+ with a field 
+ whose value is 
+".  If the field 
+ already exists within 
+ then this extension replaces (a.k.a. "shadows") the old field.
+
+So let's add that to our abstract syntax for expressions:
+
+Now what type would we infer for a record update?  Our first stab at type inference rule might look like this:
+
+â¦ but that is 
+not
+ correct because the field 
+ might already exist within the old record (
+), which means 
+ would include 
+.  That in turn means that 
+ is not necessarily a well-formed record type because an 
+ field included within 
+ would conflict with the 
+ we're adding to the final record type.
+
+In order to fix this we need some notation that says that the old record may or may not have a field named 
+:
+
+â¦ and now 
+ denotes all fields within the old record that were not 
+.  This fixes the problem because now both occurrences of 
+ cannot include the field 
+.
+
+You can think of 
+ as analogous to TypeScript's 
+x?: T
+ notation for the type of a field that might be absent.
+
+With that type inference rule we can now infer the type of a function like this one:
+
+â¦ which is:
+
+In other words, the inferred type:
+
+â¦ says that this is a function whose input is a record that may or may not have a 
+ field plus some other fields (
+) and the output is a record with a 
+ field storing a 
+ plus those same other fields (
+).
+
+This is an example where we don't want to use ellipses in place of 
+.  If we were to replace 
+ with ellipses:
+
+â¦ then the type would no longer convey that the two ellipses represent the 
+same
+ set of extra fields.
+
+If you were to write the same function in TypeScript the type would be a lot clumsier:
+
+function
+ crown
+<
+T 
+extends
+ object
+>
+(
+woman
+:
+ T
+)
+:
+ Omit
+<
+T
+,
+ '
+queen
+'
+>
+ &
+ {
+ queen
+:
+ boolean
+ }
+ {
+
+    return
+ {
+ ...
+woman
+,
+ queen
+:
+ true
+ };
+
+}
+
+â¦ because TypeScript doesn't have a way to abstract over sets of fields (rows).  TypeScript can only abstract over types (like 
+T
+ in the above example), which makes this sort of type more awkward.
+
+Conclusion
+
+I'm personally interested in row polymorphism for another reason: right now
+I'm working on a type checker and language server for Nix and one of the
+trickier parts of the language to type check is Nix's 
+//
+ operator (the
+"record concatenation" operator that combines two records).  Row polymorphism
+is basically the only approach to type inference that handles that
+operator well, which is explained in the paper
+
+Type inference for record concatenation and multiple inheritance
+
+and that paper is going to be the basis of my next post.
+
+In the meantime, though, if you liked this post then you might also like another post of mine, 
+Datatype unification using Monoids
+, which presents a simple type inference algorithm for JSON-like data.
+
+Appendix
+
+Here's the fully worked Haskell program that combines all the prior snippets from the post:
+
+{-# 
+LANGUAGE
+ OverloadedStrings
+ #-}
+
+module
+ Example
+ where
+
+import
+ Data.Map
+ (
+Map
+)
+
+import
+ Data.Text
+ (
+Text
+)
+
+import
+ qualified
+ Data.Map
+ as
+ Map
+
+type
+ Identifier
+ =
+ Text
+
+data
+ Expression
+
+    =
+ Boolean 
+Bool
+
+    |
+ String 
+Text
+
+    |
+ Number 
+Double
+
+    |
+ Record 
+(
+Map
+ Identifier
+ Expression
+)
+
+    |
+ FieldAccess 
+Expression
+ Identifier
+
+    |
+ Let 
+[(
+Identifier
+,
+ Expression
+)]
+ Expression
+
+    |
+ Variable 
+Identifier
+
+data
+ Type
+
+    =
+ BooleanType
+
+    |
+ StringType
+
+    |
+ NumberType
+
+    |
+ RecordType 
+(
+Map
+ Identifier
+ Type
+)
+
+infer
+
+    ::
+ [(
+Identifier
+,
+ Type
+)]
+
+    -- ^ context, a.k.a. "Î"
+
+    ->
+ Expression
+
+    -- ^ input expression
+
+    ->
+ Either
+ Text
+ Type
+
+    -- ^ output inferred type
+
+infer context 
+(
+Boolean _
+)
+ =
+ do
+
+    return BooleanType
+
+infer context 
+(
+String _
+)
+ =
+ do
+
+    return StringType
+
+infer context 
+(
+Number _
+)
+ =
+ do
+
+    return NumberType
+
+infer context 
+(
+Record fields
+)
+ =
+ do
+
+    fieldTypes 
+<-
+ traverse 
+(
+infer context
+)
+ fields
+
+    return 
+(
+RecordType fieldTypes
+)
+
+infer context 
+(
+FieldAccess expression field
+)
+ =
+ do
+
+    expressionType 
+<-
+ infer context expression
+
+    case
+ expressionType 
+of
+
+        RecordType fieldTypes 
+->
+
+            case
+ Map.
+lookup field fieldTypes 
+of
+
+                Just fieldType 
+->
+
+                    return fieldType
+
+                Nothing 
+->
+
+                    Left 
+"missing field"
+
+        _ 
+->
+
+            Left 
+"not a record"
+
+infer context 
+(
+Let 
+[]
+ expression
+)
+ =
+ do
+
+    infer context expression
+
+infer context 
+(
+Let 
+((
+x
+,
+ assignment
+)
+ :
+ assignments
+)
+ expression
+)
+ =
+ do
+
+    assignmentType 
+<-
+ infer context assignment
+
+    infer 
+((
+x
+,
+ assignmentType
+)
+ :
+ context
+)
+ (
+Let assignments expression
+)
+
+infer context 
+(
+Variable identifier
+)
+ =
+ do
+
+    case
+ lookup identifier context 
+of
+
+        Just assignmentType 
+->
+
+            return assignmentType
+
+        Nothing 
+->
+
+            Left 
+"unbound variable"
+
+Footnotes
+
+â¦ the other big thing being good type inference for anonymous variants/unions (a.k.a. "polymorphic variants") 
+â©
+
+There isn't really an official or standard notation for this sort of thing.  Type theory notation is something that authors just sort of make up as they go and while there are some common conventions there is still a lot of notational variation between authors.  In other words, it's just vibes and as long as it's understandable in context that's usually good enough. 
+â©
+
+Haskell in shambles
+6
+ 
+â©
+
+There are some situations where it does make sense to interleave type checking and evaluation and I discuss one such case in another post of mine: 
+Type-safe eval in Grace
+. 
+â©
+
+â¦ with the exception of a fresh object, which would be rejected by the 
+excess property checker
+. 
+â©
+
+Haskell does technically support accessing record fields nowadays using the  
+OverloadedRecordDot
+ language extension but it's still fairly unergonomic, in my opinion.  I still love Haskell to death, though, as you might guess from the name of my blog. 
+â©
+
+I'm currently 
+on the market for a new job
+, so 
+email me
+ if you think I'd be a good fit at your company.
+Copyright Â© 2026 
+Gabriella Gonzalez
+. This work is licensed under 
+CC BY-SA 4.0
