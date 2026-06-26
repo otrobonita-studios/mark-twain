@@ -991,7 +991,29 @@ export default function MLClient() {
                       Getting Started with the Embeddings API
                     </h3>
                     
-                    <div className="flex flex-col gap-3 text-xs sm:text-sm leading-relaxed">
+                    <div className="flex flex-col gap-4 text-xs sm:text-sm leading-relaxed">
+                      {/* CLI Tool Banner */}
+                      <div className="bg-[#d9a34a]/10 border border-[#d9a34a]/20 p-4 rounded flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div className="flex items-start gap-3">
+                          <Terminal className="text-[#d9a34a] shrink-0 mt-0.5" size={18} />
+                          <div className="flex flex-col">
+                            <span className="font-bold text-[#fff4df] text-xs sm:text-sm">Mark Twain CLI (Rust)</span>
+                            <p className="text-xs text-[rgba(255,244,223,0.7)] leading-relaxed mt-0.5">
+                              Query the embeddings index and analyze text styles directly from your terminal using our zero-dependency CLI client.
+                            </p>
+                          </div>
+                        </div>
+                        <a 
+                          href="https://github.com/otrobonita-studios/mark-twain-cli" 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-xs font-bold uppercase tracking-wider px-4 py-2 bg-[#d9a34a] text-black hover:opacity-90 transition-all shrink-0 flex items-center gap-1.5"
+                        >
+                          View GitHub
+                          <ArrowRight size={12} />
+                        </a>
+                      </div>
+
                       <p className="opacity-75">
                         Perform a semantic search programmatically against the collection index via cURL, Node.js, or Python:
                       </p>
