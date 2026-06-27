@@ -1,0 +1,255 @@
+2025-12-05
+
+Enhancing x11 Application Security with LXC
+
+Wouldn't it be nice to add an extra layer of security to a web browser or an Electron-based IM application?
+After all, if a browser is compromised, the user’s entire home directory may be at risk.
+
+Let’s mitigate this by using LXC to isolate the application from the host system.
+
+The system used in this example is Arch Linux, but the procedure should be easily adaptable to other distributions.
+
+Networking Capabilities
+
+First, we need to install and preconfigure LXC. Install the following packages:
+
+# pacman -S lxc lxcfs
+
+Next, we need to give our LXC containers networking capabilities.
+To do that, edit the 
+/etc/default/lxc
+ file and append the following line to the bottom:
+
+USE_LXC_BRIDGE="true"
+
+Now we can start the LXC bridge interface. Enable and start the corresponding systemd unit:
+
+# systemctl enable lxc-net.service --now
+
+A new interface named lxcbr0 should now be available. Verify this with:
+
+# ip a show dev lxcbr0
+
+Creating the Container
+
+With the previous steps completed, we can create our first application container.
+Let's start by creating an initial configuration.
+
+Navigate to 
+/etc/lxc
+ and create a new configuration file. Since I’m creating a web-browser container, I’ll name mine 
+www.conf
+.
+
+Open the file with your preferred editor and add the following lines:
+
+lxc.net.0.type = veth
+lxc.net.0.link = lxcbr0
+lxc.net.0.flags = up
+lxc.net.0.hwaddr = 10:66:6a:xx:xx:xx
+lxc.idmap = u 0 100000 65536
+lxc.idmap = g 0 100000 65536
+
+The first four lines specify that the container should use the network bridge we created earlier.
+
+Next, we define how the container’s UIDs and GIDs should be mapped to those on the host. Since our goal is maximum security, we’ll use unprivileged containers.
+To achieve this, we map the container’s IDs into a range of IDs that do not exist on the host. This ensures that even if a malicious process escapes the container, it will end up with no meaningful permissions on the host system.
+
+Understanding 
+idmap
+
+Here’s a detailed explanation of how the idmap configuration works:
+
+lxc.idmap = [type] [container_id] [host_id] [range]
+
+[type] – Specifies which type of ID is being mapped. Options:
+
+u for UID
+
+g for GID
+
+[container_id] – The first UID/GID inside the container to map.
+In our case it’s 0 (the container’s root).
+
+[host_id] – The starting UID/GID on the host that container_id maps to.
+Here, 0 in the container maps to 100000 on the host.
+IDs increase sequentially:
+
+container_id=1 → host_id=100001
+
+container_id=1000 → host_id=101000
+
+[range] – The size of the UID/GID block to map.
+We use 65536 to provide a full standard Linux ID range.
+
+Example mapping table:
+
+    | container_id       | host_id     |
+    | ------------------ | ----------- |
+    | 0                  | 100000      |
+    | 1                  | 100001      |
+    | 1000               | 101000      |
+    | 65535              | 165535      |
+
+Next, we need to tell LXC which UID/GID mappings to use in our new container.
+We do this by adding the following line to both 
+/etc/subuid
+ and 
+/etc/subgid
+:
+
+root:100000:65536
+
+This line means that the host user root can create UID mappings in the range 100000–165535 for LXC containers.
+It corresponds directly to the unprivileged container configuration we created earlier.
+
+If you want to create another container with different mappings, for example, mapping container_id=0 to host_id=200000, simply add another line to the subuid/subgid files:
+
+root:100000:65536
+root:200000:65536
+
+Spinning up the container
+
+Now we are finally ready to create our container using the configuration file we prepared.
+For this example, I’ll use the debian:trixie image as a base:
+
+# lxc-create --config /etc/lxc/www.conf --name www -t download --- \
+    -d debian -r trixie -a amd64
+
+Verify the container is running:
+
+# lxc-ls -f
+
+Once the setup is complete, log into the container:
+
+# lxc-attach www /bin/bash
+
+Inside the container, you can install the software you need just like on a regular Linux system.
+For example, to run Firefox:
+
+# apt update
+# apt-get -y install firefox-esr
+
+Many x11 applications do not run well as root, so it’s best to create a dedicated user to run the application inside the container:
+
+# /sbin/useradd -m -s /bin/bash www
+
+Setting up x11
+
+Basic container configuration is complete, so let's jump right into configuring it to host x11 apps. First, we have to map the x11 socket. If you're currently running an X server, you'll find it under 
+/tmp/.X11-unix
+.
+
+We also need to give the container an 
+.Xauthority
+ so it can authorize against the X server. Simply mounting the host's file won't work: each cookie entry is keyed by hostname, and the client only uses the entry whose hostname matches the machine it runs on — which, inside the container, it won't. The fix is to replace the entry's family field with the 
+FamilyWild
+ wildcard (
+ffff
+) so it matches any host, then merge it into a fresh 
+.Xauthority
+ for the container:
+
+: > /tmp/lxc.Xauthority && xauth nlist :0 | \
+    sed 's/^..../ffff/' | xauth -f /tmp/lxc.Xauthority nmerge -
+# Replace :0 with your $DISPLAY value
+
+Lastly, we have to make sure we've set the following environment variables:
+
+DISPLAY - set this to the host's DISPLAY value
+
+XAUTHORITY - set this to the path where the 
+lxc.Xauthority
+ file will be mounted inside the container
+
+To implement these steps, let's edit the container's configuration file and add the following lines. Note that this is the per-container config that 
+lxc-create
+ generated under 
+/var/lib/lxc/www/config
+, which is distinct from the 
+/etc/lxc/www.conf
+ template we passed at creation time:
+
+lxc.environment = XAUTHORITY=/tmp/lxc.Xauthority
+lxc.environment = DISPLAY=:0
+
+lxc.mount.entry = /tmp/.X11-unix tmp/.X11-unix none bind,optional,create=dir,ro
+lxc.mount.entry = /tmp/lxc.Xauthority tmp/lxc.Xauthority none bind,optional,create=file,ro
+
+One last detail: since we built an unprivileged container, its IDs are shifted by our idmap (container UID 0 maps to host UID 100000). The 
+.Xauthority
+ file, however, was created by 
+xauth
+ with mode 0600 and is owned by your host user, whose UID falls outside that mapped range. Inside the container the file therefore shows up as owned by 
+nobody
+, and our container user can't read it - so X would still reject the connection with 
+Authorization required
+.
+
+The simplest fix is to make the cookie file world-readable on the host:
+
+chmod 644 /tmp/lxc.Xauthority
+
+If you'd rather keep it at 0600, 
+chown
+ it to the mapped host UID of the container user instead (for the 
+www
+ user at container UID 1000, that's host UID 101000).
+
+If everything went smoothly, you should now be able to run the browser we installed earlier and see its window on your host's desktop:
+
+# lxc-start www
+# lxc-attach www -- su www -c firefox
+
+Optionally, if you want hardware-accelerated rendering and video decoding inside the container, you can pass through the GPU by mounting 
+/dev/dri
+:
+
+lxc.mount.entry = /dev/dri dev/dri none bind,optional,create=dir
+
+Setting up sound
+
+Audio follows the same pattern as the display. PipeWire ships a PulseAudio-compatible server, so we can expose a PulseAudio socket on the host and bind-mount it into the container, just as we did with the x11 socket.
+
+First, install the audio packages inside the container so the application can use the socket:
+
+# apt-get -y install pulseaudio pipewire-pulse
+
+Next, tell PipeWire to open a dedicated PulseAudio socket by adding it to 
+server.address
+ in 
+~/.config/pipewire/pipewire-pulse.conf
+:
+
+pulse.properties = {
+    # ... keep the existing defaults ...
+    server.address = [
+        "unix:native"
+        "unix:/tmp/pulse-socket-0"
+    ]
+}
+
+Reload the PulseAudio server so the socket appears:
+
+systemctl --user restart pipewire-pulse
+
+/tmp/pulse-socket-0
+ should now exist. Next, mount it into the container and point 
+PULSE_SERVER
+ at it. Add the following to the container config:
+
+lxc.environment = PULSE_SERVER=unix:/tmp/pulse-socket-0
+
+lxc.mount.entry = /tmp/pulse-socket-0 tmp/pulse-socket-0 none bind,optional,create=file,ro
+
+Unlike the cookie file, the socket is world-accessible, so the unprivileged-container ownership issue from before doesn't apply here — there's nothing to 
+chmod
+. Restart the container and it should have working audio.
+
+Conclusion
+
+We now have a GUI application running inside an unprivileged LXC container, with its display and sound forwarded from the host. If the browser is compromised, the blast radius is a container whose UIDs map to an unused range on the host — your home directory and the rest of the system stay out of reach.
+
+The isolation isn't free, though, and it isn't absolute. Every channel we opened — the X socket, the PulseAudio socket, optionally the GPU — is a hole through the wall, and each one widens what a compromised process can touch. The audio socket, for instance, grants capture as well as playback. Forward what the application actually needs and leave the rest out; that trade-off is the whole exercise.
+
+The same setup works for any untrusted GUI application, not just a browser. You can tighten it further with seccomp or AppArmor profiles, but even as it stands, a compromised app is now boxed in rather than sitting on top of your home directory.
