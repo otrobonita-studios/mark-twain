@@ -1,0 +1,237 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">nanoeuler</h1></div>
+<p dir="auto">A GPT-2-class language model built <strong>entirely from scratch in C/CUDA</strong> — no PyTorch, no
+autograd, no ML libraries. The forward <strong>and</strong> backward passes are written and verified by
+hand, and the whole training pipeline lives in this repo: a hand-written <strong>byte-level BPE
+tokenizer</strong>, <strong>pretraining</strong> on a books + web corpus, and <strong>supervised fine-tuning</strong> into a
+chat model (RLHF/DPO planned). It runs on CPU (<code>libm</code> + OpenMP) for a small showcase model,
+and a full from-scratch <strong>CUDA engine</strong> — cuBLAS matmuls, a hand-written <strong>FlashAttention</strong>,
+validated against a CPU reference by a full-model gradient check — trains a <strong>~116M-parameter</strong>
+model on a single RTX 4070.</p>
+<blockquote>
+<p dir="auto"><strong>Status &amp; honesty.</strong> This is a research/educational artifact, built in public. At ~116M
+parameters trained on a single consumer GPU, it is a <em>text generator in the spirit of
+GPT-2-small</em>: fluent-ish English, <strong>no real world knowledge</strong>. It is <strong>not</strong> a capable
+assistant — the chat model demonstrates that the pretrain→SFT pipeline works end to end, it
+is not a useful chatbot. The point of the project is the from-scratch engineering and the
+complete, understandable training pipeline.</p>
+</blockquote>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="make check              # verify the backward pass (gradient check, double precision)
+make                    # build the training binary
+./nanoeuler train       # train the small showcase model (~0.76M params)
+./nanoeuler train big   # train the larger model (~10M params; meant for a GPU)
+./nanoeuler chat        # REPL: type a prompt, the model continues it"><pre class="notranslate"><code>make check              # verify the backward pass (gradient check, double precision)
+make                    # build the training binary
+./nanoeuler train       # train the small showcase model (~0.76M params)
+./nanoeuler train big   # train the larger model (~10M params; meant for a GPU)
+./nanoeuler chat        # REPL: type a prompt, the model continues it
+</code></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Why "Euler"?</h2></div>
+<p dir="auto">A residual block computes</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="x = x + f(x)"><pre class="notranslate"><code>x = x + f(x)
+</code></pre></div>
+<p dir="auto">Read it as a step of numerical integration. The <strong>forward-Euler method</strong> advances an
+ordinary differential equation <code>dx/dt = f(x)</code> by</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="x(t+Δt) = x(t) + Δt · f(x(t))"><pre class="notranslate"><code>x(t+Δt) = x(t) + Δt · f(x(t))
+</code></pre></div>
+<p dir="auto">With step size <code>Δt = 1</code> this is exactly the residual update. So a deep residual
+network is a <em>discretized ODE</em>: <strong>depth is integration time</strong>, and each layer
+integrates the hidden state forward by one Euler step. This is the view behind work
+like Neural ODEs (a ResNet is the Euler discretization of a continuous flow). The
+project is named after <strong>Leonhard Euler</strong>, who gave us that integration method.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Example output</h2></div>
+<p dir="auto">A sample from the ~116M model after a partial pretraining run on the books + web corpus
+(prompt <code>Alessandro eat a</code>):</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="Alessandro eat a icing textile: the satisfied by the servants in order to keep your weight
+[Using to a heated, collaborated young people that attend the metric process where the rank
+is authorized and to contain the sedentary. Some state lawyers were able to insert ..."><pre class="notranslate"><code>Alessandro eat a icing textile: the satisfied by the servants in order to keep your weight
+[Using to a heated, collaborated young people that attend the metric process where the rank
+is authorized and to contain the sedentary. Some state lawyers were able to insert ...
+</code></pre></div>
+<p dir="auto">The content is not meaningful, but notice what it learned on its own: real grammar, long
+clauses, and an encyclopedic register picked up from the web data. This is the expected
+behaviour of a small model trained on a single GPU — fluent shape, shallow substance. More
+training and (far) more data improve fluency; world knowledge needs scale this project does
+not pretend to have.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Architecture</h2></div>
+<p dir="auto">Decoder-only transformer with the building blocks common to current models:</p>
+<ul dir="auto">
+<li><strong>RMSNorm</strong> (pre-norm, no bias)</li>
+<li><strong>Rotary position embeddings (RoPE)</strong> applied to queries and keys</li>
+<li><strong>SwiGLU</strong> feed-forward: <code>down(silu(gate(x)) * up(x))</code></li>
+<li><strong>Grouped-query attention (GQA)</strong>: query heads share a smaller set of key/value heads</li>
+<li><strong>Multi-token prediction (MTP)</strong>: <code>K</code> output heads predict the next <code>K</code> tokens; the
+auxiliary heads improve the learned representation and enable speculative decoding.
+Generation uses head 0.</li>
+<li><strong>No biases</strong> anywhere.</li>
+<li><strong>Byte-level BPE tokenizer</strong>, hand-written, with GPT-2-style pretokenization (a single
+leading space attaches to the following word, so spaces are not wasted as standalone
+tokens). Merges are learned on a sample of the corpus; the GPU model uses a 4096-token
+vocabulary (~3.4 bytes/token on English).</li>
+</ul>
+<p dir="auto">Each block is <code>x = x + attn(rmsnorm(x))</code> followed by <code>x = x + swiglu(rmsnorm(x))</code>.
+A residual connection <code>x = x + f(x)</code> is one step of the forward-Euler method for the
+ODE <code>dx/dt = f(x)</code> — hence the name, and a nod to Leonhard Euler.</p>
+<p dir="auto">Configurations:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>where</th>
+<th>dim</th>
+<th>q/kv heads</th>
+<th>layers</th>
+<th>context</th>
+<th>vocab</th>
+<th>params</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>small</code> (CPU, <code>nanoeuler.c</code>)</td>
+<td>128</td>
+<td>4 / 2</td>
+<td>4</td>
+<td>128</td>
+<td>512</td>
+<td>~1.05M</td>
+</tr>
+<tr>
+<td><strong>GPU pipeline</strong> (<code>cuda/</code>, <code>run_train</code>)</td>
+<td>768</td>
+<td>12 / 4</td>
+<td>16</td>
+<td>512</td>
+<td>4096</td>
+<td><strong>~116M</strong></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">The CPU <code>small</code> model trains in a few hours on 12 cores and is a self-contained showcase.
+The ~116M GPU model is the real pipeline: it pretrains on the books + web mix and is then
+fine-tuned into a chat model (see below). The head size is 64 (<code>768/12</code>), which fits the
+FlashAttention kernel.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Verified backward pass</h2></div>
+<p dir="auto">Hand-written back-propagation is easy to get subtly wrong, so every analytic
+gradient is compared against a central finite difference. The check runs in double
+precision so floating-point cancellation does not hide correct gradients:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="$ make check
+  tok      : max rel err 1.02e-04
+  qkvw     : max rel err 7.20e-07
+  gatew    : max rel err 6.86e-08
+  ...
+max relative error: 1.02e-04
+&gt;&gt;&gt; backward OK (error &lt; 1e-2)"><pre class="notranslate"><code>$ make check
+  tok      : max rel err 1.02e-04
+  qkvw     : max rel err 7.20e-07
+  gatew    : max rel err 6.86e-08
+  ...
+max relative error: 1.02e-04
+&gt;&gt;&gt; backward OK (error &lt; 1e-2)
+</code></pre></div>
+<p dir="auto">Every parameter tensor is checked, including the less obvious backward passes of
+RoPE, SwiGLU, GQA, and MTP.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Build and performance</h2></div>
+<p dir="auto"><code>make</code> builds with <code>-O3 -march=native -ffast-math -fopenmp</code>. Matrix multiplies and
+attention are parallelized with OpenMP and vectorized; on a 12-core machine the
+training loop uses all cores. <code>make check</code> builds a separate double-precision binary
+used only for the gradient check.</p>
+<p dir="auto">No external dependencies. Tested with gcc 13 on Linux.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Scope</h2></div>
+<p dir="auto">This is a from-scratch text generator and a complete, understandable training pipeline —
+not a product. A model of this size trained on one GPU produces fluent-looking English with
+little real knowledge; the fine-tuned chat model answers in assistant <em>form</em> but its content
+is shallow. A usable conversational model needs orders of magnitude more parameters, data and
+compute (a ~135M model only becomes a basic assistant after ~600B training tokens; this repo
+trains on a far smaller corpus on a single GPU). The goal is to own every piece — every
+parameter, every gradient, the tokenizer, the kernels, the pretraining and the fine-tuning.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">GPU engine (CUDA)</h2></div>
+<p dir="auto"><code>cuda/nanoeuler_cuda.cu</code> is a full from-scratch CUDA port — forward, backward, training
+and inference on the GPU. Every kernel is validated on the device against a CPU reference,
+and the whole model has a GPU gradient check (GPU grads vs CPU grads to ~1e-6).</p>
+<p dir="auto">Kernels: matmul (delegated to <strong>cuBLAS</strong> with TF32 tensor cores), RMSNorm, RoPE,
+grouped-query attention with a hand-written <strong>FlashAttention</strong> (tiled, online softmax,
+no T×T matrix in memory), SwiGLU, softmax/cross-entropy and AdamW. FlashAttention made
+the training step about 3× faster.</p>
+<p dir="auto">Build (RTX 40-series = Ada = <code>sm_89</code>; the host-compiler flag avoids a gcc ICE on the large file):</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cd cuda
+nvcc -O3 -arch=sm_89 -Xcompiler -fno-tree-reassoc,-fno-tree-copy-prop nanoeuler_cuda.cu -o nanoeuler_cuda -lcublas"><pre class="notranslate"><code>cd cuda
+nvcc -O3 -arch=sm_89 -Xcompiler -fno-tree-reassoc,-fno-tree-copy-prop nanoeuler_cuda.cu -o nanoeuler_cuda -lcublas
+</code></pre></div>
+<p dir="auto">Modes:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='./nanoeuler_cuda              # run all kernel self-tests (GPU vs CPU)
+./nanoeuler_cuda g            # full-model gradient check (GPU grads vs CPU)
+./nanoeuler_cuda t            # pretrain from scratch, checkpoint to ../nanoeuler.bin every 5k steps
+./nanoeuler_cuda tr           # resume pretraining from the latest ../nanoeuler.bin checkpoint
+./nanoeuler_cuda i "It was"   # autoregressive generation on GPU
+./nanoeuler_cuda s            # supervised fine-tune on Alpaca, save ../nanoeuler_chat.bin
+./nanoeuler_cuda c            # interactive chat with the fine-tuned model'><pre class="notranslate"><code>./nanoeuler_cuda              # run all kernel self-tests (GPU vs CPU)
+./nanoeuler_cuda g            # full-model gradient check (GPU grads vs CPU)
+./nanoeuler_cuda t            # pretrain from scratch, checkpoint to ../nanoeuler.bin every 5k steps
+./nanoeuler_cuda tr           # resume pretraining from the latest ../nanoeuler.bin checkpoint
+./nanoeuler_cuda i "It was"   # autoregressive generation on GPU
+./nanoeuler_cuda s            # supervised fine-tune on Alpaca, save ../nanoeuler_chat.bin
+./nanoeuler_cuda c            # interactive chat with the fine-tuned model
+</code></pre></div>
+<p dir="auto">Training checkpoints every 5000 steps, so a long run can be stopped (Ctrl-C) and resumed with
+<code>tr</code>. A model trained on the GPU is saved in the CPU program's format, so <code>./nanoeuler chat</code>
+can also load and run it.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Chatbot: pretrain then fine-tune (SFT)</h2></div>
+<p dir="auto">The chat pipeline is two stages. First <strong>pretrain</strong> the ~116M base on the books + web mix
+(<code>./nanoeuler_cuda t</code>, resumable with <code>tr</code>). Then <strong>supervised fine-tuning</strong> turns it into an
+assistant: <code>./nanoeuler_cuda s</code> loads the pretrained base, renders each
+<a href="https://github.com/tatsu-lab/stanford_alpaca">Alpaca</a> example with the standard instruction
+template, and trains with the <strong>loss masked to the response tokens only</strong> (prompt and padding
+positions get a target of <code>-1</code>, which the cross-entropy kernel turns into zero gradient). The
+result is saved to <code>nanoeuler_chat.bin</code>; <code>./nanoeuler_cuda c</code> then wraps each line you type in
+the same template and samples a reply, stopping at the <code>&lt;/s&gt;</code> end marker.</p>
+<p dir="auto">After fine-tuning the model answers in the right <em>shape</em> — it follows the instruction→response
+format, writes complete sentences and stops on its own. The <em>content</em>, though, is shallow and
+often wrong: this is a small model trained on a single GPU, so it has little world knowledge to
+express. SFT teaches the model <em>how</em> to respond, not <em>what</em> it knows — that comes from
+pretraining and scale. This is a faithful, fully-from-scratch demonstration that the
+pretrain→SFT pipeline works end to end, not a capable assistant.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Data</h2></div>
+<p dir="auto">Pretraining uses a real <strong>books + web</strong> mix:</p>
+<ul dir="auto">
+<li><strong>Books</strong> — <code>data/get_gutenberg.sh</code> downloads ~95 public-domain Project Gutenberg classics
+(Austen, Dickens, Dostoevsky, Tolstoy, Melville, the complete Shakespeare, ...). Each book's
+Project Gutenberg license header/footer is stripped (only the text between the
+<code>*** START ... ***</code> / <code>*** END ... ***</code> markers is kept) so the model trains on prose.</li>
+<li><strong>Web</strong> — <code>data/get_web.sh</code> pulls a slice of <a href="https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu" rel="nofollow">FineWeb-Edu</a>
+(high-quality educational web text) straight from the Hugging Face parquet files using the
+<strong>DuckDB</strong> CLI (a single static binary — no Python, no libraries).</li>
+</ul>
+<p dir="auto">Then concatenate them into the pretraining corpus the trainer reads:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="sh data/get_gutenberg.sh                       # books  -&gt; data/gutenberg.txt
+sh data/get_web.sh                             # web    -&gt; data/web.txt (~1 GB by default)
+cat data/gutenberg.txt data/web.txt &gt; data/pretrain.txt
+sh data/get_alpaca.sh                          # instruction data for SFT -&gt; data/alpaca.json"><pre class="notranslate"><code>sh data/get_gutenberg.sh                       # books  -&gt; data/gutenberg.txt
+sh data/get_web.sh                             # web    -&gt; data/web.txt (~1 GB by default)
+cat data/gutenberg.txt data/web.txt &gt; data/pretrain.txt
+sh data/get_alpaca.sh                          # instruction data for SFT -&gt; data/alpaca.json
+</code></pre></div>
+<p dir="auto">Corpora and model checkpoints are git-ignored (regenerable).</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Roadmap</h2></div>
+<ul dir="auto">
+<li>✅ Hand-written byte-level BPE with GPT-2-style pretokenization.</li>
+<li>✅ From-scratch CUDA engine (cuBLAS + FlashAttention), validated by a full-model gradient check.</li>
+<li>✅ Pretraining on a books + web mix, with checkpoint/resume.</li>
+<li>✅ Supervised fine-tuning (Alpaca) with response-masked loss → a chat model.</li>
+<li>⏳ <strong>DPO</strong> (preference optimization) — the alignment stage, next to build.</li>
+<li>⏳ Scale the model and data (toward ~270M) and publish a trained checkpoint people can try.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Files</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="nanoeuler.c             CPU model: forward, backward, training, sampling, chat REPL
+cuda/nanoeuler_cuda.cu  GPU engine: BPE, kernels, FlashAttention, pretrain/SFT/infer/chat, gradient check
+data/get_gutenberg.sh   downloads + cleans the Gutenberg books corpus
+data/get_web.sh         downloads a FineWeb-Edu web slice via the DuckDB CLI (no Python)
+data/get_alpaca.sh      downloads the Alpaca instruction data for fine-tuning
+Makefile  LICENSE  shakespeare.txt  .gitignore"><pre class="notranslate"><code>nanoeuler.c             CPU model: forward, backward, training, sampling, chat REPL
+cuda/nanoeuler_cuda.cu  GPU engine: BPE, kernels, FlashAttention, pretrain/SFT/infer/chat, gradient check
+data/get_gutenberg.sh   downloads + cleans the Gutenberg books corpus
+data/get_web.sh         downloads a FineWeb-Edu web slice via the DuckDB CLI (no Python)
+data/get_alpaca.sh      downloads the Alpaca instruction data for fine-tuning
+Makefile  LICENSE  shakespeare.txt  .gitignore
+</code></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">MIT. See <code>LICENSE</code>.</p>
+</article>
