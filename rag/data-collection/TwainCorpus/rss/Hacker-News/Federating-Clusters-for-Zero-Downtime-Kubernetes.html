@@ -1,0 +1,257 @@
+<main class="main-content"><div class="blog blog--single"><div class="blog__container container"><div class="blog-post"><div class="blog-post__header"><h1>Federating Clusters for Zero-Downtime Kubernetes</h1><div class="blog-post-meta"><div class="blog-post-meta__media"></div><div class="blog-post-meta__body"><div class="blog-post-meta__name">Dominik TÃ¡skai, Linkerd Ambassador</div><div class="blog-post-meta__date">Jun 24, 2026 â¢ 15 min read</div></div></div></div><div class="blog-post__cover"></div><div class="blog-post__content prose"><p>Every multi-region setup eventually meets the same awkward moment: a whole
+cluster goes away, and the identical copy of your service running two regions
+over might as well not exist, because nothing is wired to treat them as one
+thing. Failover becomes a runbook: restore, repoint DNS, and wait for an outage
+that, on paper, you’d already paid to survive.</p><p>Linkerd’s multicluster extension closes that gap by letting several clusters
+present a service as a single, load-balanced endpoint. The part that the
+official tasks gloss over is that a real platform almost never picks <em>one</em>
+multicluster mode. Some services want federation (same service everywhere, one
+endpoint, automatic failover). While others want mirroring (reach a specific
+remote service by name). And you frequently want both patterns living on the
+same set of links. The docs walk through each mode on its own. This post wires
+all three together across three GKE clusters, with a full-mesh link topology, a
+chaos test that takes out an entire cluster, and scripts you can clone and run
+on a fresh GCP project.</p><p><strong>Companion repo</strong>: Every script referenced here lives in
+<a href="https://github.com/dtaskai/linkerd-multicluster-demo" rel="noopener" target="_blank">this repository</a>. Feel
+free to clone it, set your project ID, and run it.</p><h2 id="linkerd-multicluster-modes-gateway-flat-and-federated">Linkerd multicluster modes: Gateway, flat, and federated</h2><p>Linkerd’s multicluster extension supports three modes. The nice thing is they’re
+not mutually exclusive: on the same set of linked clusters, the mode is chosen
+per service via a label.</p><table><thead><tr><th>Mode</th><th>Label</th><th>What happens</th><th>Network Requirement</th></tr></thead><tbody><tr><td><strong>Hierarchical (gateway)</strong></td><td><code>mirror.linkerd.io/exported=true</code></td><td>Service mirrored as <code>&lt;svc&gt;-&lt;cluster&gt;</code>, traffic routed through a gateway</td><td>Gateway IP reachable</td></tr><tr><td><strong>Flat (pod-to-pod)</strong></td><td><code>mirror.linkerd.io/exported=remote-discovery</code></td><td>Service mirrored as <code>&lt;svc&gt;-&lt;cluster&gt;</code>, traffic goes directly to remote pods</td><td>Flat network (pod IPs routable)</td></tr><tr><td><strong>Federated</strong></td><td><code>mirror.linkerd.io/federated=member</code></td><td>All same-name services unioned into <code>&lt;svc&gt;-federated</code>, load balanced across all clusters</td><td>Flat network (pod IPs routable)</td></tr></tbody></table><p>The distinction that matters operationally is that hierarchical mirroring works
+on <em>any</em> network. Only the gateway IP needs to be reachable, while flat and
+federated modes need real pod-to-pod connectivity. On GCP, VPC-native GKE
+clusters on peered VPCs give you that flat network for free. So, you can run
+federated services for your core workloads over a flat network and still mirror
+a specialized service through a gateway from a cluster that isn’t on that
+network. Most platform teams I’ve seen end up with exactly this kind of mix.</p><h2 id="multi-region-architecture-gke-cluster-setup">Multi-region architecture: GKE cluster setup</h2><p>We have three GKE clusters across three regions, fully linked to each other (six
+directional links total). Three demo services, each using a different
+multicluster mode:</p><figure></figure><p><strong>frontend</strong> is federated and runs in all three clusters. A single federated
+frontend service in each cluster load-balances across all nine pods (3 replicas
+Ã 3 clusters). When a cluster goes down, the remaining six pods absorb the
+traffic with no application changes.</p><p><strong>api</strong> is flat-mirrored and runs in <code>west</code> and <code>east</code>. The <code>north</code> cluster
+consumes it as <code>api-west</code> and <code>api-east</code>, which are explicit remote service
+names with traffic sent straight to the remote pods. This is what you reach for
+when the client needs to decide which backend it talks to, for example, to keep
+a request in-region for data locality.</p><p><strong>analytics</strong> is gateway-mirrored and runs only in <code>east</code>. Exported through the
+Linkerd gateway so <code>west</code> and <code>north</code> reach it as <code>analytics-east-gw</code> without
+needing flat-network connectivity to <code>east</code>’s pods. It’s here mainly to prove
+that gateway mode coexists with flat and federated modes on the same links.</p><h2 id="deployment-prerequisites-gke-linkerd-and-cli-tools">Deployment prerequisites: GKE, Linkerd, and CLI tools</h2><ul><li>A GCP account (free-tier credits cover this. Use three standard clusters with
+small node pools)</li><li><code>gcloud</code> CLI, authenticated (<code>gcloud auth login</code>)</li><li><code>kubectl</code> v1.28+</li><li><code>step</code> CLI, <code>brew install step</code> (for certificate generation)</li><li><code>helm</code> v3</li><li>~30 minutes for the full setup</li></ul><p>The infra script enables the <code>compute</code> and <code>container</code> APIs for you, so a
+brand-new project works out of the box.</p><h2 id="step-0-configure">Step 0: Configure</h2><p>Clone the repo, create a local <code>.env</code> file from the example file, and customize
+it for your GCP project. The defaults are enough for the rest of the demo, so in
+most cases you only need to change the project ID.</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>git clone &lt;your-repo-url&gt;
+</span></span><span style="display:flex"><span>cd blog-linkerd-federation
+</span></span><span style="display:flex"><span>cp env.example .env
+</span></span></code></pre></div><p>Open <code>.env</code> and set at least your project ID. The file ships with sensible
+defaults for everything else:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>export <span style="color:#79c0ff">GCP_PROJECT</span><span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">"your-project-id"</span>
+</span></span><span style="display:flex"></span><span style="display:flex"><span>export <span style="color:#79c0ff">REGION_WEST</span><span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">"us-central1"</span>
+</span></span><span style="display:flex"><span>export <span style="color:#79c0ff">REGION_EAST</span><span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">"us-east1"</span>
+</span></span><span style="display:flex"><span>export <span style="color:#79c0ff">REGION_NORTH</span><span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">"europe-west1"</span>
+</span></span><span style="display:flex"></span><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># One zone per region. We pin node-locations to a single zone so num-nodes is</span>
+</span></span><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># the TOTAL node count â see the cost note below for why this matters.</span>
+</span></span><span style="display:flex"><span>export <span style="color:#79c0ff">ZONE_WEST</span><span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">"us-central1-a"</span>
+</span></span><span style="display:flex"><span>export <span style="color:#79c0ff">ZONE_EAST</span><span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">"us-east1-b"</span>
+</span></span><span style="display:flex"><span>export <span style="color:#79c0ff">ZONE_NORTH</span><span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">"europe-west1-b"</span>
+</span></span><span style="display:flex"></span><span style="display:flex"><span>export <span style="color:#79c0ff">CLUSTER_MACHINE_TYPE</span><span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">"e2-medium"</span>
+</span></span><span style="display:flex"><span>export <span style="color:#79c0ff">CLUSTER_NODE_COUNT</span><span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">"1"</span>
+</span></span><span style="display:flex"><span>export <span style="color:#79c0ff">FRONTEND_REPLICAS</span><span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">"3"</span>
+</span></span></code></pre></div><p>At minimum, set <code>GCP_PROJECT</code>. Everything else ships with sensible defaults:
+three regions, one zone per region, and small node pools to keep the cost down.
+If you run <code>cat .env</code>, you should see the full set of variables populated.</p><p>Load the variables into your current shell so the scripts can read them:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>source .env
+</span></span></code></pre></div><p>Every script below reads from this file, and they all run with
+<code>set -euo pipefail</code>, so a missing variable fails loudly rather than silently.
+That’s why <code>env.example</code> carries the full set, the VPC and cluster names
+included, instead of just the project ID.</p><h2 id="step-1-provision-three-gke-clusters-with-vpc-peering">Step 1: Provision three GKE clusters with VPC peering</h2><p>Run the infrastructure script to create the networks and clusters. This takes
+about 10â15 minutes, so itâs a good point to grab a coffee.</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>./scripts/01-infra.sh
+</span></span></code></pre></div><p>This script does the following:</p><ol><li>Enables the <code>compute</code> and <code>container</code> APIs (no-op if they’re already on).</li><li>Creates <strong>three VPCs</strong> with non-overlapping pod and service CIDRs, a hard
+requirement for VPC peering.</li><li>Sets up <strong>full-mesh VPC peering</strong> (westâeast, eastânorth, northâwest) with
+<code>--export-custom-routes</code> and <code>--import-custom-routes</code> so pod CIDRs are
+actually advertised. This is what gives us the flat network.</li><li>Creates <strong>three GKE Standard clusters</strong>, one per VPC/region, each pinned to a
+single zone.</li><li>Renames the <strong>kubectl contexts</strong> to <code>west</code>, <code>east</code>, <code>north</code>.</li></ol><p>Hereâs the address plan the script uses. The ranges are intentionally
+non-overlapping so VPC peering can route pod traffic correctly:</p><table><thead><tr><th>Cluster</th><th>VPC Subnet</th><th>Pod CIDR</th><th>Service CIDR</th></tr></thead><tbody><tr><td>west</td><td>10.10.0.0/20</td><td>10.100.0.0/14</td><td>10.104.0.0/20</td></tr><tr><td>east</td><td>10.20.0.0/20</td><td>10.108.0.0/14</td><td>10.112.0.0/20</td></tr><tr><td>north</td><td>10.30.0.0/20</td><td>10.116.0.0/14</td><td>10.120.0.0/20</td></tr></tbody></table><p>Non-overlapping ranges are non-negotiable. If pod CIDRs overlap across peered
+VPCs, routing breaks silently. Pods get responses from the wrong cluster, or
+connections time out with nothing useful in the logs. Ask me how I know.</p><p><strong>One zone, not three.</strong> A GKE <em>regional</em> cluster places <code>--num-nodes</code> nodes in
+<strong>each</strong> of three zones by default. With <code>--num-nodes 1</code> that’s 3 nodes per
+cluster, 9 total, and triple the bill. The script pins <code>--node-locations</code> to a
+single zone so <code>CLUSTER_NODE_COUNT=1</code> really means one node per cluster.</p><p><strong>Cost note:</strong> Three Standard clusters with one <code>e2-medium</code> node each run
+roughly $10â15/day total for this demo (management fee + nodes + a small gateway
+load balancer on <code>east</code>). The teardown script removes everything.</p><h2 id="step-2-install-linkerd-with-a-shared-trust-anchor">Step 2: Install Linkerd with a shared trust anchor</h2><p>Install Linkerd into all three clusters using a shared trust anchor. The script
+generates the certificates, installs the control plane, and configures each
+cluster to trust the others for cross-cluster mTLS.</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>./scripts/02-linkerd-install.sh
+</span></span></code></pre></div><p>This generates a root CA and per-cluster issuer certificates, then installs
+Linkerd on all three clusters:</p><div class="highlight disable-copy"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-text" data-lang="text"><span style="display:flex"><span>root.crt (shared trust anchor)
+</span></span><span style="display:flex"><span>âââ issuer-west.crt + issuer-west.key
+</span></span><span style="display:flex"><span>âââ issuer-east.crt + issuer-east.key
+</span></span><span style="display:flex"><span>âââ issuer-north.crt + issuer-north.key
+</span></span></code></pre></div><p>Per-cluster issuer certs are a production habit worth keeping: if one cluster’s
+issuer is compromised you rotate it in isolation, without touching the others.
+The shared root is what lets cross-cluster mTLS work at all. Every proxy can
+verify every other proxy’s identity back to the same anchor.</p><p>To keep resource usage (and cost) down, this installs the control plane only
+with no Viz add-on.</p><h2 id="step-3-install-multicluster-and-create-a-full-mesh-link-topology">Step 3: Install multicluster and create a full-mesh link topology</h2><p>Set up the multicluster components and create a full-mesh topology between the
+clusters. After this step, every cluster can consume services from every other
+cluster.</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>./scripts/03-multicluster-setup.sh
+</span></span></code></pre></div><p>This is the step with the most going on. We create <strong>six directional links,</strong>
+every cluster linked to every other cluster, so every cluster gets a
+<code>&lt;svc&gt;-federated</code> service for federated workloads, and every cluster can consume
+mirrored services from any other.</p><p>The wrinkle is the gateway. Only <code>east</code> needs one (it’s the only cluster
+exporting <code>analytics</code> hierarchically), so we enable the gateway <em>in east’s
+install</em> and leave everyone else gatewayless. One install per cluster, all flags
+at once, no re-running install a second time to bolt a gateway on afterward:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># west: gatewayless, with one controller per cluster it consumes from</span>
+</span></span><span style="display:flex"><span>linkerd --context west multicluster install --gateway<span style="color:#ff7b72;font-weight:700">=</span>false <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  --set controllers<span style="color:#ff7b72;font-weight:700">[</span>0<span style="color:#ff7b72;font-weight:700">]</span>.link.ref.name<span style="color:#ff7b72;font-weight:700">=</span>east <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  --set controllers<span style="color:#ff7b72;font-weight:700">[</span>1<span style="color:#ff7b72;font-weight:700">]</span>.link.ref.name<span style="color:#ff7b72;font-weight:700">=</span>north <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  --set controllers<span style="color:#ff7b72;font-weight:700">[</span>2<span style="color:#ff7b72;font-weight:700">]</span>.link.ref.name<span style="color:#ff7b72;font-weight:700">=</span>east-gw <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  | kubectl --context west apply -f -
+</span></span><span style="display:flex"></span><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># east: gateway enabled here, controllers for the clusters it consumes</span>
+</span></span><span style="display:flex"><span>linkerd --context east multicluster install --gateway<span style="color:#ff7b72;font-weight:700">=</span>true <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  --set controllers<span style="color:#ff7b72;font-weight:700">[</span>0<span style="color:#ff7b72;font-weight:700">]</span>.link.ref.name<span style="color:#ff7b72;font-weight:700">=</span>west <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  --set controllers<span style="color:#ff7b72;font-weight:700">[</span>1<span style="color:#ff7b72;font-weight:700">]</span>.link.ref.name<span style="color:#ff7b72;font-weight:700">=</span>north <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  | kubectl --context east apply -f -
+</span></span><span style="display:flex"></span><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># north: gatewayless, controllers for west, east, and east's gateway link</span>
+</span></span><span style="display:flex"><span>linkerd --context north multicluster install --gateway<span style="color:#ff7b72;font-weight:700">=</span>false <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  --set controllers<span style="color:#ff7b72;font-weight:700">[</span>0<span style="color:#ff7b72;font-weight:700">]</span>.link.ref.name<span style="color:#ff7b72;font-weight:700">=</span>west <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  --set controllers<span style="color:#ff7b72;font-weight:700">[</span>1<span style="color:#ff7b72;font-weight:700">]</span>.link.ref.name<span style="color:#ff7b72;font-weight:700">=</span>east <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  --set controllers<span style="color:#ff7b72;font-weight:700">[</span>2<span style="color:#ff7b72;font-weight:700">]</span>.link.ref.name<span style="color:#ff7b72;font-weight:700">=</span>east-gw <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  | kubectl --context north apply -f -
+</span></span></code></pre></div><p>Note the controller count. The service-mirror controller runs on the <em>consuming</em>
+side, one per link. <code>west</code> and <code>north</code> each consume <code>analytics</code> via the gateway,
+so they get a third controller for the <code>east-gw</code> link; <code>east</code> doesn’t consume
+its own analytics, so it only needs two.</p><p>Then we generate the links. Flat/federated links use <code>--gateway=false</code>; the
+gateway-aware link to <code>east</code> (for the analytics export) is a <em>separate</em> link
+named <code>east-gw</code>:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># Flat links (no gateway) â for federated + flat-mirrored services</span>
+</span></span><span style="display:flex"><span>linkerd --context east multicluster link-gen --cluster-name<span style="color:#ff7b72;font-weight:700">=</span>east --gateway<span style="color:#ff7b72;font-weight:700">=</span>false <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  | kubectl --context west apply -f -
+</span></span><span style="display:flex"><span>linkerd --context west multicluster link-gen --cluster-name<span style="color:#ff7b72;font-weight:700">=</span>west --gateway<span style="color:#ff7b72;font-weight:700">=</span>false <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  | kubectl --context east apply -f -
+</span></span><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># ... (all six directions)</span>
+</span></span><span style="display:flex"></span><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># Gateway-aware link from east (for the analytics hierarchical export)</span>
+</span></span><span style="display:flex"><span>linkerd --context east multicluster link-gen --cluster-name<span style="color:#ff7b72;font-weight:700">=</span>east-gw <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  | kubectl --context west apply -f -
+</span></span><span style="display:flex"><span>linkerd --context east multicluster link-gen --cluster-name<span style="color:#ff7b72;font-weight:700">=</span>east-gw <span style="color:#79c0ff">\
+</span></span></span><span style="display:flex"><span>  | kubectl --context north apply -f -
+</span></span></code></pre></div><p>After this, <code>linkerd multicluster check</code> on any cluster should report every
+linked cluster healthy.</p><h2 id="step-4-deploy-the-demo-services">Step 4: Deploy the demo services</h2><p>Deploy the demo workloads. The next sections label them for federation, flat
+mirroring, and gateway mirroring and show what each mode creates.</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>./scripts/04-deploy-app.sh
+</span></span></code></pre></div><p>Three services, three modes, and deliberately the same <code>buoyantio/bb</code> image for
+all of them, a tiny HTTP server that echoes a fixed string. The application
+isn’t the point. The point is that one <code>kubectl label</code> changes how Linkerd
+treats the service across clusters, with everything else held constant.</p><h3 id="frontend-federated">frontend (federated)</h3><p>Deploy to all three clusters with a per-cluster response string, then labeled
+for federation:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span><span style="color:#ff7b72">for</span> ctx in west east north; <span style="color:#ff7b72">do</span>
+</span></span><span style="display:flex"><span>  kubectl --context <span style="color:#79c0ff">$ctx</span> -n mc-demo label svc/frontend mirror.linkerd.io/federated<span style="color:#ff7b72;font-weight:700">=</span>member
+</span></span><span style="display:flex"><span><span style="color:#ff7b72">done</span>
+</span></span></code></pre></div><p>Within a few seconds, <code>frontend-federated</code> shows up in all three clusters:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>$ kubectl --context west -n mc-demo get svc
+</span></span><span style="display:flex"><span>NAME                 TYPE        CLUSTER-IP     PORT<span style="color:#ff7b72;font-weight:700">(</span>S<span style="color:#ff7b72;font-weight:700">)</span>    AGE
+</span></span><span style="display:flex"><span>frontend             ClusterIP   10.104.1.50    8080/TCP   45s
+</span></span><span style="display:flex"><span>frontend-federated   ClusterIP   10.104.2.100   8080/TCP   10s
+</span></span></code></pre></div><h3 id="api-flat-mirrored">api (flat-mirrored)</h3><p>Label the api service in <code>west</code> and <code>east</code> for flat export:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>kubectl --context west -n mc-demo label svc/api mirror.linkerd.io/exported<span style="color:#ff7b72;font-weight:700">=</span>remote-discovery
+</span></span><span style="display:flex"><span>kubectl --context east -n mc-demo label svc/api mirror.linkerd.io/exported<span style="color:#ff7b72;font-weight:700">=</span>remote-discovery
+</span></span></code></pre></div><p>Now <code>north</code> can see <code>api-west</code> and <code>api-east</code> as separate services:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>$ kubectl --context north -n mc-demo get svc
+</span></span><span style="display:flex"><span>NAME                 TYPE        CLUSTER-IP      PORT<span style="color:#ff7b72;font-weight:700">(</span>S<span style="color:#ff7b72;font-weight:700">)</span>    AGE
+</span></span><span style="display:flex"><span>frontend             ClusterIP   10.120.1.50     8080/TCP   45s
+</span></span><span style="display:flex"><span>frontend-federated   ClusterIP   10.120.2.100    8080/TCP   10s
+</span></span><span style="display:flex"><span>api-west             ClusterIP   10.120.3.20     8080/TCP   5s
+</span></span><span style="display:flex"><span>api-east             ClusterIP   10.120.3.21     8080/TCP   5s
+</span></span></code></pre></div><p>The client in <code>north</code> picks <code>api-west</code> or <code>api-east</code> explicitly. Traffic will go
+straight to the remote pods with no gateway in the path.</p><h3 id="analytics-gateway-mirrored">analytics (gateway-mirrored)</h3><p>Next, deploy only to <code>east</code>, labeled for hierarchical (gateway) export:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>kubectl --context east -n mc-demo label svc/analytics mirror.linkerd.io/exported<span style="color:#ff7b72;font-weight:700">=</span>true
+</span></span></code></pre></div><p>This creates <code>analytics-east-gw</code> in <code>west</code> and <code>north</code>, routed through east’s
+Linkerd gateway:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>$ kubectl --context west -n mc-demo get svc analytics-east-gw
+</span></span><span style="display:flex"><span>NAME               TYPE        CLUSTER-IP     PORT<span style="color:#ff7b72;font-weight:700">(</span>S<span style="color:#ff7b72;font-weight:700">)</span>    AGE
+</span></span><span style="display:flex"><span>analytics-east-gw  ClusterIP   10.104.5.10    8080/TCP   5s
+</span></span></code></pre></div><p>The endpoints for this service point at east’s gateway IP, not the analytics
+pods directly. That’s the right trade when you can’t guarantee flat-network
+connectivity, or when you specifically want the gateway handling load balancing
+and mTLS termination.</p><h2 id="step-5-verify-all-three-modes">Step 5: Verify all three modes</h2><p>Generate traffic against all three service patterns and verify that each
+resolves the way you expect.</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>./scripts/05-verify.sh
+</span></span></code></pre></div><p>This deploys a traffic generator in <code>north</code> that hits all three service patterns
+in a loop and tails the logs. The response strings come straight from the
+deployments, so you’ll see which cluster served each request:</p><div class="highlight disable-copy"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-text" data-lang="text"><span style="display:flex"><span>[federated]  frontend from east
+</span></span><span style="display:flex"><span>[federated]  frontend from west
+</span></span><span style="display:flex"><span>[federated]  frontend from north
+</span></span><span style="display:flex"><span>[flat-west]  api from west
+</span></span><span style="display:flex"><span>[flat-east]  api from east
+</span></span><span style="display:flex"><span>[gateway]    analytics from east
+</span></span></code></pre></div><p>You can also inspect endpoints to see how differently each mode resolves:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># Federated: endpoints span all three clusters</span>
+</span></span><span style="display:flex"><span>$ linkerd --context west diagnostics endpoints frontend-federated.mc-demo.svc.cluster.local:8080
+</span></span><span style="display:flex"><span>NAMESPACE   IP            PORT   POD                        SERVICE
+</span></span><span style="display:flex"><span>mc-demo     10.100.1.15   <span style="color:#a5d6ff">8080</span>   frontend-xxx-west          frontend.mc-demo
+</span></span><span style="display:flex"><span>mc-demo     10.108.0.42   <span style="color:#a5d6ff">8080</span>   frontend-xxx-east          frontend.mc-demo
+</span></span><span style="display:flex"><span>mc-demo     10.116.0.33   <span style="color:#a5d6ff">8080</span>   frontend-xxx-north         frontend.mc-demo
+</span></span><span style="display:flex"></span><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># Flat mirror: endpoints are the remote pod IPs</span>
+</span></span><span style="display:flex"><span>$ linkerd --context north diagnostics endpoints api-west.mc-demo.svc.cluster.local:8080
+</span></span><span style="display:flex"><span>NAMESPACE   IP            PORT   POD                        SERVICE
+</span></span><span style="display:flex"><span>mc-demo     10.100.2.10   <span style="color:#a5d6ff">8080</span>   api-xxx-west               api.mc-demo
+</span></span><span style="display:flex"></span><span style="display:flex"><span><span style="color:#8b949e;font-style:italic"># Gateway mirror: the endpoint is east's gateway IP on port 4143</span>
+</span></span><span style="display:flex"><span>$ kubectl --context west -n mc-demo get endpoints analytics-east-gw
+</span></span><span style="display:flex"><span>NAME               ENDPOINTS             AGE
+</span></span><span style="display:flex"><span>analytics-east-gw  35.186.xxx.xxx:4143   30s
+</span></span></code></pre></div><p>Three modes, one mesh, one set of clusters, and the only difference between them
+is a label.</p><h2 id="step-6-the-chaos-test-kill-a-cluster">Step 6: The chaos test, kill a cluster</h2><p>This is where federation earns its keep. We simulate a full cluster failure and
+watch how each service type reacts.</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>./scripts/06-chaos-test.sh
+</span></span></code></pre></div><p>The script scales every deployment in <code>east</code> to zero replicas (standing in for a
+cluster outage), then samples traffic from <code>north</code> across all three patterns.</p><h3 id="federated-service-frontend-federated">Federated service (<code>frontend-federated</code>)</h3><div class="highlight disable-copy"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-text" data-lang="text"><span style="display:flex"><span>Before:  west=33% east=33% north=33%
+</span></span><span style="display:flex"><span>After:   west=50% north=50%              â automatic rebalance, zero errors
+</span></span></code></pre></div><p>Traffic redistributes immediately. No errors, no config changes. As east’s pods
+drop out of the endpoint list, Linkerd’s load balancer simply spreads requests
+across what’s left.</p><h3 id="flat-mirrored-service-api-east">Flat-mirrored service (<code>api-east</code>)</h3><div class="highlight disable-copy"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-text" data-lang="text"><span style="display:flex"><span>Before:  api-east responds normally
+</span></span><span style="display:flex"><span>After:   api-east returns 503s           â expected: the remote pods are gone
+</span></span></code></pre></div><p>This is the <em>correct</em> behavior. The client explicitly asked for <code>api-east</code>, and
+east is down. Handling that is the client’s job: fail over to <code>api-west</code>, retry,
+or front the two with a TrafficSplit. Mirroring hands you control; federation
+hands you automation.</p><h3 id="gateway-mirrored-service-analytics-east-gw">Gateway-mirrored service (<code>analytics-east-gw</code>)</h3><div class="highlight disable-copy"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-text" data-lang="text"><span style="display:flex"><span>Before:  analytics-east-gw responds normally
+</span></span><span style="display:flex"><span>After:   analytics-east-gw returns 502s  â the gateway is down too
+</span></span></code></pre></div><p>Same story here, the client asked for a specific remote, and that remote is
+gone.</p><p>Bring east back:</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>kubectl --context east -n mc-demo scale deploy --all --replicas<span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">1</span>
+</span></span><span style="display:flex"><span>kubectl --context east -n mc-demo scale deploy/frontend --replicas<span style="color:#ff7b72;font-weight:700">=</span><span style="color:#a5d6ff">3</span>
+</span></span></code></pre></div><p>(The script restores <code>frontend</code> to its full <code>FRONTEND_REPLICAS</code> count rather
+than leaving it at 1, otherwise east would rejoin the federation under-weighted,
+landing around 14% instead of an even third.) Within 15â30 seconds all three
+patterns recover: the federated service rebalances back to 33/33/33, and the
+mirrored services start answering again.</p><p>The lesson worth carrying out of this: federation is the right default for
+anything that should simply be available everywhere. Mirroring, flat or gateway,
+is the right call when the client genuinely needs to know which cluster it’s
+talking to.</p><h2 id="step-7-teardown">Step 7: Teardown</h2><p>When youâre finished with the demo, run the teardown script to remove all the
+infrastructure and avoid ongoing GCP charges.</p><div class="highlight"><pre style="color:#e6edf3;background-color:#0d1117;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-bash" data-lang="bash"><span style="display:flex"><span>./scripts/99-teardown.sh
+</span></span></code></pre></div><p>This removes all three clusters, the VPC peerings, subnets, firewall rules, and
+VPCs created by the earlier steps. Run it when youâre done so the meter stops.</p><h2 id="selecting-your-linkerd-multicluster-architecture-strategy">Selecting your Linkerd multicluster architecture strategy</h2><p>After running all three side by side, here’s the decision framework I’d hand a
+teammate:</p><table><thead><tr><th>Question</th><th>â Mode</th></tr></thead><tbody><tr><td>Should the client be cluster-agnostic?</td><td><strong>Federated</strong></td></tr><tr><td>Does the client need to pick a specific cluster?</td><td><strong>Flat mirror</strong></td></tr><tr><td>Is there no flat network between clusters?</td><td><strong>Gateway mirror</strong></td></tr><tr><td>Do you need automatic failover with no app changes?</td><td><strong>Federated</strong></td></tr><tr><td>Do you need traffic splitting with explicit weights?</td><td><strong>Flat mirror</strong> + TrafficSplit</td></tr><tr><td>Is the service a singleton (only in one cluster)?</td><td><strong>Mirror</strong> (flat or gateway)</td></tr></tbody></table><p>And you can mix them freely in the same mesh. The label on each service decides
+its behavior independently of the others.</p><h2 id="linkerd-multicluster-gotchas-and-configuration-lessons">Linkerd multicluster gotchas and configuration lessons</h2><p>The gotchas that cost us time and don’t jump out of the docs:</p><p><strong>VPC peering route exchange.</strong> Creating the peering isn’t enough. You have to
+pass <code>--export-custom-routes</code> and <code>--import-custom-routes</code> on <em>both</em> sides, or
+the pod CIDRs never get advertised. The symptom is brutal to diagnose: DNS
+resolves fine, then connections just hang. Maddening to debug.</p><p><strong>Regional clusters multiply your nodes.</strong> A regional cluster with
+<code>--num-nodes 1</code> quietly gives you three nodes (one per zone). We pin
+<code>--node-locations</code> to a single zone to keep it at one. Easy to miss until the
+bill arrives.</p><p><strong>Overlapping CIDRs.</strong> GKE auto-allocates large ranges out of the <code>10.0.0.0/8</code>
+space by default, and three clusters built with defaults will overlap, at which
+point peering fails silently. Always set explicit, non-overlapping
+<code>--cluster-ipv4-cidr</code> and <code>--services-ipv4-cidr</code>.</p><p><strong>Controller count matters.</strong> Each cluster needs one service-mirror controller
+per link it consumes. Miss one and the Link CR is created, but nothing mirrors,
+and <code>linkerd multicluster check</code> still looks green, so you’ll stare at it for a
+while before the penny drops.</p><p><strong>Federated service naming is fixed.</strong> The federated service is always
+<code>&lt;svc&gt;-federated</code>; you can’t change the suffix. Clients have to target
+<code>frontend-federated</code>, not <code>frontend</code>. Plan your naming around it, or use a
+TrafficSplit to point <code>frontend</code> at <code>frontend-federated</code>.</p><p><strong>Gateway and flat can’t share one link.</strong> A single Link CR is either gateway or
+flat, not both. To get both behaviors to the same cluster you create two links
+with different names. That’s why our setup uses <code>east</code> (flat) and <code>east-gw</code>
+(gateway) as separate links, with a matching controller for each on the
+consuming clusters.</p><h2 id="production-checklist">Production checklist</h2><ul><li><strong>Bidirectional links</strong> between all clusters (full mesh) so every cluster has
+the federated service</li><li><strong>cert-manager</strong> with a shared CA instead of hand-rolled <code>step</code> certificates</li><li><strong>Separate issuer certs</strong> per cluster (don’t skip it!)</li><li><strong>NetworkPolicies</strong> restricting cross-cluster traffic to only the services
+that need it</li><li><strong>Linkerd authorization policies</strong> for fine-grained access control</li><li><strong>Monitoring</strong>: pipe Linkerd-Viz metrics into your Prometheus/Grafana stack,
+and alert on a federated service’s endpoint count dropping</li><li><strong>GitOps</strong>: keep Link CRs and multicluster config in version control</li><li><strong>Test failover regularly</strong>: scale a cluster to zero in staging and confirm
+traffic redistributes</li></ul><h2 id="key-takeaways-mastering-multi-region-linkerd-deployments">Key takeaways: Mastering multi-region Linkerd deployments</h2><p>The docs show each multicluster mode in isolation; real platforms need all three
+at once. Federation covers the common case: The same service everywhere,
+automatic failover, and nothing to change in the app. Flat mirrors give you
+explicit, cluster-aware routing when data locality matters. Gateway mirrors get
+you cross-cluster reach when a flat network isn’t on the table.</p><p>What surprised me most about building this is how little of it is genuinely
+complex. It’s mostly wiring. Once the trust anchor is shared and the links are
+up, adding a service to the federation is a single <code>kubectl label</code>, and removing
+a cluster is as simple as letting it go down. The mesh adjusts on its own.</p><p>For teams running across regions, that’s a real chunk of operational toil gone:
+your services run everywhere, traffic finds the healthy copies, and you pick the
+multicluster mode per service based on what that service actually needs.</p><h2 id="references">References</h2><ul><li><a href="/docs/tasks/federated-services/">Linkerd Federated Services Task Guide</a>:
+official walkthrough for federation</li><li><a href="/docs/reference/multicluster/">Linkerd Multicluster Reference</a>: architecture
+and mode details</li><li><a href="/docs/tasks/multicluster/">Linkerd Multicluster Communication Guide</a>:
+hierarchical mirroring walkthrough</li><li><a href="/docs/tasks/installing-multicluster/">Installing Multicluster Components</a>:
+installation reference</li><li><a href="/2024/12/05/announcing-linkerd-2.17/">Linkerd 2.17 Announcement</a>: federated
+services introduction</li><li><a href="https://docs.cloud.google.com/kubernetes-engine/docs/concepts/alias-ips" rel="noopener" target="_blank">GKE VPC-native Clusters</a>:
+flat networking on GCP</li></ul></div></div><div class="blog-post-related"><h2>Suggested Blog Posts</h2><div class="blog-post-related__pages"><div class="card card--horz card--center"><div class="card__media"><div class="thumbnail">
+</div></div><div class="card__body"><div class="card__header"><h4><a href="/2020/02/25/multicluster-kubernetes-with-service-mirroring/">Multicluster Kubernetes with Service Mirroring</a></h4><div class="blog-post-meta"><div class="blog-post-meta__date">Feb 25, 2020 â¢ 10 min read</div></div></div></div></div><div class="card card--horz card--center"><div class="card__media"><div class="thumbnail">
+</div></div><div class="card__body"><div class="card__header"><h4><a href="/2020/02/17/architecting-for-multicluster-kubernetes/">Architecting for Multicluster Kubernetes</a></h4><div class="blog-post-meta"><div class="blog-post-meta__date">Feb 17, 2020 â¢ 6 min read</div></div></div></div></div><div class="card card--horz card--center"><div class="card__media"><div class="thumbnail">
+</div></div><div class="card__body"><div class="card__header"><h4><a href="/2026/06/23/announcing-linkerd-2.20/">Announcing Linkerd 2.20: Rate-limit-aware load balancing, reduced memory usage, better inbound metrics, and more</a></h4><div class="blog-post-meta"><div class="blog-post-meta__date">Jun 23, 2026 â¢ 4 min read</div></div></div></div></div><div class="card card--horz card--center"><div class="card__media"><div class="thumbnail">
+</div></div><div class="card__body"><div class="card__header"><h4><a href="/2026/05/18/the-proxy-died-first/">The Proxy Died First: How Kubernetes Native Sidecars Solve the Service Mesh Shutdown Problem</a></h4><div class="blog-post-meta"><div class="blog-post-meta__date">May 18, 2026 â¢ 8 min read</div></div></div></div></div></div></div></div></div></main>

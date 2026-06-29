@@ -1,0 +1,168 @@
+<article>
+
+<section><p>This post is a Haskell koan. We’ll get to the background and motivation, but the
+goal here is to share a small and uncommon technique that we’ve employed, and
+enjoyed; perfect blog fodder.</p>
+<p>In short, we wrote a type-checked non-empty string constructor, replaced
+thousands of equivalent <code>TemplateHaskell</code> calls, for a ~10% build-time
+improvement in a large and data-heavy package that made many calls to it.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1">before, after, invalidBefore,<span class="ot"> invalidAfter ::</span> <span class="dt">NonEmptyText</span></span>
+<span id="cb1-2">before <span class="ot">=</span> <span class="op">$$</span>(NonEmptyText.make <span class="st">"hello"</span>)</span>
+<span id="cb1-3">after <span class="ot">=</span> NonEmptyText.make <span class="st">"hello"</span></span>
+<span id="cb1-4">invalidBefore <span class="ot">=</span> <span class="op">$$</span>(NonEmptyText.make <span class="st">""</span>) <span class="co">-- ⇝ error during splice evaluation ...</span></span>
+<span id="cb1-5">invalidAfter <span class="ot">=</span> NonEmptyText.make <span class="st">""</span> <span class="co">-- ⇝ type error: expected a non-empty string</span></span></code></pre></div>
+<p>To <strong>make invalid states unrepresentable</strong> is a core design goal of the software
+at Bellroy. With that in mind, a type we often employ for textual data – of
+which we have a lot – is <code>NonEmptyText</code>. It is just what it sounds like: a
+value of this type is a string with at least one character.</p>
+<p>The technique is a result of a convergence of GHC features over the past 15
+years or so. In particular, <code>RequiredTypeArguments</code>, <a href="https://downloads.haskell.org/ghc/9.10.1/docs/users_guide/9.10.1-notes.html">introduced in GHC
+9.10</a>,
+lets us pass a type-level string literal into a function as if it were a value.
+We can throw a custom type error message like <code>"Expected a non-empty string"</code> if
+we (at the type-level) see an empty string; like so:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb2-1"><span class="kw">type</span> <span class="kw">family</span> <span class="dt">IsNonEmptySymbol</span><span class="ot"> symbol ::</span> <span class="dt">Constraint</span> <span class="kw">where</span></span>
+<span id="cb2-2">  <span class="dt">IsNonEmptySymbol</span> <span class="st">""</span> <span class="ot">=</span> <span class="dt">Unsatisfiable</span> (<span class="dt">Text</span> <span class="st">"Expected a non-empty string"</span>)</span>
+<span id="cb2-3">  <span class="dt">IsNonEmptySymbol</span> _ <span class="ot">=</span> (<span class="ot">()::</span><span class="dt">Constraint</span>) <span class="co">-- empty constraint is always satisfied</span></span>
+<span id="cb2-4">  </span>
+<span id="cb2-5"><span class="co">-- Note previous syntax without RequiredTypeArguments:</span></span>
+<span id="cb2-6"><span class="co">-- make :: forall symbol. IsNonEmptySymbol symbol =&gt; NonEmptyText</span></span>
+<span id="cb2-7"><span class="co">-- with usage like `make @"hello!"`</span></span>
+<span id="cb2-8"></span>
+<span id="cb2-9"><span class="ot">make ::</span> <span class="kw">forall</span> symbol <span class="ot">-&gt;</span> (<span class="dt">IsNonEmptySymbol</span> symbol) <span class="ot">=&gt;</span> <span class="dt">NonEmptyText</span></span>
+<span id="cb2-10">make symbol <span class="ot">=</span> <span class="dt">NonEmptyText</span> (fromString (symbolVal (<span class="dt">Proxy</span><span class="ot"> ::</span> <span class="dt">Proxy</span> symbol)))</span>
+<span id="cb2-11"></span>
+<span id="cb2-12"><span class="ot">test ::</span> <span class="dt">NonEmptyText</span></span>
+<span id="cb2-13">test <span class="ot">=</span> make <span class="st">"hello!"</span></span></code></pre></div>
+<p>Which, with the right <code>LANGUAGE</code> incantations, does actually work. This requires
+<code>UndecidableInstances</code> to work, which is not harmful in and of itself, but does
+open up the possibilities of what can go wrong<a class="footnote-ref" href="#fn1" id="fnref1" role="doc-noteref"><sup>1</sup></a>.</p>
+<p>Additionally, since <code>IsNonEmptySymbol</code> is a type family, it can’t directly be
+used like an ordinary typeclass constraint – for instance, it can’t be packaged
+into a <code>Dict</code>, or used with functions like <code>Data.SOP.hcfoldMap</code>; it’s not
+something you can just “ask for an instance of” like an ordinary typeclass,
+despite returning a <code>Constraint</code> like one.</p>
+<p>The final step then to this trick is writing <code>IsNonEmptySymbol</code> as a typeclass:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb3-1"><span class="kw">class</span> <span class="dt">IsNonEmptySymbol</span> symbol</span>
+<span id="cb3-2"><span class="kw">instance</span> <span class="ot">{-# OVERLAPPING #-}</span> <span class="dt">Unsatisfiable</span> (<span class="dt">Text</span> <span class="st">"Expected a non-empty string"</span>) <span class="ot">=&gt;</span> <span class="dt">IsNonEmptySymbol</span> <span class="st">""</span></span>
+<span id="cb3-3"><span class="kw">instance</span> <span class="dt">IsNonEmptySymbol</span> a</span>
+<span id="cb3-4"></span>
+<span id="cb3-5"><span class="co">-- make: same as above</span></span>
+<span id="cb3-6"><span class="ot">make ::</span> <span class="kw">forall</span> symbol <span class="ot">-&gt;</span> (<span class="dt">IsNonEmptySymbol</span> symbol) <span class="ot">=&gt;</span> <span class="dt">NonEmptyText</span></span>
+<span id="cb3-7">make symbol <span class="ot">=</span> <span class="dt">NonEmptyText</span> (fromString (symbolVal (<span class="dt">Proxy</span><span class="ot"> ::</span> <span class="dt">Proxy</span> symbol)))</span></code></pre></div>
+<p>When GHC resolves the <code>IsNonEmptySymbol</code> constraint given an empty string, it
+finds both: <code>_ =&gt; instance IsNonEmptySymbol ""</code> and <code>instance IsNonEmptySymbol a</code>. If we omitted the <code>OVERLAPPING</code> pragma, that would be where GHC raises an
+error; it wouldn’t know which instance to actually choose, and would complain
+that there are overlapping possibilities – which is fine, since the only case
+where there is an overlapping instance is in the case we want to forbid, when
+the input is <code>""</code>.</p>
+<p>So the effect of the <code>OVERLAPPING</code> pragma here is that GHC is does choose the
+instance we “want”; the one with the custom type error. The instance then raises
+our custom error message informing the user that a non-empty string was
+expected.</p>
+<h1 id="impact">Impact</h1>
+<p>Our internal <code>bellroy-data</code> package – containing data such as information about
+known freight and shipping providers, accounting systems, product data, tax
+codes, etc. – had thousands of TH splices like <code>$$(NonEmptyText.makeTH _)</code>.
+Moving to the <code>RequiredTypeArgument</code> approach shaved off around 10% of the
+compilation time for that package.</p>
+<h1 id="similar-cases-we-can-employ-this-trick">Similar cases we can employ this trick</h1>
+<p>We can re-use (almost) the exact same code to validate that a given <code>Natural</code> is
+positive to make a type-checked <code>Positive</code> constructor. In general we can use
+this technique for <em>any</em> type we can define a type-level predicate for.</p>
+<p>From here you might be able to imagine, for instance, type-level string parsing
+to define for instance type-safe term syntax for constructing URIs: it will
+work, but you’ll run into GHC’s default reduction limit of 20 quite quickly; an
+<em>O(n)</em> type-level validator over a <em>n</em>-length string has a hard-cap of 20
+“reduction” (i.e., parsing) steps and thus parsing cannot proceed beyond 20
+characters – that is, also assuming your parsing steps themselves aren’t
+counting towards that limit.</p>
+<p>In general non-trivial algorithms are also quite awkward to express in type
+families; you have no way to write <code>let</code>-bindings for instance, or do pattern
+matching with a <code>case</code>-like syntax: if you need either, they must be expressed
+with some combination of extra type arguments and helper type families. This
+also needs a bit of plumbing to work as a typeclass as in the above
+<code>IsNonEmptySymbol</code> class we created.</p>
+<p>Nevertheless, if you’ve gotten this far, you’re probably interested in what that
+can look like: behold 🪄, type-level parsing for DynamoDB table-names:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb4-1"><span class="ot">{-# LANGUAGE DataKinds #-}</span></span>
+<span id="cb4-2"><span class="ot">{-# LANGUAGE QuantifiedConstraints #-}</span></span>
+<span id="cb4-3"><span class="ot">{-# LANGUAGE RequiredTypeArguments #-}</span></span>
+<span id="cb4-4"><span class="ot">{-# LANGUAGE TypeFamilies #-}</span></span>
+<span id="cb4-5"><span class="ot">{-# LANGUAGE UndecidableInstances #-}</span></span>
+<span id="cb4-6"><span class="kw">import</span> <span class="dt">Data.Proxy</span></span>
+<span id="cb4-7"><span class="kw">import</span> <span class="dt">Data.String</span> (fromString)</span>
+<span id="cb4-8"><span class="kw">import</span> <span class="dt">Data.Text</span> (<span class="dt">Text</span>)</span>
+<span id="cb4-9"><span class="kw">import</span> <span class="dt">Data.Type.Bool</span> <span class="kw">qualified</span> <span class="kw">as</span> <span class="dt">Bool</span></span>
+<span id="cb4-10"><span class="kw">import</span> <span class="dt">GHC.TypeError</span></span>
+<span id="cb4-11"><span class="kw">import</span> <span class="dt">GHC.TypeLits</span></span>
+<span id="cb4-12"></span>
+<span id="cb4-13"><span class="co">-- | Valid DynamoDB table names must match regex /^[a-zA-Z_.-]{3,255}$/</span></span>
+<span id="cb4-14"><span class="kw">newtype</span> <span class="dt">TableName</span> <span class="ot">=</span> <span class="dt">TableName</span> <span class="dt">Text</span></span>
+<span id="cb4-15">  <span class="kw">deriving</span> (<span class="dt">Show</span>)</span>
+<span id="cb4-16"></span>
+<span id="cb4-17"><span class="ot">make ::</span> <span class="kw">forall</span> name <span class="ot">-&gt;</span> (<span class="dt">IsValidTableName</span> name) <span class="ot">=&gt;</span> <span class="dt">TableName</span></span>
+<span id="cb4-18">make name <span class="ot">=</span> <span class="dt">TableName</span> (fromString (symbolVal (<span class="dt">Proxy</span><span class="ot"> ::</span> <span class="dt">Proxy</span> name)))</span></code></pre></div>
+<p>So far, so good. But enumerating every single invalid string will take some
+time; we need an algorithmic approach rather than how <code>IsNonEmptySymbol</code> worked
+above. As above, we’d prefer to encapsulate this into a typeclass of kind <code>Type -&gt; Constraint</code>. The approach I use here is to use a type-family to direct the
+resolution of an inner typeclass. So this approach works as a unary typeclass
+(desirable) <em>and</em> surfaces custom type error messages to the programmer
+(excellent).</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb5-1"><span class="kw">class</span> (<span class="dt">KnownSymbol</span> a) <span class="ot">=&gt;</span> <span class="dt">IsValidTableName</span> a</span>
+<span id="cb5-2"><span class="kw">instance</span> (<span class="dt">KnownSymbol</span> a, <span class="dt">IsValidTableName_</span> validity a) <span class="ot">=&gt;</span> <span class="dt">IsValidTableName</span> a</span>
+<span id="cb5-3"></span>
+<span id="cb5-4"><span class="co">-- | Wrapper class which produces nice error messages</span></span>
+<span id="cb5-5"><span class="co">--</span></span>
+<span id="cb5-6"><span class="co">-- The `wasValid` parameter is computed by the `IsValidTableName__` type </span></span>
+<span id="cb5-7"><span class="co">-- family. We can then direct GHC into either a no-op instance (success),</span></span>
+<span id="cb5-8"><span class="co">-- or an instance which throws a somewhat informative error.</span></span>
+<span id="cb5-9"><span class="kw">class</span> (<span class="dt">IsValidTableName__</span> a <span class="op">~</span> wasValid) <span class="ot">=&gt;</span> <span class="dt">IsValidTableName_</span> (<span class="ot">wasValid ::</span> <span class="dt">Bool</span>) a</span>
+<span id="cb5-10"><span class="kw">instance</span> (<span class="dt">IsValidTableName__</span> a <span class="op">~</span> <span class="dt">'True</span>) <span class="ot">=&gt;</span> <span class="dt">IsValidTableName_</span> <span class="dt">'True</span> a</span>
+<span id="cb5-11"><span class="kw">instance</span> (<span class="dt">Unsatisfiable</span> (<span class="dt">'Text</span> <span class="st">"Encountered invalid TableName"</span>)) <span class="ot">=&gt;</span> <span class="dt">IsValidTableName_</span> <span class="dt">'False</span> a</span></code></pre></div>
+<p>Now we actually need to implement this <code>IsValidTableName__</code> type family which
+looks like <code>IsValidTableName__ (input :: Symbol) :: Bool</code>.</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb6-1"><span class="kw">type</span> <span class="dt">IsValidTableName__</span> text <span class="ot">=</span> <span class="dt">IsValidTableName_go</span> <span class="dv">0</span> <span class="dt">'Nothing</span> (<span class="dt">UnconsSymbol</span> text)</span>
+<span id="cb6-2"></span>
+<span id="cb6-3"><span class="co">-- inner loop for IsValidTableName__</span></span>
+<span id="cb6-4"><span class="kw">type</span> <span class="kw">family</span> <span class="dt">IsValidTableName_go</span> (<span class="ot">len ::</span> <span class="dt">Nat</span>) (<span class="ot">invalidLastChar ::</span> <span class="dt">Maybe</span> <span class="dt">Char</span>) (<span class="ot">unconsResult ::</span> <span class="dt">Maybe</span> (<span class="dt">Char</span>, <span class="dt">Symbol</span>))<span class="ot"> ::</span> <span class="dt">Bool</span> <span class="kw">where</span></span>
+<span id="cb6-5">  <span class="dt">IsValidTableName_go</span> len <span class="dt">'Nothing</span> (<span class="dt">'Just</span> '(x, xs)) <span class="ot">=</span> <span class="dt">IsValidTableName_go</span> (len <span class="op">+</span> <span class="dv">1</span>) (<span class="dt">InvalidTableChar</span> x) (<span class="dt">UnconsSymbol</span> xs)</span>
+<span id="cb6-6">  <span class="dt">IsValidTableName_go</span> len <span class="dt">'Nothing</span> _ <span class="ot">=</span> (<span class="dv">3</span> <span class="op">&lt;=?</span> len) <span class="dt">Bool</span><span class="op">.&amp;&amp;</span> (len <span class="op">&lt;=?</span> <span class="dv">255</span>)</span>
+<span id="cb6-7">  <span class="dt">IsValidTableName_go</span> len (<span class="dt">'Just</span> invalidChar) _ <span class="ot">=</span> <span class="dt">'False</span></span>
+<span id="cb6-8"></span>
+<span id="cb6-9"><span class="co">-- check individual characters for validity</span></span>
+<span id="cb6-10"><span class="kw">type</span> <span class="kw">family</span> <span class="dt">InvalidTableChar</span> (<span class="ot">ch ::</span> <span class="dt">Char</span>)<span class="ot"> ::</span> <span class="dt">Maybe</span> <span class="dt">Char</span> <span class="kw">where</span></span>
+<span id="cb6-11">  <span class="dt">InvalidTableChar</span> ch <span class="ot">=</span> <span class="dt">Bool</span><span class="op">.</span><span class="dt">If</span> (<span class="dt">IsValidTableChar</span> ch) <span class="dt">'Nothing</span> (<span class="dt">'Just</span> ch)</span>
+<span id="cb6-12"></span>
+<span id="cb6-13"><span class="kw">type</span> <span class="kw">family</span> <span class="dt">IsValidTableChar</span> (<span class="ot">ch ::</span> <span class="dt">Char</span>)<span class="ot"> ::</span> <span class="dt">Bool</span> <span class="kw">where</span></span>
+<span id="cb6-14">  <span class="dt">IsValidTableChar</span> <span class="ch">'-'</span> <span class="ot">=</span> <span class="dt">'True</span></span>
+<span id="cb6-15">  <span class="dt">IsValidTableChar</span> <span class="ch">'_'</span> <span class="ot">=</span> <span class="dt">'True</span></span>
+<span id="cb6-16">  <span class="dt">IsValidTableChar</span> <span class="ch">'.'</span> <span class="ot">=</span> <span class="dt">'True</span></span>
+<span id="cb6-17">  <span class="dt">IsValidTableChar</span> ch <span class="ot">=</span></span>
+<span id="cb6-18">    (<span class="ch">'a'</span> <span class="op">&lt;=?</span> ch <span class="dt">Bool</span><span class="op">.&amp;&amp;</span> ch <span class="op">&lt;=?</span> <span class="ch">'z'</span>)</span>
+<span id="cb6-19">      <span class="dt">Bool</span><span class="op">.||</span> (<span class="ch">'A'</span> <span class="op">&lt;=?</span> ch <span class="dt">Bool</span><span class="op">.&amp;&amp;</span> ch <span class="op">&lt;=?</span> <span class="ch">'Z'</span>)</span>
+<span id="cb6-20">      <span class="dt">Bool</span><span class="op">.||</span> (<span class="ch">'0'</span> <span class="op">&lt;=?</span> ch <span class="dt">Bool</span><span class="op">.&amp;&amp;</span> ch <span class="op">&lt;=?</span> <span class="ch">'9'</span>)</span></code></pre></div>
+<p>Finally, we can actually use this:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb7-1">valid, invalid,<span class="ot"> invalid2 ::</span> <span class="dt">TableName</span></span>
+<span id="cb7-2">valid <span class="ot">=</span> make <span class="st">"hello-bellroy123"</span></span>
+<span id="cb7-3">invalid <span class="ot">=</span> make <span class="st">"no"</span> <span class="co">-- error! "Encountered invalid TableName"</span></span>
+<span id="cb7-4">invalid2 <span class="ot">=</span> make <span class="st">"tablename!!"</span> <span class="co">-- error! "Encountered invalid TableName"</span></span></code></pre></div>
+<h1 id="concluding-remarks">Concluding remarks</h1>
+<p>The <code>singletons-th</code> package could be used here to promote actual term-level
+functions like the <code>IsValidTableName</code> function, but a point here is to
+demonstrate how that would actually work under the hood.</p>
+<p>There is an inexorable march towards <a href="https://ghc.serokell.io/dh">Dependent
+Haskell</a> which is slowly-but-surely inching closer
+to reality with every major GHC release. Languages like Idris and Lean have it
+today, but for better or worse, Haskell is the language in this space with the
+most adoption and inertia. GHC developers: please continue! 🙂</p>
+<section class="footnotes footnotes-end-of-document" id="footnotes" role="doc-endnotes">
+
+<ol>
+<li id="fn1"><p><a href="https://functor.tokyo/blog/2017-04-07-undecidable-instances">Dennis
+Gosnell</a> has a
+great blog-post detailing <code>UndecidableInstances</code> and details a use-case
+where it is quite dangerous.<a class="footnote-back" href="#fnref1" role="doc-backlink">↩︎</a></p></li>
+</ol>
+</section></section>
+</article>

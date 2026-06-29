@@ -1,0 +1,739 @@
+This post is a Haskell koan. We’ll get to the background and motivation, but the
+goal here is to share a small and uncommon technique that we’ve employed, and
+enjoyed; perfect blog fodder.
+
+In short, we wrote a type-checked non-empty string constructor, replaced
+thousands of equivalent 
+TemplateHaskell
+ calls, for a ~10% build-time
+improvement in a large and data-heavy package that made many calls to it.
+
+before, after, invalidBefore,
+ invalidAfter ::
+ 
+NonEmptyText
+
+before 
+=
+ 
+$$
+(NonEmptyText.make 
+"hello"
+)
+
+after 
+=
+ NonEmptyText.make 
+"hello"
+
+invalidBefore 
+=
+ 
+$$
+(NonEmptyText.make 
+""
+) 
+-- ⇝ error during splice evaluation ...
+
+invalidAfter 
+=
+ NonEmptyText.make 
+""
+ 
+-- ⇝ type error: expected a non-empty string
+
+To 
+make invalid states unrepresentable
+ is a core design goal of the software
+at Bellroy. With that in mind, a type we often employ for textual data – of
+which we have a lot – is 
+NonEmptyText
+. It is just what it sounds like: a
+value of this type is a string with at least one character.
+
+The technique is a result of a convergence of GHC features over the past 15
+years or so. In particular, 
+RequiredTypeArguments
+, 
+introduced in GHC
+9.10
+,
+lets us pass a type-level string literal into a function as if it were a value.
+We can throw a custom type error message like 
+"Expected a non-empty string"
+ if
+we (at the type-level) see an empty string; like so:
+
+type
+ 
+family
+ 
+IsNonEmptySymbol
+ symbol ::
+ 
+Constraint
+ 
+where
+
+IsNonEmptySymbol
+ 
+""
+ 
+=
+ 
+Unsatisfiable
+ (
+Text
+ 
+"Expected a non-empty string"
+)
+
+IsNonEmptySymbol
+ _ 
+=
+ (
+()::
+Constraint
+) 
+-- empty constraint is always satisfied
+
+-- Note previous syntax without RequiredTypeArguments:
+
+-- make :: forall symbol. IsNonEmptySymbol symbol => NonEmptyText
+
+-- with usage like `make @"hello!"`
+
+make ::
+ 
+forall
+ symbol 
+->
+ (
+IsNonEmptySymbol
+ symbol) 
+=>
+ 
+NonEmptyText
+
+make symbol 
+=
+ 
+NonEmptyText
+ (fromString (symbolVal (
+Proxy
+ ::
+ 
+Proxy
+ symbol)))
+
+test ::
+ 
+NonEmptyText
+
+test 
+=
+ make 
+"hello!"
+
+Which, with the right 
+LANGUAGE
+ incantations, does actually work. This requires
+
+UndecidableInstances
+ to work, which is not harmful in and of itself, but does
+open up the possibilities of what can go wrong
+1
+.
+
+Additionally, since 
+IsNonEmptySymbol
+ is a type family, it can’t directly be
+used like an ordinary typeclass constraint – for instance, it can’t be packaged
+into a 
+Dict
+, or used with functions like 
+Data.SOP.hcfoldMap
+; it’s not
+something you can just “ask for an instance of” like an ordinary typeclass,
+despite returning a 
+Constraint
+ like one.
+
+The final step then to this trick is writing 
+IsNonEmptySymbol
+ as a typeclass:
+
+class
+ 
+IsNonEmptySymbol
+ symbol
+
+instance
+ 
+{-# OVERLAPPING #-}
+ 
+Unsatisfiable
+ (
+Text
+ 
+"Expected a non-empty string"
+) 
+=>
+ 
+IsNonEmptySymbol
+ 
+""
+
+instance
+ 
+IsNonEmptySymbol
+ a
+
+-- make: same as above
+
+make ::
+ 
+forall
+ symbol 
+->
+ (
+IsNonEmptySymbol
+ symbol) 
+=>
+ 
+NonEmptyText
+
+make symbol 
+=
+ 
+NonEmptyText
+ (fromString (symbolVal (
+Proxy
+ ::
+ 
+Proxy
+ symbol)))
+
+When GHC resolves the 
+IsNonEmptySymbol
+ constraint given an empty string, it
+finds both: 
+_ => instance IsNonEmptySymbol ""
+ and 
+instance IsNonEmptySymbol a
+. If we omitted the 
+OVERLAPPING
+ pragma, that would be where GHC raises an
+error; it wouldn’t know which instance to actually choose, and would complain
+that there are overlapping possibilities – which is fine, since the only case
+where there is an overlapping instance is in the case we want to forbid, when
+the input is 
+""
+.
+
+So the effect of the 
+OVERLAPPING
+ pragma here is that GHC is does choose the
+instance we “want”; the one with the custom type error. The instance then raises
+our custom error message informing the user that a non-empty string was
+expected.
+
+Impact
+
+Our internal 
+bellroy-data
+ package – containing data such as information about
+known freight and shipping providers, accounting systems, product data, tax
+codes, etc. – had thousands of TH splices like 
+$$(NonEmptyText.makeTH _)
+.
+Moving to the 
+RequiredTypeArgument
+ approach shaved off around 10% of the
+compilation time for that package.
+
+Similar cases we can employ this trick
+
+We can re-use (almost) the exact same code to validate that a given 
+Natural
+ is
+positive to make a type-checked 
+Positive
+ constructor. In general we can use
+this technique for 
+any
+ type we can define a type-level predicate for.
+
+From here you might be able to imagine, for instance, type-level string parsing
+to define for instance type-safe term syntax for constructing URIs: it will
+work, but you’ll run into GHC’s default reduction limit of 20 quite quickly; an
+
+O(n)
+ type-level validator over a 
+n
+-length string has a hard-cap of 20
+“reduction” (i.e., parsing) steps and thus parsing cannot proceed beyond 20
+characters – that is, also assuming your parsing steps themselves aren’t
+counting towards that limit.
+
+In general non-trivial algorithms are also quite awkward to express in type
+families; you have no way to write 
+let
+-bindings for instance, or do pattern
+matching with a 
+case
+-like syntax: if you need either, they must be expressed
+with some combination of extra type arguments and helper type families. This
+also needs a bit of plumbing to work as a typeclass as in the above
+
+IsNonEmptySymbol
+ class we created.
+
+Nevertheless, if you’ve gotten this far, you’re probably interested in what that
+can look like: behold 🪄, type-level parsing for DynamoDB table-names:
+
+{-# LANGUAGE DataKinds #-}
+
+{-# LANGUAGE QuantifiedConstraints #-}
+
+{-# LANGUAGE RequiredTypeArguments #-}
+
+{-# LANGUAGE TypeFamilies #-}
+
+{-# LANGUAGE UndecidableInstances #-}
+
+import
+ 
+Data.Proxy
+
+import
+ 
+Data.String
+ (fromString)
+
+import
+ 
+Data.Text
+ (
+Text
+)
+
+import
+ 
+Data.Type.Bool
+ 
+qualified
+ 
+as
+ 
+Bool
+
+import
+ 
+GHC.TypeError
+
+import
+ 
+GHC.TypeLits
+
+-- | Valid DynamoDB table names must match regex /^[a-zA-Z_.-]{3,255}$/
+
+newtype
+ 
+TableName
+ 
+=
+ 
+TableName
+ 
+Text
+
+deriving
+ (
+Show
+)
+
+make ::
+ 
+forall
+ name 
+->
+ (
+IsValidTableName
+ name) 
+=>
+ 
+TableName
+
+make name 
+=
+ 
+TableName
+ (fromString (symbolVal (
+Proxy
+ ::
+ 
+Proxy
+ name)))
+
+So far, so good. But enumerating every single invalid string will take some
+time; we need an algorithmic approach rather than how 
+IsNonEmptySymbol
+ worked
+above. As above, we’d prefer to encapsulate this into a typeclass of kind 
+Type -> Constraint
+. The approach I use here is to use a type-family to direct the
+resolution of an inner typeclass. So this approach works as a unary typeclass
+(desirable) 
+and
+ surfaces custom type error messages to the programmer
+(excellent).
+
+class
+ (
+KnownSymbol
+ a) 
+=>
+ 
+IsValidTableName
+ a
+
+instance
+ (
+KnownSymbol
+ a, 
+IsValidTableName_
+ validity a) 
+=>
+ 
+IsValidTableName
+ a
+
+-- | Wrapper class which produces nice error messages
+
+--
+
+-- The `wasValid` parameter is computed by the `IsValidTableName__` type 
+
+-- family. We can then direct GHC into either a no-op instance (success),
+
+-- or an instance which throws a somewhat informative error.
+
+class
+ (
+IsValidTableName__
+ a 
+~
+ wasValid) 
+=>
+ 
+IsValidTableName_
+ (
+wasValid ::
+ 
+Bool
+) a
+
+instance
+ (
+IsValidTableName__
+ a 
+~
+ 
+'True
+) 
+=>
+ 
+IsValidTableName_
+ 
+'True
+ a
+
+instance
+ (
+Unsatisfiable
+ (
+'Text
+ 
+"Encountered invalid TableName"
+)) 
+=>
+ 
+IsValidTableName_
+ 
+'False
+ a
+
+Now we actually need to implement this 
+IsValidTableName__
+ type family which
+looks like 
+IsValidTableName__ (input :: Symbol) :: Bool
+.
+
+type
+ 
+IsValidTableName__
+ text 
+=
+ 
+IsValidTableName_go
+ 
+0
+ 
+'Nothing
+ (
+UnconsSymbol
+ text)
+
+-- inner loop for IsValidTableName__
+
+type
+ 
+family
+ 
+IsValidTableName_go
+ (
+len ::
+ 
+Nat
+) (
+invalidLastChar ::
+ 
+Maybe
+ 
+Char
+) (
+unconsResult ::
+ 
+Maybe
+ (
+Char
+, 
+Symbol
+))
+ ::
+ 
+Bool
+ 
+where
+
+IsValidTableName_go
+ len 
+'Nothing
+ (
+'Just
+ '(x, xs)) 
+=
+ 
+IsValidTableName_go
+ (len 
++
+ 
+1
+) (
+InvalidTableChar
+ x) (
+UnconsSymbol
+ xs)
+
+IsValidTableName_go
+ len 
+'Nothing
+ _ 
+=
+ (
+3
+ 
+<=?
+ len) 
+Bool
+.&&
+ (len 
+<=?
+ 
+255
+)
+
+IsValidTableName_go
+ len (
+'Just
+ invalidChar) _ 
+=
+ 
+'False
+
+-- check individual characters for validity
+
+type
+ 
+family
+ 
+InvalidTableChar
+ (
+ch ::
+ 
+Char
+)
+ ::
+ 
+Maybe
+ 
+Char
+ 
+where
+
+InvalidTableChar
+ ch 
+=
+ 
+Bool
+.
+If
+ (
+IsValidTableChar
+ ch) 
+'Nothing
+ (
+'Just
+ ch)
+
+type
+ 
+family
+ 
+IsValidTableChar
+ (
+ch ::
+ 
+Char
+)
+ ::
+ 
+Bool
+ 
+where
+
+IsValidTableChar
+ 
+'-'
+ 
+=
+ 
+'True
+
+IsValidTableChar
+ 
+'_'
+ 
+=
+ 
+'True
+
+IsValidTableChar
+ 
+'.'
+ 
+=
+ 
+'True
+
+IsValidTableChar
+ ch 
+=
+
+    (
+'a'
+ 
+<=?
+ ch 
+Bool
+.&&
+ ch 
+<=?
+ 
+'z'
+)
+
+Bool
+.||
+ (
+'A'
+ 
+<=?
+ ch 
+Bool
+.&&
+ ch 
+<=?
+ 
+'Z'
+)
+
+Bool
+.||
+ (
+'0'
+ 
+<=?
+ ch 
+Bool
+.&&
+ ch 
+<=?
+ 
+'9'
+)
+
+Finally, we can actually use this:
+
+valid, invalid,
+ invalid2 ::
+ 
+TableName
+
+valid 
+=
+ make 
+"hello-bellroy123"
+
+invalid 
+=
+ make 
+"no"
+ 
+-- error! "Encountered invalid TableName"
+
+invalid2 
+=
+ make 
+"tablename!!"
+ 
+-- error! "Encountered invalid TableName"
+
+Concluding remarks
+
+The 
+singletons-th
+ package could be used here to promote actual term-level
+functions like the 
+IsValidTableName
+ function, but a point here is to
+demonstrate how that would actually work under the hood.
+
+There is an inexorable march towards 
+Dependent
+Haskell
+ which is slowly-but-surely inching closer
+to reality with every major GHC release. Languages like Idris and Lean have it
+today, but for better or worse, Haskell is the language in this space with the
+most adoption and inertia. GHC developers: please continue! 🙂
+
+Dennis
+Gosnell
+ has a
+great blog-post detailing 
+UndecidableInstances
+ and details a use-case
+where it is quite dangerous.
+↩︎
