@@ -1,0 +1,243 @@
+<main class="panels">
+<!-- QSOE OS -->
+<section aria-labelledby="tab-qsoe" class="panel is-active" id="qsoe" role="tabpanel" tabindex="0">
+<h2>QSOE</h2>
+<p class="lead">A QNX-inspired operating system with selectable kernels.</p>
+<p class="news"><strong>News:</strong> QSOE 0.1 is out — the first public release of
+           the unified two-kernel system (June 2026).
+           <a href="https://qsoe-dev.blogspot.com/2026/06/qsoe-project-v01-is-released.html">Read the
+           announcement →</a></p>
+<p>QSOE ships in two variants that share one userspace and one build system.
+           <span class="mono">QSOE/N</span> runs on <strong>Skimmer</strong>, a microkernel written
+           from scratch for this project (SMP by design); <span class="mono">QSOE/L</span> runs on
+           <strong>seL4</strong> as its kernel.</p>
+<p>Both variants, when compiled, offer the kernel and initrd files directly usable in
+           e.g. U-Boot loader. The userspace is <strong>100% identical</strong> across
+           both variants; the only parts produced per-kernel are <code>taskman</code>, the task
+           manager, and <code>libc.so</code> — the C library, which is around 85% shared at the source
+           level and diverges only at the thin layer where it meets the kernel.</p>
+<p>The design follows the QNX Neutrino tradition: a small kernel with everything else in
+           userspace, synchronous message-passing IPC, and the resource-manager model for services.</p>
+<p>QSOE targets 64-bit RISC-V (<code>RV64</code>, <code>Sv39</code>) on the SiFive HiFive
+           Unmatched (<code>FU740</code>), with QEMU used for day-to-day development. Both QSOE variants
+           now boot on real hardware. Released under Apache-2.0.</p>
+<div class="meta-row">
+<a href="https://gitlab.com/qsoe/os">gitlab.com/qsoe/os</a>
+<a href="https://qsoe-dev.blogspot.com">dev blog</a>
+</div>
+<div class="folds">
+<details class="fold">
+<summary>Downloads</summary>
+<div class="fold-body">
+<p>QSOE can be built from source or installed from pre-built binaries. Ready-made
+                 images for each release are published at
+                 <a href="https://github.com/qsoe-dev/dl">github.com/qsoe-dev/dl</a>
+                 (current release: <strong>0.1</strong>). The files are:</p>
+<ul class="tidy dl-list">
+<li><a href="https://github.com/qsoe-dev/dl/raw/main/releases/0.1/bin/skimmer.bin"><code>skimmer.bin</code></a>
+                    — the Skimmer microkernel: the kernel of the <strong>QSOE/N</strong> variant. A raw
+                    binary image, loaded by the bootloader (or QEMU) together with the userspace package below.</li>
+<li><a href="https://github.com/qsoe-dev/dl/raw/main/releases/0.1/bin/modpkg.cpio"><code>modpkg.cpio</code></a>
+                    — the module package: the shared QSOE userspace (taskman, <code>init</code>, the C library,
+                    the shell, drivers and utilities) as a CPIO archive. <strong>QSOE/N</strong> boots it as an
+                    initrd alongside <code>skimmer.bin</code>.</li>
+<li><a href="https://github.com/qsoe-dev/dl/raw/main/releases/0.1/bin/qsoe-l-qemu.elf"><code>qsoe-l-qemu.elf</code></a>
+                    — the <strong>QSOE/L</strong> variant (on the seL4 kernel) as a single, self-contained ELF
+                    for the QEMU <code>virt</code> machine. It bundles the elfloader, the seL4 kernel, taskman and
+                    the userspace together — nothing else is needed to boot.</li>
+<li><a href="https://github.com/qsoe-dev/dl/raw/main/releases/0.1/bin/qsoe-l-sifive.elf"><code>qsoe-l-sifive.elf</code></a>
+                    — the same QSOE/L image, built for the SiFive HiFive Unmatched (FU740) board.</li>
+<li><a href="https://github.com/qsoe-dev/dl/raw/main/releases/0.1/bin/mrbml-riscv64.efi"><code>mrbml-riscv64.efi</code></a>
+                    — <strong>mr-bml</strong>, QSOE's own bootloader (an EFI application for RISC-V). It
+                    can load either variant and drives the boot menu on real hardware.</li>
+<li><a href="https://github.com/qsoe-dev/dl/raw/main/releases/0.1/bin/nvme.img.gz"><code>nvme.img.gz</code></a>
+                    — a ready-to-run, self-booting QEMU disk image (GPT). Its EFI partition holds
+                    <code>mr-bml</code>, and an on-disk root holds both kernels — so QEMU boots straight to the
+                    mr-bml menu, no <code>-kernel</code> needed. The fastest way to see QSOE run; see
+                    <strong>Running under QEMU</strong> below.</li>
+<li><a href="https://github.com/qsoe-dev/dl/raw/main/releases/0.1/bin/virtio.img.gz"><code>virtio.img.gz</code></a>
+                    — a companion root disk used <em>only</em> when running <strong>QSOE/L</strong> under QEMU
+                    (stock seL4 predates the interrupt controller QEMU's NVMe needs, so it mounts its root from a
+                    virtio disk instead). Not needed for QSOE/N or for real hardware.</li>
+</ul>
+<p>In short: to <strong>run it in QEMU</strong>, grab <code>nvme.img.gz</code>
+                 (plus <code>virtio.img.gz</code> for QSOE/L) and see <strong>Running under QEMU</strong>.
+                 To put it on <strong>real hardware</strong>, you need <code>mrbml-riscv64.efi</code>
+                 plus the kernels — <strong>QSOE/N</strong> uses <code>skimmer.bin</code> + <code>modpkg.cpio</code>,
+                 <strong>QSOE/L</strong> uses one of the <code>qsoe-l-*.elf</code> images — and see
+                 <strong>Installation</strong>.</p>
+</div>
+</details>
+<details class="fold">
+<summary>Running under QEMU</summary>
+<div class="fold-body">
+<p>The quickest way to see QSOE run — no hardware, no <code>-kernel</code> juggling. The
+                 <code>nvme.img</code> download is a self-booting UEFI disk: QEMU's firmware runs
+                 <code>mr-bml</code> from it, and mr-bml's menu starts either variant straight off the disk.</p>
+<h4>You need</h4>
+<ul class="tidy">
+<li><code>qemu-system-riscv64</code> — version <strong>11.0.1 or newer</strong> for QSOE/N
+                    (its NVMe needs the AIA interrupt controller).</li>
+<li>edk2 RISC-V UEFI firmware — on Debian/Ubuntu, the <code>qemu-efi-riscv64</code> package.</li>
+<li>The launcher <code><a href="https://gitlab.com/qsoe/os/-/blob/main/host_tools/run-nvme.sh">run-nvme.sh</a></code>
+                    from the <a href="https://gitlab.com/qsoe/os">os</a> repository — it wraps the right QEMU
+                    machine, firmware and disks for each variant, so you don't have to.</li>
+</ul>
+<h4>Run it</h4>
+<pre class="cmd"><span class="c"># unpack the image(s) — add virtio.img.gz only if you want QSOE/L</span>
+gunzip nvme.img.gz virtio.img.gz
+
+<span class="c"># point the launcher at them and pick a variant from its menu</span>
+NVME_IMG=./nvme.img VIRTIO_IMG=./virtio.img ./run-nvme.sh</pre>
+<p>Pass <code>n</code> or <code>l</code> to skip the menu (<code>./run-nvme.sh n</code>). The script
+                 selects the matching QEMU machine automatically — QSOE/N on the AIA machine with an NVMe root,
+                 QSOE/L on the PLIC machine with the virtio root disk. The mr-bml menu and the system console
+                 both appear on your terminal; choose a variant and it boots to a <code>login:</code> prompt.
+                 Log in as <code>root</code> with password <code>QSOE</code>.</p>
+</div>
+</details>
+<details class="fold">
+<summary>Installation</summary>
+<div class="fold-body">
+<p>Real hardware, real disk. QSOE 0.1 boots on the SiFive HiFive Unmatched (FU740); the SpaceMiT
+                 K3 is a future target. This assumes a board already running Linux — you'll be placing files on
+                 its existing EFI and boot partitions, so familiarity with the board's firmware is expected.</p>
+<p>The boot model is simple: <strong>mr-bml</strong> lives in the EFI System Partition; it reads
+                 its menu and the kernels from an <strong>ext2/3/4</strong> partition; the chosen variant then
+                 mounts its own root from a <strong>fs-qrv</strong> partition.</p>
+<h4>Steps</h4>
+<ol class="steps">
+<li>Copy <code>mrbml-riscv64.efi</code> into your ESP as
+                    <code>EFI/BOOT/BOOTRISCV64.EFI</code> (the UEFI removable-media path), or register it with
+                    <code>efibootmgr</code> as a boot entry.</li>
+<li>On your boot/root filesystem, create <code>/boot/qsoe/</code> and copy the kernels there:
+                    <code>skimmer.bin</code> + <code>modpkg.cpio</code> for QSOE/N,
+                    <code>qsoe-l-sifive.elf</code> for QSOE/L.</li>
+<li>Create <code>/boot/mr-bml/mr-bml.cfg</code> with one entry per variant — for example:</li>
+</ol>
+<pre class="cmd"><span class="c"># /boot/mr-bml/mr-bml.cfg  — adjust the mainfs= partition to your disk</span>
+menuentry 'QSOE/N (Skimmer)' {
+    kernel /boot/qsoe/skimmer.bin mainfs=/dev/nvme0n1p8
+    modpkg /boot/qsoe/modpkg.cpio
+}
+menuentry 'QSOE/L (seL4)' {
+    kernel /boot/qsoe/qsoe-l-sifive.elf mainfs=/dev/nvme0n1p8
+}</pre>
+<p>The <code>mainfs=</code> device names the partition holding the QSOE root filesystem (fs-qrv) —
+                 set it to whichever partition you've devoted to QSOE on your board. On real hardware there is
+                 no QEMU virtio split: <em>both</em> variants drive the NVMe disk directly.</p>
+</div>
+</details>
+<details class="fold">
+<summary>Building from source</summary>
+<div class="fold-body">
+<p>QSOE is built with a <code>riscv64-linux-gnu-</code> cross toolchain (rv64gc) and a stock
+                 <code>make</code>; QEMU is handy for testing. The umbrella repository orchestrates the build and
+                 pulls in the component repositories that match its release tag.</p>
+<pre class="cmd">git clone https://gitlab.com/qsoe/os
+cd os
+make prepare   <span class="c"># fetch the components for this tag (see component.list)</span>
+make           <span class="c"># build both variants: QSOE/N, then QSOE/L</span>
+make dist      <span class="c"># optional: the QEMU disk images (nvme.img.gz, virtio.img.gz)</span></pre>
+<p>QSOE/L additionally shallow-clones the seL4 kernel during <code>make prepare</code>. The build
+                 produces exactly the files on the Downloads list. The whole tree is Apache-2.0; the source
+                 lives under <a href="https://gitlab.com/qsoe">gitlab.com/qsoe</a>.</p>
+</div>
+</details>
+<details class="fold">
+<summary>Documentation</summary>
+<div class="fold-body">
+<p>The QSOE manuals, published as PDF alongside the releases:</p>
+<ul class="tidy">
+<li><a href="https://github.com/qsoe-dev/doc/raw/main/Design.pdf"><code>Design.pdf</code></a>
+                    — the architecture: the two-kernel model, taskman, the IPC and resource-manager design.</li>
+<li><a href="https://github.com/qsoe-dev/doc/raw/main/UserGuide.pdf"><code>UserGuide.pdf</code></a>
+                    — installation, the shell, the basic commands, the text editor and the utilities.</li>
+<li><a href="https://github.com/qsoe-dev/doc/raw/main/ProgrammingBook.pdf"><code>ProgrammingBook.pdf</code></a>
+                    — programming for QSOE, including the <strong>Resource Server Framework</strong> chapter.</li>
+<li><a href="https://github.com/qsoe-dev/doc/raw/main/AppPortingGuide.pdf"><code>AppPortingGuide.pdf</code></a>
+                    — porting Unix (and QNX) software to QSOE: what to account for — no <code>fork()</code>,
+                    no <code>brk()</code>, <code>select()</code> via <code>poll()</code>, and the rest.</li>
+</ul>
+</div>
+</details>
+<details class="fold">
+<summary>Roadmap</summary>
+<div class="fold-body">
+<p>It is often said that the Linux kernel has no roadmap. QSOE does — the ten releases
+                 that carry it from today's <strong>0.1</strong> to the unified <strong>1.0</strong> are
+                 mapped out. A working plan, not a contract: milestones may shift as the work reveals
+                 what's really next.</p>
+<ul class="roadmap">
+<li class="now"><code>0.1</code> — <strong>First public release.</strong> Two-kernel
+                    foundation, shared userspace, read-only <code>fs-qrv</code> at <code>/usr</code>,
+                    interactive getty + login, sources opened. <em>(current)</em></li>
+<li><code>0.2</code> — Text-mode console on the GK208 ("Kepler"): a watchable on-device
+                    display, so the real-time audio work can be seen on hardware, not just over serial.</li>
+<li><code>0.3</code> — First writable filesystem: qrvfs gains file create/unlink,
+                    <code>O_CREAT</code>/<code>O_TRUNC</code>, <code>realpath</code> and symlink resolution.</li>
+<li><code>0.4</code> — The canonical dual-panel file manager: QSOE's flagship application,
+                    exercising the writable filesystem and the userspace end to end.</li>
+<li><code>0.5</code> — First <code>deva-hdmi</code> audio device, with the priority /
+                    interrupt / scheduling groundwork the hard-real-time path needs.</li>
+<li><code>0.6</code> — Comprehensive conformance suites, and the audio real-time package
+                    (up to N hard-real-time tasks on an N-CPU system).</li>
+<li><code>0.7</code> — <span class="tbd">to be defined</span> nearer the time.</li>
+<li><code>0.8</code> — Second hardware target (SpaceMiT K3, RVA23-class) and the AIA
+                    interrupt architecture (IMSIC/APLIC), so MSI/MSI-X works uniformly across boards.</li>
+<li><code>0.9</code> — QNX-libc compatibility push: recompile and run a target set of
+                    QNX-source utilities, closing the remaining libc gaps.</li>
+<li><code>1.0</code> — First stable release: API comparable to QNX 6.x; intended
+                    for porting QNX userland software (<code>fork</code> → <code>posix_spawn</code>).</li>
+</ul>
+</div>
+</details>
+</div>
+</section>
+<!-- OTHER PROJECTS -->
+<section aria-labelledby="tab-other" class="panel" id="other" role="tabpanel" tabindex="0">
+<h2>Other projects</h2>
+<p class="lead">Earlier and adjacent work.</p>
+<ul class="project-list">
+<li><a class="name" href="https://gitlab.com/gatemate/pc">GateMate PC</a>
+<span class="desc">— a personal computer built on the Cologne Chip GateMate FPGA.</span></li>
+<li><a class="name" href="https://gitlab.com/gatemate/s359">GateMate System/359</a>
+<span class="desc">— an IBM S/360-inspired FPGA implementation of a computing system, with I/O channels and a powerful macroassembler.</span></li>
+<li><a class="name" href="qrv.html">QRV</a>
+<span class="desc">— a QNX port to RISC-V (historical); fed hardware bring-up lessons into QSOE/N.</span></li>
+</ul>
+</section>
+<!-- SERVICES -->
+<section aria-labelledby="tab-services" class="panel" id="services" role="tabpanel" tabindex="0">
+<h2>Services</h2>
+<p class="lead">Consulting and development in low-level and systems software.</p>
+<ul class="tidy">
+<li>Microkernel-based operating systems</li>
+<li>System libraries and low-level runtime</li>
+<li>Virtualization for real-time applications</li>
+<li>RISC-V systems bring-up</li>
+<li>AI-assisted development for FPGAs</li>
+</ul>
+<p style="margin-top:1.4rem;">Engagements range from focused bring-up work to longer-term
+           architecture and implementation. Get in touch to discuss scope.</p>
+</section>
+<!-- ABOUT -->
+<section aria-labelledby="tab-about" class="panel" id="about" role="tabpanel" tabindex="0">
+<h2>About</h2>
+<p>QSOE Systems is the independent practice of <strong>Yuri Zaporozhets</strong>, a systems
+           software developer with 25+ years of experience building low-level software — kernels,
+           operating systems, runtimes, and the hardware bring-up underneath them.</p>
+</section>
+<!-- CONTACT -->
+<section aria-labelledby="tab-contact" class="panel" id="contact" role="tabpanel" tabindex="0">
+<h2>Contact</h2>
+<p class="lead">Email is the best way to reach me.</p>
+<p class="contact-mail"><a href="mailto:yuriz@qsoe.net">yuriz@qsoe.net</a></p>
+<div class="meta-row">
+<a href="https://gitlab.com/qsoe">GitLab</a>
+<a href="https://github.com/qsoe-dev">GitHub</a>
+<a href="https://qsoe-dev.blogspot.com">Blog 1</a>
+<a href="https://r-tty.blogspot.com">Blog 2</a>
+</div>
+</section>
+</main>
