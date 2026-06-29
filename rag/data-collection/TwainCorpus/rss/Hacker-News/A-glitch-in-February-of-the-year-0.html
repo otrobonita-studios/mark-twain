@@ -1,0 +1,65 @@
+<article class="main-article">
+<p class="breadcrumb"><a href="//28times.com/blog">Blog</a> &gt; Post<div class="doc-content"><h1>A glitch in February of the year 0</h1><p class="post-byline">by Lukas Gelbmann, 2026-06-26<p class="post-teaser">A technical report about a rare correctness issue that we found and fixed.<p>Recently, as we were adding support for timestamps in the distant past,
+a team member noticed during testing that some timestamps weren’t
+handled correctly. The issue could be easily reproduced with the
+timestamp <code>0000-02-03 04:00 Europe/Oslo</code>.</p>
+<p>A first investigation showed that the problem affected all time zones,
+but only in February of the year 0 (as well as the last few days of
+January).</p>
+<p>Most time series don’t have timestamps that are two thousand years in
+the past. But, of course, we want to parse all timestamps in the
+supported range correctly, even the rare cases dating back to antiquity.</p>
+<h2>Time for bug hunting</h2>
+<p>We started looking for the bug, assuming that, surely, it would be in
+our own code. We use the calendar logic provided by the PHP runtime (the
+<code>DateTimeImmutable</code> class), but we still have some non-trivial
+processing on timestamps. To deal with timestamps that are ambiguous
+because of a time zone transition, we compute a Unix time stamp
+internally, and then convert it to a PHP <code>DateTimeImmutable</code>.</p>
+<p>The year 0 is a bit of an outlier in two ways. First, it doesn’t exist
+in the traditional Julian calendar that historians use (they would call
+it 1 BC instead). Second, in the proleptic Gregorian calendar with
+astronomical year numbering (which is the calendar that we use on
+28times), it’s a <a href="https://en.wikipedia.org/wiki/Century_leap_year">century leap
+year</a>. Century leap
+years are the exception to an exception: years divisible by 100 are not
+leap years, unless – like the year 0 – they are divisible by 400.</p>
+<p>This gave us a vague idea of why the year 0 might be impacted by a bug.
+But since other century leap years (such as 2000) were unaffected, this
+couldn’t be a full explanation.</p>
+<p>So we went through our code step by step and found the problem. To our
+surprise, it wasn’t in our code. The problem was related to the idiom we
+used to convert a Unix time stamp to a <code>DateTimeImmutable</code> object.</p>
+<h2>The root cause</h2>
+<p>Below are three ways of converting a Unix time stamp to a
+<code>DateTimeImmutable</code> in PHP.</p>
+<ol>
+<li><code>\DateTimeImmutable::createFromFormat(<span class="syn-string">'U'</span>, <span class="syn-string">'-62164356180'</span>)</code></li>
+<li><code>(<span class="syn-keyword">new</span> \DateTimeImmutable(<span class="syn-string">'@0'</span>))-&gt;setTimestamp(-<span class="syn-number">62164356180</span>)</code></li>
+<li><code><span class="syn-keyword">new</span> \DateTimeImmutable(<span class="syn-string">'@-62164356180'</span>)  <b class="syn-warning">// incorrect return value</b></code></li>
+</ol>
+<p>These three should be completely equivalent – and for most timestamps,
+they are. But unlike the first two, the last variant gives a result
+that’s off by one day for February of the year 0. At time of writing,
+this happens in all recent PHP releases. As luck would have it, the last
+method is also the one we used in our code.</p>
+<p>(You can also substitute <code>DateTime</code> for <code>DateTimeImmutable</code> in these
+three snippets. <code>DateTime</code> has the same problem with the last variant.)</p>
+<h2>Fixing the issue</h2>
+<p>For our own purposes, the fix was simply to use one of the first two
+methods. This is also what I would recommend to other PHP programmers
+using <code>DateTime</code> or <code>DateTimeImmutable</code>.</p>
+<p>I also opened a <a href="https://github.com/derickr/timelib/pull/173">pull
+request</a> to fix the bug in
+the library <code>timelib</code>, which provides date/time functionality. PHP’s
+<code>DateTimeImmutable</code> uses this library internally.</p>
+<p>The problem ended up being that <code>timelib</code> has two implementations for
+converting a Unix timestamp to a date in the proleptic Gregorian
+calendar. One of them has a range check that uses the wrong date – a
+date that falls in January of the year 0, around a month before the
+century leap day instead of after it. This causes all results before the
+century leap day to be off by one day. I proposed fixing it by making
+all callers use the correct algorithm.</p>
+<p>This issue will hopefully be fixed in upcoming releases of <code>timelib</code> and
+PHP. It certainly made for a satisfying bug fix – we have a clean
+workaround, and improving <code>timelib</code> and PHP is a nice bonus.</p></p></p></div></p></article>
