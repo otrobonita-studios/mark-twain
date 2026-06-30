@@ -1,0 +1,1826 @@
+Reading The Internals of PostgreSQL: Database Cluster, Databases, and Tables
+June 28, 2026
+I'm delving into Postgres Internals and while doing that I thought it would be better to write my notes to keep me accountable and try to internalize my readings. Thanks Hironobu Suzuki for this great reference and his work on Postgres. Here is the source link 
+https://www.interdb.jp/pg/index.html
+.
+
+Logical Structure of Database Cluster
+#
+
+A database cluster is not a collection of database servers in the context of PostgreSQL (SQL standard uses the term catalog cluster). It means a group of databases managed by a single PostgreSQL instance. That is most probably a correct definition in dictionary terms, but usually when you hear database cluster you would assume multiple nodes/instances of databases that act as a single system.
+
+A database is a collection of database objects such as tables, indexes, views, etc. In PostgreSQL, databases are also database objects and they are represented by 
+Oid
+, which is an unsigned int object identifier.
+
+sql
+SELECT
+ oid
+, datname 
+FROM
+ pg_database 
+ORDER BY
+ oid
+;
+oid
+datname
+1
+template1
+4
+template0
+5
+postgres
+(3 rows)
+
+Built-in objects (databases in this query) have hardcoded low values. Other user-created tables/objects start having OIDs from 16384 (OIDs 1-16383 are reserved or used by init objects).
+
+These objects and their relations are stored in system catalogs which are just regular tables in PostgreSQL. Some examples are:
+
+Table
+Description
+pg_class
+Tables and other objects that are similar to tables (views, indexes, TOAST tables etc.)
+pg_database
+Stores information about available databases.
+pg_index
+Index information
+...
+...
+
+Some trivia about catalogs:
+
+pg_database is shared across all databases of a cluster (one table per cluster), whereas most system catalogs are created 
+per database
+
+pg_class stores indexes and there is a pg_index catalog as well. Well, the reason is that pg_class is for generic relational information. pg_index and other respective catalogs have their own customized schema. This helps with separating concerns and not having a pg_class2 table in the future (overly exaggerated but remembered the famous 
+merchants2
+ table 
+https://jimmyhmiller.com/ugliest-beautiful-codebase
+).
+
+As mentioned above, these are just regular tables you can run queries on (at your own risk!). Many built-in objects such as types, functions, and operators are stored in these tables and user-defined ones are added to them the same way.
+
+These OIDs are automatically created when new rows are added to catalog tables. For example, when registering an extension (e.g. pgvector), what happens is that pgvector is added to the 
+pg_extension
+ table with an automatically created OID. This behavior was true for user-defined tables previously. The chronological history is:
+
+PG <= 8.0
+: All table rows are created with an OID.
+
+8.1 <= PG < 12
+: Automatic OID generation is an opt-in feature. To enable, users need to create the table with 
+CREATE TABLE foo (...) WITH OIDS;
+ or enable GUC 
+default_with_oids
+.
+
+PG >= 12
+: The feature is completely removed.
+
+Physical Structure of DB Cluster
+#
+
+A Postgres cluster stores everything in the data directory. Its path is set by the 
+PGDATA
+ environment variable. Common default locations are 
+/var/lib/pgsql/data
+ and 
+/var/lib/postgresql/<version>/main
+.
+
+initdb
+ is responsible for setting up and creating this directory and it is automated by Postgres installers. When 
+brew install postgresql@18
+ is called, 
+postgres@18.rb
+ runs the line below in its post-install method, after Postgres itself is installed:
+
+system bin/"initdb", "--locale=en_US.UTF-8", "-E", "UTF-8", postgresql_datadir unless pg_version_exists?
+
+Similar logic is implemented across other Postgres installation methods (EDB for Windows, apt/deb, etc.).
+
+Inside $PGDATA there are many subdirectories:
+
+$PGDATA/
+├── 
+base/
+            # one subdirectory per database
+│   └── 
+{OID}/
+       # tables & indexes as files (relfilenode)
+├── 
+global/
+          # cluster-wide catalogs (e.g. pg_class)
+├── 
+pg_wal/
+          # WAL segment files
+├── 
+pg_xact/
+         # transaction commit status (clog)
+├── 
+pg_tblspc/
+       # symlinks to external tablespaces
+├── 
+PG_VERSION
+       # major version number
+├── 
+postgresql.conf
+  # main server configuration
+└── 
+...
+              # 15+ more 
+
+The full list is in 
+https://www.postgresql.org/docs/current/storage-file-layout.html
+. Subdirectory changes seem to be very rare. The table 
+here
+ shows some naming changes and new additions in PG9 and PG10. I also checked the Postgres source code and saw that the 
+current_logfiles
+ subdirectory was added in the PG10 release. It is added in 
+19dc233
+ which is included starting from PG10:
+
+bash
+git
+ tag
+ --contains
+ 19dc233c32f
+ |
+ grep
+ -E
+ '^REL'
+ |
+ sort
+ -V
+ |
+ head
+REL_10_0
+REL_10_1
+REL_10_2
+...
+
+Database Subdirectory Layout
+#
+
+As said above, each database has its own subdirectory in the base directory, named after its OID (
+/base/{OID}
+).
+
+Tables and indexes are stored in a single file under the database subdirectory if their size is under 1GB. Similar to OID, physical files are identified by 
+relfilenode
+ and this information is stored in the 
+pg_class
+ row of the table and/or index.
+
+Now let's explore these layouts a bit. I'm using a Mac. I've installed PostgreSQL 18 with 
+brew install postgresql@18
+ and run it as a service. Then, connect in a terminal with 
+psql -d postgres
+.
+
+sql
+SHOW data_directory;
+data_directory
+/opt/homebrew/var/postgresql@18
+(1 row)
+
+As described above, the data directory path is 
+/opt/homebrew/var/postgresql@{VERSION}
+.
+
+Now let's create the 
+shop
+ database and explore it.
+
+sql
+CREATE
+ DATABASE
+ shop
+;
+
+SELECT
+ oid
+, datname 
+FROM
+ pg_database 
+WHERE
+ datname 
+=
+ 'shop'
+;
+CREATE DATABASE
+oid
+datname
+16384
+shop
+(1 row)
+
+A new directory with that OID is now on disk:
+
+bash
+ls
+ /opt/homebrew/var/postgresql@18/base/
+1
+16384
+4
+5
+
+One surprise is that the 
+shop
+ directory is not empty. The reason is that the 
+CREATE DATABASE
+ command creates the database by copying an existing one, and 
+template1
+ is the default source database for it. Additional details on templates are 
+in the official documentation
+.
+
+bash
+ls
+ /opt/homebrew/var/postgresql@18/base/16384
+ |
+ head
+112
+113
+1247
+1247_fsm
+1247_vm
+1249
+1249_fsm
+1249_vm
+1255
+1255_fsm
+
+Create a basic table:
+
+sql
+\c shop
+
+CREATE
+ TABLE
+ orders
+ (
+
+    id          
+bigserial
+   PRIMARY KEY
+,
+
+    customer_id 
+bigint
+      NOT NULL
+,
+
+    total_cents 
+bigint
+      NOT NULL
+,
+
+    created_at  
+timestamptz
+ NOT NULL
+ DEFAULT
+ now
+()
+
+);
+
+Now, this table will have OID for itself and its index for primary key. Let's examine them by querying pg_class:
+
+sql
+SELECT
+ oid
+, relname, relfilenode, relkind
+
+FROM
+   pg_class
+
+WHERE
+  relname 
+IN
+ (
+'orders'
+, 
+'orders_pkey'
+);
+oid
+relname
+relfilenode
+relkind
+16386
+orders
+16386
+r
+16395
+orders_pkey
+16395
+i
+(2 rows)
+
+As you can see, relfilenodes (identifier for physical location) and OIDs are identical. We can use 
+pg_relation_filepath
+ which is a built-in function to compute paths:
+
+sql
+SELECT
+ pg_relation_filepath(
+'orders'
+),
+
+       pg_relation_filepath(
+'orders_pkey'
+);
+pg_relation_filepath
+pg_relation_filepath
+base/16384/16386
+base/16384/16395
+(1 row)
+
+Our table and index files are stored in 
+base/{database_oid}/{table|index_relfilenode}
+. Insert some rows and trigger 
+VACUUM
+:
+
+sql
+INSERT INTO
+ orders (customer_id, total_cents)
+
+SELECT
+ (random() 
+*
+ 1000
+)::
+bigint
+, (random() 
+*
+ 100000
+)::
+bigint
+
+FROM
+   generate_series
+(
+1
+, 
+1000
+);
+
+VACUUM orders;
+INSERT 0 1000
+VACUUM
+
+VACUUM
+ is mainly used to reclaim storage. Its details can be checked in the 
+documentation
+, and I'll delve into it in future posts. The resulting files are:
+
+bash
+ls
+ -l
+ /opt/homebrew/var/postgresql@18/base/16384/{16386
+*
+,16395}
+-rw-------@ 1 burak  admin  65536 Jun 15 10:43 .../base/16384/16386
+-rw-------@ 1 burak  admin  24576 Jun 15 10:43 .../base/16384/16386_fsm
+-rw-------@ 1 burak  admin   8192 Jun 15 10:43 .../base/16384/16386_vm
+-rw-------@ 1 burak  admin  40960 Jun 15 10:43 .../base/16384/16395
+
+For our table, 
+16386
+ is the main relation data; 
+16386_fsm
+ and 
+16386_vm
+ are its forks. They are called auxiliary files and are used for tracking free space in the table's pages (FSM) and the visibility status of each page (VM). Now, to demonstrate that 
+OID == relfilenode
+ does not necessarily hold, trigger a 
+VACUUM FULL
+, which does the following (simplified):
+
+get an exclusive lock on the table
+
+copy rows to new files (new relfilenode/s)
+
+swap the pointer to the new relfilenode and commit
+
+sql
+VACUUM FULL orders;
+
+SELECT
+ oid
+, relname, relfilenode
+
+FROM
+   pg_class
+
+WHERE
+  relname 
+IN
+ (
+'orders'
+, 
+'orders_pkey'
+);
+
+SELECT
+ pg_relation_filepath(
+'orders'
+);
+VACUUM
+oid
+relname
+relfilenode
+16386
+orders
+16397
+16395
+orders_pkey
+16400
+(2 rows)
+pg_relation_filepath
+base/16384/16397
+(1 row)
+
+The rewrite caused by 
+VACUUM
+ updated the relfilenodes, and they are not equal to the OIDs at the latest state.
+
+Tablespaces
+#
+
+Postgres also supports 
+tablespaces
+. With tablespaces, a user can specify other directories to store/use database files. It allows the following:
+
+extending the partition/volume that Postgres was initially configured on.
+
+placing frequently-accessed indexes on fast disks and cold tables on slower ones.
+
+We've talked about the 
+base/
+ and 
+global/
+ directories. 
+pg_default
+ is the default tablespace for ordinary database objects, and its path is 
+$PGDATA/base
+, whereas 
+pg_global
+ is the tablespace for cluster-wide objects.
+
+Let's create a directory 
+mkdir -p /Users/burak/pg-tblspc-extra
+ and add it as a tablespace.
+
+sql
+CREATE
+ TABLESPACE
+ extra_space
+ LOCATION
+ '/Users/burak/pg-tblspc-extra'
+;
+
+SELECT
+ oid
+, spcname 
+FROM
+ pg_tablespace 
+WHERE
+ spcname 
+=
+ 'extra_space'
+;
+CREATE TABLESPACE
+oid
+spcname
+16401
+extra_space
+(1 row)
+
+As expected, our tablespace has an OID as well, and it's 
+16401
+. Now, instead of going to the raw path of this tablespace, Postgres creates a symlink between the file paths.
+
+bash
+ls
+ -la
+ /opt/homebrew/var/postgresql@18/pg_tblspc/
+lrwx------@ 1 burak  admin  28 Jun 20 15:56 16401 -> /Users/burak/pg-tblspc-extra
+
+When creating a tablespace, Postgres runs 
+symlink("/Users/burak/pg-tblspc-extra","$PGDATA/pg_tblspc/16401")
+. How does Postgres know if the file it's searching for is in 
+base/
+, 
+global/
+, or symlinked in 
+pg_tblspc/
+? Internally, there is a mapping below:
+
+where spcOid is the tablespace OID. You may have noticed 
+PG_xx_yyy
+, which is 
+PG_{major version}_{catalog version}
+, and for my local setup, it's:
+
+bash
+ls
+ -la
+ /Users/burak/pg-tblspc-extra/
+drwx------@ 2 burak  staff  64 Jun 20 15:56 PG_18_202506291
+
+Create a table in this tablespace with an index and check their paths:
+
+sql
+\c shop
+
+CREATE
+ TABLE
+ archived_orders
+ (
+LIKE
+ orders INCLUDING ALL)
+
+    TABLESPACE extra_space;
+
+SELECT
+ oid
+, relname, reltablespace, relfilenode
+
+FROM
+   pg_class
+
+WHERE
+  relname 
+IN
+ (
+'archived_orders'
+, 
+'archived_orders_pkey'
+);
+CREATE TABLE
+oid
+relname
+reltablespace
+relfilenode
+16402
+archived_orders
+16401
+16402
+16411
+archived_orders_pkey
+0
+16411
+(2 rows)
+
+Our tablespace's OID was 
+16401
+, and the table's catalog row reflects that, but the index has 
+reltablespace
+ as 0, which stands for using the database's default tablespace. By default, indexes use the database's default tablespace and need to be overridden with 
+USING INDEX TABLESPACE
+.
+
+sql
+\db
++
+                                            List of tablespaces
+Name
+Owner
+Location
+Access privileges
+Options
+Size
+Description
+extra_space
+burak
+/Users/burak/pg-tblspc-extra
+96 bytes
+pg_default
+burak
+30 MB
+pg_global
+burak
+548 kB
+(3 rows)
+
+Heap Table Structure
+#
+
+Previously, we've talked about data hierarchy and where data is actually located in the disk. Now, this section explores how they are stored instead of where. A heap table is an unordered collection of pages with tuples (~= physical representation of rows) that are stored in random order.
+
+Pages are numbered from 0th to Nth in a file, and each is 8192 bytes. This 8192 is configurable only by recompiling Postgres from the source code (
+--with-blocksize=BLOCKSIZE
+). A page has the following data:
+
+Headers
+: Contain general information about the page that Postgres looks at on every access (free-space pointers, checksum, flags, etc.)
+
+Line Pointers
+: Point to tuples. They behave like indexes to tuples and any access to tuples goes through line pointers. They are numbered from 1 to N and sequentially increase.
+
+Tuples
+: Where data is actually stored. Tuples are numbered 1 to N as well but they are stored starting from the end of the page. Tuples also have headers, a null bitmap, and user data.
+
+Now let's examine how they work and what the actual values are in a Postgres cluster. To do that, I'll utilize a built-in Postgres extension named 
+pageinspect
+. It introduces functions to inspect the contents of pages at a low level. Let's create a database, a table, and the extension.
+
+sql
+CREATE
+ DATABASE
+ notes_lab
+;
+
+CREATE
+ EXTENSION pageinspect;
+
+CREATE
+ TABLE
+ notes
+ (
+
+    id      
+integer
+ GENERATED
+ ALWAYS
+ AS
+ IDENTITY
+ PRIMARY KEY
+,
+
+    note    
+text
+ NOT NULL
+
+);
+
+INSERT INTO
+ notes (note)
+
+VALUES
+ (
+'small row'
+), (
+'second row'
+), (
+'third row'
+);
+
+First examine where table data is located as we've checked in previous section:
+
+sql
+SELECT
+ oid
+, relname, relfilenode, relkind
+
+FROM
+   pg_class
+
+WHERE
+  relname 
+IN
+ (
+'notes'
+, 
+'notes_pkey'
+)
+
+ORDER  BY
+ relname;
+oid
+relname
+relfilenode
+relkind
+16461
+notes
+16461
+r
+16468
+notes_pkey
+16468
+i
+(2 rows)
+
+Note that relkind 
+r
+ stands for an ordinary table and 
+i
+ stands for an index 
+(docs)
+. Let's check heap table's location and size:
+
+sql
+SELECT
+ pg_relation_filepath(
+'notes'
+) 
+AS
+ heap_path,
+
+       pg_relation_size(
+'notes'
+)     
+AS
+ heap_bytes;
+heap_path
+heap_bytes
+base/16413/16461
+8192
+(1 row)
+
+Location is 
+base/{database_oid}/{relfilenode_oid}
+ as expected, and it consists of 1 page of 8KB at the moment.
+
+We've added three rows to the table and in any 
+SELECT
+ query we can also get the physical location of a row with 
+ctid
+. 
+ctid
+ is a system column that represents 
+(page|block_number, offset_number)
+ of any row.
+
+sql
+SELECT
+ ctid, id, note
+
+FROM
+   notes
+
+ORDER  BY
+ id;
+ctid
+id
+note
+(0,1)
+1
+small row
+(0,2)
+2
+second row
+(0,3)
+3
+third row
+(3 rows)
+
+Now we've only 3 rows and one 8KB page, and 
+ctid
+ effectively represents this. For the first row, (0,1) means block 
+0
+ and line pointer 
+1
+.
+
+sql
+SELECT
+ *
+
+FROM
+   page_header(get_raw_page(
+'notes'
+, 
+0
+));
+lsn
+checksum
+flags
+lower
+upper
+special
+pagesize
+version
+prune_xid
+0/20BBC40
+0
+0
+36
+8072
+8192
+8192
+4
+0
+(1 row)
+
+lower = 36
+: 
+24
+ byte 
+PageHeaderData
+ + 
+3 × 4
+ byte line pointers.
+
+upper = 8072
+: first byte of tuple storage.
+
+free space is 
+upper - lower = 8036
+ bytes.
+
+special = 8192
+: no special area since this is a simple heap page.
+
+sql
+SELECT
+ lp, lp_off, lp_flags, lp_len, t_ctid
+
+FROM
+   heap_page_items(get_raw_page(
+'notes'
+, 
+0
+));
+lp
+lp_off
+lp_flags
+lp_len
+t_ctid
+1
+8152
+1
+38
+(0,1)
+2
+8112
+1
+39
+(0,2)
+3
+8072
+1
+38
+(0,3)
+(3 rows)
+
+These columns are defined by ItemIdData 4-byte line pointer (
+permalink
+):
+
+c
+...
+
+typedef
+ struct
+ ItemIdData
+
+{
+
+	unsigned
+	lp_off:
+15
+,
+		/* offset to tuple (from start of page) */
+
+				lp_flags:
+2
+,
+		/* state of line pointer, see below */
+
+				lp_len:
+15
+;
+		/* byte length of tuple */
+
+} ItemIdData;
+
+...
+
+lp_off
+ is where our data row is actually located in the page. lp_flags=1 is 
+LP_NORMAL
+, which means this line pointer points at real/valid data. It could also be 
+0 (LP_UNUSED)
+, which would've meant the slot is free as a result of VACUUM. What does lp_len consist of? For the first row, it is 
+38
+, which breaks down as:
+
+24
+ B
+tuple header
+HeapTupleHeaderData
+4
+ B
+id
+int4
+1
+ B
+varlena hdr
+9
+ B
+"small row"
+notes row · lp_len = 38 B
+38
+ bytes total
+
+TOAST (The Oversized-Attribute Storage Technique)
+#
+
+Postgres does not allow tuples to overflow into multiple pages and, as mentioned before, page size is a compile-time variable of 8KB. This means that large values cannot be stored in the same way and Postgres uses TOAST to break these values into multiple rows. Only variable-length data types support TOAST since others such as integers cannot exceed their specified sizes. Postgres first compresses the data and if it passes the 2KB threshold it creates a TOAST table and stores the actual data there. The main table field only includes a pointer to that data.
+
+To explore data uncompressed, we set 
+SET STORAGE EXTERNAL
+. With this, Postgres will not compress the data.
+
+sql
+CREATE
+ TABLE
+ toast_demo
+ (
+
+    id   
+integer
+ GENERATED
+ ALWAYS
+ AS
+ IDENTITY
+ PRIMARY KEY
+,
+
+    data
+ text
+ NOT NULL
+
+);
+
+ALTER
+ TABLE
+ toast_demo 
+ALTER
+ COLUMN 
+data
+ SET
+ STORAGE 
+EXTERNAL
+;
+
+INSERT INTO
+ toast_demo (
+data
+) 
+VALUES
+ (
+'abc'
+);
+
+INSERT INTO
+ toast_demo (
+data
+)
+
+SELECT
+ repeat
+(
+'The quick brown fox jumps over the lazy dog. '
+, 
+222
+)
+
+FROM
+   generate_series
+(
+1
+, 
+2
+);
+
+INSERT INTO
+ toast_demo (
+data
+)
+
+VALUES
+ (
+'The quick brown fox jumps over the lazy dog. '
+);
+
+INSERT INTO
+ toast_demo (
+data
+)
+
+SELECT
+ repeat
+(
+'The quick brown fox jumps over the lazy dog. '
+, 
+111
+);
+
+Insert 5 rows with varying sizes.
+
+Now, our table and its corresponding heap table can be depicted as above. Let's explore what these variables and relations mean step-by-step.
+
+sql
+SELECT
+ id, ctid, 
+length
+(
+data
+) 
+AS
+ logical_bytes
+
+FROM
+   toast_demo
+
+ORDER  BY
+ id;
+id
+ctid
+logical_bytes
+1
+(0,1)
+3
+2
+(0,2)
+9990
+3
+(0,3)
+9990
+4
+(0,4)
+45
+5
+(0,5)
+4995
+(5 rows)
+
+Rows 2,3,5 exceed the 2KB TOAST threshold and are stored in the TOAST table. To examine this, we need to find the generated TOAST table, which can be found in the main table's row in pg_class.
+
+sql
+SELECT
+ oid
+, relname, reltoastrelid
+
+FROM
+   pg_class
+
+WHERE
+  relname 
+=
+ 'toast_demo'
+;
+oid
+relname
+reltoastrelid
+16483
+toast_demo
+16488
+(1 row)
+
+Our toast_demo table has a pointer to the TOAST table in the 
+reltoastrelid
+ field, and we see that the TOAST table's oid is 
+16488
+. Let's get it as well:
+
+sql
+SELECT
+ oid
+, relname, relfilenode, pg_relation_filepath(
+oid
+) 
+AS
+ toast_path
+
+FROM
+   pg_class
+
+WHERE
+  oid
+ =
+ 16488
+;
+oid
+relname
+relfilenode
+toast_path
+16488
+pg_toast_16483
+16488
+base/16413/16488
+(1 row)
+
+As above, we've accessed our TOAST table's information in pg_class just like any other table because it simply is a table.
+
+sql
+\d
++
+ pg_toast
+.
+pg_toast_16483
+TOAST table "pg_toast.pg_toast_16483"
+Column
+Type
+Storage
+chunk_id
+oid
+plain
+chunk_seq
+integer
+plain
+chunk_data
+bytea
+plain
+Owning table: "public.toast_demo"
+Indexes:
+    "pg_toast_16483_index" PRIMARY KEY, btree (chunk_id, chunk_seq)
+Access method: heap
+
+This is a PostgreSQL-owned/defined schema, which was introduced 
+20 years ago by Tom Lane
+ (it's my first time seeing 20 years ago in git blame and I'll probably see a lot in this series):
+
+c
+	/* this is pretty painful...  need a tuple descriptor */
+
+	tupdesc 
+=
+ CreateTemplateTupleDesc
+(
+3
+);
+
+	TupleDescInitEntry
+(tupdesc, (AttrNumber) 
+1
+,
+
+					   "chunk_id"
+,
+
+					   OIDOID,
+
+					   -
+1
+, 
+0
+);
+
+	TupleDescInitEntry
+(tupdesc, (AttrNumber) 
+2
+,
+
+					   "chunk_seq"
+,
+
+					   INT4OID,
+
+					   -
+1
+, 
+0
+);
+
+	TupleDescInitEntry
+(tupdesc, (AttrNumber) 
+3
+,
+
+					   "chunk_data"
+,
+
+					   BYTEAOID,
+
+					   -
+1
+, 
+0
+);
+
+Now, at this stage, we know that we've a main table and it points to a TOAST table that was created automatically by Postgres. Let's check the line pointers of these 5 rows to understand the sizes of these items:
+
+sql
+SELECT
+ lp, lp_off, lp_flags, lp_len, t_ctid
+
+FROM
+   heap_page_items(get_raw_page(
+'toast_demo'
+, 
+0
+));
+lp
+lp_off
+lp_flags
+lp_len
+t_ctid
+1
+8160
+1
+32
+(0,1)
+2
+8112
+1
+46
+(0,2)
+3
+8064
+1
+46
+(0,3)
+4
+7984
+1
+74
+(0,4)
+5
+7936
+1
+46
+(0,5)
+(5 rows)
+
+Keep in mind that rows 2,3,5 were passing the 2KB threshold and coincidentally(?) they have the same item size and it's relatively low. Now, what happens here is that rows 1,4 are stored directly in the table and their line pointers reflect their size. The other rows are exactly 46 bytes, which can be calculated as:
+
+24 bytes: tuple header
+
+4 bytes: id integer
+
+18 bytes
+: External TOAST pointer
+
+24
+ B
+tuple header
+4
+ B
+id
+int4
+18
+ B
+TOAST pointer
+varatt_external
+toasted row · lp_len = 46 B
+46
+ bytes total
+
+And the TOAST pointer consists of 
+VARHDRSZ_EXTERNAL + sizeof(varatt_external)
+. 
+That struct is
+:
+
+c
+typedef
+ struct
+ varatt_external
+
+{
+
+	int32		va_rawsize;
+		/* Original data size (includes header) */
+
+	uint32		va_extinfo;
+		/* External saved size (without header) and
+
+								 * compression method */
+
+	Oid			va_valueid;
+		/* Unique ID of value within TOAST table */
+
+	Oid			va_toastrelid;
+	/* RelID of TOAST table containing it */
+
+} varatt_external;
+
+sql
+SELECT
+ id,
+
+       length
+(
+data
+)                   
+AS
+ va_extinfo,
+
+       length
+(
+data
+) 
++
+ 4
+               AS
+ va_rawsize,
+
+       pg_column_toast_chunk_id(
+data
+) 
+AS
+ va_valueid
+
+FROM
+   toast_demo
+
+WHERE
+  pg_column_toast_chunk_id(
+data
+) 
+IS NOT NULL
+
+ORDER  BY
+ id;
+id
+va_extinfo
+va_rawsize
+va_valueid
+2
+9990
+9994
+16492
+3
+9990
+9994
+16493
+5
+4995
+4999
+16494
+(3 rows)
+
+As described in the struct fields, we can check the data size, raw size, and OID of the row in the TOAST table from the pointer of the main table.
+
+va_rawsize = 9994
+: original varlena value, including its 4-byte header.
+
+va_extinfo = 9990
+: bytes stored externally here, no compression.
+
+va_valueid
+: maps to 
+pg_toast.pg_toast_16483.chunk_id
+ so we know where to look in that table.
+
+Now let's check the TOAST table for these 3 rows. The query below is for getting a summary of chunk counts, sequences, and sizes of TOASTs:
+
+sql
+SELECT
+ chunk_id,
+
+       count
+(
+*
+) 
+AS
+ chunks,
+
+       min
+(chunk_seq) 
+AS
+ first_seq,
+
+       max
+(chunk_seq) 
+AS
+ last_seq,
+
+       sum
+(
+length
+(chunk_data)) 
+AS
+ external_bytes
+
+FROM
+   pg_toast
+.
+pg_toast_16483
+
+GROUP  BY
+ chunk_id
+
+ORDER  BY
+ chunk_id;
+chunk_id
+chunks
+first_seq
+last_seq
+external_bytes
+16492
+6
+0
+5
+9990
+16493
+6
+0
+5
+9990
+16494
+3
+0
+2
+4995
+(3 rows)
+
+As you can see, each 
+chunk_id
+ has 0-indexed chunks that are sequentially numbered. The sum of each sequence's 
+chunk_data
+ totals up to the expected data size.
+
+sql
+SELECT
+ chunk_id, chunk_seq, 
+length
+(chunk_data) 
+AS
+ chunk_bytes
+
+FROM
+   pg_toast
+.
+pg_toast_16483
+
+ORDER  BY
+ chunk_id, chunk_seq;
+chunk_id
+chunk_seq
+chunk_bytes
+16492
+0
+1996
+16492
+1
+1996
+16492
+2
+1996
+16492
+3
+1996
+16492
+4
+1996
+16492
+5
+10
+16493
+0
+1996
+16493
+1
+1996
+16493
+2
+1996
+16493
+3
+1996
+16493
+4
+1996
+16493
+5
+10
+16494
+0
+1996
+16494
+1
+1996
+16494
+2
+1003
+(15 rows)
+
+As shown previously, the TOAST table has an index 
+"pg_toast_16483_index" PRIMARY KEY, btree (chunk_id, chunk_seq)
+. The retrieval path is by querying the TOAST table by 
+chunk_id
+, ordering the results by 
+chunk_seq
+, and finally merging these chunks.
+
+Writing and Reading Tuples
+#
+
+This section gives a high-level overview of how Postgres writes and reads tuples. First, set up a database and table:
+
+sql
+CREATE
+ DATABASE
+ wr_lab
+;
+
+\c wr_lab
+
+CREATE
+ EXTENSION pageinspect;
+
+CREATE
+ TABLE
+ sampletbl
+ (
+
+    id   
+integer
+ GENERATED
+ ALWAYS
+ AS
+ IDENTITY
+,
+
+    data
+ text
+ NOT NULL
+
+);
+
+Writing tuples
+#
+
+Line pointers start after page headers and are added from the beginning of the page to the end, while tuples are exactly the reverse (they start at the end and are added backwards). 
+pd_lower
+ and 
+pd_upper
+ show the end of the line pointers and tuples, respectively; the 
+page_header()
+ function exposes them as the 
+lower
+ and 
+upper
+ columns shown below. To demonstrate:
+
+sql
+INSERT INTO
+ sampletbl (
+data
+) 
+VALUES
+ (
+'AAAAAAAAA'
+);
+
+SELECT
+ lower, upper 
+FROM
+ page_header(get_raw_page(
+'sampletbl'
+, 
+0
+));
+lower
+upper
+28
+8152
+
+Headers are 24 bytes and then we've one 4-byte line pointer, so the next line pointer will have offset 28. The tuple is 38 bytes (24-byte tuple header, 4-byte id, and 10 bytes of text), so the next tuple should have offset 8154. But there is padding introduced by Postgres and the tuple offset moves to 8152 instead of 8154 to align the tuple offset to 
+8 bytes
+.
+
+sql
+INSERT INTO
+ sampletbl (
+data
+) 
+VALUES
+ (
+'BBBBBBBBB'
+);
+
+SELECT
+ lower, upper 
+FROM
+ page_header(get_raw_page(
+'sampletbl'
+, 
+0
+));
+lower
+upper
+32
+8112
+
+Inserting another row moves the lp offset by 4 and the heap by 40 (since the text has the same length) as expected. 
+Here is what runs in the background
+:
+
+c
+/*
+
+ * Compute new lower and upper pointers for page, see if it'll fit.
+
+ *
+
+ * Note: do arithmetic as signed ints, to avoid mistakes if, say,
+
+ * alignedSize > pd_upper.
+
+ */
+
+if
+ (offsetNumber 
+==
+ limit 
+||
+ needshuffle)
+
+	lower 
+=
+ phdr
+->
+pd_lower 
++
+ sizeof
+(ItemIdData);
+
+else
+
+	lower 
+=
+ phdr
+->
+pd_lower;
+
+alignedSize 
+=
+ MAXALIGN
+(size);
+
+upper 
+=
+ (
+int
+) phdr
+->
+pd_upper 
+-
+ (
+int
+) alignedSize;
+
+size
+ is the row's data size and 
+ItemIdData
+ is the line pointer's struct. As you can see, 
+lower
+ is increased by 4 and 
+upper
+ is decreased by the 
+aligned
+ data size. 
+MAXALIGN
+ is a macro that aligns the given length to 
+8
+.
+
+Writes also change/add headers (other than 
+pd_lower
+ and 
+pd_upper
+) at both the page and tuple level. This will be delved into in detail later. Some examples:
+
+Page:
+
+pd_lsn - wal position
+
+pd_flags - page level flags
+
+...
+
+Tuple:
+
+t_xmin - xid (transaction id) that inserted row
+
+t_xmax - xid that deleted/updated row
+
+t_infomask - status bits
+
+...
+
+Reading tuples
+#
+
+First, drop and recreate our table with an index on 
+data
+ column:
+
+sql
+DROP
+ TABLE
+ sampletbl;
+
+CREATE
+ TABLE
+ sampletbl
+ (
+
+    id   
+integer
+ GENERATED
+ ALWAYS
+ AS
+ IDENTITY
+,
+
+    data
+ text
+ NOT NULL
+
+);
+
+-- 1,000 random rows so the table spans several 8KB pages...
+
+INSERT INTO
+ sampletbl (
+data
+)
+
+SELECT
+ md5(random()::
+text
+)
+
+FROM
+   generate_series
+(
+1
+, 
+1000
+);
+
+-- ...plus four rows that are easy to spot in a query
+
+INSERT INTO
+ sampletbl (
+data
+)
+
+VALUES
+ (
+'AAAAAAAAA'
+), (
+'BBBBBBBBB'
+), (
+'CCCCCCCCC'
+), (
+'DDDDDDDDD'
+);
+
+CREATE
+ INDEX
+ sampletbl_data_idx
+ ON
+ sampletbl (
+data
+);
+
+The first and most straightforward access method is just sequentially scanning all tuples in all pages. But in 
+most
+ cases, Postgres will use an appropriate index. There are many index types that are supported, but the default is the B-tree index, similar to many other databases. Thus, the 
+CREATE
+ query above creates a B-tree index. For other types, it needs to be specified like 
+USING gist|hash|gin
+.
+
+sql
+EXPLAIN (COSTS 
+OFF
+) 
+SELECT
+ *
+ FROM
+ sampletbl;
+QUERY PLAN
+Seq Scan on sampletbl
+
+In the above query, Postgres needs to scan all pages and return all of them, so the query plan is to simply sequentially scan the table. Whereas when we've a query that can leverage an index, it changes.
+
+sql
+EXPLAIN (COSTS 
+OFF
+) 
+SELECT
+ id, 
+data
+ FROM
+ sampletbl 
+WHERE
+ data
+ =
+ 'CCCCCCCCC'
+;
+QUERY PLAN
+Index Scan using sampletbl_data_idx on sampletbl
+Index Cond: (data = 'CCCCCCCCC'::text)
+
+As shown, the equality predicate in the query makes Postgres use the index we've created.
+
+Wrapping Up
+#
+
+We've started from how PostgreSQL sets up local directories, paths, OIDs, tablespaces, TOAST tables and finally writing/reading tuples.
+
+This post covered 1.1-1.4 sections of The Internals of PostgreSQL book. I plan to divide upcoming chapters into several posts since this was a bit longer than I expected.
+
+This is my first personal blog post and thanks for reading. For any wrong information or issue you think of please reach out to me at 
+buraksenb@gmail.com
+, I would really appreciate it. Stay tuned for more.
