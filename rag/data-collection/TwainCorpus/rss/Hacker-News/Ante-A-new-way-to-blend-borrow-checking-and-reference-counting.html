@@ -1,0 +1,1206 @@
+<body>
+<div class="header root explorations">
+<div class="header contents">
+<a class="header vorb-container" href="/">
+
+</a>
+<a class="header text" href="/">
+<div class="header title"><span class="header explorations">Languages</span> ∩ <span class="header vale">Architecture</span></div>
+</a>
+<div class="header links">
+<a class="rss" href="/rss.xml">RSS</a>
+<a class="github" href="https://github.com/ValeLang/Vale">Github</a>
+<a class="reddit" href="https://reddit.com/r/Vale">r/Vale</a>
+<a class="twitter" href="https://twitter.com/verdagon">Twitter</a>
+<a class="discord" href="https://discord.gg/SNB8yGH">Discord</a>
+</div>
+</div>
+</div>
+<div class="c-blog m-annotated page annotated nojs">
+<div class="c-blog m-annotated page-inner">
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<div class="c-blog m-annotated metadata">
+<h1 class="c-blog m-annotated noline cozy" style="margin-top: 8px">Ante: A New Way to Blend Borrow Checking and Reference Counting</h1>
+<div class="c-blog m-annotated subtitle content cozy">Blending borrowing and reference counting without the crashes!</div>
+<div class="c-blog m-annotated content">
+<span class="c-blog m-annotated date">June 28, 2026</span>
+<span class="c-blog m-annotated separator"> — </span>
+<span class="c-blog m-annotated author">Evan Ovadia</span>
+</div>
+</div>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Ante has taken the first step towards something <b>we all thought was impossible:</b> blending reference counting and borrow checking without run-time crashes. <a class="c-blog m-annotated note-anchor note-color0" data-noteid="0" href="#note0">0</a>
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+This is <i>very</i> promising, because it means that someday, we can more easily use <b>each approach when it makes sense</b> without risking crashes. If there was a language like that, I could prototype a game in a flexible way with reference-counting, and gradually migrate it to faster borrow-checked code. <a class="c-blog m-annotated note-anchor note-color1" data-noteid="1" href="#note1">1</a>
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+No mainstream language has figured out how to combine them seamlessly, even though many have tried.
+</p>
+<p class="c-blog m-annotated">
+Rust tried, but when we try to use Rust's reference-counting <span class="c-blog m-annotated inline-code">Rc</span> type, it often requires <span class="c-blog m-annotated inline-code">RefCell</span> (like <span class="c-blog m-annotated inline-code">Rc&lt;RefCell&lt;Spaceship&gt;&gt;</span>) which can crash at run-time if you hold it wrong. <a class="c-blog m-annotated note-anchor note-color2" data-noteid="2" href="#note2">2</a> <a class="c-blog m-annotated note-anchor note-color3" data-noteid="3" href="#note3">3</a> I wish <span class="c-blog m-annotated inline-code">rustc</span> could check for proper <span class="c-blog m-annotated inline-code">Rc</span> usage at compile-time! <a class="c-blog m-annotated note-anchor note-color4" data-noteid="4" href="#note4">4</a> <a class="c-blog m-annotated note-anchor note-color5" data-noteid="5" href="#note5">5</a>
+</p>
+<p class="c-blog m-annotated">
+Swift too has tried, with its <a class="c-blog m-annotated" href="https://github.com/swiftlang/swift/blob/main/docs/OwnershipManifesto.md">new borrowing system</a>, but it has an <a class="c-blog m-annotated" href="https://forums.swift.org/t/huge-performance-hit-from-exclusive-memory-access-checks/54374/12">expensive</a> <a class="c-blog m-annotated" href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0176-enforce-exclusive-access-to-memory.md">run-time check</a> which crashes at run-time if you hold it wrong.
+</p>
+<p class="c-blog m-annotated">
+It turns out, blending reference counting and borrow checking is <i>hard</i>, for reasons you'll see below.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+So let's talk about Ante!
+</p>
+<div class="c-blog m-annotated callout">
+Ante is a work-in-progress! Some parts of this are implemented, some are still theoretical, and the design is still in flux. This is being actively developed as we speak, so follow Ante's progress on its <a class="c-blog m-annotated" href="https://antelang.org/">site</a> and <a class="c-blog m-annotated" href="https://discord.gg/BN97fKnEH2">discord</a>!
+</div>
+</section>
+</div>
+<div class="c-blog m-annotated slice-notes first">
+
+<div class="c-blog m-annotated notes-first-header">
+<div><b>Side Notes</b></div>
+<div>(interesting tangential thoughts)</div>
+</div>
+<div class="c-blog m-annotated notes-container">
+
+<label class="c-blog m-annotated notes-header" for="toggle0">
+<span class="c-blog m-annotated notes-header-text when-expanded">Notes [–]</span>
+<span class="c-blog m-annotated notes-header-text when-collapsed">Notes [+]</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color0">0</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color1">1</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color2">2</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color3">3</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color4">4</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color5">5</span>
+</label>
+<div class="c-blog m-annotated notes-contents">
+<div class="c-blog m-annotated note" data-noteid="0" id="note0">
+<span class="c-blog m-annotated note-starter note-color0">0</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+To be more specific, Ante has found a way to blend reference counting and borrow checking for mutable objects, without run-time panics or overhead that come from Rust's RefCell or Swift's exclusivity checking.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated note" data-noteid="1" id="note1">
+<span class="c-blog m-annotated note-starter note-color1">1</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+This is close to the same reason I work on Vale! But Vale uses generational references, which often risk these exact kinds of program halts.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated note" data-noteid="2" id="note2">
+<span class="c-blog m-annotated note-starter note-color2">2</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+For example, two people getting unique (read-write) references to it at the same time would crash it.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated note" data-noteid="3" id="note3">
+<span class="c-blog m-annotated note-starter note-color3">3</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+It also has <span class="c-blog m-annotated inline-code">try_borrow()</span> and <span class="c-blog m-annotated inline-code">try_borrow_mut()</span> methods which don't panic, but just moves the problem somewhere else.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated note" data-noteid="4" id="note4">
+<span class="c-blog m-annotated note-starter note-color4">4</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+And alas, GhostCell / QCell doesn't count, they bring in other limitations and aren't a drop-in replacement for <span class="c-blog m-annotated inline-code">RefCell</span>.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated note" data-noteid="5" id="note5">
+<span class="c-blog m-annotated note-starter note-color5">5</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+There is Cell, but it doesn't let you get references to its innards. For example you can’t go from <span class="c-blog m-annotated inline-code">&amp;Cell&lt;(T, U)&gt;</span> to a <span class="c-blog m-annotated inline-code">&amp;Cell&lt;U&gt;</span>. Rust also tends to have a lot of friction when internal mutability is used in general, leading to many users avoiding it.
+</p>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="ante">
+ Ante</h3>
+<p class="c-blog m-annotated">
+Ante aims to be a simpler Rust, a systems programming language with memory-safety and thread-safety. It has single ownership and borrow checking, so values are inline (on the stack, or in the containing struct/array).
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+And when the user wants to prioritize simplicity, they can opt into reference counting with the <span class="c-blog m-annotated inline-code">shared</span> keyword on their types.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+For example, this snippet would balance a red-black tree:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="comment">// Color can be either an R or a B</span>
+<span class="keyword storage modifier">shared</span> <span class="keyword">type</span> <span class="type">Color</span> <span class="punctuation delimiter">=</span> <span class="punctuation delimiter">|</span> <span class="constructor">R</span> <span class="punctuation delimiter">|</span> <span class="constructor">B</span>
+
+<span class="comment">// RbTree can either be an Empty or a Tree</span>
+<span class="keyword storage modifier">shared</span> <span class="keyword">type</span> <span class="type">RbTree</span> t <span class="punctuation delimiter">=</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">Empty</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">Tree</span> <span class="type">Color</span> <span class="punctuation bracket">(</span><span class="type">RbTree</span> t<span class="punctuation bracket">)</span> t <span class="punctuation bracket">(</span><span class="type">RbTree</span> t<span class="punctuation bracket">)</span>
+
+<span class="comment">// A balance function, for RbTree of any element type t</span>
+<span class="function">balance</span> <span class="punctuation bracket">(</span><span class="variable parameter">tree</span><span class="punctuation delimiter">:</span> <span class="type">RbTree</span> t<span class="punctuation bracket">)</span> <span class="punctuation bracket">{</span><span class="type">Copy</span> t<span class="punctuation bracket">}</span><span class="punctuation delimiter">:</span> <span class="type">RbTree</span> t <span class="punctuation delimiter">=</span>
+    <span class="keyword">match</span> tree
+    <span class="punctuation delimiter">|</span> <span class="constructor">Tree</span> <span class="constructor">B</span> <span class="punctuation bracket">(</span><span class="constructor">Tree</span> <span class="constructor">R</span> <span class="punctuation bracket">(</span><span class="constructor">Tree</span> <span class="constructor">R</span> a x b<span class="punctuation bracket">)</span> y c<span class="punctuation bracket">)</span> z d
+    <span class="punctuation delimiter">|</span> <span class="constructor">Tree</span> <span class="constructor">B</span> <span class="punctuation bracket">(</span><span class="constructor">Tree</span> <span class="constructor">R</span> a x <span class="punctuation bracket">(</span><span class="constructor">Tree</span> <span class="constructor">R</span> b y c<span class="punctuation bracket">)</span><span class="punctuation bracket">)</span> z d
+    <span class="punctuation delimiter">|</span> <span class="constructor">Tree</span> <span class="constructor">B</span> a x <span class="punctuation bracket">(</span><span class="constructor">Tree</span> <span class="constructor">R</span> <span class="punctuation bracket">(</span><span class="constructor">Tree</span> <span class="constructor">R</span> b y c<span class="punctuation bracket">)</span> z d<span class="punctuation bracket">)</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">Tree</span> <span class="constructor">B</span> a x <span class="punctuation bracket">(</span><span class="constructor">Tree</span> <span class="constructor">R</span> b y <span class="punctuation bracket">(</span><span class="constructor">Tree</span> <span class="constructor">R</span> c z d<span class="punctuation bracket">)</span><span class="punctuation bracket">)</span> <span class="operator">-&gt;</span> <span class="type">Tree</span> <span class="type">R</span> <span class="punctuation bracket">(</span><span class="type">Tree</span> <span class="type">B</span> a x b<span class="punctuation bracket">)</span> y <span class="punctuation bracket">(</span><span class="type">Tree</span> <span class="type">B</span> c z d<span class="punctuation bracket">)</span>
+    <span class="punctuation delimiter">|</span> other <span class="operator">-&gt;</span> other</code></pre>
+</div>
+<p class="c-blog m-annotated">
+I normally favor C-style syntax, but even I have to admit, this is beautiful. And it's concise too, as small as the <a class="c-blog m-annotated" href="https://github.com/Verdagon/AntePost/blob/main/python-rbtree/rbtree.py">Python equivalent</a>, and smaller than the <a class="c-blog m-annotated" href="https://github.com/Verdagon/AntePost/blob/main/cpp-rbtree/main.cpp">C++ equivalent</a> and <a class="c-blog m-annotated" href="https://github.com/Verdagon/AntePost/blob/main/rust-rbtree/src/main.rs">Rust equivalent</a>.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+But the most interesting thing for me is what Ante is doing in memory safety. Ante has <b>shared mutability superpowers:</b> if you want to mutably borrow reference-counted data, you don't need to risk run-time errors. No mainstream language can do that, not even Rust or Swift.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Before I talk about its shared mutability superpowers, let's start basic. Let's see how it does borrow checking, and then we'll add reference counting into the mix.
+</p>
+</section>
+</div>
+
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="shape-stability">
+ Shape-Stability</h3>
+<p class="c-blog m-annotated">
+Ante has a concept of <b>shape-stability</b>, which means "a reference to something of stable shape is always valid <a class="c-blog m-annotated note-anchor note-color0" data-noteid="6" href="#note6">6</a> no matter what mutations are made elsewhere."
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Because of this, Ante code can safely have <b>multiple mutable borrow references to the same struct at the same time.</b>
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+To set the stage, here's a <span class="c-blog m-annotated inline-code">heal</span> function taking two mutable references to <span class="c-blog m-annotated inline-code">Entity</span>s:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Entity</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">energy</span><span class="punctuation delimiter">:</span> <span class="type">I32</span>
+    <span class="variable other member">health</span><span class="punctuation delimiter">:</span> <span class="type">I32</span>
+
+<span class="function">heal</span> <span class="punctuation bracket">(</span><span class="variable parameter">healer</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">Entity</span><span class="punctuation bracket">)</span> <span class="punctuation bracket">(</span><span class="variable parameter">target</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">Entity</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="function">healer</span><span class="punctuation delimiter">.</span>energy -<span class="punctuation delimiter">=</span> <span class="constant numeric">10</span>
+    target<span class="punctuation delimiter">.</span>health +<span class="punctuation delimiter">=</span> <span class="constant numeric">10</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+In Ante, we can call <span class="c-blog m-annotated inline-code">heal</span> with the same <span class="c-blog m-annotated inline-code">Entity</span> for both parameters — for example, when an entity heals itself:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="function">self_heal</span> <span class="punctuation bracket">(</span><span class="variable parameter">entity</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">Entity</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="function">heal</span> entity entity</code></pre>
+</div>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Mutating <span class="c-blog m-annotated inline-code">healer</span> can't invalidate shared references to the <span class="c-blog m-annotated inline-code">Entity</span> in any way, <a class="c-blog m-annotated note-anchor note-color1" data-noteid="7" href="#note7">7</a> so the compiler accepts this code as valid.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+In other words, even though <span class="c-blog m-annotated inline-code">healer</span> and <span class="c-blog m-annotated inline-code">target</span> might point to the same <span class="c-blog m-annotated inline-code">Entity</span>, this is memory safe: nothing here can destroy the <span class="c-blog m-annotated inline-code">Entity</span>, so both references stay valid.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Now let's get a little more complicated.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Ante code can actually have multiple mutable borrow references to the same struct, <b>or any of its struct fields, or any of their struct fields, at the same time.</b>
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+For example, here we have a mutable borrow reference pointing at the ship, and another mutable borrow reference pointing at the ship's engine, at the same time.
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span>
+
+<span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">engine</span><span class="punctuation delimiter">:</span> <span class="type">Engine</span>
+    <span class="variable other member">name</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="function">refuel</span> <span class="punctuation bracket">(</span><span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="variable">engine_alias</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span> ship<span class="punctuation delimiter">.</span>engine
+
+    <span class="comment">// Can still use original `ship`</span>
+    ship<span class="punctuation delimiter">.</span>engine<span class="punctuation delimiter">.</span>fuel <span class="operator">:=</span> <span class="constant numeric">200</span>
+    engine_alias<span class="punctuation delimiter">.</span>fuel <span class="operator">:=</span> <span class="constant numeric">100</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+Ante knows this is completely memory safe, because during this function, nobody can destroy <span class="c-blog m-annotated inline-code">ship</span>, and therefore nobody can destroy its <span class="c-blog m-annotated inline-code">engine</span> or its <span class="c-blog m-annotated inline-code">fuel</span>.
+</p>
+<p class="c-blog m-annotated">
+In other words, these references are to <b>shape-stable</b> data.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Those familiar with Rust and Swift will be surprised by this:
+</p>
+<ul class="c-blog m-annotated bullet">
+<li class="c-blog m-annotated">
+In Rust, we <a class="c-blog m-annotated" href="https://github.com/Verdagon/AntePost/blob/main/rust-twomuts/src/main.rs">can't</a> have multiple <span class="c-blog m-annotated inline-code">&amp;mut</span> references pointing to the same data. <a class="c-blog m-annotated note-anchor note-color2" data-noteid="8" href="#note8">8</a>
+</li>
+<li class="c-blog m-annotated">
+In Swift, we also <a class="c-blog m-annotated" href="https://github.com/Verdagon/AntePost/blob/main/swift-twomuts/Sources/SwiftTwoMuts/main.swift">can't</a> have multiple <span class="c-blog m-annotated inline-code">&amp;mut</span> references pointing to the same data.
+</li>
+</ul>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Now let's add some reference counting into the mix!
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated slice-notes">
+<div class="c-blog m-annotated notes-container">
+
+<label class="c-blog m-annotated notes-header" for="toggle2">
+<span class="c-blog m-annotated notes-header-text when-expanded">Notes [–]</span>
+<span class="c-blog m-annotated notes-header-text when-collapsed">Notes [+]</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color0">6</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color1">7</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color2">8</span>
+</label>
+<div class="c-blog m-annotated notes-contents">
+<div class="c-blog m-annotated note" data-noteid="6" id="note6">
+<span class="c-blog m-annotated note-starter note-color0">6</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Here, "valid" means dereferenceable; you can dereference the reference without risking any memory unsafety or undefined behavior.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated note" data-noteid="7" id="note7">
+<span class="c-blog m-annotated note-starter note-color1">7</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Similar to how in Rust you can't use a <span class="c-blog m-annotated inline-code">&amp;mut Spaceship</span> to destroy the <span class="c-blog m-annotated inline-code">Spaceship</span> it's pointing at. Even in Rust, it would be perfectly safe to have multiple <span class="c-blog m-annotated inline-code">&amp;mut Spaceship</span> references pointing at the same <span class="c-blog m-annotated inline-code">Spaceship</span> local variable.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated note" data-noteid="8" id="note8">
+<span class="c-blog m-annotated note-starter note-color2">8</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+We can sometimes <a class="c-blog m-annotated" href="https://github.com/Verdagon/AntePost/blob/main/rust-cell/src/main.rs">get close</a> with <span class="c-blog m-annotated inline-code">Cell</span>, but see the appendix section for why Ante goes further than Rust's Cell.
+</p>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="reference-counting">
+ Reference Counting</h3>
+<p class="c-blog m-annotated">
+The above ability is a <b>perfect fit with reference counting,</b> as we'll see below.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+In Ante, if you put <span class="c-blog m-annotated inline-code">shared</span> in front of a type definition, it means that type is automatically reference counted. <a class="c-blog m-annotated note-anchor note-color3" data-noteid="9" href="#note9">9</a>
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+And when you have a <span class="c-blog m-annotated inline-code">shared mut</span> type, you can mutate its fields without locking, like <span class="c-blog m-annotated inline-code">set_fuel</span> is doing to <span class="c-blog m-annotated inline-code">Spaceship</span>'s <span class="c-blog m-annotated inline-code">engine: Engine</span> field:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span>
+
+<span class="keyword storage modifier">shared</span> <span class="keyword storage modifier">mut</span> <span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">engine</span><span class="punctuation delimiter">:</span> <span class="type">Engine</span>
+    <span class="variable other member">name</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="function">launch</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="function">set_fuel</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">mut</span> ship<span class="punctuation delimiter">.</span>engine<span class="punctuation bracket">)</span>
+
+<span class="function">set_fuel</span> <span class="punctuation bracket">(</span><span class="variable parameter">engine</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">Engine</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    engine<span class="punctuation delimiter">.</span>fuel <span class="operator">:=</span> <span class="constant numeric">100</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+I'll explain this snippet further below, but for now: this is similar to the <a class="c-blog m-annotated" href="https://github.com/Verdagon/AntePost/blob/main/rust-spaceship/src/main.rs">Rust equivalent</a> and <a class="c-blog m-annotated" href="https://github.com/Verdagon/AntePost/blob/main/swift-spaceship/Sources/SwiftSpaceship/main.swift">Swift equivalent</a>, but without the crash risk of Rust's .borrow_mut() or Swift's automatic run-time exclusivity checking.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+<span class="c-blog m-annotated inline-code">launch</span> can make a <span class="c-blog m-annotated inline-code">mut Engine</span> borrow reference because <span class="c-blog m-annotated inline-code">launch</span> knows the <span class="c-blog m-annotated inline-code">engine</span> will stay alive because <span class="c-blog m-annotated inline-code">launch</span> is keeping the containing <span class="c-blog m-annotated inline-code">Spaceship</span> alive.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+More generally: <b>you can always make a mut borrow reference to a shared mut type's fields,</b> even though they are shared. <a class="c-blog m-annotated note-anchor note-color4" data-noteid="10" href="#note10">10</a>
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated slice-notes">
+<div class="c-blog m-annotated notes-container">
+
+<label class="c-blog m-annotated notes-header" for="toggle3">
+<span class="c-blog m-annotated notes-header-text when-expanded">Notes [–]</span>
+<span class="c-blog m-annotated notes-header-text when-collapsed">Notes [+]</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color3">9</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color4">10</span>
+</label>
+<div class="c-blog m-annotated notes-contents">
+<div class="c-blog m-annotated note" data-noteid="9" id="note9">
+<span class="c-blog m-annotated note-starter note-color3">9</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+At least for now. Eventually, the application (not the code) will be able to configure how their memory is managed, e.g. via RC, GC, or a custom mechanism.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated note" data-noteid="10" id="note10">
+<span class="c-blog m-annotated note-starter note-color4">10</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Though, you can't always take a mut borrow reference to the things inside those fields, as we'll see later. There are different mechanisms for that.
+</p>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="more-explicit-syntax">
+ More Explicit Syntax</h3>
+<p class="c-blog m-annotated">
+From here on out, I'll be using the more explicit <span class="c-blog m-annotated inline-code">Rc Spaceship</span> syntax instead of the <span class="c-blog m-annotated inline-code">shared mut type</span> syntactic sugar (you'll see why later).
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+With the more explicit <span class="c-blog m-annotated inline-code">Rc</span> syntax, the above snippet would look like this: <a class="c-blog m-annotated note-anchor note-color5" data-noteid="11" href="#note11">11</a>
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span>
+
+<span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">engine</span><span class="punctuation delimiter">:</span> <span class="type">Engine</span>
+    <span class="variable other member">name</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="function">launch</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="function">set_fuel</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">mut</span> ship<span class="punctuation delimiter">.</span>engine<span class="punctuation bracket">)</span>
+
+<span class="function">set_fuel</span> <span class="punctuation bracket">(</span><span class="variable parameter">engine</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">Engine</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    engine<span class="punctuation delimiter">.</span>fuel <span class="operator">:=</span> <span class="constant numeric">100</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+Differences:
+</p>
+<ul class="c-blog m-annotated bullet">
+<li class="c-blog m-annotated">
+<span class="c-blog m-annotated inline-code">shared mut type Spaceship</span> became <span class="c-blog m-annotated inline-code">type Spaceship</span>
+</li>
+<li class="c-blog m-annotated">
+<span class="c-blog m-annotated inline-code">var ship: Spaceship</span> became <span class="c-blog m-annotated inline-code">var ship: Rc Spaceship</span>
+</li>
+</ul>
+</section>
+</div>
+<div class="c-blog m-annotated slice-notes">
+<div class="c-blog m-annotated notes-container">
+
+<label class="c-blog m-annotated notes-header" for="toggle4">
+<span class="c-blog m-annotated notes-header-text when-expanded">Notes [–]</span>
+<span class="c-blog m-annotated notes-header-text when-collapsed">Notes [+]</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color5">11</span>
+</label>
+<div class="c-blog m-annotated notes-contents">
+<div class="c-blog m-annotated note" data-noteid="11" id="note11">
+<span class="c-blog m-annotated note-starter note-color5">11</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+We're assuming an Ante syntax where we can access fields of an Rc's contents. Without it, this might instead be something like <span class="c-blog m-annotated inline-code">set_fuel (ship.as_mut ()).engine</span>
+</p>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="unions">
+ Unions</h3>
+<p class="c-blog m-annotated">
+Unions are <b>really good for speed.</b> <a class="c-blog m-annotated note-anchor note-color0" data-noteid="12" href="#note12">12</a> We like unions.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Unfortunately, unions are notoriously unsafe, and it's hard for memory-safe languages to support them well.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+To see why, look at the below example, where <span class="c-blog m-annotated inline-code">Engine</span> is a union, and we're trying to do unsafe shenanigans with it.
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">str</span><span class="punctuation delimiter">:</span> <span class="type">String</span><span class="punctuation bracket">)</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span><span class="punctuation bracket">)</span>
+
+<span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">engine</span><span class="punctuation delimiter">:</span> <span class="type">Engine</span>
+    <span class="variable other member">name</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="function">launch</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">other_ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="keyword">match</span> <span class="keyword storage modifier">uniq</span> ship<span class="punctuation delimiter">.</span>engine
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> str <span class="operator">-&gt;</span>
+        other_ship<span class="punctuation delimiter">.</span>engine <span class="operator">:=</span> <span class="type">ImpulseEngine</span> <span class="constant numeric">0x42</span>
+        str<span class="punctuation delimiter">.</span><span class="punctuation bracket">[</span><span class="constant numeric">0</span><span class="punctuation bracket">]</span> <span class="operator">:=</span> <span class="string">'z'</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> fuel <span class="operator">-&gt;</span>
+        <span class="punctuation bracket">(</span><span class="punctuation bracket">)</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+This program can actually segfault if we pass the same <span class="c-blog m-annotated inline-code">Spaceship</span> in for both <span class="c-blog m-annotated inline-code">ship</span> and <span class="c-blog m-annotated inline-code">other_ship</span>!
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+For this reason, <b>Ante needs to refuse to compile the above.</b> Ante has this rule:
+</p>
+<p class="c-blog m-annotated">
+If you have a mut borrow reference to a union, you <b>cannot</b> make a mut borrow reference to one of its variants.
+</p>
+<p class="c-blog m-annotated">
+This is the opposite of the struct rule from before:
+</p>
+<p class="c-blog m-annotated">
+If you have a mut borrow reference to a struct, you <b>can</b> make a mut borrow reference to one of its fields.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+In a perfect world, Ante would refuse the above program with an error like this:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante">    <span class="keyword">match</span> <span class="keyword storage modifier">uniq</span> ship<span class="punctuation delimiter">.</span>engine
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> str <span class="operator">-&gt;</span>
+        <span class="comment">// error: Mutating `other_ship.engine` may cause `ship.engine` to be dropped while still in use</span>
+        <span class="comment">// note: `other_ship.engine` is an `Engine` which may alias with `ship.engine`</span>
+        other_ship<span class="punctuation delimiter">.</span>engine <span class="operator">:=</span> <span class="type">ImpulseEngine</span> <span class="constant numeric">0x42</span>
+        str<span class="punctuation delimiter">.</span><span class="punctuation bracket">[</span><span class="constant numeric">0</span><span class="punctuation bracket">]</span> <span class="operator">:=</span> <span class="string">'z'</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> fuel <span class="operator">-&gt;</span>
+        <span class="punctuation bracket">(</span><span class="punctuation bracket">)</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+But how would Ante know that? Is that even possible?
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+It is! Ante knows to give this error because <span class="c-blog m-annotated inline-code">ship.engine</span> went through a <b>temporary <span class="c-blog m-annotated inline-code">uniq</span> conversion.</b>
+</p>
+<p class="c-blog m-annotated">
+So what do I mean by that, and what is <span class="c-blog m-annotated inline-code">uniq</span>?
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated slice-notes">
+<div class="c-blog m-annotated notes-container">
+
+<label class="c-blog m-annotated notes-header" for="toggle5">
+<span class="c-blog m-annotated notes-header-text when-expanded">Notes [–]</span>
+<span class="c-blog m-annotated notes-header-text when-collapsed">Notes [+]</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color0">12</span>
+</label>
+<div class="c-blog m-annotated notes-contents">
+<div class="c-blog m-annotated note" data-noteid="12" id="note12">
+<span class="c-blog m-annotated note-starter note-color0">12</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+ Unions are fast because they hold their contents inline, which leads to less cache misses (or "pointer chasing"). For example, in C if we have a union like this:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code">union Engine {
+  StringTheoryEngine ste;
+  ImpuseEngine ie;
+};</code></pre>
+</div>
+<p class="c-blog m-annotated">
+and it's inside a Spaceship like:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code">struct Spaceship {
+  Engine engine;
+};</code></pre>
+</div>
+<p class="c-blog m-annotated">
+The StringTheoryEngine and ImpulseEngine live <i>inside</i> the Spaceship's memory.
+</p>
+<p class="c-blog m-annotated">
+Other languages such as Java don't do this, they instead make Engine into an interface, and make <span class="c-blog m-annotated inline-code">Spaceship</span> contain a <span class="c-blog m-annotated inline-code">Engine</span> pointer instead.
+</p>
+<p class="c-blog m-annotated">
+Pointers are slow. Unions are fast. Ante is like C here.
+
+</p>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="references">
+<span class="c-blog m-annotated inline-code">uniq</span> references</h3>
+<p class="c-blog m-annotated">
+<b><span class="c-blog m-annotated inline-code">uniq</span></b> means "exclusive mutable reference".
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+If a variable contains a <span class="c-blog m-annotated inline-code">uniq Spaceship</span>, then it's the <b>only usable reference</b> to that Spaceship. <a class="c-blog m-annotated note-anchor note-color1" data-noteid="13" href="#note13">13</a>
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="function">set_fuel</span> <span class="punctuation bracket">(</span><span class="variable parameter">engine</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">uniq</span> <span class="type">Engine</span><span class="punctuation bracket">)</span> <span class="punctuation bracket">(</span><span class="variable parameter">other</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">Engine</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="comment">// In here, we know nothing else points to `engine` </span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+This is generally not useful on its own, but it does allow us to point into the contents of unions.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated slice-notes">
+<div class="c-blog m-annotated notes-container">
+
+<label class="c-blog m-annotated notes-header" for="toggle6">
+<span class="c-blog m-annotated notes-header-text when-expanded">Notes [–]</span>
+<span class="c-blog m-annotated notes-header-text when-collapsed">Notes [+]</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color1">13</span>
+</label>
+<div class="c-blog m-annotated notes-contents">
+<div class="c-blog m-annotated note" data-noteid="13" id="note13">
+<span class="c-blog m-annotated note-starter note-color1">13</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Ante's <span class="c-blog m-annotated inline-code">uniq Spaceship</span> is similar to a Rust <span class="c-blog m-annotated inline-code">&amp;mut Spaceship</span>.
+</p>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="how--helps-with-unions">
+ How <span class="c-blog m-annotated inline-code">uniq</span> helps with unions</h3>
+<p class="c-blog m-annotated">
+Because there may be other aliases to the same data, it would not be safe to allow arbitrary mutation of union fields.
+</p>
+<p class="c-blog m-annotated">
+For example, one user may be holding a String from a <span class="c-blog m-annotated inline-code">Maybe String</span> while another user mutates it to <span class="c-blog m-annotated inline-code">None</span>.
+</p>
+<p class="c-blog m-annotated">
+Or, like we saw in the above example, someone destroyed the String's container while someone else held a reference to one of its characters.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Languages generally patch this issue either via reference counting so the String lives on (Swift), or by banning shared mutability altogether (Rust).
+</p>
+<p class="c-blog m-annotated">
+But even though we want to prevent the above unsafe program, we want to allow programs that <i>safely</i> have mutable references into unions' contents:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">str</span><span class="punctuation delimiter">:</span> <span class="type">String</span><span class="punctuation bracket">)</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span><span class="punctuation bracket">)</span>
+
+<span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">engine</span><span class="punctuation delimiter">:</span> <span class="type">Engine</span>
+    <span class="variable other member">name</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="function">launch</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="keyword">match</span> <span class="keyword storage modifier">uniq</span> ship<span class="punctuation delimiter">.</span>engine <span class="comment">// match statements require uniq references</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> str <span class="operator">-&gt;</span> <span class="comment">// Get uniq reference to StringTheoryEngine</span>
+        str<span class="punctuation delimiter">.</span><span class="punctuation bracket">[</span><span class="constant numeric">0</span><span class="punctuation bracket">]</span> <span class="operator">:=</span> <span class="string">'z'</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> fuel <span class="operator">-&gt;</span>
+        <span class="punctuation bracket">(</span><span class="punctuation bracket">)</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+The equivalent programs in e.g. <a class="c-blog m-annotated" href="https://github.com/Verdagon/AntePost/blob/main/swift-union/Sources/SwiftUnion/main.swift">Swift</a> and <a class="c-blog m-annotated" href="https://github.com/Verdagon/AntePost/blob/main/rust-union/src/main.rs">Rust</a> allow this safe program by, unfortunately, adding extra run-time overhead/checks.
+</p>
+<p class="c-blog m-annotated">
+Fortunately, Ante doesn't need extra run-time overhead/checks because it understands that nobody is changing ship.engine while we're in this function.
+</p>
+<p class="c-blog m-annotated">
+Ante knows that because of its <b>temporary uniq conversion</b> mechanism.
+</p>
+</section>
+</div>
+
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="uniq-conversion">
+ uniq Conversion</h3>
+<p class="c-blog m-annotated">
+Ante's insight is that we can <b>temporarily get a uniq reference</b> to something, as long as in that scope we <b>don't access anything else</b> that might reference it.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+For example, here's a program with a uniq conversion, with comments showing where that scope begins and ends:
+</p>
+<div class="c-blog m-annotated callout">
+match uniq ?
+</div>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">str</span><span class="punctuation delimiter">:</span> <span class="type">String</span><span class="punctuation bracket">)</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span><span class="punctuation bracket">)</span>
+
+<span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">engine</span><span class="punctuation delimiter">:</span> <span class="type">Engine</span>
+    <span class="variable other member">name</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="function">launch</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="comment">// Start scope where nobody can access any other var that might contain a Spaceship</span>
+    <span class="keyword">match</span> <span class="keyword storage modifier">uniq</span> ship<span class="punctuation delimiter">.</span>engine
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> str <span class="operator">-&gt;</span>
+        str<span class="punctuation delimiter">.</span><span class="punctuation bracket">[</span><span class="constant numeric">0</span><span class="punctuation bracket">]</span> <span class="operator">:=</span> <span class="string">'z'</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> fuel <span class="operator">-&gt;</span>
+        <span class="punctuation bracket">(</span><span class="punctuation bracket">)</span>
+    <span class="comment">// End scope where nobody can access any other var that might contain a Spaceship</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+The <span class="c-blog m-annotated inline-code">uniq</span> reference exists in scope between the <span class="c-blog m-annotated inline-code">// Start scope</span> and <span class="c-blog m-annotated inline-code">// End scope</span> comments (more specifically, everything in between <span class="c-blog m-annotated inline-code">ship</span>'s declaration and its last use).
+</p>
+<p class="c-blog m-annotated">
+While the <span class="c-blog m-annotated inline-code">uniq</span> reference exists, Ante prevents us from using any other pre-existing variable that might indirectly contain a <span class="c-blog m-annotated inline-code">Spaceship</span>.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Whereas Rust prevents the <span class="c-blog m-annotated inline-code">uniq</span> from existing "because other references might exist elsewhere", Ante says that we can make the <span class="c-blog m-annotated inline-code">uniq</span> as long as we don't <b>use</b> those references <b>in this scope.</b>
+</p>
+</section>
+<section class="c-blog m-annotated">
+<div class="c-blog m-annotated callout">
+This is an important nuance right here. A <span class="c-blog m-annotated inline-code">uniq Spaceship</span> isn't the only reference to the Spaceship, it's just the only <b>usable</b> reference. This is similar to C in that there can be many pointers to an object, but in a given scope, a <span class="c-blog m-annotated inline-code">restrict</span> pointer is the only one that can be used. Ante is taking advantage of this nuance.
+</div>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+However, there are some limitations.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+If we used another local variable inside that scope (such as another <span class="c-blog m-annotated inline-code">Rc Spaceship</span>) that might indirectly refer to a Spaceship, we'd get a compile error:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">str</span><span class="punctuation delimiter">:</span> <span class="type">String</span><span class="punctuation bracket">)</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span><span class="punctuation bracket">)</span>
+
+<span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">engine</span><span class="punctuation delimiter">:</span> <span class="type">Engine</span>
+    <span class="variable other member">name</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="function">launch</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">other_ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="comment">// Start scope where nobody can access any other var that might contain a Spaceship</span>
+    <span class="keyword">match</span> <span class="keyword storage modifier">uniq</span> ship<span class="punctuation delimiter">.</span>engine
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> str <span class="operator">-&gt;</span>
+        <span class="comment">// error: Mutating `other_ship.engine` may cause `ship.engine` to be dropped while still in use</span>
+        <span class="comment">// note: `other_ship.engine` is an `Engine` which may alias with `ship.engine`</span>
+        other_ship<span class="punctuation delimiter">.</span>engine <span class="operator">:=</span> <span class="type">ImpulseEngine</span> <span class="constant numeric">0x42</span>
+        str<span class="punctuation delimiter">.</span><span class="punctuation bracket">[</span><span class="constant numeric">0</span><span class="punctuation bracket">]</span> <span class="operator">:=</span> <span class="string">'z'</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> fuel <span class="operator">-&gt;</span>
+        <span class="punctuation bracket">(</span><span class="punctuation bracket">)</span>
+    <span class="comment">// End scope where nobody can access any other var that might contain a Spaceship</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+This is an error because we're accessing <span class="c-blog m-annotated inline-code">other_ship</span> while <span class="c-blog m-annotated inline-code">ship</span> is temporarily converted to a <span class="c-blog m-annotated inline-code">uniq Spaceship</span>.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+We can't use anything that even <b>indirectly</b> contains a Spaceship,   
+<a class="c-blog m-annotated note-anchor note-color2" data-noteid="14" href="#note14">14</a>  
+so this would be rejected too:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">str</span><span class="punctuation delimiter">:</span> <span class="type">String</span><span class="punctuation bracket">)</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span><span class="punctuation bracket">)</span>
+
+<span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">engine</span><span class="punctuation delimiter">:</span> <span class="type">Engine</span>
+    <span class="variable other member">name</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="keyword">type</span> <span class="type">HasAShip</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span>
+
+<span class="function">launch</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">other</span><span class="punctuation delimiter">:</span> <span class="type">HasAShip</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="comment">// Start scope where nobody can access any other var that might contain a Spaceship</span>
+    <span class="keyword">match</span> <span class="keyword storage modifier">uniq</span> ship<span class="punctuation delimiter">.</span>engine
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> str <span class="operator">-&gt;</span>
+        <span class="comment">// error: Mutating `other.ship.engine` may cause `ship.engine` to be dropped while still in use</span>
+        <span class="comment">// note: `other.ship.engine` is an `Engine` which may alias with `ship.engine`</span>
+        other<span class="punctuation delimiter">.</span>ship<span class="punctuation delimiter">.</span>engine <span class="operator">:=</span> <span class="type">ImpulseEngine</span> <span class="constant numeric">0x42</span>
+        str<span class="punctuation delimiter">.</span><span class="punctuation bracket">[</span><span class="constant numeric">0</span><span class="punctuation bracket">]</span> <span class="operator">:=</span> <span class="string">'z'</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> fuel <span class="operator">-&gt;</span>
+        <span class="punctuation bracket">(</span><span class="punctuation bracket">)</span>
+    <span class="comment">// End scope where nobody can access any other var that might contain a Spaceship</span></code></pre>
+</div>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Note that we <b>can</b> use anything else, for example an integer <span class="c-blog m-annotated inline-code">new_fuel</span>:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">str</span><span class="punctuation delimiter">:</span> <span class="type">String</span><span class="punctuation bracket">)</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span><span class="punctuation bracket">)</span>
+
+<span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">engine</span><span class="punctuation delimiter">:</span> <span class="type">Engine</span>
+    <span class="variable other member">name</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="function">launch</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation bracket">(</span><span class="variable parameter">new_fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="comment">// Start scope where nobody can access any other var that might contain a Spaceship</span>
+    <span class="keyword">match</span> <span class="keyword storage modifier">uniq</span> ship<span class="punctuation delimiter">.</span>engine
+    <span class="punctuation delimiter">|</span> <span class="constructor">StringTheoryEngine</span> str <span class="operator">-&gt;</span>
+        str<span class="punctuation delimiter">.</span><span class="punctuation bracket">[</span><span class="constant numeric">0</span><span class="punctuation bracket">]</span> <span class="operator">:=</span> <span class="string">'z'</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> fuel <span class="operator">-&gt;</span>
+        fuel <span class="operator">:=</span> new_fuel
+    <span class="comment">// End scope where nobody can access any other var that might contain a Spaceship</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+We can use <span class="c-blog m-annotated inline-code">new_fuel</span> because it's just an <span class="c-blog m-annotated inline-code">I32</span>, it can't contain any references to a <span class="c-blog m-annotated inline-code">Spaceship</span>. It's just an integer.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated slice-notes">
+<div class="c-blog m-annotated notes-container">
+
+<label class="c-blog m-annotated notes-header" for="toggle8">
+<span class="c-blog m-annotated notes-header-text when-expanded">Notes [–]</span>
+<span class="c-blog m-annotated notes-header-text when-collapsed">Notes [+]</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color2">14</span>
+</label>
+<div class="c-blog m-annotated notes-contents">
+<div class="c-blog m-annotated note" data-noteid="14" id="note14">
+<span class="c-blog m-annotated note-starter note-color2">14</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Also, if <span class="c-blog m-annotated inline-code">Spaceship</span> contained a field like <span class="c-blog m-annotated inline-code">follow_ship: Rc Spaceship</span> it would be rejected, because then that <span class="c-blog m-annotated inline-code">uniq Spaceship</span> is also reachable via that. So generally, one can't do a <span class="c-blog m-annotated inline-code">mut</span>-&gt;<span class="c-blog m-annotated inline-code">uniq</span> conversion on a recursive type.
+</p>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="across-function-calls">
+ Across Function Calls</h3>
+<p class="c-blog m-annotated">
+Here's an example that does a <span class="c-blog m-annotated inline-code">mut</span>-&gt;<span class="c-blog m-annotated inline-code">uniq</span> conversion as part of a function call.
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Resonator</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">resonance</span><span class="punctuation delimiter">:</span> <span class="type">I32</span>
+
+<span class="keyword">type</span> <span class="type">Engine</span> <span class="punctuation delimiter">=</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span><span class="punctuation bracket">)</span>
+    <span class="punctuation delimiter">|</span> <span class="constructor">WarpEngine</span> <span class="punctuation bracket">(</span><span class="variable other member">resonators</span><span class="punctuation delimiter">:</span> <span class="type">Vec</span> <span class="type">Resonator</span><span class="punctuation bracket">)</span>
+
+<span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">engine</span><span class="punctuation delimiter">:</span> <span class="type">Engine</span>
+    <span class="variable other member">name</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="function">foo</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation bracket">(</span><span class="variable parameter">new_res</span><span class="punctuation delimiter">:</span> <span class="type">Resonator</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="comment">// Start scope where nobody can access any other var that might contain a Spaceship</span>
+    <span class="function">maybe_use_resonator</span> ship new_res <span class="comment">// converts to `uniq` here</span>
+    <span class="comment">// End scope where nobody can access any other var that might contain a Spaceship</span>
+
+<span class="function">maybe_use_resonator</span> <span class="punctuation bracket">(</span><span class="variable parameter">u_ship</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">uniq</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation bracket">(</span><span class="variable parameter">new_res</span><span class="punctuation delimiter">:</span> <span class="type">Resonator</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="keyword">match</span> u_ship<span class="punctuation delimiter">.</span>engine
+    <span class="punctuation delimiter">|</span> <span class="constructor">WarpEngine</span> resonators <span class="operator">-&gt;</span>
+        <span class="function">resonators</span><span class="punctuation delimiter">.</span>push new_res
+    <span class="punctuation delimiter">|</span> <span class="constructor">ImpulseEngine</span> fuel <span class="operator">-&gt;</span>
+        <span class="punctuation bracket">(</span><span class="punctuation bracket">)</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+Remember, the rule is that we can <b>temporarily get a uniq reference</b> to something, as long as in that scope we <b>don't access anything else</b> that might reference it.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+As you can see from the comments, the compiler really just needs to check the <span class="c-blog m-annotated inline-code">maybe_use_resonator</span> callsite, to check that none of the arguments contain anything that might have a reference to a <span class="c-blog m-annotated inline-code">Spaceship</span>. And the only other argument (<span class="c-blog m-annotated inline-code">Resonator</span>) does not, so we're good!
+</p>
+</section>
+</div>
+
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="returning-values">
+ Returning Values</h3>
+<p class="c-blog m-annotated">
+The main restriction with the <span class="c-blog m-annotated inline-code">mut</span> to <span class="c-blog m-annotated inline-code">uniq</span> conversion is that you cannot return converted <span class="c-blog m-annotated inline-code">uniq</span> references from a function: <a class="c-blog m-annotated note-anchor note-color3" data-noteid="15" href="#note15">15</a>
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="function">get_converted</span> <span class="punctuation bracket">(</span><span class="variable parameter">foo</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">Foo</span><span class="punctuation bracket">)</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">uniq</span> <span class="type">Foo</span> <span class="punctuation delimiter">=</span>
+    <span class="comment">// Attempt to convert mut -&gt; uniq</span>
+    foo  <span class="comment">// error: `local uniq` refs cannot be returned as `uniq`</span></code></pre>
+</div>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Luckily, we can still get what we want by specifying the returned reference is only <b>locally unique</b>:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="function">get_converted</span> <span class="punctuation bracket">(</span><span class="variable parameter">foo</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">Foo</span><span class="punctuation bracket">)</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">local</span> <span class="keyword storage modifier">uniq</span> <span class="type">Foo</span> <span class="punctuation delimiter">=</span>
+    <span class="comment">// Convert mut -&gt; local uniq</span>
+    foo</code></pre>
+</div>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+This is actually always what is happening internally anyway, whenever we convert from a <span class="c-blog m-annotated inline-code">mut</span> ref to a <span class="c-blog m-annotated inline-code">uniq</span> ref, we only get a <span class="c-blog m-annotated inline-code">local uniq</span> one back. Most of the time we can use this as a normal <span class="c-blog m-annotated inline-code">uniq</span> ref, but when returning values we have to specify it explicitly.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated slice-notes">
+<div class="c-blog m-annotated notes-container">
+
+<label class="c-blog m-annotated notes-header" for="toggle10">
+<span class="c-blog m-annotated notes-header-text when-expanded">Notes [–]</span>
+<span class="c-blog m-annotated notes-header-text when-collapsed">Notes [+]</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color3">15</span>
+</label>
+<div class="c-blog m-annotated notes-contents">
+<div class="c-blog m-annotated note" data-noteid="15" id="note15">
+<span class="c-blog m-annotated note-starter note-color3">15</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+If this were allowed, the returned <span class="c-blog m-annotated inline-code">uniq</span> reference could be used without the compiler checks that ensure that no variable in scope can be used which may alias the converted reference.
+</p>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="i-think-ante-is-onto-something-here">
+ I think Ante is onto something here</h3>
+<p class="c-blog m-annotated">
+Ante can temporarily turn an RC reference (<span class="c-blog m-annotated inline-code">Rc Spaceship</span>) into a unique borrow reference (<span class="c-blog m-annotated inline-code">uniq Spaceship</span>) without run-time errors, and that's a <b>huge</b> step forward. <a class="c-blog m-annotated note-anchor note-color4" data-noteid="16" href="#note16">16</a>
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+It does have a downside however. As Jake (Ante's creator) emphasized to me, this <i>does</i> require some type analysis: answering the question "Can we reach a Spaceship from an Engine?" requires the compiler to recursively look through Engine and everything it contains, to make sure that nothing contains a Spaceship. This could be pretty brittle; adding fields to a struct can be a breaking API change.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+And for that reason, Jake's looking for a better way to uphold that guarantee, with some promising options:
+</p>
+<ul class="c-blog m-annotated bullet">
+<li class="c-blog m-annotated">
+Taking a page from <a class="c-blog m-annotated" href="https://verdagon.dev/blog/group-borrowing">group borrowing</a> and <a class="c-blog m-annotated" href="https://doc.flix.dev/references.html">Flix’s references</a>, <a class="c-blog m-annotated note-anchor note-color5" data-noteid="17" href="#note17">17</a> each shared mutable type like <span class="c-blog m-annotated inline-code">Rc</span> could be branded with an anonymous but unique type. The compiler could then use that brand to distinguish multiple values for uniqueness instead of using the element type. This could make common types like strings easier to convert since they are more likely to appear within other values and thus be blocked from the current type-based check.
+</li>
+<ul class="c-blog m-annotated bullet">
+<li class="c-blog m-annotated">
+From there, the type analysis can be removed entirely if an effect like <span class="c-blog m-annotated inline-code">Mutates ‘a</span> is added when mutating a shared type. The compiler would only need to ensure each <span class="c-blog m-annotated inline-code">Mutates ‘a</span> effect comes from the same variable.
+</li>
+</ul>
+<li class="c-blog m-annotated">
+There are run-time options too, e.g. a language could allow the user to check if two references point to different objects, or offer logic to express checks, or even <span class="c-blog m-annotated inline-code">unsafe</span> checks to wrap in a safe API.  
+</li>
+<li class="c-blog m-annotated">
+The compiler could track which values are not possibly aliased, because e.g., they are not indirectly stored inside an <span class="c-blog m-annotated inline-code">Rc</span>. If the compiler did this, any of these values could be used within a locally unique variable’s scope regardless of the types they contain.
+</li>
+</ul>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+I think there could be other options as well:
+</p>
+<ul class="c-blog m-annotated bullet">
+<li class="c-blog m-annotated">
+Something similar to Pony's <a class="c-blog m-annotated" href="https://tutorial.ponylang.io/reference-capabilities/reference-capabilities#the-list-of-reference-capabilities">iso permission</a>, in that it guarantees that an <span class="c-blog m-annotated inline-code">iso Spaceship</span> has no references pointing out (though, without the <span class="c-blog m-annotated inline-code">iso</span> restriction that only one person can point to it).  
+</li>
+<li class="c-blog m-annotated">
+If there was a temporary permission that said "you can look inside this struct, but you can't use any of its references that point outside of itself", that might help here.
+</li>
+</ul>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Even with these possible angles, the hard part will be making it ergonomic. Jake's goal with Ante is to make something usable, readable, and simple. Doing that while offering maximum flexibility is always tricky.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated slice-notes">
+<div class="c-blog m-annotated notes-container">
+
+<label class="c-blog m-annotated notes-header" for="toggle11">
+<span class="c-blog m-annotated notes-header-text when-expanded">Notes [–]</span>
+<span class="c-blog m-annotated notes-header-text when-collapsed">Notes [+]</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color4">16</span>
+<span class="c-blog m-annotated note-preview when-collapsed note-color5">17</span>
+</label>
+<div class="c-blog m-annotated notes-contents">
+<div class="c-blog m-annotated note" data-noteid="16" id="note16">
+<span class="c-blog m-annotated note-starter note-color4">16</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+This is, in a way, a <i>compile-time RefCell</i>, and is what C++ users have internalized since the dawn of time. Jake's found a way to build it into a memory safety approach.
+</p>
+</section>
+</div>
+<div class="c-blog m-annotated note" data-noteid="17" id="note17">
+<span class="c-blog m-annotated note-starter note-color5">17</span>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+I and a few others have been exploring this angle lately.
+</p>
+</section>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="the-broader-picture">
+ The broader picture</h3>
+<p class="c-blog m-annotated">
+If you look closely, you'll see that something <i>very interesting</i> is happening in the realms of memory safety design.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+We used to think that it was impossible to have "shared mutable borrowing", where we could have a borrowed reference to something, even though others can mutate it through their own references. Heck, Rust is basically built on that belief.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+But we're starting to see a <i>lot</i> of exceptions pile up:
+</p>
+<ul class="c-blog m-annotated bullet">
+<li class="c-blog m-annotated">
+In Ante, we're able to get unique borrow references to data even though it was shared-mutable, via its local uniqueness rules.  
+</li>
+<li class="c-blog m-annotated">
+In <a class="c-blog m-annotated" href="https://vale.dev/">Vale</a>, we're able to get immutable borrow references to data even though it was shared mutable, via its pure functions.  
+</li>
+<li class="c-blog m-annotated">
+In <a class="c-blog m-annotated" href="https://verdagon.dev/blog/group-borrowing">group borrowing</a>, a compiler can make shared-mutable borrow references to anything, even if they aren't shape-stable.
+</li>
+<li class="c-blog m-annotated">
+With Rust's <a class="c-blog m-annotated" href="https://docs.rs/ghost-cell/latest/ghost_cell/">GhostCell</a>, a graph of objects can freely point to each other (though we can still only have one mutable reference to one of them at any given time).
+</li>
+</ul>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+This isn't just a bag of tricks. This is the universe telling us, very strongly, that the unifying principle is right there, in front of us.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+I'll mysteriously leave that unifying principle vague and unexplained for now. Leave a comment if you know what I'm talking about!
+</p>
+</section>
+</div>
+
+</div>
+<div class="c-blog m-annotated slice">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="conclusion">
+ Conclusion</h3>
+<p class="c-blog m-annotated">
+Let's get zen for a minute. <b>We are like water,</b> in a complex landscape full of mountains and valleys. It's easy to follow the path of least resistance and flow into a valley, where we can't see much. It's hard to climb to the top of the mountains and see farther.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+And that's why we have articles like this! Every new technique is another tool to help us climb the mountains and see farther. All we need to do is <a class="c-blog m-annotated" href="https://verdagon.dev/grimoire/grimoire">keep adding tools</a>, and we'll inevitably find the next big advances in memory safety.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+If you enjoy articles like this, stay tuned and subscribe to the RSS feed, r/vale, twitter, and bluesky. To follow Ante’s development, check out its <a class="c-blog m-annotated" href="https://antelang.org/">website</a> and its <a class="c-blog m-annotated" href="https://discord.com/invite/NPJncGBAws">discord</a>.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Cheers!
+</p>
+<p class="c-blog m-annotated">
+- Evan
+</p>
+</section>
+</div>
+
+</div>
+<div class="c-blog m-annotated slice afterword">
+<div class="c-blog m-annotated slice-contents">
+<section class="c-blog m-annotated">
+<h3 class="c-blog m-annotated" id="appendix-comparison-to-rusts-cell">
+ Appendix: Comparison to Rust's Cell</h3>
+<p class="c-blog m-annotated">
+The savvy Rust user will ask, "how is this different from putting Cells in structs?"
+</p>
+<p class="c-blog m-annotated">
+To illustrate the question, here's a program in Ante, and the equivalent Rust one with Cells below it:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">ante</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-ante"><span class="keyword">type</span> <span class="type">Spaceship</span> <span class="punctuation delimiter">=</span>
+    <span class="variable other member">fuel</span><span class="punctuation delimiter">:</span> <span class="type">I32</span>
+    <span class="variable other member">status</span><span class="punctuation delimiter">:</span> <span class="type">String</span>
+
+<span class="comment">// Example: changes "Enterprise" to "Enterprise (refueling)"</span>
+<span class="function">add_to_name</span> <span class="punctuation bracket">(</span><span class="keyword storage modifier">var</span> <span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span> <span class="type">Spaceship</span><span class="punctuation bracket">)</span> <span class="punctuation delimiter">=</span>
+    <span class="variable">status_ref</span><span class="punctuation delimiter">:</span> <span class="keyword storage modifier">mut</span> <span class="type">String</span> <span class="punctuation delimiter">=</span> <span class="punctuation bracket">(</span><span class="function">ship</span><span class="punctuation delimiter">.</span>as_mut <span class="punctuation bracket">(</span><span class="punctuation bracket">)</span><span class="punctuation bracket">)</span><span class="punctuation delimiter">.</span>status <span class="comment">// Get reference to the status String itself</span>
+    status_ref +<span class="punctuation delimiter">=</span> <span class="string">" (refueling)"</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+And the Rust version:
+</p>
+<div class="c-blog m-annotated c-snippet root">
+<div class="c-blog m-annotated c-snippet header">rust</div>
+<pre class="c-blog m-annotated c-snippet pre"><code class="c-blog m-annotated c-snippet code language-rust"><span class="keyword">struct</span> <span class="type">Spaceship</span> <span class="punctuation bracket">{</span>
+    fuel<span class="punctuation delimiter">:</span> <span class="type">Cell</span><span class="punctuation bracket">&lt;</span><span class="type builtin">i32</span><span class="punctuation bracket">&gt;</span><span class="punctuation delimiter">,</span>
+    status<span class="punctuation delimiter">:</span> <span class="type">Cell</span><span class="punctuation bracket">&lt;</span><span class="type">String</span><span class="punctuation bracket">&gt;</span><span class="punctuation delimiter">,</span>
+<span class="punctuation bracket">}</span>
+
+<span class="comment">// Example: changes "Enterprise" to "Enterprise (refueling)"</span>
+<span class="keyword">fn</span> <span class="function">add_to_name</span><span class="punctuation bracket">(</span><span class="variable parameter">ship</span><span class="punctuation delimiter">:</span> <span class="type">Rc</span><span class="punctuation bracket">&lt;</span><span class="type">Spaceship</span><span class="punctuation bracket">&gt;</span><span class="punctuation bracket">)</span> <span class="punctuation bracket">{</span>
+    <span class="keyword">let</span> status_ref = <span class="operator">&amp;</span>ship<span class="punctuation delimiter">.</span>status<span class="punctuation delimiter">;</span> <span class="comment">// Can't get the &amp;String, but can get &amp;Cell&lt;String&gt;</span>
+    <span class="keyword">let</span> <span class="keyword">mut</span> status = status_ref<span class="punctuation delimiter">.</span><span class="function method">replace</span><span class="punctuation bracket">(</span><span class="type">String</span><span class="punctuation delimiter">::</span><span class="function">new</span><span class="punctuation bracket">(</span><span class="punctuation bracket">)</span><span class="punctuation bracket">)</span><span class="punctuation delimiter">;</span> <span class="comment">// Temporarily put something in its place</span>
+    status += <span class="string">" (refueling)"</span><span class="punctuation delimiter">;</span>
+    status_ref<span class="punctuation delimiter">.</span><span class="function method">replace</span><span class="punctuation bracket">(</span>status<span class="punctuation bracket">)</span><span class="punctuation delimiter">;</span> <span class="comment">// Swap the modified name back into place</span>
+<span class="punctuation bracket">}</span></code></pre>
+</div>
+<p class="c-blog m-annotated">
+Rust has a limitation here: Given an <span class="c-blog m-annotated inline-code">Rc&lt;Spaceship&gt;</span>, there's no way to get a <span class="c-blog m-annotated inline-code">&amp;mut String</span> that we can add to. So instead, Rust has to swap a default value in and remember to put it back.
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+This has a few downsides:
+</p>
+<ul class="c-blog m-annotated bullet">
+<li class="c-blog m-annotated">
+It forces you to create a "default" instance, like "" for Strings. Anyone who's used C# and Golang knows how bad it is to require this.  
+</li>
+<li class="c-blog m-annotated">
+It has a risk: what if we forget the final <span class="c-blog m-annotated inline-code">replace</span> call to put it back?  
+</li>
+<li class="c-blog m-annotated">
+Another risk: what if someone reads the status while it's swapped?
+</li>
+</ul>
+<p class="c-blog m-annotated">
+That last will sound familiar: this Cell is basically a RefCell!
+</p>
+</section>
+<section class="c-blog m-annotated">
+<p class="c-blog m-annotated">
+Ante approaches this differently: it lets you temporarily get a reference to the status string, and the compiler enforces that nobody else can access it while you're doing that.
+
+</p>
+</section>
+</div>
+
+</div>
+<div class="c-blog m-annotated slice afterword">
+
+</div>
+</div>
+</div>
+<div class="c-footer root">
+<div class="c-footer copyright">
+        Copyright © 2022 Evan Ovadia  
+      </div>
+</div>
+
+</body>
