@@ -1,0 +1,343 @@
+In 2014 I came back from San Francisco with no plan and one useful scar: I had seen what small
+software teams needed from their tools. I had spent a year building SDKs at Joypad and TinySpark after
+shipping one of my first games. Then I was back in Spain, about to start Telecommunications
+Engineering, and trying to decide what to build next.
+
+The answer was Fyve, a social network built around people’s interests. I chose 
+Go
+
+for the backend because the language felt plain in the right way. 
+Gin
+ started
+as the web framework for that product, written while I was still learning Go and still deciding what kind
+of engineer I wanted to be. The code lives at 
+gin-gonic/gin
+.
+
+Fyve faded. Gin kept going.
+
+Simple over easy
+
+At the time, the Go web framework people kept pointing me to was
+
+Martini
+. I understood why immediately. The README was small,
+the middleware model felt elegant, and you could get a route responding in minutes.
+
+Martini used reflection-based dependency injection to wire handlers together. That made the first demo
+feel smooth. It also moved important behavior out of sight. Services appeared in handlers by magic,
+control flow became harder to trace, and reflection ran on the request path.
+
+I was reading the Go community through Rob Pike’s
+
+Simplicity is Complicated
+ lens around then. The line that
+stuck with me was not a slogan about minimalism. It was the cost model: simple software often takes
+more work from the person building it so it can take less work from the person using it.
+
+That became the design line for Gin. 
+Easy is what looks good in the first example:
+ fewer lines,
+nicer syntax, less ceremony on the page. 
+Simple is lower count:
+ fewer moving parts, fewer concepts to
+learn, fewer exceptions to remember. Martini made the first version easy. I wanted Gin to stay simple
+after the codebase was old enough to surprise me.
+
+Finding the middle ground
+
+Aristotle’s version of virtue was the middle ground: 
+not too much, not too little.
+ That was the shape
+of the framework problem too.
+
+Martini gave you too much magic. Go’s standard 
+net/http
+ gives you the
+honest version of web programming: no magic, explicit control flow, and a handler shape you can hold in
+your head. But it gives you too little help. You write the same plumbing for route params, request
+parsing, validation, and responses in handler after handler. None of it is hard. Enough of it becomes
+noise.
+
+Gin was my attempt to find the useful point between them: keep the request path explicit, run no
+reflection there, and put the boring work behind one object you can inspect: the Context.
+
+r 
+:=
+ gin.
+Default
+()
+
+r.
+GET
+(
+"/users/:id"
+, 
+func
+(
+c
+ *
+gin
+.
+Context
+) {
+
+    id 
+:=
+ c.
+Param
+(
+"id"
+)          
+// path params, no reflection
+
+    c.
+JSON
+(
+200
+, 
+gin
+.
+H
+{
+"id"
+: id}) 
+// response rendering, one call
+
+})
+
+r.
+Run
+(
+":8080"
+)
+
+That 
+*gin.Context
+ carries the request, response writer, path parameters, validation helpers, and
+rendering. You pass one thing around. The obvious operations stay one method call away, while the
+machinery remains visible enough that you can debug it when production gets weird.
+
+Funny enough, 
+gin.Context
+ shipped in 2014, two years before Go’s standard library had a
+
+context.Context
+. When it landed, we didn’t rename ours — we made
+
+gin.Context
+ satisfy the standard interface, adding full compatibility without a single breaking change.
+
+That was the product sense from SDK work showing up in a web framework. Developer experience is a
+feature when it makes the fast path feel natural.
+
+A router built around a radix tree
+
+The router is where the simplicity line became concrete. Martini could walk a list of regular
+expressions and ask each one whether it matched. That is flexible. You can make a route match only
+numbers, or hide extra rules inside the pattern. It is also another language inside your framework.
+
+Gin chose a smaller route language: static segments, named parameters, and catch-alls. That choice made
+the router faster because it could use a 
+radix tree
+, the same
+approach 
+httprouter
+ made popular in Go. More importantly, it made routes easier to reason about. The framework pushed you
+toward regular paths instead of clever matchers.
+
+Route lookup, without scanning routes
+
+routes 
+0
+ 
+nodes 
+1
+ 
+matched 
+/
+
+Figure. A compressed radix tree, built and matched live. Shared prefixes collapse into one path, then /blog/42/comments walks the tree and binds 42 as :slug.
+
+Start with ordinary routes
+ 
+The router sees route strings like 
+/search
+, 
+/support
+, and 
+/blog/:slug/comments
+. A naive router can test them one by one. A radix tree turns the shared text into structure.
+
+Shared prefixes collapse
+ 
+/search
+ and 
+/support
+ share 
+/s
+. The two blog routes share 
+/blog/
+ and then 
+:slug
+. Each shared prefix is stored once.
+
+Matching walks one path
+ 
+For 
+/blog/42/comments
+, the lookup follows 
+/blog/
+, binds 
+42
+ at 
+:slug
+, then continues into 
+/comments
+. It does not scan every route.
+
+The hot path stays small
+ 
+The work follows the URL length. Params land in a small slice, the matched handler is already sitting on the final node, and the request path avoids reflection.
+
+Matching 
+/blog/42/comments
+ walks 
+/blog/
+ down to the 
+:slug
+ node, binds 
+42
+, and continues into
+
+/comments
+. The work follows the length of the URL, not the number of routes registered in the app.
+Routes that look separate in a file collapse into one compact path through memory.
+
+For a router holding 
+n
+n
+n
+ routes and a request path of length 
+k
+k
+k
+, a radix-tree lookup runs in
+
+T
+match
+(
+k
+)
+=
+O
+(
+k
+)
+,
+independent of 
+n
+,
+T_\text{match}(k) = O(k), \quad \text{independent of } n,
+T
+match
+​
+(
+k
+)
+=
+O
+(
+k
+)
+,
+independent of 
+n
+,
+
+where linear regex matching costs 
+O
+(
+n
+⋅
+m
+)
+O(n \cdot m)
+O
+(
+n
+⋅
+m
+)
+ for 
+m
+m
+m
+-length patterns. The tree trades that
+per-request scan for a single walk down the shared prefix.
+
+The same idea showed up in the small allocation choices. Parameters live in a preallocated slice. Context
+objects come from a 
+sync.Pool
+ and get reset between requests. The garbage collector gets less junk to
+clean up, so latency has fewer reasons to wobble.
+
+That is the kind of performance work I trust: fewer operations on the hot path, and fewer concepts in
+the programmer’s head.
+
+Designing for zero breaking changes
+
+The quiet goal was zero breaking changes. I wanted Gin to feel like it belonged in Go’s ecosystem, which
+meant learning from Go’s own 
+compatibility promise
+.
+
+That constraint changes how you design. You add a method before you remove one. You reject the clever
+rename that saves five characters. You treat every public function as something a stranger might build
+a company on.
+
+It held. Some of the first programs written against Gin still compile and run more than ten years
+later. 
+The benchmarks matter. That compatibility matters more.
+
+Hacker News, and then growth
+
+I 
+released Gin on Hacker News
+ at the right moment. Go was
+getting attention there, and a framework that fit in one README, avoided reflection on the hot path, and
+benchmarked well was easy to try.
+
+The growth after that was steady rather than cinematic. People used it, filed issues, sent patches,
+and put it in real services. Today Gin sits around 88k stars with more than 290k projects depending on
+it.
+
+Open source numbers can be vanity metrics. In this case, 
+the dependency count matters more to me than
+the stars.
+ It means the API decisions kept compounding long after the original startup disappeared.
+
+Letting it graduate
+
+A few years in, I stepped back and handed Gin to maintainers who kept improving it without me. I think
+of that as the project graduating. Special kudos to 
+Bo-Yi Wu
+ and
+
+Javier Provecho
+, who carried it forward and kept the bar high.
+
+The part of open source I respect is when 
+the thing stops needing its author.
+ It survives contact
+with other people’s use cases, other people’s priorities, and other people’s taste.
+
+If you’re building a library, that is the bar I would aim for. Design the API you can imagine keeping
+for ten years. Make it simple underneath, even when that costs more than making it easy. 
+Build it so it
+can outgrow you.
+
+I tried to do the same thing a few years later on a compiler, which is the story of
+
+Qwik
+.

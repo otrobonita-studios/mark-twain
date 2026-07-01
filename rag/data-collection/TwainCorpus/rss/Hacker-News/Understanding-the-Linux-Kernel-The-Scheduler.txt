@@ -1,0 +1,514 @@
+ð
+
+Understanding the Linux Kernel (4 of 4)
+
+â¼
+1.
+
+The Linux Kernel Startup
+2.
+
+System Calls
+3.
+
+Memory Manager
+4.
+
+The Scheduler
+
+You are here
+In the 
+previous article
+
+we looked at how the kernel gives every process its own private view of memory. But memory is only half of what a process needs to actually 
+run
+. The other half is the CPU itself â and there are only so many CPUs in a machine, while there are usually hundreds or thousands of things that want to run on them.
+So somebody has to decide, constantly, who gets a CPU and for how long. That somebody is the 
+scheduler
+. Every few milliseconds, on every core, the kernel asks itself the same question â 
+of everything that wants to run right now, who runs next?
+ â and the answer has to be fast, fair, and good enough that your text editor stays responsive even while a compile is pegging every core.
+Let’s take it step by step, because the scheduler has a lot of moving parts. We’ll start with what the scheduler is even scheduling â what a process and a thread really are under the hood. Then we’ll see that Linux doesn’t have just one scheduler but several, stacked as 
+scheduling classes
+. From there we’ll look at 
+when
+ a running task stops running (it’s more interesting than it sounds), and look at what it costs to switch from one task to another. And finally we’ll get to the heart of it: how the kernel actually decides who’s next, using an algorithm called 
+EEVDF
+.
+ð A note on scope
+Everything here is against Linux 
+7.1
+ (the scheduler core lives in 
+kernel/sched/
+, mostly in 
+fair.c
+ and 
+core.c
+). And it’s a deliberate simplification: the real implementation has far more going on â load balancing across CPUs, group scheduling through cgroups, CPU bandwidth control, NUMA awareness, and countless edge cases â that I’m skipping over to keep the core ideas clear.
+So let’s begin where the scheduler itself begins: with the thing it’s actually shuffling on and off the CPU.
+What the Scheduler Actually Schedules
+Here’s the first surprise, and it clears up a lot of confusion: the kernel doesn’t schedule “processes” or “threads.” Those are words we use up in user space. Down in the kernel there’s just one kind of schedulable thing â a 
+task_struct
+ (
+include/linux/sched.h:820
+), the kernel’s record of one flow of execution, one thing that can sit on a CPU and run instructions.
+What you 
+call
+ a process and what you 
+call
+ a thread are both, underneath, the exact same kind of object. The only difference is 
+what they share
+. When you 
+fork()
+ a new process, you get a fresh 
+task_struct
+ that shares nothing with its parent â its own memory, its own file descriptors, its own everything. When you create a thread (with 
+clone()
+ and the right flags) you 
+also
+ get a fresh 
+task_struct
+, except this one shares the address space, the open files, the signal handlers, and so on with the task that spawned it. So a “multi-threaded process” is really just a bunch of 
+task_struct
+s that happen to point at the same memory.
+From the scheduler’s chair none of that matters anyway â it doesn’t know or care who shares what. It just sees a pile of 
+task_struct
+s, some runnable and some not, and picks among the runnable ones. Everything runnable on a CPU is a 
+task_struct
+, full stop.
+Now, a 
+task_struct
+ is huge â it holds basically everything the kernel knows about a task â but the scheduler only cares about a sliver of it. Tucked inside every task is a small embedded bundle of scheduling state (called the 
+sched_entity
+, 
+include/linux/sched.h:575
+), and that little bundle â not the giant struct around it â is what the scheduler actually reasons about.
+It’s where the interesting numbers live, things with names like 
+vruntime
+, 
+vlag
+, 
+deadline
+, and 
+slice
+. Don’t worry about what any of those mean yet â unpacking them is basically the rest of this article. For now just hold onto the shape of it: each runnable task carries a small wad of accounting state, and that’s the part the scheduler reads when it decides who runs next.
+But “the scheduler” is a bit of a white lie, because there isn’t just one â so before we go further, let’s see who actually gets handed the decision.
+Scheduling Classes: Who Even Gets Asked First
+Before we get to 
+the
+ algorithm, there’s a twist: Linux doesn’t actually have one scheduler. It has several, and they’re stacked in a strict pecking order. These stacked schedulers are called 
+scheduling classes
+, and each one is a self-contained policy for a different kind of workload.
+The way they cooperate is dead simple. When a CPU needs something to run, the kernel goes down the stack from the top and asks each class in turn, “got anything runnable?” The first one to say yes wins, and everything below it doesn’t even get a vote. So a class only ever runs a task when 
+every
+ class above it had nothing to offer.
+So what’s in those boxes? The three at the top all exist to give 
+some
+ task the right to butt ahead of ordinary work. At the very top sits 
+stop
+, which isn’t really a scheduling policy so much as a “drop everything” lever the kernel pulls when it needs a CPU to do one urgent thing this instant â like migrating tasks off a core that’s being shut down. Below it, 
+deadline
+ handles tasks with hard timing needs (think audio or robotics), where you don’t ask for a priority but for a guarantee: “this task needs so many milliseconds of CPU every so often.” And then 
+rt
+ is classic real-time priorities â a real-time task runs for as long as it likes and only steps aside for something even higher, which is wonderful for latency-critical code and a great way to freeze your machine if such a task never sleeps.
+Here’s the thing, though: on a normal desktop or server, those top three boxes are almost always 
+empty
+. Which brings us to the one that matters for the rest of this article: 
+fair
+. This is where essentially everything you run actually lives â your shell, your browser, your database, that compile job. None of those tasks has any special timing demand; they just want a reasonable slice of the CPU, and the fair class’s whole job is to hand those slices out 
+fairly
+. Because the classes above it are usually idle, the fair class is the one running the show nearly all the time â so when people say “the Linux scheduler,” this is the one they almost always mean.
+Rounding out the bottom, just so the picture’s complete: 
+ext
+ is a newer addition that lets you load a whole scheduling policy as a BPF program, handy for experimenting without recompiling the kernel; and 
+idle
+ is the floor, the do-nothing task that runs only when nothing else wants the CPU and quietly puts the core to sleep to save power. We won’t dwell on either â from here on, it’s all about 
+fair
+.
+The fair class is built on an algorithm with an intimidating name: 
+EEVDF
+, 
+Earliest Eligible Virtual Deadline First
+. Don’t let the name scare you â we’ll take it apart piece by piece later, and it turns out to be a fairly intuitive idea.
+Before we get to how EEVDF 
+chooses
+, though, it helps to know when it even gets the chance to â the moments a running task lets go of the CPU.
+When Does a Running Task Stop Running?
+Say a task is happily running on a CPU. What makes it 
+stop
+ so something else can run? This is the part people usually hand-wave past, but it’s where the whole system actually lives. There are really only two ways a task gives up the CPU, and understanding both is most of understanding the scheduler. Let’s take the gentler one first.
+Way One: It Voluntarily Blocks
+The most common reason a task stops running is that it asks for something it can’t have yet. It calls 
+read()
+ on a socket with no data, takes a 
+mutex
+ someone else holds, calls 
+sleep()
+, waits on a condition variable â anything that can’t complete immediately.
+When that happens, deep inside the blocking primitive, the kernel sets the task’s state to “not runnable” and calls 
+schedule()
+ (
+kernel/sched/core.c:7273
+). This is the task voluntarily saying “I have nothing to do right now, give the CPU to someone else.” The scheduler takes the task off the run queue entirely (it’s not runnable, so there’s no point considering it), picks somebody else, and switches to them. The blocked task will get put 
+back
+ on a run queue later, when whatever it was waiting for happens â that’s a 
+wakeup
+, and we’ll get to it.
+This is the clean, cooperative case. The task itself initiated the handoff. But not every task is so courteous.
+Way Two: It Gets Preempted
+But what about a task that 
+never
+ blocks? A tight loop crunching numbers, a 
+while(1)
+, a video encoder pegging the core. If blocking were the only way to give up the CPU, that task would run forever and starve everyone else. So the kernel has to be able to take the CPU 
+away
+ â that’s 
+preemption
+.
+Here’s the clever part: preemption is almost never immediate. The kernel doesn’t violently yank a task off the CPU mid-instruction. Instead, when it decides a task should be preempted, it just 
+sets a flag
+ on it â 
+TIF_NEED_RESCHED
+, literally “this task needs to reschedule” (
+resched_curr()
+, 
+kernel/sched/core.c:1212
+) â and lets it keep running for now. Setting a flag is cheap and safe to do from awkward spots like inside a timer interrupt, where actually switching tasks would be dangerous. The flag is just a sticky note: “switch this one out at the next safe opportunity.”
+Those safe opportunities are well-defined points where the kernel checks the flag and, if it’s set, calls 
+schedule()
+ to do the real switch. By far the most common one is 
+returning to user space
+ â every time a task pops back out of the kernel into your code (after a syscall or an interrupt), the kernel peeks at the flag first.
+So the rhythm is always 
+decide â set flag â run a little longer â hit a safe point â switch.
+ This deferred, flag-driven design is the spine of the whole thing â even a 
+wakeup never switches tasks directly.
+ It just makes a task runnable and, if that task deserves the CPU, sets the flag on whoever’s currently running; the actual switch happens later, at a safe point.
+For our purposes a task moves between three main states. 
+Running
+ drops to 
+blocked
+ when it voluntarily waits on something, and a 
+wakeup
+ later moves it from blocked to 
+runnable
+ (waiting its turn). From runnable the scheduler promotes it back to 
+running
+ by picking it; and a running task is pushed back down to runnable when it’s preempted. Notice there’s no arrow straight from blocked to running â a woken task always rejoins the queue and waits to be picked.
+So who decides to set that preemption flag, and based on what? Two main triggers: the periodic tick, and wakeups. Take the tick first.
+The periodic tick â the heartbeat
+Each CPU has a timer that fires at a steady, regular beat â this is called the 
+tick
+. Every time it fires, the kernel runs a small routine, 
+sched_tick()
+ (
+kernel/sched/core.c:5636
+), which does two things: it adds up how much CPU time the current task has used so far, and then checks whether that adds up to more than the time slice the task was given. If the task has used up its slice, the kernel sets the preemption flag on it, and the task gets switched out at the next safe point.
+This is the scheduler’s heartbeat: it’s what stops a CPU-hungry task that never blocks on its own from hogging a core forever.
+The tick deals with tasks that overstay their welcome; the other trigger fires when a fresh contender suddenly appears.
+Wakeups â someone more deserving showed up
+The other trigger is a 
+wakeup
+. Remember that a blocked task is one that’s sleeping, waiting for something â and at some point that something happens: its data arrives, or the lock it wanted is freed. When that occurs, the kernel wakes the task and puts it back on the run queue, ready to run again.
+But the CPU is probably already busy with another task. So the kernel pauses to ask a question (in 
+wakeup_preempt_fair()
+, 
+kernel/sched/fair.c:9055
+): does this freshly-woken task deserve the CPU more than the one running right now? If the answer is yes â by the EEVDF rules we’re about to learn â it sets the preemption flag on the current task. As always, it doesn’t switch right away, it just flags. This is what makes a machine feel responsive: when you hit a key and that wakes your editor, the editor can elbow aside a long-running background compile almost immediately.
+We keep saying the switch “happens later, at a safe point” â so let’s stop hand-waving and look at what that switch actually involves, and why the kernel is so reluctant to do it.
+The Context Switch and What It Costs
+Once the scheduler has chosen the next task, and assuming it’s different from the one running now, it calls 
+context_switch()
+ (
+kernel/sched/core.c:5328
+) to actually hand the CPU over. (If the pick comes back as the 
+same
+ task â quite common â it skips the switch entirely; the cheapest context switch is the one you don’t do.)
+That little “if it’s different” is doing a lot of work, because the swap is not free. The obvious cost is the easy part: saving the outgoing task’s CPU state â its registers, program counter, stack pointer â and loading the incoming task’s state back in. That’s real but cheap, on the order of a microsecond.
+The expensive part is everything that happens 
+after
+ the switch, and it comes down to caches going cold. The CPU keeps several caches of recently-used things close at hand so it doesn’t have to do slow work twice, and a context switch tends to invalidate them.
+The clearest example is the 
+TLB
+. As we saw in the 
+memory manager article
+
+, every memory address a program uses has to be translated to a real physical location, and the TLB is a small cache of those translations so the CPU doesn’t redo the lookup every time. But if the next task belongs to a different process, it has its own separate memory layout â so the kernel switches address spaces, and that usually wipes the TLB. The new task’s first memory accesses then find nothing cached and have to do the full, slow translation to refill it.
+The regular 
+CPU caches
+ (the ones holding actual data and code) take a similar hit: while other tasks were running, they pushed our task’s data out to make room for their own. So when our task resumes it starts “cold” and pays a wave of slow memory fetches while those caches fill back up with its data. (Modern CPUs have tricks to soften the TLB part, but they don’t make the cost disappear.)
+So the 
+indirect
+ cost â cold caches and TLB misses paid in the moments after the switch â can dwarf the register-swapping itself. This is the hidden tax, and it’s exactly why the scheduler doesn’t preempt with abandon. Many of its design choices are partly about 
+not switching more often than we have to.
+ A scheduler that flipped tasks ten times as often would look fairer on paper and run slower in practice, because it would spend its time refilling caches instead of doing work.
+Now â how does that “pick the next task” step actually choose? That’s the algorithm.
+How the Scheduler Decides: EEVDF
+We’ve reached the core question. The fair class has a pile of runnable tasks sitting on its run queue, and it has to pick one. The algorithm it uses is 
+EEVDF â Earliest Eligible Virtual Deadline First.
+ The name is intimidating but it’s literally a checklist, and we can build up to it one idea at a time.
+The whole goal is two things at once:
+Fairness
+ â over time, each task should get a share of the CPU proportional to its priority. A high-priority task gets more, a low-priority one less, but nobody gets starved.
+Low latency
+ â a task that only wants the CPU for a short burst (like an interactive app responding to a keystroke) should get served 
+quickly
+, not made to wait behind a long-running batch job.
+EEVDF achieves both with three concepts: 
+virtual runtime
+, 
+eligibility
+, and the 
+virtual deadline
+. We’ll build them up one at a time, starting with the clock the whole thing runs on.
+Idea 1: Weight and Virtual Runtime
+Every task has a priority, which on Linux you set through a value called 
+nice
+. It runs from â20 (the “greediest,” highest priority) to +19 (the lowest), with 0 as the default. The kernel turns that nice value into a number it calls 
+weight
+: a higher-priority task gets more weight, and more weight should mean a bigger share of the CPU.
+The mapping isn’t linear â it’s a precomputed lookup table where each step of nice changes the weight by roughly 25%. The default, nice 0, has weight 
+1024
+; bump the priority up to nice â5 and you get 
+3121
+; all the way up at nice â20 it’s 
+88761
+. Going the other way, nice +5 drops to 
+335
+, and nice +19 bottoms out at just 
+15
+. (The full table is 
+sched_prio_to_weight[]
+, 
+kernel/sched/core.c:10569
+.) So the gap is huge: a nice â20 task carries almost 6,000Ã the weight of a nice +19 one.
+So how does the scheduler turn all that weight into an actual share of the CPU? Not by measuring real time â if a heavy task and a light one both run for 10ms, plain elapsed time says they’re equal, with no room to favor the heavy one. The trick is to count 
+virtual runtime
+ (
+vruntime
+) instead: real elapsed time 
+divided by the task’s weight
+ (the conversion is 
+calc_delta_fair()
+, 
+kernel/sched/fair.c:297
+).
+That division is the whole trick. A heavy task’s virtual clock ticks 
+slowly
+, so it can run a long time while its 
+vruntime
+ barely moves; a light task’s 
+vruntime
+ races ahead. If the scheduler always favors the lowest 
+vruntime
+, the heavy task keeps looking “behind” and keeps getting picked â so weight quietly becomes proportional CPU share. (The meter doing this bookkeeping is 
+update_curr()
+, 
+fair.c:1407
+, which charges the running task its virtual time on essentially every scheduler event â on each timer tick, when another task wakes up, when it’s time to pick the next task, when a task is added to or removed from the run queue, and so on.)
+Knowing how fast each task’s clock ticks isn’t enough on its own, though â the scheduler still needs a way to tell who’s actually fallen behind.
+Idea 2: The Average, and Lag
+We now have a virtual clock per task, but a clock on its own doesn’t tell you whether a task has had its fair share â you need something to compare it against. That something is the 
+average
+ 
+vruntime
+ across all the runnable tasks, a number the scheduler calls 
+V
+. Think of 
+V
+ as the “fair line”: where every task’s clock 
+would
+ be if the CPU had been split perfectly evenly so far. (It’s a weighted average, so heavier tasks count for more, and the kernel keeps it updated cheaply without rescanning the whole queue â that’s 
+avg_vruntime()
+, 
+fair.c:780
+.)
+Now you can just compare any task’s own 
+vruntime
+ to that fair line, and the difference is its 
+lag
+. If the task’s clock is 
+behind
+ the line, it hasn’t run as much as it should have â it’s owed CPU time. If it’s 
+ahead
+ of the line, it has already had more than its share.
+The rule is just: a task is 
+eligible
+ only when it’s 
+not
+ ahead (
+entity_eligible()
+, 
+fair.c:939
+). That’s the “Eligible” in EEVDF and the fairness guarantee in one move â a CPU hog drifts ahead, becomes ineligible, and sits benched until everyone catches up.
+Eligibility narrows the field down to who’s 
+allowed
+ to run, but it doesn’t break ties between them â and breaking ties is where the last idea comes in.
+Idea 3: The Virtual Deadline
+Eligibility tells us 
+who’s allowed
+ to run, but usually several tasks qualify at the same time. So how does the scheduler decide which of them actually goes first?
+Each task gets a 
+slice
+: how long it wants the CPU in one uninterrupted go (700Âµs by default, but a task can ask for a different size). From that slice, the scheduler computes a 
+virtual deadline
+ for the task (
+update_deadline()
+, 
+fair.c:1238
+) â basically, “if this task starts running now, by when (on its virtual clock) should it be done with its slice?”
+The recipe is simple: take where the task’s virtual clock is 
+right now
+ (its 
+vruntime
+) and add the slice on top â but the slice has to be converted into virtual time first, which, just like in Idea 1, means dividing it by the task’s weight. So the deadline is “current virtual position, plus how far this slice will push the virtual clock forward.”
+Two nice things fall out of that division by weight. First, a 
+heavier
+ task gets a 
+closer
+ deadline: its virtual clock crawls, so the same slice barely nudges it forward â yet another way more weight quietly buys more CPU. Second, and this is the detail the whole latency story rests on: 
+a task that asks for a shorter slice gets an earlier deadline.
+ The scheduler then just runs whoever’s deadline is soonest.
+With all three ideas on the table â virtual runtime, eligibility, and the deadline â we can finally watch them snap together into the actual pick.
+Putting It Together: 
+pick_eevdf
+Now the name unpacks itself. 
+Earliest Eligible Virtual Deadline First
+: among all tasks that are 
+eligible
+ (owed CPU â not ahead of their fair share), pick the one with the 
+earliest virtual deadline
+. That’s the entire decision, and it’s exactly what 
+pick_eevdf()
+ (
+fair.c:1136
+) does:
+Now, you might worry that “scan everyone, keep the eligible ones, then find the earliest deadline” sounds slow when there are thousands of runnable tasks. It isn’t, and the reason is a nice bit of data-structure cleverness. The runnable tasks live in a 
+red-black tree
+ sorted by deadline, so the soonest deadline is always sitting right at the left edge, cheap to grab. The catch is that the leftmost task might not be eligible â it could be one of those “ahead of the average” tasks â so we can’t always just take it. To handle that, the tree is 
+augmented
+: every node also remembers the smallest 
+vruntime
+ anywhere in its subtree, and that little hint lets the search prune away entire branches that can’t possibly hold an eligible task. The upshot is that EEVDF picks its winner in 
+O(log n)
+ time, never walking the whole queue.
+One more guard worth knowing about. Once a task starts running, it’s promised a small minimum stretch of time before anything can preempt it (
+protect_slice()
+, 
+fair.c:1106
+), so the scheduler can’t fall into thrashing â flipping between tasks every few microseconds. Think back to what a context switch actually costs: this is one more piece of the machinery quietly working to avoid paying that tax too often.
+And then the loop closes on itself. When the running task’s virtual clock finally reaches its own deadline, 
+update_curr
+ raises the reschedule flag, and at the next safe point 
+pick_eevdf
+ runs again and crowns the next winner. Round and round it goes, thousands of times a second.
+We’ve now met every piece on its own â so let’s run them all together once, from start to finish.
+End to End: The Life of a Scheduling Decision
+Let’s follow one ordinary task â call it 
+T
+ â through a full lap, in order:
+T is born.
+ It’s created (or wakes from a sleep), and the fair class drops it onto the CPU’s run queue: it gets a 
+vruntime
+, a virtual deadline (its 
+vruntime
+ plus its slice divided by weight), and a slot in the red-black tree, which stays sorted by deadline. Now T just 
+sits there
+, runnable but not running â some other task currently holds the CPU.
+The current task lets go.
+ T gets its turn only when whoever’s running gives up the CPU â either that task 
+blocks
+ on its own, or it gets 
+preempted
+ (the tick caught it over its slice, or a wakeup flagged it). Preemption isn’t instant: it just sets 
+TIF_NEED_RESCHED
+ and waits for the next safe point, usually when that task returns to user space.
+The scheduler runs.
+ At that safe point the kernel calls 
+__schedule()
+ (
+kernel/sched/core.c:7017
+), which walks the scheduling classes from highest priority to lowest, asking each for something to run. For an ordinary workload the urgent and real-time classes are empty, so it reaches the 
+fair class
+.
+EEVDF picks T.
+ The fair class runs 
+pick_eevdf
+, which finds â in O(log n) â the 
+eligible
+ task (one not ahead of its fair share) with the 
+earliest virtual deadline
+. Say that’s T.
+The context switch.
+ 
+context_switch
+ hands the CPU from the old task to T: it saves the old task’s registers, switches address space, and T starts running â with a cold TLB and caches it’ll warm back up. While T runs, 
+update_curr
+ keeps metering its 
+vruntime
+ against its deadline.
+T gives the CPU back.
+ Eventually T’s turn ends. It might block on I/O â but say instead it just keeps running until the tick notices it has reached its deadline and sets 
+TIF_NEED_RESCHED
+ on it. T keeps running until the next safe point.
+And the loop turns.
+ At that safe point we’re back at step 3: 
+__schedule()
+ runs, walks the classes, and 
+pick_eevdf
+ crowns the next winner. T, still runnable, simply slots back into the run queue’s tree to wait for its next turn.
+Then it all repeats, thousands of times a second, on every core.
+That’s the whole machine in motion â let’s pull it all into one picture.
+Summary
+So that’s the scheduler. Remember that it only ever schedules 
+task_struct
+s
+ â processes and threads are really the same object, just differing in what they share. Each task lives in a 
+scheduling class
+, and the kernel tries the classes in a fixed priority order; but since the higher ones are usually empty, the 
+fair class
+ is what runs almost everything you do.
+A task hands back the CPU in one of two ways: it 
+blocks
+ on its own (by calling 
+schedule()
+), or it gets 
+preempted
+. And preemption isn’t instant â the kernel just sets 
+TIF_NEED_RESCHED
+ and waits for the next safe point, usually when the task returns to user space. That flag gets raised either by the 
+periodic tick
+ (the task used up its slice) or by a 
+wakeup
+ (a more-deserving task showed up). The switch that follows, 
+context_switch
+, is pricier than it looks, mostly because the new task starts out with a cold TLB and caches â which is exactly why the scheduler tries not to switch any more than it has to.
+And when the fair class actually picks, it uses 
+EEVDF
+, which really comes down to three ideas. 
+Virtual runtime
+ is real time divided by weight, so heavier tasks accrue it more slowly and get picked more often â that’s how weight turns into 
+priority
+. 
+Eligibility
+ means only tasks that aren’t ahead of their fair share are even considered â and that’s what guarantees 
+fairness
+, since nobody can run away with the CPU. And among the eligible tasks it goes for the 
+earliest virtual deadline
+, where a shorter requested slice buys an earlier deadline â that’s the 
+latency
+ knob. Or, in one breath: 
+weight gives you priority, eligibility gives you fairness, the virtual deadline gives you latency.
+Next, we’ll turn from 
+who runs
+ to 
+how programs reach their files
+ â the common layer the kernel puts in front of every filesystem so that 
+open
+, 
+read
+, and 
+write
+ work the same whether the bytes live on disk, in memory, or on a network share. The 
+VFS
+ (Virtual File System) is up next.
