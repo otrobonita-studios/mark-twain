@@ -1,0 +1,239 @@
+<body>
+<!-- HEADER -->
+
+<!-- MAIN CONTENT -->
+<div class="outer" id="main_content_wrap">
+<section class="inner" id="main_content">
+<h1 id="from-julia-to-rust-a-differentiable-tensor-stack-for-scientific-computing-in-the-agentic-ai-era">From Julia to Rust: a differentiable tensor stack for scientific computing in the agentic AI era</h1>
+<p><em><a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a> is a Rust-native dense tensor stack: linear algebra, PyTorch-style eager autodiff, JAX-style traced transforms, NumPy-style einsum, FFT, extensible operation crates, and explicit CPU/CUDA backends. The first crates are on crates.io as of June 23, 2026 (JST).</em></p>
+<p>by <strong>Hiroshi Shinaoka</strong> (Saitama University), for the tensor4all team</p>
+<p><em>🌐 <a href="https://tensor4all.org/blog/introducing-tenferro-rs/">English</a> · <a href="https://tensor4all.org/blog/introducing-tenferro-rs-ja/">日本語</a> · <a href="https://tensor4all.org/blog/introducing-tenferro-rs-zh/">简体中文</a></em></p>
+<p></p>
+
+<p>Most tensor-network code has been written in Julia, and ours was no exception.
+ITensors and the surrounding ecosystem are good for prototyping: the code stays
+close to the math, and it is easy to iterate. Our own work on the IR basis,
+sparse modeling, and the <a href="https://tensor4all.org">tensor4all</a>
+tensor-cross-interpolation and quantics stack started there.</p>
+<p>Once the codebase gets large, though, Julia development starts to slow down:
+type instability that only shows up at run time, compile and precompile times
+that stretch the edit/test loop, and the sense that correctness gets harder to
+check as the code grows. When we started fitting the tensor-network stack into a
+larger system, that became hard to ignore. We began moving the compute engine to
+Rust.</p>
+<p>That immediately exposed a second problem. The tensor library we wanted to build
+on was not there yet. Rust has libraries for individual jobs: ndarray for
+arrays, Burn for deep learning, faer for linear algebra. What was missing was a
+tensor layer that could cover autodiff through einsum and still feel usable for
+scientific computing. The goal was not to replace those libraries. It was to
+connect the pieces that already exist.</p>
+<p>The Rust ecosystem has changed a lot in the last few years. crates.io went from
+602 crates in 2015 to roughly 210,000 in 2026
+(<a href="https://github.com/shinaoka/rust_crate_count">data</a>). For dense linear
+algebra there is faer; for GPU kernels, <a href="https://github.com/tracel-ai/cubecl">CubeCL</a>;
+for generic numerics, <code class="language-plaintext highlighter-rouge">num-traits</code> and <code class="language-plaintext highlighter-rouge">num-complex</code>. There are also libraries
+at nearby layers: ndarray for arrays, nalgebra and faer for linear algebra, Burn
+and candle for deep learning, and numr for a NumPy-style array API. What we
+needed was the layer between them: a scientific-computing tensor stack with
+column-major storage, dynamic shapes, eager and traced autodiff, einsum, FFT,
+CPU/CUDA backends, and extensible operations. That is what tenferro-rs is for.
+We build on faer and CubeCL and add the missing parts instead of reinventing
+them. Porting SparseIR.jl and Julia tensor-network code made it clearer where
+that missing layer was.</p>
+<p>That is the background for <a href="https://github.com/tensor4all/tenferro-rs">tenferro-rs</a>.
+This post explains why we are building it, and why we chose Rust now that code
+is no longer written only by humans.</p>
+<h2 id="why-rust-now-when-julia-was-fine-before">Why Rust now, when Julia was fine before?</h2>
+<p>A couple of years ago I would probably have told students to start with Julia.
+Julia code can stay close to the math, memory management is easy, and the
+numerical libraries were already there. Rust had more to learn, and the
+ecosystem was still missing pieces.</p>
+<p>I would not give the same advice now. Not because Rust changed, but because I
+am no longer the one writing most of the code.</p>
+<p>Fortran, Python, and Julia all developed around lowering the cost for humans to
+write, read, and maintain code by hand. Readability, a REPL, notation close to
+the math, and a low barrier to entry all matter for that. When AI writes more of
+the code, the tradeoff changes. Writing speed matters less. Much of the learning
+cost can be handled by the agent. But “it reads like the math” still does not
+guarantee correctness: aliasing, mutation, and allocation are not visible from
+the surface of a line.</p>
+<p>For us, the question stopped being “how fast can a human write this?” and
+became “how confident can we be that it is correct?”. That reframing is why Rust
+became the more practical choice.</p>
+<p>Concretely:</p>
+<ul>
+<li>Ownership and types rule out a wide range of errors at compile time. <code class="language-plaintext highlighter-rouge">cargo
+check</code> answers in seconds, so when the agent gets something wrong, we find out
+before running the program.</li>
+<li>Cargo handles builds, dependency resolution, tests, and benchmarks in one
+place. No CMake, no link-time version conflicts. A from-scratch build of the
+full stack plus dependencies takes a couple of minutes on a laptop, and the
+edit/test loop is tens of seconds.</li>
+<li>Rust controls symbol visibility along module and crate boundaries. An agent
+can only work <em>inside</em> a layer; it cannot reach into another crate’s internals
+and quietly break the abstraction. In an AI-written codebase of about 130K
+lines, that boundary matters.</li>
+<li>Lifetimes and ownership mechanics can largely be left to the agent, so human
+attention goes to algorithms, design, and correctness. The early learning cost
+that used to count against Rust is less of a problem now.</li>
+</ul>
+<p>In C++, Python, and Julia, large codebases tend to come with the worry that they
+are becoming too hard to verify. With Rust, that worry is noticeably smaller.</p>
+<h2 id="from-a-port-to-a-stack">From a port to a stack</h2>
+<p>We did not set out to build a general tensor library. We wanted to port the
+pieces we needed and spend less time fighting the tools. But as the
+implementation progressed, it became clear that autodiff, backends, and the way
+new operations are added should not be trapped inside a tensor-network-specific
+layer. We designed the shared parts as an independent tensor stack.</p>
+<ul>
+<li>Operation families live in their own crates rather than inside one all-in-one
+tensor type.</li>
+<li>Autodiff rules live outside the tensor type. Following the Julia/ChainRules
+lesson, the derivative rule belongs to the operation itself, not to one
+concrete tensor class. The AD substrate, <a href="https://github.com/tensor4all/tidu-rs">tidu-rs</a>,
+is generic, and the tensor type is just one consumer of it.</li>
+<li>Backends and devices are explicit. Nothing silently moves data between CPU and
+GPU. We also keep separate the question of which backend can execute an
+operation and which devices are available at run time.</li>
+<li>Storage is column-major, matching Fortran, Julia, MATLAB, and LAPACK/BLAS.
+Row-major data can still be handled through strided views, without unnecessary
+eager copies.</li>
+</ul>
+<p>That design makes the stack useful outside tensor networks too.</p>
+<h2 id="tenferro-rs-in-two-minutes">tenferro-rs in two minutes</h2>
+<p>The stack gives you typed tensors, immediate (eager) execution with <code class="language-plaintext highlighter-rouge">backward()</code>,
+traced graphs with <code class="language-plaintext highlighter-rouge">grad</code>/<code class="language-plaintext highlighter-rouge">vjp</code>/<code class="language-plaintext highlighter-rouge">jvp</code>/HVP, linear algebra, einsum, FFT, and
+explicit CPU and CUDA backends (plus experimental WebGPU).</p>
+<p>Here is PyTorch-style eager autodiff for <code class="language-plaintext highlighter-rouge">sum(x²)</code>, whose gradient is <code class="language-plaintext highlighter-rouge">2x</code>, copied
+verbatim from the repo’s
+<a href="https://github.com/tensor4all/tenferro-rs/blob/main/docs/tutorial-code/src/bin/eager_autodiff_pytorch_style.rs"><code class="language-plaintext highlighter-rouge">eager_autodiff_pytorch_style.rs</code></a>:</p>
+<div class="language-rust highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">use</span> <span class="nn">tenferro_ad</span><span class="p">::{</span><span class="n">EagerRuntime</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">};</span>
+
+<span class="k">fn</span> <span class="nf">assert_close</span><span class="p">(</span><span class="n">actual</span><span class="p">:</span> <span class="o">&amp;</span><span class="p">[</span><span class="nb">f64</span><span class="p">],</span> <span class="n">expected</span><span class="p">:</span> <span class="o">&amp;</span><span class="p">[</span><span class="nb">f64</span><span class="p">])</span> <span class="p">{</span>
+    <span class="nd">assert_eq!</span><span class="p">(</span><span class="n">actual</span><span class="nf">.len</span><span class="p">(),</span> <span class="n">expected</span><span class="nf">.len</span><span class="p">());</span>
+    <span class="k">for</span> <span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="p">(</span><span class="n">actual</span><span class="p">,</span> <span class="n">expected</span><span class="p">))</span> <span class="k">in</span> <span class="n">actual</span><span class="nf">.iter</span><span class="p">()</span><span class="nf">.zip</span><span class="p">(</span><span class="n">expected</span><span class="p">)</span><span class="nf">.enumerate</span><span class="p">()</span> <span class="p">{</span>
+        <span class="k">let</span> <span class="n">error</span> <span class="o">=</span> <span class="p">(</span><span class="n">actual</span> <span class="o">-</span> <span class="n">expected</span><span class="p">)</span><span class="nf">.abs</span><span class="p">();</span>
+        <span class="nd">assert!</span><span class="p">(</span>
+            <span class="n">error</span> <span class="o">&lt;</span> <span class="mf">1.0e-12</span><span class="p">,</span>
+            <span class="s">"value {index}: actual={actual}, expected={expected}, error={error}"</span>
+        <span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">fn</span> <span class="nf">main</span><span class="p">()</span> <span class="k">-&gt;</span> <span class="nb">Result</span><span class="o">&lt;</span><span class="p">(),</span> <span class="nb">Box</span><span class="o">&lt;</span><span class="k">dyn</span> <span class="nn">std</span><span class="p">::</span><span class="nn">error</span><span class="p">::</span><span class="n">Error</span><span class="o">&gt;&gt;</span> <span class="p">{</span>
+    <span class="k">let</span> <span class="n">runtime</span> <span class="o">=</span> <span class="nn">EagerRuntime</span><span class="p">::</span><span class="nf">new</span><span class="p">();</span>
+    <span class="k">let</span> <span class="n">x</span> <span class="o">=</span> <span class="n">runtime</span><span class="nf">.variable_from</span><span class="p">(</span><span class="nn">Tensor</span><span class="p">::</span><span class="nf">from_vec_col_major</span><span class="p">(</span>
+        <span class="nd">vec!</span><span class="p">[</span><span class="mi">3</span><span class="p">],</span>
+        <span class="nd">vec!</span><span class="p">[</span><span class="mf">1.0_f64</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">],</span>
+    <span class="p">)</span><span class="o">?</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+    <span class="k">let</span> <span class="n">prediction</span> <span class="o">=</span> <span class="n">x</span><span class="nf">.mul</span><span class="p">(</span><span class="o">&amp;</span><span class="n">x</span><span class="p">)</span><span class="nf">.unwrap</span><span class="p">();</span>
+    <span class="k">let</span> <span class="n">loss</span> <span class="o">=</span> <span class="n">prediction</span><span class="nf">.reduce_sum</span><span class="p">(</span><span class="o">&amp;</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="o">?</span><span class="p">;</span>
+
+    <span class="nd">assert_eq!</span><span class="p">(</span><span class="n">loss</span><span class="nf">.shape</span><span class="p">(),</span> <span class="o">&amp;</span><span class="p">[]);</span>
+    <span class="nf">assert_close</span><span class="p">(</span><span class="n">loss</span><span class="nf">.materialized</span><span class="p">()</span><span class="o">?</span><span class="py">.as_slice</span><span class="p">::</span><span class="o">&lt;</span><span class="nb">f64</span><span class="o">&gt;</span><span class="p">()</span><span class="nf">.unwrap</span><span class="p">(),</span> <span class="o">&amp;</span><span class="p">[</span><span class="mf">14.0</span><span class="p">]);</span>
+
+    <span class="n">loss</span><span class="nf">.backward</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+
+    <span class="k">let</span> <span class="n">grad</span> <span class="o">=</span> <span class="n">x</span>
+        <span class="nf">.grad</span><span class="p">()</span><span class="o">?</span>
+        <span class="nf">.expect</span><span class="p">(</span><span class="s">"tracked variable should receive a gradient"</span><span class="p">);</span>
+    <span class="nd">assert_eq!</span><span class="p">(</span><span class="n">grad</span><span class="nf">.shape</span><span class="p">(),</span> <span class="o">&amp;</span><span class="p">[</span><span class="mi">3</span><span class="p">]);</span>
+    <span class="nf">assert_close</span><span class="p">(</span><span class="n">grad</span><span class="py">.as_slice</span><span class="p">::</span><span class="o">&lt;</span><span class="nb">f64</span><span class="o">&gt;</span><span class="p">()</span><span class="nf">.unwrap</span><span class="p">(),</span> <span class="o">&amp;</span><span class="p">[</span><span class="mf">2.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">,</span> <span class="mf">6.0</span><span class="p">]);</span>
+
+    <span class="n">x</span><span class="nf">.clear_grad</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+    <span class="nd">assert!</span><span class="p">(</span><span class="n">x</span><span class="nf">.grad</span><span class="p">()</span><span class="o">?</span><span class="nf">.is_none</span><span class="p">());</span>
+
+    <span class="nf">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>In this example, the program checks its own result. That small example reflects
+the way we build the library. The same computation can also run as a JAX-style
+traced graph, compiled once and reused, with <code class="language-plaintext highlighter-rouge">grad</code>/<code class="language-plaintext highlighter-rouge">vjp</code>/<code class="language-plaintext highlighter-rouge">jvp</code>
+(see <a href="https://github.com/tensor4all/tenferro-rs/blob/main/docs/tutorial-code/src/bin/traced_autodiff_jax_style.rs"><code class="language-plaintext highlighter-rouge">traced_autodiff_jax_style.rs</code></a>).
+You can choose the layer you need: typed tensors, eager execution with autodiff,
+or traced graphs. Autodiff, CUDA, einsum, FFT, and linalg can all be enabled only
+when needed.</p>
+<h2 id="computations-whose-sizes-depend-on-data">Computations whose sizes depend on data</h2>
+<p>JAX and XLA are good at optimizing a computation whose shapes are fixed and then
+running it quickly again for inputs of the same shape. Once shapes depend on the
+data, things get harder. Truncation thresholds, adaptive bond dimensions,
+data-dependent iteration counts: if sizes are only known at run time, every new
+shape can force a recompilation. If you avoid recompilation by falling back to
+eager execution, transforms such as <code class="language-plaintext highlighter-rouge">grad</code> and <code class="language-plaintext highlighter-rouge">vjp</code> no longer fit into the same
+workflow.</p>
+<p>That is the daily reality of tensor networks and much of adaptive scientific
+computing. It is most of what we do. For calculations where ranks or bond
+dimensions change with the data, reusing the same traced program without
+recompilation matters.</p>
+<p>tenferro compiles a traced program once and <strong>reuses</strong> it even when concrete
+sizes (ranks, thresholds, iteration counts) are decided at run time. <code class="language-plaintext highlighter-rouge">grad</code>,
+<code class="language-plaintext highlighter-rouge">vjp</code>, and <code class="language-plaintext highlighter-rouge">jvp</code> remain available. At the same time, static-size computations can
+use OpenXLA. <code class="language-plaintext highlighter-rouge">tenferro-xla</code> lowers graphs to StableHLO and can load PJRT plugins,
+so in principle it can reach the same execution speed as JAX.</p>
+<h2 id="checking-correctness-from-the-outside">Checking correctness from the outside</h2>
+<p>The obvious worry with AI-written numerical code is that it can look correct
+without being correct.</p>
+<p>So we do not make reading the code the only basis for trust. We set up separate
+checks that do not depend on someone eyeballing the source:</p>
+<ul>
+<li>Correctness is checked against finite-difference and PyTorch reference
+oracles. <a href="https://github.com/tensor4all/tensor-ad-oracles">tensor-ad-oracles</a>
+is a standalone database and generator for derivative-correctness checks of
+tensor and linear-algebra operations, with invariants, residual checks, and
+provenance checks.</li>
+<li>Performance is measured with the reproducible
+<a href="https://github.com/tensor4all/tenferro-benchmark">tenferro-benchmark</a> suite
+against PyTorch and JAX. On many targets, tenferro already reaches CPU/GPU
+performance close to them, with more optimization still left. We link the
+benchmark repository rather than freezing numbers here, because that is the
+reproducible reference and the numbers change.</li>
+<li>Design is written down. REPOSITORY_RULES.md, AGENTS.md, design notes, and
+worklogs record the architecture and its constraints for both humans and
+agents. When a failure exposes a missing rule, such as “operation families are
+first-class crates, not a facade” or “no naive CPU loop fallbacks, use faer or
+BLAS”, it becomes a new constraint instead of a one-off fix. That keeps the
+design from drifting in a 130K-line codebase.</li>
+</ul>
+<p>The oracles and benchmarks live in separate repositories, so the agent writing
+the library cannot move the goalposts. We also check rules against code
+continuously, so drift is caught early. Add tests with enforced per-file coverage
+thresholds, and correctness, performance, and design are checked through separate
+mechanisms rather than by review alone.</p>
+<h2 id="try-it">Try it</h2>
+<p>The first tenferro crates are on <strong>crates.io</strong>, published as separate crates so
+you can pull in only what you need:</p>
+<div class="language-toml highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nn">[dependencies]</span>
+<span class="py">tenferro-tensor</span> <span class="p">=</span> <span class="s">"0.2"</span>   <span class="c"># tensors, views, backends</span>
+<span class="py">tenferro-ad</span>     <span class="p">=</span> <span class="s">"0.2"</span>   <span class="c"># eager + traced autodiff</span>
+<span class="c"># plus tenferro-linalg, tenferro-einsum, tenferro-fft, tenferro-cpu,</span>
+<span class="c"># tenferro-gpu, tenferro-xla: add only what you need</span>
+</code></pre></div></div>
+<p>tenferro-rs is still a v0.2 preview; the API is not a finalized 1.0. But it is
+not just an experiment. We already use it as the engine under
+<a href="https://github.com/tensor4all/tensor4all-rs">tensor4all-rs</a>, our Rust
+tensor-network stack (TreeTN, QTT, TCI), and develop it against real scientific
+workloads. If your host language is Python, JAX and PyTorch are the natural
+choice. tenferro-rs is for people who want similar capabilities directly from
+Rust. At this preview stage, user feedback can still shape the design.</p>
+<p>We especially want people who have used ndarray, nalgebra/faer, Burn/candle,
+PyTorch/JAX, or Julia/Fortran in scientific and HPC work to try it:</p>
+<ul>
+<li>Docs and guides: https://tensor4all.org/tenferro-rs/</li>
+<li>Source: https://github.com/tensor4all/tenferro-rs</li>
+<li>Reproduce the benchmarks: https://github.com/tensor4all/tenferro-benchmark</li>
+<li>Check correctness: https://github.com/tensor4all/tensor-ad-oracles</li>
+</ul>
+<p>If you try it on real scientific workloads and find something missing, slow, or
+wrong, that report is especially useful.</p>
+<h2 id="acknowledgments">Acknowledgments</h2>
+<p>Thanks to <a href="https://giggleliu.github.io/">Jin-Guo Liu</a> for the initial tenferro
+design, and to <a href="https://terasakisatoshi.github.io/">Satoshi Terasaki</a> for
+development support.</p>
+<p><em>Disclosure: this post was written collaboratively by AI coding agents and the
+author, in the same human-verified workflow it describes.</em></p>
+</section>
+</div>
+<!-- FOOTER  -->
+
+</body>

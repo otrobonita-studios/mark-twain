@@ -1,0 +1,91 @@
+blog 
+/
+ structural-correctness
+
+Structural Correctness
+
+2026.06.27
+
+~6 MIN READ
+
+Type systems are great: they catch huge swaths of bugs at compile time, and contribute to a grammar/vocab of forward development for your app. Like type systems, modern tools for verifying correctness leverage 
+structural descriptions
+ of the problem, via graph-structured model of the domain:
+
+Type systems
+ describe programs as a graph of types, functions, traits/etc, and their relationships. Types are nodes, with relationships like 
+returns
+, 
+accepts
+, 
+implements
+, etc as edges.
+
+Build systems
+ like bazel have build targets as nodes and dependencies as edges between them. Without explicit deps stated, unstated packages are not provided to build targets even if they are built by other means, fulfilling hermiticity and trivial deployability.
+
+Interface description languages
+ have messages types and services as nodes, with return types and parameter types as edges (a restricted type system).
+
+Databases
+ use foreign keys (edges) to describe the relationship between related table rows (nodes). However, databases also use check contraints to implement correctness: not structural, but useful predicates to express aspects can't can't be described additively.
+
+STRUCTURAL CORRECTNESS
+Model your domain as a graph of typed nodes and edges. The best of these graphs are definitional: the structure that describes the system 
+is
+ the system. No edge, no capability.
+
+Each domain has its own vocab of node and edge types. Bazel is a nice example of the richness via different edge types: deps means "link this code," srcs means "compile these files," data means "make available at runtime." Each is a different edge type in the target graph, and each constitutes a different capability. Elegant choice of node and edge types result in expressive and powerful tools. Many of these correctness tools leverage both structural correctness and predicates to describe valid configurations.
+
+The best of these graph-structured systems are constitutive/definitional: they both define "what is valid" and "how outputs are computed". In bazel, a target can't import a module it doesn't 
+dep
+end on. This provides two valuable features: a) the verifiable invariant must be stated for the system to function, so you end up with a verifiable system by default, and b) it provides a brevity in specificaiton thanks to stated attributes and relationships doing double duty for behavior and validation. Building a bazel project forces you to describe the explicit structure of your product, and leaves you with a means to verify it as you continue to develop.
+
+These two points about "each domain has its own nounds and verbs" and "definitional graph structured systems" are why bazel is such a good substrate for describing your whole product in: Bazel lets you define arbitrary node types for your domain concepts (packages, services, datasets), constrain their relationships via typed edges, and then derive your entire build/test/deploy pipeline from that single structural description. A service, its metrics endpoint, and the Prometheus deployment that scrapes it can all be nodes in the same graph — their relationships declared once and used to compile, deploy, and verify the whole system.
+
+But what about state?
+
+I'm glad you asked! Databases define what can be stored via schema-specified tables, foreign keys, and check constraints. But outside of those they do not specify valid state transitions. This is often left to the application layer, where HTTP or RPC endpoints are relied on to faithfully implement the business logic. However, this is often where things go wrong: e.g. two endpoints that both modify order status, one forgetting to check inventory before marking it 
+shipped
+.
+
+Colored petri nets (CPNs) take the schema-specified collections (
+places/tokens
+) and adds strict "next state" definition via 
+transitions
+. In CPNs, state only changes via a specific 
+binding
+ being selected and its transition firing, consuming, mutating, and producing tokens in specific places. This is an applicaiton of graph-structured systems to state: places and transitions are nodes, and the arcs that connect them are edges. Like bazel, the concepts that define the functioning of CPN systems do double duty as means of verifying said system more completely.
+
+To demonstrate how CPNs do this, let's walk through a fairly complex example: a web scraper. I implemented the web scraper I described as an application of interest in the 
+original CPN post
+. In this example, the scraper needs to use a rotating set of proxies, and to implement "leasing" semantics for domains, to prevent overloading of a site, etc. Traditionally, building a stateful system like this means scattering coordination across multiple layers: a database handles resource state (via 
+SELECT FOR UPDATE
+ and careful lock ordering), a task queue handles job scheduling, application code handles rate limiting and cooldown logic, and yet another component enforces domain concurrency limits. Each has its own incomplete view of correctness. And you increase reliability by writing check constraints, unit tests, and application-level predicates, and ensure they agree via trial and error.
+
+Proxy conservation isn't a property you test for, but a topological fact of the net.
+
+With a CPN, the scraper's entire coordination model is declared as tokens and transitions. Claiming a resource for scraping is a single transition (
+select_resource
+) that binds across available resources, proxies, and domain states. It atomically leases a proxy, increments the domain's active count, and creates a session all in the same firing. There's no locking strategy to get right, because the binding system guarantees only valid combinations participate. Proxy conservation isn't a property you test for because it's a topological fact: a proxy token exists in exactly one place at any time (
+available_proxies
+ or 
+leased_proxies
+), and only declared transitions can move it. The resource lifecycle (
+available
+ → 
+leased
+ → 
+cooling
+ → 
+available
+) is the shape of the net itself, effectively a state machine.
+
+Also, it provides you with a cool animation of the net to show off:
+
+Full size
+ — the web scraper CPN, animated
+
+Personally, I'm bullish on this unification of state and transition: databases generally only handle the data + type side of this, plus predicate tools like check constraints. Where existing systems distribute state-related invariants across application code, unit tests, and database constraints (each with separate verification), CPNs unify these concerns and use them to define app function.
+
+As a new domain there's a lot of learning ahead about what kinds of bugs could emerge from these systems, or what kind of operations and performance trade-offs need to be made. Type systems are famously not-free. But I see an even larger amount of opportunity to go with it.
