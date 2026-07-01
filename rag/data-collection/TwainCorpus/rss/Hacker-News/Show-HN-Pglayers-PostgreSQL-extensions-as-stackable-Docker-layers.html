@@ -1,0 +1,1144 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">pglayers</h1></div>
+<p dir="auto">The <a href="https://hub.docker.com/_/postgres" rel="nofollow">official PostgreSQL Docker images</a>
+ship without extensions. Every time you need pgvector, PostGIS, or
+pg_cron, you're stuck manually installing dependencies, compiling from
+source, or settling for third-party images that bundle a fixed set of
+extensions.</p>
+<p dir="auto">pglayers fixes this. It's both a <strong>ready-to-use PostgreSQL distribution
+with extensions pre-installed</strong> and a <strong>tool to build your own custom
+image</strong> with exactly the extensions you need -- all on top of the
+official <code>postgres</code> Docker images. You don't need to figure out how to
+build PostgreSQL extensions, install dependencies, or set up compilers.</p>
+<p dir="auto">Each extension is published as a minimal Docker image layer containing
+only its binaries. You stack them on top of the official <code>postgres</code>
+image using <code>COPY --from</code> -- one line per extension, no compilation.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Quick start</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Option 1: Ready-to-use images</h3></div>
+<p dir="auto">Pre-built combined images with <code>shared_preload_libraries</code> already
+configured:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# All 53 extensions
+docker run -d -e POSTGRES_PASSWORD=secret ghcr.io/pglayers/pglayers-full:17
+
+# Azure Database for PostgreSQL compatible (28 extensions)
+docker run -d -e POSTGRES_PASSWORD=secret ghcr.io/pglayers/pglayers-azure:17" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> All 53 extensions</span>
+docker run -d -e POSTGRES_PASSWORD=secret ghcr.io/pglayers/pglayers-full:17
+
+<span class="pl-c"><span class="pl-c">#</span> Azure Database for PostgreSQL compatible (28 extensions)</span>
+docker run -d -e POSTGRES_PASSWORD=secret ghcr.io/pglayers/pglayers-azure:17</pre></div>
+<p dir="auto">Available profiles: <code>full</code>, <code>azure</code>. Each is published for PG 17, 18,
+and 19. See <a href="#profiles">Profiles</a> for details and how to create custom
+ones.</p>
+<blockquote>
+<p dir="auto"><strong>Note:</strong> Vendor profiles (e.g., <code>azure</code>) are a best-effort
+approximation for local development. They are not a replacement for
+the actual managed service -- extension versions, configuration
+defaults, and platform-specific behavior may differ. Use them to
+develop and test locally, not to replicate production exactly.</p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Option 2: Pick your own extensions</h3></div>
+<p dir="auto">Each extension is published as its own image layer. You stack them onto
+the official <code>postgres</code> image with <code>COPY --from</code> -- each line adds one
+extension to the final image:</p>
+<div class="highlight highlight-source-dockerfile notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="FROM postgres:17
+
+COPY --from=ghcr.io/pglayers/pgx-pgvector:17  / /
+COPY --from=ghcr.io/pglayers/pgx-pg_cron:17   / /
+COPY --from=ghcr.io/pglayers/pgx-postgis:17   / /" dir="auto"><pre><span class="pl-k">FROM</span> postgres:17
+
+<span class="pl-k">COPY</span> --from=ghcr.io/pglayers/pgx-pgvector:17  / /
+<span class="pl-k">COPY</span> --from=ghcr.io/pglayers/pgx-pg_cron:17   / /
+<span class="pl-k">COPY</span> --from=ghcr.io/pglayers/pgx-postgis:17   / /</pre></div>
+<p dir="auto">Build and run:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="docker build -t my-postgres .
+docker run -d -e POSTGRES_PASSWORD=secret my-postgres" dir="auto"><pre>docker build -t my-postgres <span class="pl-c1">.</span>
+docker run -d -e POSTGRES_PASSWORD=secret my-postgres</pre></div>
+<p dir="auto">No compilation happens -- Docker pulls the pre-built extension
+layers from the registry and overlays them onto the official image.
+The result is a single image with exactly the extensions you chose,
+composed layer by layer.</p>
+<blockquote>
+<p dir="auto"><strong>New to Docker?</strong> See <a href="#verifying-your-container">Verifying your container</a>
+for how to check it's running and handle port conflicts.</p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Supported PostgreSQL versions</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Version</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PostgreSQL 17</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>PostgreSQL 18</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>PostgreSQL 19</td>
+<td>Experimental (beta -- supported until officially released)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">All extensions are built and tested against PG 17 and 18. Support for
+PG 19 is best-effort while it remains in beta; some extensions may not
+yet have upstream compatibility. Once PG 19 reaches GA, it will be
+promoted to stable.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Available extensions</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Extension</th>
+<th>Version</th>
+<th>PG versions</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="https://github.com/apache/age">age</a></td>
+<td>1.7.0-rc0</td>
+<td>17, 18</td>
+<td>Graph database with openCypher query language (Apache AGE)</td>
+</tr>
+<tr>
+<td><a href="https://gitlab.com/dalibo/postgresql_anonymizer" rel="nofollow">anon</a></td>
+<td>3.1.1</td>
+<td>17, 18</td>
+<td>Data anonymization and masking</td>
+</tr>
+<tr>
+<td><a href="https://github.com/HexaCluster/credcheck">credcheck</a></td>
+<td>5.0</td>
+<td>17, 18, 19</td>
+<td>Credential checks on user creation / password change</td>
+</tr>
+<tr>
+<td><a href="https://github.com/documentdb/documentdb">documentdb</a></td>
+<td>0.113-0</td>
+<td>17, 18</td>
+<td>MongoDB-compatible document database engine (BSON types and CRUD API)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/zachasme/h3-pg">h3-pg</a></td>
+<td>4.2.3</td>
+<td>17, 18</td>
+<td>Uber H3 hexagonal geospatial indexing</td>
+</tr>
+<tr>
+<td><a href="https://github.com/citusdata/postgresql-hll">hll</a></td>
+<td>2.21</td>
+<td>17, 18, 19</td>
+<td>HyperLogLog probabilistic distinct counting</td>
+</tr>
+<tr>
+<td><a href="https://github.com/pramsey/pgsql-http">http</a></td>
+<td>1.7.1</td>
+<td>17, 18, 19</td>
+<td>HTTP client for PostgreSQL (web requests from SQL)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/HypoPG/hypopg">hypopg</a></td>
+<td>1.4.3</td>
+<td>17, 18, 19</td>
+<td>Hypothetical indexes for what-if analysis</td>
+</tr>
+<tr>
+<td><a href="https://github.com/RhodiumToad/ip4r">ip4r</a></td>
+<td>2.4.3</td>
+<td>17, 18, 19</td>
+<td>IPv4/IPv6 range data types with GiST indexing</td>
+</tr>
+<tr>
+<td><a href="https://github.com/orafce/orafce">orafce</a></td>
+<td>4.16.7</td>
+<td>17, 18, 19</td>
+<td>Oracle compatibility functions and packages</td>
+</tr>
+<tr>
+<td><a href="https://github.com/pgaudit/pgaudit">pgaudit</a></td>
+<td>17.1</td>
+<td>17, 18</td>
+<td>Audit logging (session and object-level)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/pgbigm/pg_bigm">pg_bigm</a></td>
+<td>1.2</td>
+<td>17, 18</td>
+<td>2-gram full text search (better for CJK languages)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/citusdata/pg_cron">pg_cron</a></td>
+<td>1.6.7</td>
+<td>17, 18</td>
+<td>Job scheduler (periodic jobs inside the database)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/duckdb/pg_duckdb">pg_duckdb</a></td>
+<td>1.1.1</td>
+<td>17, 18</td>
+<td>DuckDB columnar analytics engine embedded in Postgres</td>
+</tr>
+<tr>
+<td><a href="https://github.com/microsoft/pg_durable">pg_durable</a></td>
+<td>0.2.3</td>
+<td>17, 18</td>
+<td>In-database durable execution (fault-tolerant workflows)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/EnterpriseDB/pg_failover_slots">pg_failover_slots</a></td>
+<td>1.2.1</td>
+<td>17, 18</td>
+<td>Logical replication slot manager for failover</td>
+</tr>
+<tr>
+<td><a href="https://github.com/supabase/pg_graphql">pg_graphql</a></td>
+<td>1.6.1</td>
+<td>17, 18</td>
+<td>GraphQL support for PostgreSQL</td>
+</tr>
+<tr>
+<td><a href="https://github.com/iCyberon/pg_hashids">pg_hashids</a></td>
+<td>1.2.1</td>
+<td>17, 18, 19</td>
+<td>Short unique hash IDs from integers</td>
+</tr>
+<tr>
+<td><a href="https://github.com/ossc-db/pg_hint_plan">pg_hint_plan</a></td>
+<td>1.7.1</td>
+<td>17, 18</td>
+<td>Tweak execution plans using hints in SQL comments</td>
+</tr>
+<tr>
+<td><a href="https://github.com/sraoss/pg_ivm">pg_ivm</a></td>
+<td>1.13</td>
+<td>17, 18</td>
+<td>Incremental View Maintenance for materialized views</td>
+</tr>
+<tr>
+<td><a href="https://github.com/supabase/pg_jsonschema">pg_jsonschema</a></td>
+<td>0.3.4</td>
+<td>17, 18</td>
+<td>JSON Schema validation</td>
+</tr>
+<tr>
+<td><a href="https://github.com/supabase/pg_net">pg_net</a></td>
+<td>0.20.3</td>
+<td>17, 18, 19</td>
+<td>Async non-blocking HTTP/HTTPS requests</td>
+</tr>
+<tr>
+<td><a href="https://github.com/pgpartman/pg_partman">pg_partman</a></td>
+<td>5.4.3</td>
+<td>17, 18, 19</td>
+<td>Automated table partition management</td>
+</tr>
+<tr>
+<td><a href="https://github.com/powa-team/pg_qualstats">pg_qualstats</a></td>
+<td>2.1.4</td>
+<td>17, 18, 19</td>
+<td>Statistics collector for WHERE clause predicates</td>
+</tr>
+<tr>
+<td><a href="https://github.com/reorg/pg_repack">pg_repack</a></td>
+<td>1.5.3</td>
+<td>17, 18, 19</td>
+<td>Online table reorganization without heavy locks</td>
+</tr>
+<tr>
+<td><a href="https://github.com/ChenHuajun/pg_roaringbitmap">pg_roaringbitmap</a></td>
+<td>1.1.0</td>
+<td>17, 18</td>
+<td>Roaring bitmap data type for fast set operations</td>
+</tr>
+<tr>
+<td><a href="https://github.com/eulerto/pg_similarity">pg_similarity</a></td>
+<td>1.0</td>
+<td>17, 18</td>
+<td>Similarity functions (Levenshtein, Jaro-Winkler, Cosine, Jaccard)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/cybertec-postgresql/pg_squeeze">pg_squeeze</a></td>
+<td>1.9.3</td>
+<td>17, 18, 19</td>
+<td>Remove unused space from tables without heavy locks</td>
+</tr>
+<tr>
+<td><a href="https://github.com/percona/pg_stat_monitor">pg_stat_monitor</a></td>
+<td>2.3.2</td>
+<td>17, 18</td>
+<td>Enhanced query statistics with histograms and buckets</td>
+</tr>
+<tr>
+<td><a href="https://github.com/timescale/pg_textsearch">pg_textsearch</a></td>
+<td>1.3.1</td>
+<td>17, 18</td>
+<td>BM25 relevance-ranked full-text search</td>
+</tr>
+<tr>
+<td><a href="https://github.com/fboulnois/pg_uuidv7">pg_uuidv7</a></td>
+<td>1.7.0</td>
+<td>17, 18, 19</td>
+<td>UUIDv7 generation (time-sortable unique identifiers)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/postgrespro/pg_wait_sampling">pg_wait_sampling</a></td>
+<td>1.1.9</td>
+<td>17, 18, 19</td>
+<td>Sampling-based statistics of wait events</td>
+</tr>
+<tr>
+<td><a href="https://github.com/klando/pgfincore">pgfincore</a></td>
+<td>1.4.0</td>
+<td>17, 18, 19</td>
+<td>Inspect and manage OS page cache for data files</td>
+</tr>
+<tr>
+<td><a href="https://github.com/michelp/pgjwt">pgjwt</a></td>
+<td>master</td>
+<td>17, 18, 19</td>
+<td>JSON Web Token (JWT) generation and validation</td>
+</tr>
+<tr>
+<td><a href="https://github.com/2ndQuadrant/pglogical">pglogical</a></td>
+<td>2.4.7</td>
+<td>17, 18, 19</td>
+<td>Logical streaming replication using publish/subscribe model</td>
+</tr>
+<tr>
+<td><a href="https://github.com/pgRouting/pgrouting">pgrouting</a></td>
+<td>4.0.1</td>
+<td>17, 18, 19</td>
+<td>Geospatial routing and network analysis on PostGIS</td>
+</tr>
+<tr>
+<td><a href="https://github.com/michelp/pgsodium">pgsodium</a></td>
+<td>3.1.11</td>
+<td>17, 18, 19</td>
+<td>Modern cryptography using libsodium</td>
+</tr>
+<tr>
+<td><a href="https://github.com/theory/pgtap">pgtap</a></td>
+<td>1.3.4</td>
+<td>17, 18, 19</td>
+<td>Unit testing framework for PostgreSQL</td>
+</tr>
+<tr>
+<td><a href="https://github.com/darold/pgtt">pgtt</a></td>
+<td>4.5</td>
+<td>17, 18, 19</td>
+<td>Oracle-style Global Temporary Tables</td>
+</tr>
+<tr>
+<td><a href="https://github.com/pgvector/pgvector">pgvector</a></td>
+<td>0.8.3</td>
+<td>17, 18, 19</td>
+<td>Vector similarity search for AI/embeddings</td>
+</tr>
+<tr>
+<td><a href="https://github.com/okbob/plpgsql_check">plpgsql_check</a></td>
+<td>2.9.1</td>
+<td>17, 18, 19</td>
+<td>PL/pgSQL linter and validator</td>
+</tr>
+<tr>
+<td><a href="https://github.com/bigsql/plprofiler">plprofiler</a></td>
+<td>4.2.5</td>
+<td>17, 18</td>
+<td>Performance profiler for PL/pgSQL functions</td>
+</tr>
+<tr>
+<td><a href="https://github.com/plv8/plv8">plv8</a></td>
+<td>3.2.4</td>
+<td>17, 18</td>
+<td>JavaScript (V8) procedural language</td>
+</tr>
+<tr>
+<td><a href="https://github.com/postgis/postgis">PostGIS</a></td>
+<td>3.6.4</td>
+<td>17, 18, 19</td>
+<td>Geospatial extensions (geometry, geography, raster, MVT)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/mpartel/postgres-protobuf">postgres_protobuf</a></td>
+<td>0.3.2</td>
+<td>17, 18, 19</td>
+<td>Protocol Buffer support (query, convert to/from JSON)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/dimitri/prefix">prefix</a></td>
+<td>1.2.11</td>
+<td>17, 18, 19</td>
+<td>Prefix range data type for phone routing lookups</td>
+</tr>
+<tr>
+<td><a href="https://github.com/postgrespro/rum">rum</a></td>
+<td>1.3.15</td>
+<td>17, 18</td>
+<td>GIN-like index with ordering for full text search</td>
+</tr>
+<tr>
+<td><a href="https://github.com/theory/pg-semver">semver</a></td>
+<td>0.41.0</td>
+<td>17, 18, 19</td>
+<td>Semantic version data type</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tvondra/tdigest">tdigest</a></td>
+<td>1.4.3</td>
+<td>17, 18, 19</td>
+<td>T-digest for quantile and percentile estimation</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tds-fdw/tds_fdw">tds_fdw</a></td>
+<td>2.0.5</td>
+<td>17, 18</td>
+<td>Foreign data wrapper for SQL Server and Sybase</td>
+</tr>
+<tr>
+<td><a href="https://github.com/arkhipov/temporal_tables">temporal_tables</a></td>
+<td>1.2.2</td>
+<td>17, 18</td>
+<td>System-period temporal tables</td>
+</tr>
+<tr>
+<td><a href="https://github.com/timescale/timescaledb">timescaledb</a></td>
+<td>2.28.1</td>
+<td>17, 18</td>
+<td>Time-series hypertables, compression, continuous aggregates</td>
+</tr>
+<tr>
+<td><a href="https://github.com/eulerto/wal2json">wal2json</a></td>
+<td>2.6</td>
+<td>17, 18</td>
+<td>JSON output plugin for logical replication / CDC</td>
+</tr>
+<tr>
+<td><a href="https://github.com/supabase/wrappers">wrappers</a></td>
+<td>0.6.2</td>
+<td>17, 18</td>
+<td>Foreign Data Wrapper framework (Stripe, S3, Firebase, etc.)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Image tags</h3></div>
+<p dir="auto">Each extension is published with two tag formats:</p>
+<ul dir="auto">
+<li><code>pgx-&lt;extension&gt;:&lt;pg_major&gt;</code> -- latest build (e.g. <code>pgx-pgvector:17</code>)</li>
+<li><code>pgx-&lt;extension&gt;:&lt;pg_major&gt;-&lt;version&gt;</code> -- pinned version (e.g. <code>pgx-pgvector:17-v0.8.3</code>)</li>
+</ul>
+<p dir="auto">All images are multi-architecture (<code>linux/amd64</code> and <code>linux/arm64</code>) and
+hosted on GHCR at <code>ghcr.io/pglayers/pgx-*</code>. Docker automatically pulls
+the correct architecture for your platform.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Configuration notes</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">shared_preload_libraries</h3></div>
+<p dir="auto">Some extensions require entries in <code>shared_preload_libraries</code>. Add this to
+your Dockerfile after the <code>COPY</code> lines:</p>
+<div class="highlight highlight-source-dockerfile notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="RUN echo &quot;shared_preload_libraries = 'pg_cron,pgaudit,pg_partman_bgw'&quot; \
+    &gt;&gt; /usr/share/postgresql/postgresql.conf.sample" dir="auto"><pre><span class="pl-k">RUN</span> echo <span class="pl-s">"shared_preload_libraries = 'pg_cron,pgaudit,pg_partman_bgw'"</span> \
+    &gt;&gt; /usr/share/postgresql/postgresql.conf.sample</pre></div>
+<p dir="auto">Extensions that need this:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Extension</th>
+<th>Library name</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>age</td>
+<td><code>age</code></td>
+</tr>
+<tr>
+<td>anon</td>
+<td><code>anon</code></td>
+</tr>
+<tr>
+<td>credcheck</td>
+<td><code>credcheck</code></td>
+</tr>
+<tr>
+<td>pg_cron</td>
+<td><code>pg_cron</code></td>
+</tr>
+<tr>
+<td>pg_duckdb</td>
+<td><code>pg_duckdb</code></td>
+</tr>
+<tr>
+<td>pg_durable</td>
+<td><code>pg_durable</code></td>
+</tr>
+<tr>
+<td>pg_failover_slots</td>
+<td><code>pg_failover_slots</code></td>
+</tr>
+<tr>
+<td>pg_hint_plan</td>
+<td><code>pg_hint_plan</code></td>
+</tr>
+<tr>
+<td>pg_net</td>
+<td><code>pg_net</code></td>
+</tr>
+<tr>
+<td>pg_partman</td>
+<td><code>pg_partman_bgw</code></td>
+</tr>
+<tr>
+<td>pg_qualstats</td>
+<td><code>pg_qualstats</code></td>
+</tr>
+<tr>
+<td>pg_squeeze</td>
+<td><code>pg_squeeze</code></td>
+</tr>
+<tr>
+<td>pg_stat_monitor</td>
+<td><code>pg_stat_monitor</code></td>
+</tr>
+<tr>
+<td>pg_textsearch</td>
+<td><code>pg_textsearch</code></td>
+</tr>
+<tr>
+<td>pg_wait_sampling</td>
+<td><code>pg_wait_sampling</code></td>
+</tr>
+<tr>
+<td>pgaudit</td>
+<td><code>pgaudit</code></td>
+</tr>
+<tr>
+<td>pglogical</td>
+<td><code>pglogical</code></td>
+</tr>
+<tr>
+<td>pgsodium</td>
+<td><code>pgsodium</code></td>
+</tr>
+<tr>
+<td>pgtt</td>
+<td><code>pgtt</code></td>
+</tr>
+<tr>
+<td>plprofiler</td>
+<td><code>plprofiler</code></td>
+</tr>
+<tr>
+<td>timescaledb</td>
+<td><code>timescaledb</code></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">CREATE EXTENSION</h3></div>
+<p dir="auto">Extensions must be created in each database where you want to use them.
+You can automate this with an init script:</p>
+<div class="highlight highlight-source-dockerfile notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="COPY &lt;&lt;'EOF' /docker-entrypoint-initdb.d/10-extensions.sql
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+CREATE EXTENSION IF NOT EXISTS postgis;
+EOF" dir="auto"><pre><span class="pl-k">COPY</span> &lt;&lt;<span class="pl-s">'EOF'</span> /docker-entrypoint-initdb.d/10-extensions.sql
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+CREATE EXTENSION IF NOT EXISTS postgis;
+EOF</pre></div>
+<p dir="auto">This runs automatically on first container start (when the data directory
+is initialized).</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">PostGIS</h3></div>
+<p dir="auto">The PostGIS extension image bundles its runtime shared libraries (libgeos,
+libproj, libgdal, libjson-c, libprotobuf-c, and PROJ/GDAL data files), so
+<code>COPY --from</code> is fully self-contained. Geometry, geography, topology,
+raster, and MVT (Mapbox Vector Tiles) are all included.</p>
+<p dir="auto">To enable GDAL raster format drivers (GeoTIFF, PNG, etc.), set the
+environment variable:</p>
+<div class="highlight highlight-source-dockerfile notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="ENV POSTGIS_GDAL_ENABLED_DRIVERS=ENABLE_ALL" dir="auto"><pre><span class="pl-k">ENV</span> POSTGIS_GDAL_ENABLED_DRIVERS=ENABLE_ALL</pre></div>
+<p dir="auto">By default, GDAL drivers are disabled for security (same as the official
+PostGIS Docker image).</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">DocumentDB</h3></div>
+<p dir="auto">DocumentDB provides a MongoDB-compatible document database engine built
+on PostgreSQL. It consists of two extensions:</p>
+<ul dir="auto">
+<li><strong><code>documentdb_core</code></strong> -- BSON data type and core operations (no
+dependencies, works standalone).</li>
+<li><strong><code>documentdb</code></strong> -- Full CRUD API surface. Requires <code>documentdb_core</code>,
+<code>pg_cron</code>, <code>vector</code> (pgvector), <code>postgis</code>, and <code>tsm_system_rows</code>.</li>
+</ul>
+<p dir="auto">Create extensions in order:</p>
+<div class="highlight highlight-source-sql notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="CREATE EXTENSION IF NOT EXISTS documentdb_core;
+-- For the full API (requires pg_cron, vector, postgis layers):
+CREATE EXTENSION IF NOT EXISTS documentdb;" dir="auto"><pre>CREATE EXTENSION IF NOT EXISTS documentdb_core;
+<span class="pl-c"><span class="pl-c">--</span> For the full API (requires pg_cron, vector, postgis layers):</span>
+CREATE EXTENSION IF NOT EXISTS documentdb;</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How it works</h2></div>
+<p dir="auto">The project publishes one Docker image per extension per PostgreSQL
+version. These are not runnable containers -- they are <code>FROM scratch</code>
+images containing only the extension artifacts laid out at the
+correct filesystem paths:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="/usr/lib/postgresql/17/lib/vector.so
+/usr/share/postgresql/17/extension/vector.control
+/usr/share/postgresql/17/extension/vector--0.8.3.sql"><pre class="notranslate"><code>/usr/lib/postgresql/17/lib/vector.so
+/usr/share/postgresql/17/extension/vector.control
+/usr/share/postgresql/17/extension/vector--0.8.3.sql
+</code></pre></div>
+<p dir="auto">When you write <code>COPY --from=ghcr.io/pglayers/pgx-pgvector:17 / /</code> in
+your Dockerfile, Docker copies these files into the official <code>postgres</code>
+image at exactly the right locations. PostgreSQL finds them and you can
+<code>CREATE EXTENSION</code>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Building locally</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Prerequisites</h3></div>
+<ul dir="auto">
+<li>Docker (with BuildKit)</li>
+<li>GNU Make</li>
+<li>Bash</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Build commands</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# List available extensions with descriptions and PG versions
+make list
+
+# Build a single extension for a specific PG version
+make build EXT=pgvector PG=17
+
+# Build all extensions for a PG version
+make build-all PG=17
+
+# Build for PG 19 (beta -- requires PG_TAG override until GA)
+make build EXT=pgvector PG=19 PG_TAG=19beta1
+make build-all PG=19 PG_TAG=19beta1
+
+# Build a combined image with ALL extensions included
+make image PG=17 REGISTRY=local
+
+# Custom image name
+make image PG=18 REGISTRY=local IMAGE_NAME=my-postgres
+
+# Show detailed info for an extension (versions, notes, preload reqs)
+make info EXT=pg_cron
+
+# Push a built extension image to the registry
+make push EXT=pgvector PG=17
+
+# Push all extensions
+make push-all PG=17
+
+# Override the default registry
+make build EXT=pgvector PG=17 REGISTRY=ghcr.io/myorg
+
+# Print the Dockerfile for an extension (useful for debugging)
+make dockerfile EXT=pgvector
+
+# Remove built image for a single extension
+make clean EXT=pgvector
+
+# Remove all built extension images (reclaim disk space)
+make clean-all" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> List available extensions with descriptions and PG versions</span>
+make list
+
+<span class="pl-c"><span class="pl-c">#</span> Build a single extension for a specific PG version</span>
+make build EXT=pgvector PG=17
+
+<span class="pl-c"><span class="pl-c">#</span> Build all extensions for a PG version</span>
+make build-all PG=17
+
+<span class="pl-c"><span class="pl-c">#</span> Build for PG 19 (beta -- requires PG_TAG override until GA)</span>
+make build EXT=pgvector PG=19 PG_TAG=19beta1
+make build-all PG=19 PG_TAG=19beta1
+
+<span class="pl-c"><span class="pl-c">#</span> Build a combined image with ALL extensions included</span>
+make image PG=17 REGISTRY=local
+
+<span class="pl-c"><span class="pl-c">#</span> Custom image name</span>
+make image PG=18 REGISTRY=local IMAGE_NAME=my-postgres
+
+<span class="pl-c"><span class="pl-c">#</span> Show detailed info for an extension (versions, notes, preload reqs)</span>
+make info EXT=pg_cron
+
+<span class="pl-c"><span class="pl-c">#</span> Push a built extension image to the registry</span>
+make push EXT=pgvector PG=17
+
+<span class="pl-c"><span class="pl-c">#</span> Push all extensions</span>
+make push-all PG=17
+
+<span class="pl-c"><span class="pl-c">#</span> Override the default registry</span>
+make build EXT=pgvector PG=17 REGISTRY=ghcr.io/myorg
+
+<span class="pl-c"><span class="pl-c">#</span> Print the Dockerfile for an extension (useful for debugging)</span>
+make dockerfile EXT=pgvector
+
+<span class="pl-c"><span class="pl-c">#</span> Remove built image for a single extension</span>
+make clean EXT=pgvector
+
+<span class="pl-c"><span class="pl-c">#</span> Remove all built extension images (reclaim disk space)</span>
+make clean-all</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Skipping extensions from CI</h3></div>
+<p dir="auto">Extensions with <code>CI_SKIP=1</code> in their <code>extension.conf</code> are excluded
+from CI builds but remain in the repository for local builds. This is
+useful for extensions with prohibitively long build times (e.g., plv8
+whose V8 engine compilation exceeds CI timeouts on arm64 emulation).</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Still works locally
+make build EXT=plv8 PG=17
+
+# But skipped by CI (not in build matrix, not in profile images)" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Still works locally</span>
+make build EXT=plv8 PG=17
+
+<span class="pl-c"><span class="pl-c">#</span> But skipped by CI (not in build matrix, not in profile images)</span></pre></div>
+<p dir="auto">To skip an extension, add <code>CI_SKIP=1</code> to its <code>extension.conf</code>. To
+re-enable, remove the field and add the extension back to the
+appropriate profiles.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Running tests</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Full test suite: collisions, ldd, CREATE EXTENSION, smoke tests,
+# integration tests (builds all extensions first)
+make test REGISTRY=local PG=17
+
+# Quick integration tests against an already-built combined image
+make image PG=17 REGISTRY=local
+make test-image PG=17" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Full test suite: collisions, ldd, CREATE EXTENSION, smoke tests,</span>
+<span class="pl-c"><span class="pl-c">#</span> integration tests (builds all extensions first)</span>
+make <span class="pl-c1">test</span> REGISTRY=local PG=17
+
+<span class="pl-c"><span class="pl-c">#</span> Quick integration tests against an already-built combined image</span>
+make image PG=17 REGISTRY=local
+make test-image PG=17</pre></div>
+<p dir="auto">Tests must pass for all supported PG versions (17, 18, 19).</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Profiles</h3></div>
+<p dir="auto">Profiles let you build and test a curated subset of extensions rather
+than the full set. This is useful for matching managed PostgreSQL
+service offerings (e.g., Azure Database for PostgreSQL) or creating
+purpose-built images.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# List available profiles
+make list-profiles
+
+# List extensions in a profile
+make list PROFILE=azure
+
+# Build only the extensions in a profile
+make build-all PG=17 PROFILE=azure
+
+# Build a combined image with only the profile's extensions
+make image PG=17 PROFILE=azure    # produces: pglayers-azure:17
+
+# Run the full test suite against a profile
+make test REGISTRY=local PG=17 PROFILE=azure
+
+# Validate all profile files are in sync with extensions/
+make check-profiles" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> List available profiles</span>
+make list-profiles
+
+<span class="pl-c"><span class="pl-c">#</span> List extensions in a profile</span>
+make list PROFILE=azure
+
+<span class="pl-c"><span class="pl-c">#</span> Build only the extensions in a profile</span>
+make build-all PG=17 PROFILE=azure
+
+<span class="pl-c"><span class="pl-c">#</span> Build a combined image with only the profile's extensions</span>
+make image PG=17 PROFILE=azure    <span class="pl-c"><span class="pl-c">#</span> produces: pglayers-azure:17</span>
+
+<span class="pl-c"><span class="pl-c">#</span> Run the full test suite against a profile</span>
+make <span class="pl-c1">test</span> REGISTRY=local PG=17 PROFILE=azure
+
+<span class="pl-c"><span class="pl-c">#</span> Validate all profile files are in sync with extensions/</span>
+make check-profiles</pre></div>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Shipped profiles</h4></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Profile</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>full</code></td>
+<td>All extensions provided by pglayers</td>
+</tr>
+<tr>
+<td><code>azure</code></td>
+<td>Extensions matching Azure Database for PostgreSQL Flexible Server</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Creating a custom profile</h4></div>
+<p dir="auto">Create a text file in <code>profiles/</code> with one extension directory name per
+line (alphabetically sorted). Comments (<code>#</code>) and blank lines are ignored:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# My custom profile
+pg_cron
+pgvector
+postgis"><pre class="notranslate"><code># My custom profile
+pg_cron
+pgvector
+postgis
+</code></pre></div>
+<p dir="auto">Then use it:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="make image PG=17 PROFILE=myprofile
+make test REGISTRY=local PG=17 PROFILE=myprofile" dir="auto"><pre>make image PG=17 PROFILE=myprofile
+make <span class="pl-c1">test</span> REGISTRY=local PG=17 PROFILE=myprofile</pre></div>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Published profile images</h4></div>
+<p dir="auto">CI builds and pushes combined profile images to GHCR:</p>
+<ul dir="auto">
+<li><code>ghcr.io/&lt;owner&gt;/pglayers-azure:17</code></li>
+<li><code>ghcr.io/&lt;owner&gt;/pglayers-azure:18</code></li>
+<li><code>ghcr.io/&lt;owner&gt;/pglayers-full:17</code></li>
+<li><code>ghcr.io/&lt;owner&gt;/pglayers-full:18</code></li>
+</ul>
+<p dir="auto">These are ready-to-use PostgreSQL images with the profile's extensions
+pre-installed and <code>shared_preload_libraries</code> configured.</p>
+<p dir="auto">The <code>make test</code> suite checks:</p>
+<ol dir="auto">
+<li>
+<p dir="auto"><strong>No file collisions</strong> -- Every pair of extensions is compared for
+overlapping files. If two extensions install a file at the same path,
+the last <code>COPY --from</code> silently overwrites the first. Docker gives
+zero warning about this, but it can break extensions at runtime.</p>
+</li>
+<li>
+<p dir="auto"><strong>No base image overwrites</strong> -- Extensions must not replace files
+from the official <code>postgres:XX</code> image.</p>
+</li>
+<li>
+<p dir="auto"><strong>Shared library dependencies</strong> -- <code>ldd</code> is run on every <code>.so</code> in
+the combined image to catch missing transitive dependencies.</p>
+</li>
+<li>
+<p dir="auto"><strong>CREATE EXTENSION</strong> -- Every extension loads successfully in the
+combined image.</p>
+</li>
+<li>
+<p dir="auto"><strong>Functional smoke tests</strong> -- Each extension is exercised with a
+real query (not just loaded) to verify runtime behavior.</p>
+</li>
+<li>
+<p dir="auto"><strong>Integration tests</strong> -- Each extension's <code>test.sql</code> file runs
+multi-step validation with PASS/FAIL assertions.</p>
+</li>
+</ol>
+<p dir="auto">Example output:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="---- Phase 3: Checking for file collisions between extensions...
+PASS pgvector &lt;-&gt; postgis: no collisions
+...
+PASS No file collisions detected between any extension pair
+
+---- Phase 5: Building combined image and checking shared libraries...
+PASS All shared library dependencies resolve
+
+---- Phase 6: Functional tests...
+PASS CREATE EXTENSION vector
+PASS smoke: pgvector similarity
+...
+
+---- Phase 7: Integration tests (extensions/*/test.sql)...
+PASS integration pgvector (3 checks)
+PASS integration postgis (4 checks)
+...
+========================================
+Results: 699 passed, 0 failed, 0 warnings
+========================================"><pre class="notranslate"><code>---- Phase 3: Checking for file collisions between extensions...
+PASS pgvector &lt;-&gt; postgis: no collisions
+...
+PASS No file collisions detected between any extension pair
+
+---- Phase 5: Building combined image and checking shared libraries...
+PASS All shared library dependencies resolve
+
+---- Phase 6: Functional tests...
+PASS CREATE EXTENSION vector
+PASS smoke: pgvector similarity
+...
+
+---- Phase 7: Integration tests (extensions/*/test.sql)...
+PASS integration pgvector (3 checks)
+PASS integration postgis (4 checks)
+...
+========================================
+Results: 699 passed, 0 failed, 0 warnings
+========================================
+</code></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Verifying your container</h2></div>
+<p dir="auto">After running a <code>docker run</code> command, the container starts in the
+background (<code>-d</code> flag). To confirm it's running:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='# List running containers -- look for STATUS "Up"
+docker ps
+
+# Check the container logs for "database system is ready to accept connections"
+docker logs &lt;container_id&gt;' dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> List running containers -- look for STATUS "Up"</span>
+docker ps
+
+<span class="pl-c"><span class="pl-c">#</span> Check the container logs for "database system is ready to accept connections"</span>
+docker logs <span class="pl-k">&lt;</span>container_id<span class="pl-k">&gt;</span></pre></div>
+<p dir="auto">To connect and verify PostgreSQL is working:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='# Connect from inside the running container
+docker exec -it &lt;container_id&gt; psql -U postgres -c "SELECT version();"' dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Connect from inside the running container</span>
+docker <span class="pl-c1">exec</span> -it <span class="pl-k">&lt;</span>container_id<span class="pl-k">&gt;</span> psql -U postgres -c <span class="pl-s"><span class="pl-pds">"</span>SELECT version();<span class="pl-pds">"</span></span></pre></div>
+<p dir="auto">Replace <code>&lt;container_id&gt;</code> with the ID shown by <code>docker ps</code> (or the first
+few characters of it).</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Exposing and changing the port</h3></div>
+<p dir="auto">By default, the examples above don't publish a port to your host machine.
+To access PostgreSQL from outside the container, add <code>-p</code>:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Publish pglayers (PostgreSQL) on the default port (5432)
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=secret ghcr.io/pglayers/pglayers-full:17" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Publish pglayers (PostgreSQL) on the default port (5432)</span>
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=secret ghcr.io/pglayers/pglayers-full:17</pre></div>
+<p dir="auto">If port 5432 is already in use (another PostgreSQL instance, for example),
+map to a different host port:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Use host port 5433 instead (container still listens on 5432 internally)
+docker run -d -p 5433:5432 -e POSTGRES_PASSWORD=secret ghcr.io/pglayers/pglayers-full:17" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Use host port 5433 instead (container still listens on 5432 internally)</span>
+docker run -d -p 5433:5432 -e POSTGRES_PASSWORD=secret ghcr.io/pglayers/pglayers-full:17</pre></div>
+<p dir="auto">Then connect specifying the port:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="psql -h localhost -p 5433 -U postgres" dir="auto"><pre>psql -h localhost -p 5433 -U postgres</pre></div>
+<p dir="auto">The format is <code>-p &lt;host_port&gt;:&lt;container_port&gt;</code>. Only the host port
+(left side) needs to change -- the container always listens on 5432.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Contributing</h2></div>
+<p dir="auto">See <a href="/pglayers/pglayers/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a> for the full guide on adding
+extensions, reporting bugs, and submitting changes.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Project structure</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="pglayers/
+├── Makefile                          Build interface
+├── Dockerfile                        Combined image (all extensions)
+├── CONTRIBUTING.md                   Contribution guide
+├── AGENTS.md                         Agent/CI instructions
+├── .github/
+│   ├── base-image-digests.json       Tracked base image digests
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml            Bug report form
+│   │   ├── new_extension.yml         Extension request form
+│   │   └── config.yml                Template chooser config
+│   └── workflows/
+│       ├── build-push.yml            CI: builds extensions, pushes to GHCR
+│       ├── test.yml                  CI: full test suite (PG 17, 18, 19)
+│       ├── monitor-base-image.yml    Detects base image updates (every 6h)
+│       ├── monitor-extensions.yml    Detects new extension releases (daily)
+│       └── cache-cleanup.yml         Prunes stale GHA caches
+├── extensions/
+│   ├── pgvector/
+│   │   ├── Dockerfile                Multi-stage build -&gt; artifact image
+│   │   ├── extension.conf            Metadata and version mapping
+│   │   └── test.sql                  Integration tests (PASS/FAIL assertions)
+│   ├── pg_cron/
+│   ├── postgis/                      (complex: bundles runtime libs)
+│   ├── ... (53 extensions total)
+│   └── wal2json/
+├── profiles/
+│   ├── azure.txt                     Azure PostgreSQL Flexible Server extensions
+│   └── full.txt                      All extensions (CI-verified)
+├── tests/
+│   ├── test-layers.sh                Full test suite (collisions + functional)
+│   └── test-image.sh                 Quick integration tests against combined image
+└── examples/
+    └── Dockerfile.example            End-user reference"><pre class="notranslate"><code>pglayers/
+├── Makefile                          Build interface
+├── Dockerfile                        Combined image (all extensions)
+├── CONTRIBUTING.md                   Contribution guide
+├── AGENTS.md                         Agent/CI instructions
+├── .github/
+│   ├── base-image-digests.json       Tracked base image digests
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml            Bug report form
+│   │   ├── new_extension.yml         Extension request form
+│   │   └── config.yml                Template chooser config
+│   └── workflows/
+│       ├── build-push.yml            CI: builds extensions, pushes to GHCR
+│       ├── test.yml                  CI: full test suite (PG 17, 18, 19)
+│       ├── monitor-base-image.yml    Detects base image updates (every 6h)
+│       ├── monitor-extensions.yml    Detects new extension releases (daily)
+│       └── cache-cleanup.yml         Prunes stale GHA caches
+├── extensions/
+│   ├── pgvector/
+│   │   ├── Dockerfile                Multi-stage build -&gt; artifact image
+│   │   ├── extension.conf            Metadata and version mapping
+│   │   └── test.sql                  Integration tests (PASS/FAIL assertions)
+│   ├── pg_cron/
+│   ├── postgis/                      (complex: bundles runtime libs)
+│   ├── ... (53 extensions total)
+│   └── wal2json/
+├── profiles/
+│   ├── azure.txt                     Azure PostgreSQL Flexible Server extensions
+│   └── full.txt                      All extensions (CI-verified)
+├── tests/
+│   ├── test-layers.sh                Full test suite (collisions + functional)
+│   └── test-image.sh                 Quick integration tests against combined image
+└── examples/
+    └── Dockerfile.example            End-user reference
+</code></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Licensing policy</h2></div>
+<p dir="auto">This project ships extensions with <strong>permissive open-source licenses</strong>
+(PostgreSQL, MIT, BSD, Apache 2.0, ISC) and, where industry practice
+clearly supports it, <strong>GPL-2.0 extensions loaded via PostgreSQL's
+dynamic extension mechanism</strong>.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">GPL-2.0 extensions (PostGIS, pgRouting)</h3></div>
+<p dir="auto">PostGIS and pgRouting are licensed under GPL-2.0. Strictly interpreted,
+the GPL could apply to any program that "links" with GPL code. However,
+PostgreSQL extensions are loaded at runtime via <code>dlopen()</code> through a
+stable public API (<code>CREATE EXTENSION</code>), which the PostgreSQL community
+and broader industry treat as <strong>"mere aggregation"</strong> rather than
+creating a combined work:</p>
+<ul dir="auto">
+<li>Every managed PostgreSQL service (AWS RDS, Azure, Google Cloud SQL,
+Neon, Supabase) distributes PostGIS and pgRouting the same way.</li>
+<li>The official <code>postgis/postgis</code> Docker image on Docker Hub uses the
+identical <code>COPY --from</code> pattern.</li>
+<li>No GPL enforcement action has ever been taken against distributors
+of dynamically-loaded PostgreSQL extensions.</li>
+<li>The PostgreSQL project has operated under this interpretation for
+20+ years.</li>
+</ul>
+<p dir="auto">We include these extensions because the practical risk is zero and
+excluding them would make the project significantly less useful.
+If your legal team disagrees with this interpretation, simply omit
+the PostGIS and pgRouting <code>COPY --from</code> lines from your Dockerfile.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Extensions we exclude</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>License</th>
+<th>Policy</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPL-3.0</td>
+<td>Excluded (stronger copyleft, less industry consensus)</td>
+<td>login_hook, session_variable</td>
+</tr>
+<tr>
+<td>AGPL-3.0</td>
+<td>Excluded</td>
+<td>topn</td>
+</tr>
+<tr>
+<td>BSL, SSPL, ELv2, FSL</td>
+<td>Excluded (not open source)</td>
+<td>--</td>
+</tr>
+<tr>
+<td>Requires proprietary deps</td>
+<td>Excluded</td>
+<td>oracle_fdw (Oracle Instant Client)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">What this means in practice</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>License</th>
+<th>Included?</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PostgreSQL, MIT, BSD, Apache 2.0, ISC</td>
+<td>Yes</td>
+<td>pgvector, pg_cron, pgaudit, timescaledb</td>
+</tr>
+<tr>
+<td>MPL-2.0 (weak file-level copyleft)</td>
+<td>Yes</td>
+<td>pg_uuidv7</td>
+</tr>
+<tr>
+<td>GPL-2.0 (dynamic extension loading)</td>
+<td>Yes</td>
+<td>PostGIS, pgRouting</td>
+</tr>
+<tr>
+<td>GPL-3.0</td>
+<td>No</td>
+<td>login_hook, session_variable</td>
+</tr>
+<tr>
+<td>AGPL-3.0</td>
+<td>No</td>
+<td>--</td>
+</tr>
+<tr>
+<td>BSL, SSPL, ELv2, FSL</td>
+<td>No</td>
+<td>--</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">FAQ</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">How does pglayers work?</h3></div>
+<p dir="auto">Each extension is built as a minimal <code>FROM scratch</code> Docker image containing
+only the extension's files (shared libraries, control files, SQL scripts).
+These images are not runnable containers -- they are filesystem layers.</p>
+<p dir="auto">When you write:</p>
+<div class="highlight highlight-source-dockerfile notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="COPY --from=ghcr.io/pglayers/pgx-pgvector:17 / /" dir="auto"><pre><span class="pl-k">COPY</span> --from=ghcr.io/pglayers/pgx-pgvector:17 / /</pre></div>
+<p dir="auto">Docker copies the extension files into the official <code>postgres</code> image at
+exactly the right paths (<code>/usr/lib/postgresql/17/lib/</code>,
+<code>/usr/share/postgresql/17/extension/</code>). PostgreSQL discovers them and
+you can <code>CREATE EXTENSION</code>. No compilation, no package manager, no
+runtime dependencies to resolve -- just file copies stacked on top of
+the official image.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Why is version X of extension Y not available?</h3></div>
+<p dir="auto">pglayers follows a deliberate version policy. We prefer stability and
+reproducibility over bleeding-edge releases, using this priority order:</p>
+<ol dir="auto">
+<li>
+<p dir="auto"><strong>PGDG APT packages</strong> (preferred) -- Most extensions are installed
+from the official PostgreSQL APT repository (<code>apt.postgresql.org</code>).
+The version you get is whatever the PGDG maintainers have packaged.
+This is typically the latest stable release, but may lag a few days
+or weeks behind upstream.</p>
+</li>
+<li>
+<p dir="auto"><strong>Source builds</strong> (fallback) -- Extensions not available in PGDG are
+compiled from source at the latest stable release tag.</p>
+</li>
+</ol>
+<p dir="auto">If the PGDG repository ships an older version than upstream, we ship
+that older version. This is intentional: PGDG packages are tested
+against the corresponding PostgreSQL release, receive security patches
+through the same channel, and are guaranteed to be ABI-compatible.
+We only override this if there is a critical bug fix or security issue
+in a newer release that PGDG has not yet packaged.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Why is my extension not included?</h3></div>
+<p dir="auto">Possibly one of:</p>
+<ul dir="auto">
+<li>
+<p dir="auto"><strong>License</strong> -- pglayers only ships extensions with permissive
+open-source licenses (PostgreSQL, MIT, BSD, Apache 2.0, ISC). We
+exclude proprietary, source-available (BSL, SSPL, FSL, ELv2), and
+strong copyleft (AGPL) licenses. We also exclude extensions that
+require proprietary runtime dependencies (e.g., Oracle client).
+See the <a href="#licensing-policy">Licensing policy</a> section for details.</p>
+</li>
+<li>
+<p dir="auto"><strong>Not yet contributed</strong> -- We welcome contributions! To add a new
+extension, see the <a href="/pglayers/pglayers/blob/main/CONTRIBUTING.md">Contributing guide</a> for the
+full checklist, Dockerfile patterns, and test requirements.</p>
+</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Why is there no package for my PostgreSQL version?</h3></div>
+<p dir="auto">Extension availability per PostgreSQL version depends on upstream
+support:</p>
+<ul dir="auto">
+<li>
+<p dir="auto"><strong>APT-based extensions</strong> -- Available when the PGDG repository
+publishes a package for that PG version. New major PG versions
+(e.g., PG 19 during beta) may not have all packages yet.</p>
+</li>
+<li>
+<p dir="auto"><strong>Source-built extensions</strong> -- Available when the extension compiles
+cleanly against that PG version's headers.</p>
+</li>
+</ul>
+<p dir="auto">If an extension you need doesn't support your PG version yet, you can
+contribute by following the <a href="/pglayers/pglayers/blob/main/CONTRIBUTING.md">Contributing guide</a>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Acknowledgements</h2></div>
+<p dir="auto">This project stands on the shoulders of the PostgreSQL community:</p>
+<ul dir="auto">
+<li>The <a href="https://www.postgresql.org/community/" rel="nofollow">PostgreSQL Global Development Group</a> for building the best open-source database</li>
+<li>The <a href="https://apt.postgresql.org/" rel="nofollow">PGDG APT Repository</a> maintainers who package and distribute extensions for Debian and Ubuntu</li>
+<li>The <a href="https://hub.docker.com/_/postgres" rel="nofollow">Official PostgreSQL Docker image</a> maintainers for providing reliable, well-configured base images</li>
+<li>The <a href="https://wiki.debian.org/PostgreSql" rel="nofollow">Debian PostgreSQL team</a> for their packaging work that makes all of this possible</li>
+<li>Every extension author who releases their work under permissive open-source licenses</li>
+</ul>
+<p dir="auto">pglayers is a thin layer of automation on top of their work. Without the quality and consistency of the upstream ecosystem, this project would not exist.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto"><a href="/pglayers/pglayers/blob/main/LICENSE">MIT</a></p>
+</article>

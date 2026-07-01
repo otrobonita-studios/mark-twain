@@ -1,0 +1,328 @@
+Fixing a kubelet Memory Leak in Kubernetes 1.36
+
+June 30, 2026
+
+How I tracked down a tiny Go lifecycle bug in Kubernetes kubelet which leaked a context on every startPodSync.
+
+Author
+
+Mike Robbins
+
+A few weeks ago, I started getting alerts from a tiny Kubernetes cluster: a single-node Kubernetes test cluster, not running any of our production workload. I’d recently upgraded this cluster to v1.36, hosted on DigitalOcean’s managed DOKS service. 
+My frugality paid unexpected dividends: this tiny 
+(ahem, cheap!)
+ 2 GiB RAM node had so much memory pressure that it quickly revealed a deeper issue in Kubernetes 1.36
+, which would have taken longer to show up if memory were abundant.
+
+Investigating the alerts revealed that Pods were being restarted, but 
+kubectl top pods
+ didn’t show any unusually-large pods. The applications running on the node weren’t experiencing memory growth and were nowhere near their memory limits.
+
+Peeling back the Kubernetes facade, I opened up a root shell on the node itself, and a short 
+htop
+ and 
+M
+ later, quickly discovered that the 
+kubelet
+ process itself had grown and was growing!
+
+A quick 
+systemctl restart kubelet
+ on the node made the cluster happy again, but the underlying leak was still there, and would come back soon unless I determined the origin of the leak.
+
+Dumping kubelet’s heap
+
+Kubernetes is written in Go, and kubelet is a core component of how Kubernetes works: it runs on every node, and is responsible for keeping that node’s containers in sync with the desired cluster state.
+
+Go’s 
+pprof
+ package lets you capture a heap memory profile from a running process, which I saved to a file:
+
+kubectl get 
+--raw
+ 
+"/api/v1/nodes/
+${
+NODE
+}
+/proxy/debug/pprof/heap?debug=0"
+ 
+>
+ 
+"kubelet_pprof_heap.pb.gz"
+
+After that, 
+go tool pprof -top
+ can be used to see what’s going on, both by total size and by object count.
+
+By object count:
+
+go tool pprof -top -sample_index=inuse_objects kubelet_pprof_heap.pb.gz
+
+      flat  flat%   sum%        cum   cum%
+    642456 45.52% 45.52%     918672 65.09%  context.(*cancelCtx).propagateCancel
+    380137 26.93% 72.45%     380195 26.94%  context.withCancel (inline)
+    276216 19.57% 92.02%     276216 19.57%  context.(*cancelCtx).Done
+     10923  0.77% 92.80%      10923  0.77%  container/list.(*List).insertValue (inline)
+     10923  0.77% 93.57%      10923  0.77%  container/list.New (inline)
+     10923  0.77% 94.34%      10923  0.77%  golang.org/x/net/http2.(*clientConnReadLoop).handleResponse
+     10923  0.77% 95.12%      10923  0.77%  google.golang.org/protobuf/internal/impl.consumeStringValueValidateUTF8
+     10923  0.77% 95.89%      10923  0.77%  k8s.io/api/core/v1.(*VolumeMount).Unmarshal
+     10923  0.77% 96.67%      10923  0.77%  os.(*File).readdir
+      4681  0.33% 97.00%      16833  1.19%  k8s.io/apimachinery/pkg/watch.(*StreamWatcher).receive
+        19 0.0013% 97.00%      21865  1.55%  k8s.io/utils/internal/third_party/forked/golang/golang-lru.(*Cache).Add
+         0     0% 97.00%      10923  0.77%  container/list.(*List).PushFront (inline)
+         0     0% 97.00%     380195 26.94%  context.WithCancel
+         0     0% 97.00%     918614 65.08%  context.WithDeadline (inline)
+         0     0% 97.00%     918614 65.08%  context.WithDeadlineCause
+         0     0% 97.00%     918614 65.08%  context.WithTimeout
+...
+         0     0% 97.00%     918206 65.06%  k8s.io/apimachinery/pkg/util/wait.PollUntilContextTimeout
+...         0     0% 97.00%     918215 65.06%  k8s.io/kubernetes/pkg/kubelet.(*Kubelet).SyncPod
+...
+         0     0% 97.00%      22742  1.61%  k8s.io/kubernetes/pkg/kubelet.(*Kubelet).syncLoopIteration
+         0     0% 97.00%    1309333 92.77%  k8s.io/kubernetes/pkg/kubelet.(*podWorkers).UpdatePod.func1
+         0     0% 97.00%    1309333 92.77%  k8s.io/kubernetes/pkg/kubelet.(*podWorkers).podWorkerLoop
+         0     0% 97.00%     929138 65.83%  k8s.io/kubernetes/pkg/kubelet.(*podWorkers).podWorkerLoop.func1 (inline)
+         0     0% 97.00%     380195 26.94%  k8s.io/kubernetes/pkg/kubelet.(*podWorkers).startPodSync
+...
+         0     0% 97.00%     907283 64.28%  k8s.io/kubernetes/pkg/kubelet/volumemanager.(*volumeManager).WaitForAttachAndMount
+
+By total heap memory usage:
+
+go tool pprof -top -sample_index=inuse_space kubelet_pprof_heap.pb.gz
+
+      flat  flat%   sum%        cum   cum%
+   86.33MB 51.28% 51.28%   115.83MB 68.80%  context.(*cancelCtx).propagateCancel
+   29.50MB 17.52% 68.80%    29.50MB 17.52%  context.(*cancelCtx).Done
+      29MB 17.23% 86.03%    30.54MB 18.14%  context.withCancel (inline)
+    1.66MB  0.99% 87.02%     1.66MB  0.99%  google.golang.org/grpc/mem.(*sizedBufferPool).Get
+    1.50MB  0.89% 87.91%     2.50MB  1.49%  github.com/google/cadvisor/container/libcontainer.newContainerStats
+       1MB  0.59% 88.50%        1MB  0.59%  reflect.unsafe_New
+       1MB  0.59% 89.10%        1MB  0.59%  github.com/google/cadvisor/container/libcontainer.diskStatsCopy
+       1MB  0.59% 89.69%        1MB  0.59%  k8s.io/apimachinery/pkg/util/sets.Set[go.shape.string].Insert (inline)
+       1MB  0.59% 90.28%        1MB  0.59%  internal/bytealg.MakeNoZero
+...
+         0     0% 91.48%    30.54MB 18.14%  context.WithCancel
+         0     0% 91.48%   114.29MB 67.89%  context.WithDeadline (inline)
+         0     0% 91.48%   114.29MB 67.89%  context.WithDeadlineCause
+         0     0% 91.48%   114.29MB 67.89%  context.WithTimeout
+...
+         0     0% 91.48%   103.52MB 61.49%  k8s.io/apimachinery/pkg/util/wait.PollUntilContextTimeout
+...
+         0     0% 91.48%   104.04MB 61.80%  k8s.io/kubernetes/pkg/kubelet.(*Kubelet).SyncPod
+...
+         0     0% 91.48%   135.08MB 80.24%  k8s.io/kubernetes/pkg/kubelet.(*podWorkers).UpdatePod.func1
+         0     0% 91.48%   135.08MB 80.24%  k8s.io/kubernetes/pkg/kubelet.(*podWorkers).podWorkerLoop
+         0     0% 91.48%   104.54MB 62.10%  k8s.io/kubernetes/pkg/kubelet.(*podWorkers).podWorkerLoop.func1 (inline)
+...
+         0     0% 91.48%   103.02MB 61.19%  k8s.io/kubernetes/pkg/kubelet/volumemanager.(*volumeManager).WaitForAttachAndMount
+
+Despite never before peeking at kubelet’s implementation, I was immediately surprised to find almost a million contexts taking up the majority of its memory usage! That doesn’t sound right.
+
+Codex finds the regression
+
+Jumping into unfamiliar new codebases and being able to ask questions is one of the more powerful superpowers of the recent generation of AI coding tools. While I was suspicious of the 
+kubelet/volumemanager.(*volumeManager).WaitForAttachAndMount
+ line (maybe exec-based readiness and liveness probes were acting up?), Codex immediately steered me to the correct issue: 
+a change in Kubernetes 1.36 introduced on 2026-02-19
+ in which this code:
+
+// initialize a context for the worker if one does not exist
+
+if
+ 
+status
+.
+ctx
+ 
+==
+ 
+nil
+ 
+||
+ 
+status
+.
+ctx
+.
+Err
+()
+ 
+==
+ 
+context
+.
+Canceled
+ 
+{
+
+status
+.
+ctx
+,
+ 
+status
+.
+cancelFn
+ 
+=
+ 
+context
+.
+WithCancel
+(
+context
+.
+Background
+())
+
+}
+
+ctx
+ 
+=
+ 
+status
+.
+ctx
+
+was replaced by:
+
+ctx
+,
+ 
+status
+.
+cancelFn
+ 
+=
+ 
+context
+.
+WithCancel
+(
+parentCtx
+)
+
+This runs on every single 
+startPodSync
+, which is the core reconciliation loop for each Pod. On its own, the new line looks like it might be harmless: it creates a new cancelable context and stores the cancel function.
+
+The problem is what happens on the second pass:
+
+If 
+status.cancelFn
+ already points to the previous cancel function, this assignment overwrites it. If the old cancel function was never called (and it isn’t in the typical success case), the old child context remains attached to its parent. 
+Go’s context docs
+ explicitly say that calling the CancelFunc removes the parent’s reference to the child, and 
+failing to call it leaks the child until the parent is canceled.
+
+This is called for every single Pod reconciliation loop, and so over a few days, it grew to almost a million leaked contexts, and would have been more on a busier cluster!
+
+Reporting and patching
+
+I’d never committed to the Kubernetes project before, but my experience as a newcomer was that they’re running a great process that helped quickly triage the issue and support me in getting patches merged.
+
+Adding another layer of complexity, my original patch attempt passed local tests, but failed on E2E integration tests that run in Kubernetes CI environments. These revealed another issue of how prober workers, which handle readiness and liveness probes, weren’t using contexts quite correctly either! In the interest of solving the memory leak, the team steered me to simplify just toward reverting the immediate issue, leaving broader context fixup for later.
+
+I left a few “Be careful” comments in the code for the next person brave enough to attempt a deeper cleanup:
+
+// Be careful not to leak contexts (see #139823).
+
+// Be careful that long-lived goroutines (such as prober workers) outlive
+
+// the lifetime of a single startPodSync cancellation context.
+
+Timeline
+
+2026-06-17: memory leak 
+issue
+ reported
+
+2026-06-18: found the code change responsible in 
+startPodSync
+
+2026-06-18: Maintainers tagged as 
+accepted
+, 
+important-soon
+, 
+regression
+
+2026-06-18: 
+PR
+ opened
+
+2026-06-19: PR simplified due to prober workers failures
+
+2026-06-23: Maintainers tagged as 
+lgtm
+
+2026-06-25: Maintainers tagged as 
+approved
+ and merged into 
+master
+ branch (which feeds into v1.37)
+
+2026-06-28: 
+backport PR
+ opened against 
+release-1.36
+ branch (to get this into a v1.36 patch release)
+
+(not yet): patch release of Kubernetes v1.36.3
+
+Lessons learned
+
+The Kubernetes team was great to work with.
+
+Heap memory profiling is a superpower.
+
+Memory leaks look different than they used to.
+
+Long-running production systems have a time dimension component that short-running tests often lack.
+
+Sometimes the issue is not the application-level workload, but in all the infrastructure underneath it.
+
+“Turn it off and back on again” remains undefeated. :)
+
+Appendix: one-liner to check 
+kubelet
+ memory use
+
+kubectl get 
+--raw
+ 
+"/api/v1/nodes/
+${
+NODE
+}
+/proxy/metrics"
+ | 
+grep 
+process_resident_memory_bytes
+
+Before:
+
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 1.021227008e+09
+
+After a 
+systemctl restart kubelet
+:
+
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 1.15019776e+08
+
+That’s a drop from 974 MiB to 110 MiB.
+
+Get started with
+
+HeyOnCall
+
+Sign up free ›
+
+Launch live demo ›
