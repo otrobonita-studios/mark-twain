@@ -1,0 +1,238 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">claude-real-video</h1></div>
+<p dir="auto"><strong>Let Claude — or any LLM — actually watch a video.</strong></p>
+<p dir="auto">Most AI tools don't really <em>see</em> a video. Paste a YouTube link into ChatGPT and it
+reads the <strong>transcript</strong>, not the picture. Claude won't take a video file at all.
+Even Gemini, which <em>can</em> read video natively, has to send it up to Google and
+samples frames at a <strong>fixed interval</strong> (1 fps by default), so fast cuts slip past.</p>
+<p dir="auto"><code>claude-real-video</code> does it differently, and <strong>locally</strong>: point it at a URL or a
+file, and it pulls the frames that <em>actually matter</em> (every scene change, not a
+fixed quota), throws away the near-duplicates, transcribes the audio, and hands
+you a clean folder any LLM can read — on your own machine, nothing uploaded.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='crv "https://www.youtube.com/watch?v=..."
+# → crv-out/frames/*.jpg  +  crv-out/transcript.txt  +  crv-out/MANIFEST.txt' dir="auto"><pre>crv <span class="pl-s"><span class="pl-pds">"</span>https://www.youtube.com/watch?v=...<span class="pl-pds">"</span></span>
+<span class="pl-c"><span class="pl-c">#</span> → crv-out/frames/*.jpg  +  crv-out/transcript.txt  +  crv-out/MANIFEST.txt</span></pre></div>
+<p dir="auto">Then drop the frames + <code>MANIFEST.txt</code> into Claude / ChatGPT / Gemini and ask away.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Why not just sample frames?</h2></div>
+<p dir="auto">Most "let an LLM watch a video" scripts (and Gemini's own pipeline) grab frames
+at a <strong>fixed interval</strong> — e.g. one per second. That over-samples a static
+screencast and under-samples a fast-cut reel. <code>claude-real-video</code> is smarter:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+
+<th>fixed-interval sampling</th>
+<th><strong>claude-real-video</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Frame selection</td>
+<td>every N seconds</td>
+<td><strong>scene-change detection</strong> + density floor</td>
+</tr>
+<tr>
+<td>Repeated shots (A-B-A cuts)</td>
+<td>sent again every time</td>
+<td><strong>sliding-window dedup</strong> sends each shot once</td>
+</tr>
+<tr>
+<td>Static slide (10 min)</td>
+<td>~600 near-identical frames</td>
+<td><strong>collapses to 1</strong> (dedup)</td>
+</tr>
+<tr>
+<td>Fast-cut reel</td>
+<td>misses frames between samples</td>
+<td>catches each visual change</td>
+</tr>
+<tr>
+<td>Audio</td>
+<td>often ignored</td>
+<td>Whisper transcript w/ language detect</td>
+</tr>
+<tr>
+<td>Where the video goes</td>
+<td>often uploaded to a cloud</td>
+<td><strong>stays on your machine</strong></td>
+</tr>
+<tr>
+<td>Input</td>
+<td>usually local file only</td>
+<td><strong>URL (yt-dlp) or local file</strong></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">You feed the model <em>fewer, more meaningful</em> frames — cheaper context, better
+understanding.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Install</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='pip install claude-real-video              # core (frames + dedup)
+pip install "claude-real-video[whisper]"   # + audio transcription' dir="auto"><pre>pip install claude-real-video              <span class="pl-c"><span class="pl-c">#</span> core (frames + dedup)</span>
+pip install <span class="pl-s"><span class="pl-pds">"</span>claude-real-video[whisper]<span class="pl-pds">"</span></span>   <span class="pl-c"><span class="pl-c">#</span> + audio transcription</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">System requirement: ffmpeg</h3></div>
+<p dir="auto"><code>ffmpeg</code> / <code>ffprobe</code> are used for frame extraction and audio, and aren't
+pip-installable. Install them once:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>OS</th>
+<th>command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>macOS</strong></td>
+<td><code>brew install ffmpeg</code></td>
+</tr>
+<tr>
+<td><strong>Linux</strong></td>
+<td><code>sudo apt install ffmpeg</code> (or your distro's package manager)</td>
+</tr>
+<tr>
+<td><strong>Windows</strong></td>
+<td><code>winget install Gyan.FFmpeg</code> — or <code>choco install ffmpeg</code> — or <a href="https://www.gyan.dev/ffmpeg/builds/" rel="nofollow">download a build</a> and add its <code>bin\</code> folder to your <code>PATH</code></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Verify it's on your <code>PATH</code>:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="ffmpeg -version" dir="auto"><pre>ffmpeg -version</pre></div>
+<p dir="auto">Transcription uses the <code>whisper</code> CLI (installed by the <code>[whisper]</code> extra, or
+<code>pip install openai-whisper</code>). Whisper also relies on ffmpeg.</p>
+<p dir="auto">Works on <strong>macOS, Windows, and Linux</strong> — Python 3.10+.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Usage</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='# A YouTube / Instagram / TikTok / ... link
+crv "https://www.instagram.com/reel/XXXX/"
+
+# A local file, English transcript, output to ./out
+crv lecture.mp4 -o out --lang en
+
+# Frames only, no transcription
+crv clip.mp4 --no-transcribe
+
+# A login-gated video (your own / authorised use): pass a Netscape cookie file
+crv "https://..." --cookies cookies.txt' dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> A YouTube / Instagram / TikTok / ... link</span>
+crv <span class="pl-s"><span class="pl-pds">"</span>https://www.instagram.com/reel/XXXX/<span class="pl-pds">"</span></span>
+
+<span class="pl-c"><span class="pl-c">#</span> A local file, English transcript, output to ./out</span>
+crv lecture.mp4 -o out --lang en
+
+<span class="pl-c"><span class="pl-c">#</span> Frames only, no transcription</span>
+crv clip.mp4 --no-transcribe
+
+<span class="pl-c"><span class="pl-c">#</span> A login-gated video (your own / authorised use): pass a Netscape cookie file</span>
+crv <span class="pl-s"><span class="pl-pds">"</span>https://...<span class="pl-pds">"</span></span> --cookies cookies.txt</pre></div>
+<p dir="auto"><code>python -m claude_real_video ...</code> works as an alias for <code>crv</code> too.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Options</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>flag</th>
+<th>default</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-o, --out</code></td>
+<td><code>crv-out</code></td>
+<td>output directory</td>
+</tr>
+<tr>
+<td><code>--scene</code></td>
+<td><code>0.30</code></td>
+<td>scene-change sensitivity (lower = more frames)</td>
+</tr>
+<tr>
+<td><code>--fps-floor</code></td>
+<td><code>1.0</code></td>
+<td>at least one frame every N seconds</td>
+</tr>
+<tr>
+<td><code>--max-frames</code></td>
+<td><code>150</code></td>
+<td>hard cap on total frames</td>
+</tr>
+<tr>
+<td><code>--lang</code></td>
+<td><code>auto</code></td>
+<td>Whisper language (<code>en</code>, <code>zh</code>, <code>auto</code>, ...)</td>
+</tr>
+<tr>
+<td><code>--dedup-threshold</code></td>
+<td><code>8</code></td>
+<td>% of pixels that must change for a frame to count as new; higher = fewer frames</td>
+</tr>
+<tr>
+<td><code>--dedup-window</code></td>
+<td><code>4</code></td>
+<td>compare against the last N kept frames — a shot the model already saw doesn't come back after a cutaway (<code>1</code> = consecutive-only)</td>
+</tr>
+<tr>
+<td><code>--report</code></td>
+<td>off</td>
+<td>keep dropped frames in <code>./dropped</code> + write <code>report.html</code> visualising every keep/drop decision</td>
+</tr>
+<tr>
+<td><code>--no-transcribe</code></td>
+<td>off</td>
+<td>skip audio</td>
+</tr>
+<tr>
+<td><code>--keep-audio</code></td>
+<td>off</td>
+<td>also save the <strong>full soundtrack</strong> (<code>audio.m4a</code>) so audio models can <em>hear</em> it</td>
+</tr>
+<tr>
+<td><code>--cookies</code></td>
+<td>–</td>
+<td>Netscape cookie file for login-gated sources</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Use it from Python</h2></div>
+<div class="highlight highlight-source-python notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='from claude_real_video import process
+
+r = process("https://youtu.be/...", "out", lang="en")
+print(r.frame_count, r.transcript_path)' dir="auto"><pre><span class="pl-k">from</span> <span class="pl-s1">claude_real_video</span> <span class="pl-k">import</span> <span class="pl-s1">process</span>
+
+<span class="pl-s1">r</span> <span class="pl-c1">=</span> <span class="pl-en">process</span>(<span class="pl-s">"https://youtu.be/..."</span>, <span class="pl-s">"out"</span>, <span class="pl-s1">lang</span><span class="pl-c1">=</span><span class="pl-s">"en"</span>)
+<span class="pl-en">print</span>(<span class="pl-s1">r</span>.<span class="pl-c1">frame_count</span>, <span class="pl-s1">r</span>.<span class="pl-c1">transcript_path</span>)</pre></div>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How it works</h2></div>
+<ol dir="auto">
+<li><strong>Fetch</strong> — <code>yt-dlp</code> for URLs (optional cookies), or copy a local file.</li>
+<li><strong>Extract</strong> — one chronological <code>ffmpeg select</code> pass grabs every scene change
+<em>plus</em> a density floor (at least one frame every <code>--fps-floor</code> seconds), so
+fast cuts and slow screencasts are both covered.</li>
+<li><strong>Dedup</strong> — real pixel difference (downscaled RGB, not a perceptual hash — hashes
+go blind on flat colours and equal-luma hue changes) against a <strong>sliding window</strong>
+of the last <code>--dedup-window</code> kept frames, so an A-B-A cutaway doesn't re-send a
+shot the model has already seen. <code>--report</code> writes <code>report.html</code> showing every
+keep/drop decision with its diff %, for tuning.</li>
+<li><strong>Text</strong> — if the video <strong>already has subtitles</strong> (a sidecar <code>.srt</code>/<code>.vtt</code> next to a
+local file, or an embedded subtitle track), those are used as the transcript —
+faster and more accurate than re-transcribing. Only when there are no subtitles
+does it fall back to <strong>Whisper</strong> on the audio (skipped cleanly if there's no audio).</li>
+<li><strong>Audio</strong> <em>(optional, <code>--keep-audio</code>)</em> — save the <strong>full original soundtrack</strong>
+(<code>audio.m4a</code>: music + speech + effects, copied losslessly when possible). The
+transcript only has the <em>words</em>; the audio file lets a model that can listen
+(Gemini, GPT-4o, …) actually <em>hear</em> the music and tone.</li>
+<li><strong>Manifest</strong> — <code>MANIFEST.txt</code> summarises everything for the model.</li>
+</ol>
+<p dir="auto">So the model can <strong>see</strong> (key frames), <strong>read</strong> (transcript) and — with <code>--keep-audio</code> —
+<strong>hear</strong> (full soundtrack) the video. The transcript is plain text any model can read;
+the tool <strong>doesn't burn subtitles into the video</strong> — burning is a presentation choice,
+not something needed to make a video AI-readable.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Notes</h2></div>
+<ul dir="auto">
+<li>Only download content you have the right to. The <code>--cookies</code> option is for
+your own, authorised access — don't ship credentials in a repo.</li>
+<li>Re-running overwrites the output directory.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">MIT</p>
+</article>

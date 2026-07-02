@@ -1,0 +1,1110 @@
+JEP 539: Strict Field Initialization in the JVM (Preview)
+Owner
+Dan Smith
+Type
+Feature
+Scope
+SE
+Status
+Candidate
+Component
+specification / vm
+Discussion
+valhalla dash dev at openjdk dot org
+Effort
+M
+Duration
+L
+Reviewed by
+Alex Buckley
+Created
+2025/02/20 21:25
+Updated
+2026/06/30 21:15
+Issue
+8350458
+Summary
+
+Introduce strictly-initialized fields in the Java Virtual Machine.
+Such fields must be initialized before they are read, thus default values such
+as 
+0
+ or 
+null
+ are never observed.
+For strictly-initialized fields that are final, the same value is always
+observed.
+This is a 
+preview VM feature
+, available for use
+by compilers that emit class files.
+
+Goals
+
+Offer designers of JVM-based programming languages a model for field
+initialization which has stronger integrity guarantees than the present
+model.
+
+Give these designers the flexibility to choose, for each static and instance
+field in a class, whether to opt in to the new model or continue with the
+present model.
+
+Non-Goals
+
+It is not a goal to introduce new Java language features, such as a
+strictly-initialized modifier for fields.
+
+It is not a goal to change 
+javac
+ compilation strategies in order to impose
+strict field initialization on existing Java source code.
+
+Motivation
+
+The Java Platform specifies that every variable is initialized before use,
+ensuring that a program can never read from uninitialized memory.
+If a field in a class — whether a static field or an instance field — is not
+initialized explicitly then it is initialized implicitly before it is used, by
+being set to a 
+default value
+.
+This value is always some form of zero: the number 0, the boolean 
+false
+, or a
+
+null
+ reference.
+
+Default values are a mixed blessing.
+They provide a straightforward safety net, ensuring that a program never
+observes uninitialized memory, but they can often be misinterpreted as
+legitimate data rather than as a signal that nothing has yet been written.
+
+For example, a method may read a 
+null
+ value from a field and then pass that on
+to other methods and constructors, only to trigger a 
+NullPointerException
+
+somewhere far from where the field was read.
+JDK 14 
+improved the messages in such exceptions
+ to make it
+easier to pinpoint the source of the error in a specific line of code, but these
+messages cannot direct you back to the initialization bug that supplied the
+
+null
+ in the first place.
+
+The Java Platform also specifies that variables declared 
+final
+ cannot be
+mutated, ensuring that any two reads of a 
+final
+ variable produce the same
+value.
+For final fields, however, this rule does not apply while the class or instance
+is being initialized.
+A program may thus read different values at different times as the fields are
+set to their intended values.
+
+Field initialization bugs in practice
+
+The following example illustrates the problems of unexpected default values and
+inconsistent final fields.
+In these classes, the final field 
+App.appID
+ may be read by code in the 
+Log
+
+class before it is assigned its proper value.
+When that happens, different program components end up working with conflicting
+field values.
+
+class App {
+
+    public static final long appID = Log.currentPID(); // [1], [4], [6]
+
+    public static void main() {
+        IO.println("App[" + appID + "] has started");
+        // ...
+        Log.log("Completed 'main'");
+    }
+
+}
+
+class Log { // [2]
+
+    private static final String prefix = "App[" + App.appID + "]: "; // [3]
+
+    public static void log(String msg) {
+        IO.println(prefix + msg);
+    }
+
+    public static long currentPID() {
+        return ProcessHandle.current().pid(); // [5]
+    }
+
+}
+
+When the class 
+App
+ is run from the command line, the output is something like:
+
+App[96052] has started
+App[0]: Completed 'main'
+
+The discrepancy between ID numbers arises because the invocation of
+
+Log.currentPID()
+ in the 
+App
+ class [1] triggers initialization of the 
+Log
+
+class [2], and during that class's initialization, the default 
+0
+ value of the
+
+appID
+ field is read [3] and embedded into the 
+prefix
+ string.
+After the 
+Log
+ class is initialized, the call to its 
+currentPID
+ method from
+the 
+App
+ class [4] proceeds, producing the current process's ID number [5],
+which is finally assigned to 
+App.appID
+ [6].
+That assignment is, however, too late for the 
+prefix
+ field.
+
+In complex systems, these sorts of bugs are difficult to recognize and diagnose.
+One subtlety is that the order of initialization matters: If the 
+Log
+ class is
+initialized first, the discrepancy is not observed.
+Another subtlety is that the circular dependency between the classes 
+App
+ and
+
+Log
+ is easy to create by mistake and easy to overlook later; if the utility
+method 
+currentPID
+ were declared in some other class, the circularity would not
+exist and everything would behave as expected.
+
+Most kinds of Java variables do not suffer from these problems.
+A local variable must be explicitly assigned before it is read, and a final
+local variable may only be assigned once.
+Fields are unique in their reliance upon default values.
+
+A strict approach to field initialization
+
+We propose an alternative approach to initializing fields, both non-final and
+final.
+Instead of every field being initialized to a default value when it is created,
+we alter the JVM to ensure that some fields, designated 
+strictly-initialized
+,
+are explicitly initialized in bytecode before they are allowed to be read.
+Compilers such as 
+javac
+ are responsible for choosing which fields are
+designated strictly-initialized based on the language features used in source
+code.
+We call this 
+strict field initialization
+ because it imposes additional
+restrictions on the code that initializes fields.
+
+Strict field initialization makes it impossible to have unexpected default
+values and inconsistent final fields.
+Every read from a strictly-initialized field observes a previously-written value
+and, if the field is final, every read observes the same value.
+These properties are what we already intuitively expect from fields; strict
+field initialization promotes these properties from mere intuitions to actual
+integrity guarantees, enforced by the JVM.
+
+Strict field initialization improves integrity
+
+Strict field initialization lays the foundation for two new Java language
+features:
+
+Value classes
+ are new kinds of classes whose instances lack
+identity and can never be mutated.
+It is essential that the final instance fields of a value class instance
+always be observed to have the same value.
+
+Null-restricted fields
+ are fields that can never store 
+null
+.
+It is essential that these fields, both static and instance, not use 
+null
+
+as a default value. They must be explicitly initialized with a non-
+null
+
+value before they can be read.
+
+As shown above, the process of field initialization can be delicate.
+The JVM must not impose new initialization behavior upon existing programs since
+they could depend upon the existing behavior.
+New language features, by contrast, can define new rules and behaviors for field
+initialization and then adopt strict field initialization.
+As the language evolves and new features are adopted, program components will
+gradually be hardened against field initialization bugs.
+
+Description
+
+A 
+strictly-initialized
+ field does not have a default value.
+It cannot be read before it has been explicitly initialized and, if it is final,
+all reads produce the same value.
+Compilers mark fields that are subject to strict initialization with a new 
+flag
+in the class file
+, 
+ACC_STRICT_INIT
+ (
+0x0800
+).
+
+For strictly-initialized fields, the JVM enforces these invariants:
+
+ For a static field, a read cannot access the
+field before it is initialized, and the field must be initialized before
+class initialization completes.
+If the field is final, a write cannot mutate the field after it has been
+read.
+Violating any of these constraints causes an exception to be thrown.
+ For an instance field, a read cannot access
+the field before the 
+super()
+ constructor is invoked, and the field must be
+initialized before the 
+super()
+ constructor is invoked.
+If the field is final, a write cannot mutate the field after the 
+super()
+
+constructor is invoked.
+Violating any of these constraints causes bytecode verification to fail.
+
+The invariants of strictly-initialized fields give the JVM new opportunities to
+optimize uses of those fields.
+For example, the HotSpot JVM's JIT compiler will treat strictly-initialized
+final fields as 
+trusted
+.
+A trusted final field is known to never change, so once a value has been read
+from it, subsequent reads can reuse that same value.
+As a result, JIT-compiled code has fewer interactions with memory and may run
+faster.
+
+Below, we review the class initialization process in the JVM and discuss new
+rules for strictly-initialized static fields in more depth.
+We then review the instance initialization process and discuss new rules for
+strictly-initialized instance fields.
+
+This is a 
+preview VM feature
+, disabled by default
+
+The 
+ACC_STRICT_INIT
+ flag denoting a strictly-initialized field is recognized
+only in class files with a preview version number (
+XX.65535
+), and only when
+preview features are enabled at run time.
+
+To enable preview features at run time, use the 
+--enable-preview
+ command-line
+option:
+
+$ java --enable-preview Main
+
+Value classes
+, a new Java language feature, rely upon strict field
+initialization: Compilers mark all the fields of value classes as
+
+ACC_STRICT_INIT
+.
+To program with value classes, you must enable preview features at both compile
+time and run time in order to enable both value classes and strict field
+initialization.
+
+Strict field initialization is a standalone feature in the JVM.
+It does not assume that value classes exist, and it can be used by compilers of
+non-Java languages.
+Regardless of the compiler, class files with fields marked as 
+ACC_STRICT_INIT
+
+can be loaded only if preview features are enabled at run time.
+
+Class initialization today
+
+Whenever a class is loaded by the JVM, it must be initialized.
+In bytecode, a class or interface can declare a 
+class initialization method
+,
+named 
+<clinit>
+, for this purpose.
+The class initialization method is free to execute arbitrary code.
+Usually, class initialization includes setting all of the class's static fields
+to appropriate initial values; it may also involve interactions with global
+state.
+
+In Java source code, a class's initialization method is not written directly; it
+is, rather, an aggregation of the class's static field initializers and static
+initializer blocks.
+
+Each class in a hierarchy may have its own 
+<clinit>
+ method.
+Every superclass must be initialized before executing the 
+<clinit>
+ method of a
+subclass.
+
+A class whose initialization has begun but not yet completed is considered
+
+larval.
+
+It is developing, but not yet fully formed.
+
+The JVM tracks the 
+initialization state
+ of each class at run time.
+In today's JVM (see 
+JVMS
+§5.5
+),
+a class's initialization state is one of:
+
+Uninitialized:
+ The class is loaded, but initialization has not yet
+started.
+
+Larval
+ (within a particular thread): The class is currently being
+initialized.
+
+Initialized:
+ The class has successfully completed initialization,
+and can be used without restriction.
+
+Erroneous:
+ The class failed initialization and may not be used.
+
+The 
+<clinit>
+ method runs while the class is in the larval state.
+The class is not yet initialized at this point, but its fields and methods can
+be freely accessed by code running in the current thread.
+If the 
+<clinit>
+ method completes successfully, the class transitions to the
+initialized state.
+If an exception is thrown, the class transitions to the erroneous state and can
+never become initialized.
+
+The constraints on class initialization are enforced dynamically, at run time.
+For example, each 
+getstatic
+ instruction checks the initialization state of the
+resolved field's class.
+If the class is not initialized, but is in the larval state in another thread,
+then the 
+getstatic
+ instruction blocks until initialization completes.
+
+Strict initialization of static fields
+
+To implement strict initialization of static fields, we enhance the larval class
+initialization state to track whether each static field of the class has been
+
+set
+, and whether each static field of the class has been 
+read
+.
+
+When executing a 
+putstatic
+ or 
+getstatic
+ instruction, if the resolved field
+is declared by a class in the larval state in the current thread, the state is
+updated to record that the field has been set (by 
+putstatic
+) or read (by
+
+getstatic
+).
+This occurs even if the field is accessed from another method or class, and even
+if the field is accessed through a subclass.
+
+A field declared with the 
+ConstantValue
+ attribute is always considered set.
+
+With this information, the JVM can enforce the 
+invariants of
+strictly-initialized static fields
+:
+
+If a 
+getstatic
+ instruction attempts to read from a strictly-initialized
+field declared by a class in the larval state, and that field is not yet
+set, then the JVM throws an exception, indicating that the field cannot yet
+be read.
+
+If a 
+putstatic
+ instruction attempts to write to a strictly-initialized
+final field declared by a class in the larval state, and that field has
+already been read, then the JVM throws an exception, indicating that the
+field can no longer be set.
+
+Just before a class transitions to the initialized state, its larval
+state is checked to ensure that every strictly-initialized static field has
+been set; if not, the JVM throws an exception, indicating one of the fields
+that must be explicitly set during class initialization.
+
+(In some complex cases, such as during exception handling, a static final field
+may be written multiple times during initialization. This is allowed, but only
+the ultimate value of the field will be readable.)
+
+The above rules are enforced even if a static field is read or written
+reflectively during class initialization via, e.g., the
+
+java.lang.reflect.Field
+ or 
+java.lang.invoke.VarHandle
+ APIs.
+
+Instance initialization today
+
+Whenever a class instance is created with the 
+new
+ bytecode, that instance must
+be initialized.
+In bytecode, a class can declare multiple 
+instance initialization methods
+,
+named 
+<init>
+, for this purpose.
+These methods are free to execute arbitrary code.
+Through a chain of 
+<init>
+ method invocations, every class in an inheritance
+hierarchy defines what constitutes an initialized class instance.
+Usually, instance initialization includes setting all of the object's instance
+fields to appropriate initial values; it may also involve interactions with the
+static fields of the class, or other global state.
+
+In Java source code, instance initialization methods are mainly expressed with
+constructors, and delegation between constructors is expressed with 
+super(...)
+
+and 
+this(...)
+ calls.
+Instance initialization methods may also include code from a class's instance
+field initializers and instance initializer blocks.
+
+Each class in a hierarchy has at least one 
+<init>
+ method, and that method
+must, at some point before it completes, delegate to another 
+<init>
+ method of
+either the current class or its superclass.
+This recursion bottoms out at 
+Object::<init>
+.
+
+An instance whose initialization has begun but not yet completed is, like a
+class, considered 
+larval.
+
+It is developing, but not yet fully formed.
+
+Like classes, instances have an initialization state, although this is expressed
+only indirectly in the JVM Specification.
+Today, an object's initialization state is one of:
+
+Uninitialized:
+ The object has been created by a 
+new
+ instruction, but
+initialization has not yet started.
+
+Early larval:
+ The object is currently being initialized, and limited
+operations are available.
+
+Late larval:
+ The object is currently being initialized, but is
+sufficiently mature that it can be used without restriction.
+
+Initialized:
+ The object has successfully completed initialization.
+
+Erroneous:
+ The object failed initialization and may not be used.
+
+An 
+<init>
+ method begins execution in the early-larval state.
+Most operations, including method invocations, are not allowed on an object in
+the early-larval state, and the object may not be shared with other code.
+However, its fields may be assigned with 
+putfield
+.
+Eventually, another 
+<init>
+ method is invoked and the initialization process
+continues recursively, eventually reaching 
+Object::<init>
+.
+At that point, the instance transitions to the late-larval state and, one by
+one, the recursively invoked 
+<init>
+ methods complete their execution and
+return.
+In the late-larval state, use of the object, including its fields and methods,
+is unrestricted; the object may even be shared across threads.
+The object is considered initialized once the outermost 
+<init>
+ method returns
+successfully.
+Alternatively, any 
+<init>
+ call in the stack might fail with an exception; in
+that case, the object transitions to the erroneous state and can never become
+initialized.
+
+The constraints on instance initialization are enforced statically, by the
+
+bytecode verifier
+.
+Verification determines a 
+type state
+ for each instruction, which is either
+
+restricted
+ (for code operating on an instance in the early-larval state) or
+
+unrestricted
+ (for code operating on an instance in the late-larval and
+initialized states, and for code in static methods).
+
+For instructions with restricted type states, the verifier prevents most
+operations on the current object.
+It also ensures that an unrestricted type state can be reached only via a chain
+of recursively delegating 
+<init>
+ calls that eventually reaches
+
+Object::<init>
+.
+The 
+return
+ instruction, which makes a newly constructed object available to
+the caller of 
+<init>
+, is only allowed in an unrestricted type state.
+
+Strict initialization of instance fields
+
+To implement strict initialization of instance fields, we enhance the
+early-larval instance initialization state to track whether each instance field
+of the class has been 
+set
+.
+
+In the verifier, this is expressed with a restricted type state that carries a
+list of all the current class's strictly-initialized instance fields that have
+not yet been set.
+A 
+putfield
+ on the current class instance in a restricted type state removes
+the named field from the list.
+
+The enhanced type state supports the following rules to enforce the invariants
+of strictly-initialized instance fields:
+
+An 
+invokespecial
+ of an 
+<init>
+ method, applied to the current class
+instance in a restricted type state, requires that if the invocation is of
+a superclass method, the list of unset fields must be empty.
+(If the invocation is of another 
+<init>
+ method of the same class, there is
+no such requirement — the invoked method is responsible for setting the
+fields.)
+
+A 
+putfield
+ instruction writing to a strictly-initialized final field of
+the current class is only allowed in a restricted type state.
+(In contrast, 
+putfield
+ is allowed throughout the body of an 
+<init>
+
+method for final fields that are not strictly initialized.)
+
+It has never been permitted to use 
+getfield
+ on an instance in a restricted
+type state.
+Thus, there is no rule for 
+getfield
+ analogous to the 
+getstatic
+ rule for
+static fields, and no need to track whether final fields have been read.
+
+Jumps between restricted and unrestricted type states are not allowed.
+Jumps between different restricted type states are allowed, as long as the jump
+is to a type state in which fewer fields are set.
+
+These verification rules ensure that all strictly-initialized fields of an
+object are set while it is in an early-larval state, before any reads can occur,
+and that no strictly-initialized final fields are mutated once the object enters
+the late-larval state.
+When the verified code executes, there is no need for additional run-time checks
+to enforce the initialization invariants.
+
+In a class file, the 
+StackMapTable
+ attribute
+ expresses the
+expected incoming type state for a jump target.
+In the past, a restricted type state has been expressed simply by including the
+special type 
+uninitializedThis
+ in the list of local variables.
+But when a class has strictly-initialized fields, the type state may also need
+to indicate whether each field has been set.
+This is accomplished with a new kind of 
+StackMapTable
+ frame entry:
+
+early_larval_frame {
+    u1 frame_type = EARLY_LARVAL; /* 246 */
+    u2 number_of_unset_fields;
+    u2 unset_fields[number_of_unset_fields];
+        // array of NameAndType constants
+    base_stack_map_frame base_frame;
+        // any other kind of stack frame
+}
+
+Alternatively, if a stack frame has any other 
+frame_type
+ but mentions
+
+uninitializedThis
+, the stack frame is implicitly restricted, with unset fields
+inferred as whatever fields were unset in the previous frame.
+
+Strictly-initialized final fields cannot be mutated by deep reflection
+
+Some applications and frameworks use 
+deep reflection
+, as embodied in the
+
+setAccessible
+
+and
+
+set
+
+methods of the 
+java.lang.reflect.Field
+ API, to manipulate an object's
+private or final fields after instance initialization completes.
+In JDK 26, the mutation of final fields by deep reflection is permitted but
+causes a warning; in a future release, those who need this capability will have
+to enable it explicitly at startup.
+(See 
+JEP 500
+ for more information.)
+
+The mutation of strictly-initialized final fields by deep reflection is
+inconsistent with the invariants of strict field initialization: Different reads
+of the same final field could observe different values.
+The 
+setAccessible
+ method therefore categorizes these fields as non-modifiable,
+just as it does for static final fields and the final fields of record classes.
+Attempting to 
+set
+ a strictly-initialized final field always throws an
+
+IllegalAccessException
+.
+Using 
+--enable-final-field-mutation=...
+ will not enable mutation of these
+non-modifiable fields.
+
+To set a strictly-initialized final instance field of a class, you must employ
+one of the class's constructors, which has the exclusive ability to assign to
+the field.
+
+Strictly-initialized fields require custom deserialization
+
+Object deserialization, as embodied in the 
+ObjectInputStream
+ API
+, skips the
+usual execution of an 
+<init>
+ method in the class being instantiated.
+Instead, the API does its own construction via reflective library code.
+Much like deep reflection, this capability bypasses the verification-based
+enforcement of constraints on strictly-initialized instance fields, and cannot
+be used for classes that declare these fields.
+
+The 
+ObjectOutputStream::writeObject
+ and 
+ObjectInputStream::readObject
+
+methods therefore throw an 
+InvalidClassException
+ if a class being serialized
+or deserialized declares a strictly-initialized instance field and the class is
+not a record class.
+
+To avoid this exception, implement the 
+writeReplace
+ and
+
+readResolve
+ methods.
+Doing so causes a replacement object to be serialized and deserialized in place
+of the object with strictly-initialized fields.
+
+(We anticipate a future enhancement to serialization which allows you to
+designate construction code that 
+ObjectInputStream::readObject
+ can use to
+safely create new instances from the data in a serialization stream.
+This process will rely on regular constructor invocation, and so will be
+compatible with strictly-initialized instance fields.)
+
+Supporting changes
+
+In the 
+java.lang.reflect.Field
+ class, the existing
+
+accessFlags
+
+method and a new 
+isStrictInit
+ method reflect the presence of the
+
+ACC_STRICT_INIT
+ flag on fields.
+
+The 
+java.lang.classfile
+ API supports the 
+ACC_STRICT_INIT
+ access flag on
+fields and 
+early_larval_frame
+ entries in 
+StackMapTable
+ attributes.
+When a 
+StackMapTable
+ is automatically generated for an 
+<init>
+ method, it
+properly encodes the status of strictly-initialized instance fields.
+
+The 
+javap
+ tool displays the 
+ACC_STRICT_INIT
+ modifier and
+
+early_larval_frame
+ entries; it also displays the implicit unset fields of
+other 
+StackMapTable
+ entries.
+
+The 
+AsmTools utilities
+
+similarly support the 
+ACC_STRICT_INIT
+ flag and 
+early_larval_frame
+ entries.
+
+Alternatives
+
+Fields that have a 
+ConstantValue
+ attribute, a longstanding feature of the
+JVM, can be thought of as already being strictly initialized: The given
+value is assigned to the field before any user code can attempt to read the
+field.
+But the attribute only works on static fields with a primitive type or type
+
+String
+, and, unsurprisingly, can only assign constant values.
+Many use cases for strict field initialization need to allow initial values
+to be derived from constructor parameters or computed with general-purpose
+bytecode.
+
+In JDK 21, the 
+javac
+ compiler 
+began to issue warnings to discourage
+invocations of instance methods from superclass
+constructors
+.
+These warnings help prevent late-larval objects from being shared for
+general use before their fields have been properly initialized:
+
+class Parent {
+
+    Parent() {
+        super();
+        // warning: 'this' may not be fully initialized:
+        OtherClass.foo(this);
+    }
+
+}
+
+class Child extends Parent {
+
+    String s;
+
+    Child(String s) {
+        super();
+        this.s = s;
+    }
+
+}
+
+Warnings about the handling of late-larval objects are useful, but warnings
+can be ignored, and a subclass author cannot always control the coding
+conventions enforced in a superclass.
+Strict field initialization instead requires that fields be assigned while
+the object is in the early-larval state, before there is any possibility of
+leaking the object to outside code.
+
+In some situations, you may wish to dynamically guarantee that a field is
+initialized before it is read, but without being forced to compute the
+field's value at initialization time.
+Rather than adding such complexity to the JVM, this kind of behavior is best
+provided via libraries.
+
+For example, you can use a 
+lazy constant
+ to model a final variable
+with initialization code that executes on-demand, at the first attempt to
+read it:
+
+class Constants {
+
+    final LazyConstant<String> s = LazyConstant.of(() -> lazyInitializer());
+
+}
+
+Risks and Assumptions
+
+New JVM features are costly.
+We anticipate that there will be multiple meaningful use cases for strict
+field initialization, which together will justify its cost.
+This depends, however, on the success of new language features that rely on
+the new integrity guarantees, such as those discussed
+
+earlier
+.
+It also depends on developers being willing to adopt alternatives to the
+traditional top-to-bottom instance initialization sequence.
+
+There is a small risk that existing tools may set the 
+ACC_STRICT_INIT
+ flag
+on a field by mistake.
+The access flag value 
+0x0800
+ was historically used to indicate 
+strictfp
+
+methods, which opted in to special strict floating-point semantics that
+
+became obsolete
+ in Java 17.
+The chance of confusion is low, however, since 
+strictfp
+ is relevant only
+in class files of version 
+60
+ or earlier, while 
+ACC_STRICT_INIT
+ is
+relevant only in class files of version 
+XX.65535
+.
+
+Installing
+Contributing
+Sponsoring
+Developers' Guide
+Vulnerabilities
+JDK GA/EA Builds
+Mailing lists
+Wiki
+
+                      · 
+IRC
+Mastodon
+Bluesky
+Bylaws
+ · 
+Census
+Legal
+ · 
+AI
+Workshop
+JEP Process
+Source code
+GitHub
+Mercurial
+Tools
+Git
+jtreg harness
+Groups
+(overview
+,
+      
+archive
+)
+Adoption
+Build
+Client Libraries
+Compatibility & Specification Review
+Compiler
+Conformance
+Core Libraries
+Governing Board
+HotSpot
+IDE Tooling & Support
+Internationalization
+Members
+Networking
+Porters
+Quality
+Security
+Serviceability
+Vulnerability
+Web
+Projects
+(
+overview
+,
+      
+archive
+)
+Amber
+Babylon
+Brisbane
+CRaC
+Code Tools
+Coin
+Common VM Interface
+Detroit
+Developers' Guide
+Duke
+IcedTea
+JDK 8 Updates
+JDK 9
+JDK
+
+      (…,
+       
+26
+,
+       
+27
+,
+       
+28
+)
+JDK Updates
+JMC
+Jigsaw
+Lanai
+Leyden
+Lilliput
+Loom
+Memory Model Update
+Multi-Language VM
+Nashorn
+New I/O
+OpenJFX
+Panama
+Port: AArch32
+Port: AArch64
+Port: BSD
+Port: Haiku
+Port: MIPS
+Port: Mobile
+Port: PowerPC/AIX
+Port: RISC-V
+Port: s390x
+SCTP
+Shenandoah
+Skara
+Sumatra
+Tsan
+Valhalla
+Wakefield
+Zero
+ZGC
+
+        © 2026 Oracle Corporation and/or its affiliates
+        
+Terms of Use
+
+        ·
+        
+            License: 
+GPLv2
+
+        · 
+Privacy
+
+        · 
+Trademarks

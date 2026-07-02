@@ -1,0 +1,140 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">vulkan-netbsd</h1></div>
+<p dir="auto">An effort to bring the <strong>Vulkan</strong> software stack (Mesa / Lavapipe) to
+<strong>NetBSD</strong>, and to document and automate the process so it can be reproduced
+and maintained.</p>
+
+<blockquote>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Status: beta — Lavapipe Vulkan driver builds, installs, and registers on NetBSD</h2></div>
+<p dir="auto"><strong>Milestone reached:</strong> Mesa configures, compiles, links, <strong>installs</strong>, and
+<strong>registers</strong> the Lavapipe software Vulkan driver on NetBSD 10.1 amd64,
+against LLVM 19.1.7. The driver (<code>libvulkan_lvp.so</code>, ~17 MB) installs into
+<code>/usr/pkg/lib</code>, and its ICD manifest (advertising Vulkan API 1.4) installs
+into <code>/usr/pkg/share/vulkan/icd.d/</code>, so a Vulkan loader on the system can
+discover it. <code>ldd</code> resolves every dependency cleanly. The entire process —
+environment setup, dependency builds, the Mesa build, and installation — is
+automated end to end and reproducible on a fresh install.</p>
+<p dir="auto"><strong>Prebuilt binaries are coming.</strong> The tooling to build, fingerprint, and
+publish prebuilt artifacts is in place, and the build scripts already know how
+to fetch and install a matching prebuilt instead of building from source. Once
+a build machine is publishing releases, installing the driver will be a
+download rather than a multi-hour build. That's the near-term direction.</p>
+<p dir="auto"><strong>What this is NOT (yet):</strong></p>
+<ul dir="auto">
+<li><strong>Running Vulkan programs needs the loader.</strong> This project builds and
+installs the Vulkan <em>driver</em> (the Lavapipe ICD). Actually executing a Vulkan
+application also requires the Vulkan <em>loader</em> (<code>libvulkan.so.1</code>), which is
+the next component to bring up. Runtime execution is therefore not yet
+verified.</li>
+<li><strong>One workaround is still in place.</strong> The build applies <code>-Wno-error=format</code>
+to sidestep GCC rejecting Mesa's <code>%m</code> format specifier on NetBSD. A proper
+upstreamable fix (using <code>strerror(errno)</code>) is pending.</li>
+</ul>
+<p dir="auto">Steps, scripts, and documents will continue to change as the loader and the
+release pipeline come together.</p>
+</blockquote>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Goal</h2></div>
+<p dir="auto">NetBSD is currently the only major BSD without Vulkan support. The aim of this
+project is to:</p>
+<ol dir="auto">
+<li>Build the Vulkan software stack (Mesa's Lavapipe driver, which runs on the
+CPU via LLVM and needs no GPU) on NetBSD.</li>
+<li>Document every step, including the dead ends, so the process is reproducible.</li>
+<li>Automate the setup so a fresh machine can be brought to a build-ready state
+with a couple of scripts.</li>
+<li>Eventually feed the necessary fixes upstream (to Mesa and to pkgsrc) and
+provide prebuilt binaries or a pkgsrc package, so that Vulkan on NetBSD
+becomes something you can simply install rather than build from source.</li>
+</ol>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Scope and environment</h2></div>
+<ul dir="auto">
+<li><strong>Target OS:</strong> NetBSD 10.1 (amd64), minimal ISO install.</li>
+<li><strong>Host:</strong> VirtualBox VM.</li>
+<li><strong>Build goal only:</strong> This targets <em>compilation and linkage</em> of the Vulkan
+stack. Runtime GPU acceleration is not available under VirtualBox; the
+software driver (Lavapipe) is the target.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Repository layout</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="vulkan-netbsd/
+├── docs/
+│   ├── 01-environment-setup.md    Base system + pkgsrc + build deps
+│   ├── 02-source-dependencies.md  Dependencies not in pkgsrc (built from source)
+│   ├── 03-mesa-build.md           Configure + compile Mesa (Lavapipe); port notes
+│   └── 04-prebuilt-artifacts.md   Build-once / reuse prebuilt binaries
+└── scripts/
+    ├── setup-env.sh               Automates the environment setup
+    ├── build-glslang.sh           Builds glslang (required by Mesa; not in pkgsrc)
+    ├── build-mesa.sh              Clones + configures + compiles Mesa (Lavapipe)
+    ├── install-mesa.sh            Installs the built driver + ICD manifest
+    ├── lib-artifacts.sh           Shared: fingerprint + prebuilt fetch helpers
+    └── package-artifacts.sh       Packages built binaries into release tarballs"><pre class="notranslate"><code>vulkan-netbsd/
+├── docs/
+│   ├── 01-environment-setup.md    Base system + pkgsrc + build deps
+│   ├── 02-source-dependencies.md  Dependencies not in pkgsrc (built from source)
+│   ├── 03-mesa-build.md           Configure + compile Mesa (Lavapipe); port notes
+│   └── 04-prebuilt-artifacts.md   Build-once / reuse prebuilt binaries
+└── scripts/
+    ├── setup-env.sh               Automates the environment setup
+    ├── build-glslang.sh           Builds glslang (required by Mesa; not in pkgsrc)
+    ├── build-mesa.sh              Clones + configures + compiles Mesa (Lavapipe)
+    ├── install-mesa.sh            Installs the built driver + ICD manifest
+    ├── lib-artifacts.sh           Shared: fingerprint + prebuilt fetch helpers
+    └── package-artifacts.sh       Packages built binaries into release tarballs
+</code></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Getting started</h2></div>
+<p dir="auto">On a fresh, minimal NetBSD 10.1 (amd64) install, as root:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cd /root
+ftp https://raw.githubusercontent.com/segaboy/vulkan-netbsd/main/scripts/setup-env.sh
+sh setup-env.sh
+. /root/.profile
+
+ftp https://raw.githubusercontent.com/segaboy/vulkan-netbsd/main/scripts/build-glslang.sh
+sh build-glslang.sh
+
+ftp https://raw.githubusercontent.com/segaboy/vulkan-netbsd/main/scripts/build-mesa.sh
+sh build-mesa.sh --build
+
+ftp https://raw.githubusercontent.com/segaboy/vulkan-netbsd/main/scripts/install-mesa.sh
+sh install-mesa.sh" dir="auto"><pre><span class="pl-c1">cd</span> /root
+ftp https://raw.githubusercontent.com/segaboy/vulkan-netbsd/main/scripts/setup-env.sh
+sh setup-env.sh
+<span class="pl-c1">.</span> /root/.profile
+
+ftp https://raw.githubusercontent.com/segaboy/vulkan-netbsd/main/scripts/build-glslang.sh
+sh build-glslang.sh
+
+ftp https://raw.githubusercontent.com/segaboy/vulkan-netbsd/main/scripts/build-mesa.sh
+sh build-mesa.sh --build
+
+ftp https://raw.githubusercontent.com/segaboy/vulkan-netbsd/main/scripts/install-mesa.sh
+sh install-mesa.sh</pre></div>
+<p dir="auto"><code>build-mesa.sh --build</code> clones, configures, and compiles Mesa, producing the
+Lavapipe Vulkan driver (<code>libvulkan_lvp.so</code>). <code>install-mesa.sh</code> then installs
+that driver and its ICD manifest into <code>/usr/pkg</code> and verifies the registration.</p>
+<p dir="auto">If a build is interrupted or the machine crashes, re-run the same command — the
+build scripts detect the existing build and resume automatically.</p>
+<p dir="auto">Together, these scripts take a fresh minimal install all the way to an
+installed, registered Vulkan software driver.</p>
+<p dir="auto">See <code>docs/01-environment-setup.md</code> for the full, commented walkthrough and
+notes on running over SSH.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Contributing / following along</h2></div>
+<p dir="auto">This is a personal work-in-progress. Expect churn. The documentation is written
+as a running record of what actually worked (and what didn't), so it doubles as
+field notes for anyone attempting the same port.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">The original work in this repository — the scripts, documentation, and any
+patches authored here — is released under the MIT License (see <code>LICENSE</code>).</p>
+<p dir="auto">This project builds, installs, and (optionally) redistributes third-party
+software that is <strong>not</strong> covered by that license and retains its own:</p>
+<ul dir="auto">
+<li><strong>Mesa</strong> — primarily MIT-licensed (some components under other permissive
+licenses).</li>
+<li><strong>glslang</strong> — permissive licenses (BSD-style, Apache 2.0, and Khronos terms).</li>
+<li><strong>LLVM</strong> — Apache 2.0 with LLVM Exceptions. LLVM is installed separately via
+pkgsrc and is not redistributed by this project.</li>
+</ul>
+<p dir="auto">Prebuilt artifacts produced by <code>scripts/package-artifacts.sh</code> bundle the
+relevant upstream license texts (under <code>share/licenses/</code>) so that binary
+redistribution preserves each project's attribution. If you publish artifacts,
+keep those files intact.</p>
+</article>
