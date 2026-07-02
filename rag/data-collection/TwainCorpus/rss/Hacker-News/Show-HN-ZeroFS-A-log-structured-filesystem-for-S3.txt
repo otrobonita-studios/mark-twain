@@ -1,0 +1,295 @@
+A log-structured
+filesystem for S3
+.
+
+ZeroFS serves S3-compatible buckets as 
+POSIX filesystems
+ over NFS and 9P, or as 
+raw block devices
+ over NBD. The engine is 
+log-structured
+: writes go out as immutable objects and compaction reclaims what you delete. Data is compressed and encrypted before upload, and warm reads come from local cache in microseconds.
+
+apt
+
+dnf
+
+curl
+
+Copy
+
+Quickstart 
+→
+
+or via 
+Docker
+ · 
+GitHub Action
+ · 
+other platforms
+
+8,662
+1
+POSIX suite tests in CI
+
+1.6
+ µs
+2
+Random reads, warm cache
+
+0.83
+ ms
+3
+Mean small-write latency
+
+16
+ EiB
+4
+Maximum filesystem size
+
+1
+ 
+pjdfstest
+ runs on every change. A few cases needing semantics NFS/9P can't express are excluded; the list is public in the repo. 
+      
+2
+ SQLite bench, random reads on ZeroFS served from local cache. A raw S3 round-trip is 50–300 ms. 
+      
+3
+ File appends over NFS, 
+ZeroFS bench suite
+; data at rest in S3. 
+      
+4
+ Addressable by design: 64-bit inode and size fields, 32 KiB extents.
+
+01
+Verification
+
+The test suites run in public CI.
+
+CI runs pjdfstest, xfstests, kernel builds, stress-ng, ZFS scrubs, Jepsen's local-fs suite, and a Jepsen failover suite on every change. The first three run separately over NFS, 9P, and the FUSE client. Each card links to the CI pipeline.
+
+POSIX semantics
+
+The pjdfstest suite runs on every change, once per protocol: permissions, ownership, links, rename behavior. The exclude lists, a few cases per protocol, are published in the repository.
+
+pjdfstest workflow →
+
+xfstests
+
+The kernel filesystem test suite runs over NFS, 9P, and FUSE in separate workflows. These are the tests ext4 and XFS themselves are validated against.
+
+xfstests workflow →
+
+ZFS as the end-to-end test
+
+CI builds a ZFS pool on ZeroFS block devices, extracts the Linux kernel source tree onto it, and runs a full scrub. The scrub reports no checksum errors.
+
+zfs-test workflow →
+
+Kernel builds
+
+CI compiles the Linux kernel on NFS, 9P, and FUSE mounts with 
+make -j$(nproc)
+. Parallel compilation is the stress test: many processes writing the same tree at once.
+
+kernel-compile workflow →
+
+stress-ng
+
+Filesystem stressors run against live mounts in CI: access, chdir, chmod, chown, and the rest of the file-handling set, all at once.
+
+stress-ng workflow →
+
+Model-based checking
+
+Jepsen's local-fs suite drives a 9P mount with random operation histories and checks each against a reference filesystem model. A crash mode kills the server mid-run and verifies the recovered state matches the last fsync.
+
+jepsen workflow →
+
+Failover under fault injection
+
+A second Jepsen suite runs a leader and standby over MinIO, then kills, restarts, and pauses the leader mid-workload. It confirms every acknowledged write survives the failover and the recovered filesystem stays consistent.
+
+jepsen-ha workflow →
+
+Self-hosting
+
+The Rust toolchain builds ZeroFS on a filesystem that ZeroFS itself is serving. This one is a recorded session rather than a CI job.
+
+watch the recording →
+
+02
+Protocols
+
+Files over NFS and 9P, block devices over NBD.
+
+All three servers run in one userspace process against the same bucket. Clients mount it with the NFS and 9P support already in Linux, the NFS clients other systems ship, or 
+nbd-client
+ for block devices.
+
+File · everywhere
+
+NFS
+
+macOS, Linux, Windows, and the BSDs mount it over their own NFS support, with nothing extra installed on the client. The server stays in userspace.
+
+# mounts from any major OS
+
+mount -t nfs 127.0.0.1:/ /mnt/zerofs
+
+File · precise
+
+9P
+
+9P follows POSIX more closely than NFS, and fsync returns only after data reaches stable storage. The bundled FUSE client mounts without root and reconnects on its own.
+
+# bundled FUSE client, no root
+
+zerofs mount 127.0.0.1:5564 /mnt/zerofs
+
+Block · raw
+
+NBD
+
+Raw block devices stored in the bucket hold ext4 filesystems, ZFS pools, or VM boot disks. New devices are picked up at runtime, with no server restart.
+
+# attach a block device
+
+nbd-client 127.0.0.1 10809 /dev/nbd0 -N vol1
+
+Runs on
+Amazon S3
+Google Cloud Storage
+Azure Blob
+Any S3-compatible store
+local disk
+
+03
+Geo-distribution
+
+A ZFS mirror across three S3 regions.
+
+Each ZeroFS instance exposes one S3 region as a block device. To ZFS they are plain disks, so a mirror that spans continents is set up like any other pool.
+
+global-pool — zsh
+
+$
+ nbd-client 10.0.1.5 10809 /dev/nbd0 -N storage -persist  
+# us-east
+
+$
+ nbd-client 10.0.2.5 10809 /dev/nbd1 -N storage -persist  
+# eu-west
+
+$
+ nbd-client 10.0.3.5 10809 /dev/nbd2 -N storage -persist  
+# ap-southeast
+
+$
+ zpool create global-pool mirror /dev/nbd0 /dev/nbd1 /dev/nbd2
+
+$
+ zpool status global-pool | grep state
+
+ state: 
+ONLINE
+
+If a region becomes unreachable, the pool degrades and 
+the data stays available from the other two.
+
+04
+Capabilities
+
+Nine properties of the storage engine.
+
+04.1
+Always encrypted
+Every block is encrypted with XChaCha20-Poly1305 before upload. The data key is wrapped with a key derived from your password using Argon2id. There is no unencrypted mode.
+
+04.2
+Compression
+Data is compressed with zstd or lz4 before encryption. The codec can change at any time without migration, since the codec of existing data is detected on read.
+
+04.3
+Caching
+Configurable memory and disk caches hold recently used blocks. Warm reads return in microseconds. A raw S3 round trip takes 50 to 300 milliseconds.
+
+04.4
+Checkpoints
+Named checkpoints capture the filesystem at a point in time. Any of them can be opened read-only with a single flag at startup.
+
+04.5
+Read replicas
+One instance writes while read-only instances serve the same bucket. Replicas pick up the writer's changes automatically and return EROFS on writes.
+
+04.6
+TRIM support
+Discard from any filesystem or zpool frees the corresponding extents. Compaction repacks the live data and deletes the emptied segments from S3, so freed blocks come off the bill.
+
+04.7
+Immutable segments
+File data is packed into 32 KiB extents inside immutable segment objects, addressed by a separate metadata index. Nothing is rewritten in place, so checkpoints and read replicas see a consistent view of the bucket.
+
+04.8
+Honest fsync
+A successful fsync means every acknowledged write is durable in S3. If a failover may have lost unflushed writes, the next fsync returns an error instead of a false success.
+
+04.9
+High availability
+An optional standby tracks the leader over the same bucket and takes over automatically when the leader fails. While the two are connected, the standby also holds writes the leader has acknowledged but not yet flushed, so a failover preserves them.
+
+05
+Web UI
+
+One config section adds a web console.
+
+Enable 
+[servers.webui]
+ and the same process serves a console: a file manager running 9P over WebSocket, a dashboard streaming stats over gRPC-web, and a terminal that boots a Linux VM rooted on the mount.
+
+File manager
+
+Dashboard
+
+Terminal
+
+127.0.0.1:8080
+
+Drag-and-drop uploads
+ work for files and entire folders, written to the bucket over 9P.
+
+06
+Recordings
+
+Four recorded terminal sessions.
+
+These are asciinema recordings of real terminal sessions, rendered as text rather than video. Playback caps idle pauses at two seconds and changes nothing else.
+
+Kernel build
+
+ZFS on S3
+
+Ubuntu boot
+
+Self-hosting
+
+kernel-build — asciinema
+
+The Linux kernel compiles in 16 seconds
+ on ZFS over a ZeroFS NBD volume.
+
+It's a filesystem. It just happens to live in S3.
+
+$
+
+curl -sSfL https://sh.zerofs.net | sh
+
+Copy
+
+Quickstart
+
+Documentation
+
+Source
