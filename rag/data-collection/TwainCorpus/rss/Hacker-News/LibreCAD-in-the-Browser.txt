@@ -1,0 +1,438 @@
+magik.net
+
+LibreCAD in your browser
+
+Posted June 29, 2026 · updated July 1, 2026
+
+  Every now and then I need to sketch a quick 2D drawing like a floor plan.
+  I'm not a CAD user, and I don't want to install one just to draw five
+  lines and a circle. The free options are all desktop apps: you download
+  something, you install it, you launch it, you work locally. That's fine
+  when you're at your own desk, but it's 2026 and it felt a little silly that
+  I couldn't just open a tab and draw, especially without logging in.
+
+  I had never actually used 
+LibreCAD
+
+  before nor heard of it and I'm not its target user. I just wanted something
+  for quick sketches. So instead of trying yet another desktop install, I
+  thought: find an open-source app, and port to WebAssembly by just prompting GLM-5.2
+  in OpenCode to do so.
+
+It is worth pointing out that the whole process was very hands off and "easy",
+but this is only thanks to huge efforts of the Qt team which seems to be investing
+into Wasm support quite seriously, and the entire Wasm ecosystem which seems at
+this point to be really quite mature.
+
+  It turned out to be at the edge of what this model can do, but with some
+  guidance it worked out. Native vision support with some computer-use abilities would
+  hugely help the model debug issues autonomously, GLM-5.2 lacks that capability.
+  The result is below: the whole application (not a viewer, not a subset) compiled to
+  
+WebAssembly
+ and running right here
+  on this site. Click and it loads (source:
+  
+github.com/magik6k/LibreCAD-Web
+):
+
+Launch LibreCAD →
+
+  First load is ~18 MB compressed (Brotli). After that your browser
+  caches it. Needs a recent Chromium-based browser (Chrome or Edge 137+)
+  — the port relies on WebAssembly JSPI, which Firefox and Safari don't
+  ship yet. More on why below.
+
+  Content below is entirely written by the LLM, but it does appear roughly technically accurate, just like the app appears to roughly run in browsers but probably contains horrible bugs upon closer inspection. This is purely a FAFO style no effort project, what do you expect?
+
+What it is
+
+  LibreCAD is a free, GPL-licensed 2D CAD application. It reads and writes
+  DXF and DWG files, supports layers, blocks, dimensions, hatching, and most
+  of the things you'd expect from a 2D CAD tool. It's built in C++ on top of
+  
+Qt
+ and has been around since the QCad days.
+
+  This port compiles the exact same C++ source code to WebAssembly via
+  
+Emscripten
+ and Qt's official
+  WebAssembly platform support. There is no JavaScript reimplementation, no
+  web-native fork, no server-side rendering—the real desktop application
+  is running in your browser tab.
+
+How it was done
+
+  The first 90% was mechanical: get the toolchain up, compile, boot the GUI,
+  wire up files. The last 10% — making modal dialogs actually work
+  — is where the interesting problems were, and it's what forced a
+  rebuild of the whole toolchain. Here's the honest version.
+
+Toolchain and compilation
+
+  A Docker image with Ubuntu 24.04, Emscripten, and Qt. The full LibreCAD
+  source compiles and links to a 
+.wasm
+ binary using Qt's own
+  
+qt.toolchain.cmake
+ (the raw Emscripten toolchain file makes
+  
+find_package(Qt6)
+ fail). Desktop-only startup paths — CLI
+  argument parsing, splash screen, first-run dialog, version-check networking
+  — are guarded with 
+#ifndef Q_OS_WASM
+ so the desktop build
+  is untouched.
+
+Booting the GUI
+
+  Qt for WebAssembly renders through WebGL and delivers browser events through
+  its platform plugin. The main window boots, toolbars and docks appear, the
+  canvas takes mouse and keyboard input. So far, so good.
+
+The hard part: nested dialogs and 
+exec()
+
+  LibreCAD is a proper desktop app, and desktop apps re-enter the event loop
+  constantly: 
+QDialog::exec()
+ blocks until you close the dialog, a
+  combo-box drop-down spins its own loop, a colour picker opened 
+from
+
+  a preferences dialog nests another loop on top. On the web you
+  
+cannot block the main thread
+ — there is no way to
+  "wait here" without freezing the page. So 
+exec()
+ simply doesn't
+  return.
+
+  Emscripten's answer is 
+Asyncify
+:
+  it rewrites the binary so a blocking call can unwind to the browser and
+  resume later. Qt supports it, and it's what most Qt-WASM apps use. It works
+  — for 
+one
+ level. Asyncify can only suspend a single call depth
+  at a time. So a dialog opens fine, but the moment you click a combo-box
+  inside that dialog, or open the colour picker from Application Preferences,
+  the second suspend has nowhere to go and the whole app wedges. For a CAD
+  program whose preferences are wall-to-wall drop-downs and colour buttons,
+  that's not a rough edge, it's unusable.
+
+  The fix is 
+JSPI
+ (WebAssembly
+  JavaScript Promise Integration): a native browser suspend mechanism that,
+  unlike Asyncify, nests arbitrarily. Qt 6.9 can target it
+  (
+-device-option QT_EMSCRIPTEN_ASYNCIFY=2
+), but it requires
+  native WebAssembly exceptions (
+-fwasm-exceptions
+), and the
+  prebuilt Qt packages ship neither. So the port now 
+builds Qt 6.9
+  from source
+ for WebAssembly with JSPI + Wasm exceptions enabled.
+
+  That surfaced the real puzzle. JSPI only lets a WebAssembly stack suspend if
+  it was entered through a "promising" function, and Emscripten marks only
+  
+main()
+ as such. But once 
+main()
+ returns (which it
+  must on the web), every browser event — every click that opens a dialog
+  — arrives on its own fresh stack that 
+isn't
+ promising, so the
+  suspend aborts with 
+trying to suspend without WebAssembly.promising
+.
+  Making it work took three coordinated changes:
+
+Register Qt's DOM event handler as an 
+emscripten::async()
+
+      embind function, so every mouse/key event runs inside a promising frame
+      (this needs Emscripten 4.0+; the older series had an embind+JSPI bug
+      that aborted at startup).
+
+Wrap Qt's timer and posted-event callbacks the same way, so suspends
+      triggered off the event loop also work.
+
+Restructure 
+main()
+ into the async form — create the
+      app and return; the browser drives the loop — because
+      
+-fwasm-exceptions
+ is incompatible with the old
+      "simulate an infinite loop" trick.
+
+  With that, 
+QDialog::exec()
+, combo-box drop-downs, nested colour
+  pickers and context-menu sub-menus all work, at any nesting depth. No
+  application-level dialog rewrite required — the platform does the right
+  thing.
+
+Making the canvas fast
+
+  The first working build drew at 4–5 fps at a usable window size.
+  A profile put essentially all of the frame time in one Qt function:
+  
+blend_untransformed_generic_rgb64
+. The cause was the pixel
+  format of Qt's WebAssembly backing store — a straight-alpha
+  
+RGBA8888
+ surface (that's what an HTML canvas wants). It isn't one
+  of Qt's fast-path raster formats, so 
+every
+ blit of the drawing onto
+  the window fell back to a generic 64-bit-per-pixel blend, three times a
+  frame. Switching the backing store to premultiplied
+  
+ARGB32
+ (Qt's most optimised format, matching the layers being
+  drawn) sends compositing down the SIMD path, and a single format conversion
+  at flush time produces the RGBA bytes the canvas needs. Frame rate roughly
+  tripled — and it's an engine-wide win, not a canvas hack.
+
+Files, without a filesystem
+
+  Browsers have no real filesystem, and it turned out Qt's helper APIs
+  (
+getOpenFileContent
+ / 
+saveFileContent
+) don't deliver
+  their bytes reliably on this JSPI build — open handed back an unfilled
+  buffer, and save tried a chunked writable-stream picker that never produced a
+  download. Both now go through a thin JavaScript shim instead: 
+open
+
+  picks a file, reads it in JS and writes the bytes straight into Emscripten's
+  in-memory filesystem (MEMFS), then loads it by path; 
+save
+
+  serialises to MEMFS, then hands the bytes to a 
+Blob
+ and a
+  synthetic download link. CAD fonts (47 
+.lff
+ files) and hatch
+  patterns are bundled as a 30 MB data package preloaded into MEMFS, and
+  application settings persist across reloads via IndexedDB.
+
+Production
+
+  Brotli compression brings the total transfer from ~70 MB down to about
+  
+18 MB
+. PDF export works through 
+QPdfWriter
+
+  (which lives in QtGui, so it survives without the unavailable PrintSupport
+  module) and downloads the result. A custom HTML shell replaces Qt's default
+  loader with a splash screen and progress bar, and shows a friendly message if
+  you land here without JSPI support.
+
+Try it
+
+Launch LibreCAD →
+
+  Once it loads, try this:
+
+Open a DXF:
+ File → Open → pick a DXF from
+      your computer. If you don't have one, there are sample files in the
+      
+LibreCAD repo
+.
+
+Draw a line:
+ Click the line tool, click two points on
+      the canvas.
+
+Pan/zoom:
+ Mouse wheel to zoom, middle-drag to pan.
+
+Save:
+ File → Save As → your browser downloads
+      the DXF.
+
+Export PDF:
+ File → Print → downloads a PDF.
+
+Technical specs
+
+Build
+
+Qt version
+6.9.3, built from source for WebAssembly
+
+Suspend backend
+JSPI (
+QT_EMSCRIPTEN_ASYNCIFY=2
+) + native Wasm exceptions
+
+Emscripten
+4.0.7
+
+Base image
+Ubuntu 24.04 (Docker)
+
+C++ standard
+C++17
+
+Threads
+Single-threaded
+
+Memory model
+wasm32 (4 GB ceiling)
+
+Binary sizes
+
+librecad.wasm
+39 MB raw → 16 MB Brotli
+
+librecad.data (fonts + patterns)
+30 MB raw → 2.2 MB Brotli
+
+librecad.js (runtime glue)
+264 KB raw → 52 KB Brotli
+
+Total transfer (Brotli)
+~18 MB
+
+What works
+
+Open / edit / save DXF
+Yes (browser file picker + download)
+
+DWG read
+Yes (libdxfrw bundled)
+
+Modal dialogs, drop-downs, colour picker
+Yes, nested to any depth (JSPI)
+
+All drawing tools
+Yes (line, arc, circle, polyline, spline, hatch, dimensions, text)
+
+All modify tools
+Yes (move, rotate, scale, mirror, trim, bevel, offset, explode)
+
+Layers, blocks, library inserts
+Yes
+
+SVG export
+Yes
+
+PDF export
+Yes (QPdfWriter, downloads as file)
+
+Settings persistence
+Yes (IndexedDB)
+
+Translations (30+ languages)
+Yes (bundled .qm files)
+
+Browser support
+Chromium-based (Chrome / Edge 137+); no Firefox/Safari yet (JSPI)
+
+Multi-window MDI
+In-canvas only (no OS windows on web)
+
+Printing to physical printer
+No (use browser's print on the PDF)
+
+Source code
+
+  The fork lives at
+  
+github.com/magik6k/LibreCAD-Web
+
+  on the 
+wasm-port
+ branch. The upstream is
+  
+github.com/LibreCAD/LibreCAD
+.
+  All changes are isolated behind 
+#if defined(Q_OS_WASM)
+,
+  
+#ifndef LC_NO_PRINT
+, and 
+#ifndef LC_NO_NETWORK
+
+  guards—the desktop build compiles and runs identically from the same
+  source tree.
+
+  The interesting parts are all at the platform layer, not in LibreCAD's own
+  code: a couple of small patches to Qt's WebAssembly backend (the promising
+  event handler, the ARGB32 backing store), the from-source Qt build recipe,
+  and the JavaScript file-open/save shims. Almost nothing in LibreCAD proper
+  had to change to get nested dialogs working — JSPI carries the weight.
+  The Qt patches are small enough to be worth proposing upstream.
+
+Caveats
+
+Chromium only, for now.
+ The nested-dialog fix relies on
+      WebAssembly JSPI, which currently ships in Chromium-based browsers
+      (Chrome / Edge 137+). Firefox and Safari are working on it; when they ship
+      it, this build should run there too.
+
+First load takes a few seconds.
+ 18 MB of WASM + data
+      needs to download and compile. After that it's cached.
+
+Save = download.
+ The browser can't write back to the
+      file you opened. "Save" and "Save As" hand you a downloaded copy;
+      overwrite it on your disk manually. This is a web platform limitation,
+      not a bug.
+
+No recent files across reloads.
+ Recent-file paths are
+      ephemeral in-memory handles that vanish on reload. The file list is
+      stored, but the files themselves aren't. Re-open from your disk.
+
+Mobile browsers not tested.
+ The UI is designed for
+      mouse + keyboard. Touch events route through Qt's input system but the
+      toolbars are tiny on a phone.
+
+License
+
+  LibreCAD is GPL-2.0 licensed. The WebAssembly binary is a compiled form of
+  the GPL-2.0 source, so the same license applies. The source for this exact
+  build is in the 
+wasm-port
+ branch linked above.
+
+magik.net
+ ·
+  
+Launch LibreCAD
+ ·
+  
+Source (this fork)
+ ·
+  
+LibreCAD upstream
+ ·
+  
+librecad.org
+
+  LibreCAD is GPL-2.0. This build is a compiled form of the GPL source.
