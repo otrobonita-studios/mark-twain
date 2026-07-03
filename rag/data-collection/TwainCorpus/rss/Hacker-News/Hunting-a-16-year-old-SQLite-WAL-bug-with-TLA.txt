@@ -1,0 +1,958 @@
+This article was written by Marco Manino and Alberto Carretero, dqlite team at Canonical
+.
+
+1. Anatomy of a SQLite bug
+
+Recently SQLite published a 
+new version
+ with a fix to a 
+long-standing bug
+ in the way that the Write Ahead Log (WAL) is checkpointed that leads to the corruption of the database.
+
+The important aspect of this bug is not its real-world impact (which is very low) but how long it has been in the repository, how difficult it was to find it, and how difficult it was to 
+reproduce
+ it. Indeed the bug has been present since 2010, 
+for 16 years
+! Also, the crucial question for us, the dqlite team, is: can dqlite be affected by this?
+
+In order to find out, we first need to be able to understand the exact sequence of steps that leads to database corruption. To do that, we will be using TLA
++
+ to model SQLite’s behavior and quickly find a trace that allows us to reason about the bug. Then, we will create a different model that describes how dqlite uses sqlite and we will check whether the bug can happen.
+
+2. Small introduction to WAL and checkpoints in SQLite
+
+SQLite uses WAL mode to allow readers to not be blocked by writers. The way it achieves that is by writing to a special staging area called the Write Ahead Log (WAL). Writers can append to the end of the WAL and readers can ignore the new data until it is stable. Eventually, the staging area is moved to the database; this is called a checkpoint. To prevent the WAL from growing indefinitely, a writer will attempt to “reset” it – i.e. overwriting it – if the previous checkpoint was able to move all the pages. If you are curious to learn more you can find a very clear description in 
+the official documentation
+.
+
+SQLite orchestrates changes to the WAL using locks and shared memory. For our use-case it is enough to think about writing and checkpointing; as such, we only care about two locks:
+
+The checkpoint lock (
+CKPT_LOCK
+) which is taken before running a checkpoint to prevent multiple from happening at the same time
+
+The write lock (
+WRITE_LOCK
+) which is taken before appending new pages to the WAL
+
+The shared memory contains information needed to orchestrate writers, checkpointers, and readers, together with a data structure to index pages in the WAL for read performance. As we said, readers are not involved; as such, the only interesting fields are:
+
+walSalt
+ which contains a counter that is incremented each time the WAL is reset
+
+mxFrame
+ which contains the length of the WAL
+
+nBackfill
+ which contains the amount of pages that have been already checkpointed, that is, 
+[nBackfill+1, mxFrame]
+ has not been copied to the database at this point
+
+3. Modeling the bug in TLA
++
+
+Part of the difficulty of writing TLA
++
+ is deciding what to model and what 
+not
+ to model. We would like to come up with the simplest possible spec that is still faithful to reality and which we can use to extract useful insights from the model.
+
+The first thing to model is our database and WAL as described in the previous section:
+
+\* files.
+
+VARIABLE
+ wal
+
+VARIABLE
+ db
+
+\* wal-index variables:
+
+VARIABLE
+ nBackfill
+
+VARIABLE
+ mxFrame
+
+\* We will only capture the sequential part of the salt.
+
+VARIABLE
+ walSalt
+
+Init ≜
+    
+\* wal and db are initially empty.
+
+    ∧ wal = ⟨⟩
+    ∧ db = {}
+    ∧ nBackfill = 0
+    ∧ mxFrame = 0
+    ∧ walSalt = 0
+
+Since generating the data is out of the scope of the model, we can take a simpler approach. We can model each page of data as a single unique number, then the WAL can be a sequence of such numbers and the database a set of them. In particular, checkpointing will move pages from the sequence in the WAL to the set of the database in the order they were appended to the WAL. To generate a unique number it is enough to use an always increasing counter.
+
+We need to model the two actions that interact and produce the bug: appending and checkpointing. Let’s start by looking at the C code in SQLite that appends pages to the WAL to define our TLA
++
+ action:
+
+SQLite code responsible for appending frames to the WAL 
+
+static int walFrames(
+  Wal *pWal,                      /* Wal handle to write to */
+  int szPage,                     /* Database page-size in bytes */
+  PgHdr *pList,                   /* List of dirty pages to write */
+  Pgno nTruncate,                 /* Database size after this commit */
+  int isCommit,                   /* True if this is a commit */
+  int sync_flags                  /* Flags to pass to OsSync() (or 0) */
+){
+  int rc;                         /* Used to catch return codes */
+  u32 iFrame;                     /* Next frame address */
+  PgHdr *p;                       /* Iterator to run through pList with. */
+  PgHdr *pLast = 0;               /* Last frame in list */
+  int nExtra = 0;                 /* Number of extra copies of last page */
+  int szFrame;                    /* The size of a single frame */
+  i64 iOffset;                    /* Next byte to write in WAL file */
+  WalWriter w;                    /* The writer */
+  u32 iFirst = 0;                 /* First frame that may be overwritten */
+  WalIndexHdr *pLive;             /* Pointer to shared header */
+
+  assert( pList );
+  
+assert( pWal->writeLock );
+
+  /* If this frame set completes a transaction, then nTruncate>0.  If
+  ** nTruncate==0 then this frame set does not complete the transaction. */
+  assert( (isCommit!=0)==(nTruncate!=0) );
+
+#if defined(SQLITE_TEST) && defined(SQLITE_DEBUG)
+  { int cnt; for(cnt=0, p=pList; p; p=p->pDirty, cnt++){}
+    WALTRACE(("WAL%p: frame write begin. %d frames. mxFrame=%d. %s\n",
+              pWal, cnt, pWal->hdr.mxFrame, isCommit ? "Commit" : "Spill"));
+  }
+#endif
+
+  pLive = (WalIndexHdr*)walIndexHdr(pWal);
+  if( memcmp(&pWal->hdr, (void *)pLive, sizeof(WalIndexHdr))!=0 ){
+    iFirst = pLive->mxFrame+1;
+  }
+
+/* See if it is possible to write these frames into the start of the
+  ** log file, instead of appending to it at pWal->hdr.mxFrame.
+  */
+  if( 
+SQLITE_OK!=(rc = walRestartLog(pWal))
+ ){
+    return rc;
+  }
+
+  /* If this is the first frame written into the log, write the WAL
+  ** header to the start of the WAL file. See comments at the top of
+  ** this source file for a description of the WAL header format.
+  */
+  iFrame = pWal->hdr.mxFrame;
+  if( iFrame==0 ){
+    u8 aWalHdr[WAL_HDRSIZE];      /* Buffer to assemble wal-header in */
+    u32 aCksum[2];                /* Checksum for wal-header */
+
+    sqlite3Put4byte(&aWalHdr[0], (WAL_MAGIC | SQLITE_BIGENDIAN));
+    sqlite3Put4byte(&aWalHdr[4], WAL_MAX_VERSION);
+    sqlite3Put4byte(&aWalHdr[8], szPage);
+    sqlite3Put4byte(&aWalHdr[12], pWal->nCkpt);
+    if( pWal->nCkpt==0 ) sqlite3_randomness(8, pWal->hdr.aSalt);
+    memcpy(&aWalHdr[16], pWal->hdr.aSalt, 8);
+    walChecksumBytes(1, aWalHdr, WAL_HDRSIZE-2*4, 0, aCksum);
+    sqlite3Put4byte(&aWalHdr[24], aCksum[0]);
+    sqlite3Put4byte(&aWalHdr[28], aCksum[1]);
+
+    pWal->szPage = szPage;
+    pWal->hdr.bigEndCksum = SQLITE_BIGENDIAN;
+    pWal->hdr.aFrameCksum[0] = aCksum[0];
+    pWal->hdr.aFrameCksum[1] = aCksum[1];
+    pWal->truncateOnCommit = 1;
+
+    rc = sqlite3OsWrite(pWal->pWalFd, aWalHdr, sizeof(aWalHdr), 0);
+    WALTRACE(("WAL%p: wal-header write %s\n", pWal, rc ? "failed" : "ok"));
+    if( rc!=SQLITE_OK ){
+      return rc;
+    }
+
+    /* Sync the header (unless SQLITE_IOCAP_SEQUENTIAL is true or unless
+    ** all syncing is turned off by PRAGMA synchronous=OFF).  Otherwise
+    ** an out-of-order write following a WAL restart could result in
+    ** database corruption.  See the ticket:
+    **
+    **     https://sqlite.org/src/info/ff5be73dee
+    */
+    if( pWal->syncHeader ){
+      rc = sqlite3OsSync(pWal->pWalFd, CKPT_SYNC_FLAGS(sync_flags));
+      if( rc ) return rc;
+    }
+  }
+  if( (int)pWal->szPage!=szPage ){
+    return SQLITE_CORRUPT_BKPT;  /* TH3 test case: cov1/corrupt155.test */
+  }
+
+  /* Setup information needed to write frames into the WAL */
+  w.pWal = pWal;
+  w.pFd = pWal->pWalFd;
+  w.iSyncPoint = 0;
+  w.syncFlags = sync_flags;
+  w.szPage = szPage;
+  iOffset = walFrameOffset(iFrame+1, szPage);
+  szFrame = szPage + WAL_FRAME_HDRSIZE;
+
+/* Write all frames into the log file exactly once */
+
+  for(
+p=pList; p; p=p->pDirty
+){
+    int nDbSize;   /* 0 normally.  Positive == commit flag */
+
+    /* Check if this page has already been written into the wal file by
+    ** the current transaction. If so, overwrite the existing frame and
+    ** set Wal.writeLock to WAL_WRITELOCK_RECKSUM - indicating that
+    ** checksums must be recomputed when the transaction is committed.  */
+    if( iFirst && (p->pDirty || isCommit==0) ){
+      u32 iWrite = 0;
+      VVA_ONLY(rc =) walFindFrame(pWal, p->pgno, &iWrite);
+      assert( rc==SQLITE_OK || iWrite==0 );
+      if( iWrite>=iFirst ){
+        i64 iOff = walFrameOffset(iWrite, szPage) + WAL_FRAME_HDRSIZE;
+        void *pData;
+        if( pWal->iReCksum==0 || iWrite<pWal->iReCksum ){
+          pWal->iReCksum = iWrite;
+        }
+        pData = p->pData;
+        rc = sqlite3OsWrite(pWal->pWalFd, pData, szPage, iOff);
+        if( rc ) return rc;
+        p->flags &= ~PGHDR_WAL_APPEND;
+        continue;
+      }
+    }
+
+    iFrame++;
+    assert( iOffset==walFrameOffset(iFrame, szPage) );
+    nDbSize = (isCommit && p->pDirty==0) ? nTruncate : 0;
+    
+rc = walWriteOneFrame(&w, p, nDbSize, iOffset);
+
+    if( rc ) return rc;
+    pLast = p;
+    iOffset += szFrame;
+    p->flags |= PGHDR_WAL_APPEND;
+  }
+
+  /* Recalculate checksums within the wal file if required. */
+  if( isCommit && pWal->iReCksum ){
+    rc = walRewriteChecksums(pWal, iFrame);
+    if( rc ) return rc;
+  }
+
+  /* If this is the end of a transaction, then we might need to pad
+  ** the transaction and/or sync the WAL file.
+  **
+  ** Padding and syncing only occur if this set of frames complete a
+  ** transaction and if PRAGMA synchronous=FULL.  If synchronous==NORMAL
+  ** or synchronous==OFF, then no padding or syncing are needed.
+  **
+  ** If SQLITE_IOCAP_POWERSAFE_OVERWRITE is defined, then padding is not
+  ** needed and only the sync is done.  If padding is needed, then the
+  ** final frame is repeated (with its commit mark) until the next sector
+  ** boundary is crossed.  Only the part of the WAL prior to the last
+  ** sector boundary is synced; the part of the last frame that extends
+  ** past the sector boundary is written after the sync.
+  */
+  if( isCommit && WAL_SYNC_FLAGS(sync_flags)!=0 ){
+    int bSync = 1;
+    if( pWal->padToSectorBoundary ){
+      int sectorSize = sqlite3SectorSize(pWal->pWalFd);
+      w.iSyncPoint = ((iOffset+sectorSize-1)/sectorSize)*sectorSize;
+      bSync = (w.iSyncPoint==iOffset);
+      testcase( bSync );
+      while( iOffset<w.iSyncPoint ){
+        rc = walWriteOneFrame(&w, pLast, nTruncate, iOffset);
+        if( rc ) return rc;
+        iOffset += szFrame;
+        nExtra++;
+        assert( pLast!=0 );
+      }
+    }
+    if( bSync ){
+      assert( rc==SQLITE_OK );
+      rc = sqlite3OsSync(w.pFd, WAL_SYNC_FLAGS(sync_flags));
+    }
+  }
+
+  /* If this frame set completes the first transaction in the WAL and
+  ** if PRAGMA journal_size_limit is set, then truncate the WAL to the
+  ** journal size limit, if possible.
+  */
+  if( isCommit && pWal->truncateOnCommit && pWal->mxWalSize>=0 ){
+    i64 sz = pWal->mxWalSize;
+    if( walFrameOffset(iFrame+nExtra+1, szPage)>pWal->mxWalSize ){
+      sz = walFrameOffset(iFrame+nExtra+1, szPage);
+    }
+    walLimitSize(pWal, sz);
+    pWal->truncateOnCommit = 0;
+  }
+
+  /* Append data to the wal-index. It is not necessary to lock the
+  ** wal-index to do this as the SQLITE_SHM_WRITE lock held on the wal-index
+  ** guarantees that there are no other writers, and no data that may
+  ** be in use by existing readers is being overwritten.
+  */
+  iFrame = pWal->hdr.mxFrame;
+  for(p=pList; p && rc==SQLITE_OK; p=p->pDirty){
+    if( (p->flags & PGHDR_WAL_APPEND)==0 ) continue;
+    iFrame++;
+    rc = walIndexAppend(pWal, iFrame, p->pgno);
+  }
+  assert( pLast!=0 || nExtra==0 );
+  while( rc==SQLITE_OK && nExtra>0 ){
+    iFrame++;
+    nExtra--;
+    rc = walIndexAppend(pWal, iFrame, pLast->pgno);
+  }
+
+  if( rc==SQLITE_OK ){
+    
+/* Update the private copy of the header. */
+
+    pWal->hdr.szPage = (u16)((szPage&0xff00) | (szPage>>16));
+    testcase( szPage<=32768 );
+    testcase( szPage>=65536 );
+    
+pWal->hdr.mxFrame = iFrame;
+
+    if( isCommit ){
+      pWal->hdr.iChange++;
+      pWal->hdr.nPage = nTruncate;
+    }
+    
+/* If this is a commit, update the wal-index header too. */
+
+    if( isCommit ){
+      
+walIndexWriteHdr(pWal);
+
+      pWal->iCallback = iFrame;
+    }
+  }
+
+  WALTRACE(("WAL%p: frame write %s\n", pWal, rc ? "failed" : "ok"));
+  return rc;
+}
+
+static int walRestartLog(Wal *pWal){
+  int rc = SQLITE_OK;
+  int cnt;
+
+  if( pWal->readLock==0 ){
+    volatile WalCkptInfo *pInfo = walCkptInfo(pWal);
+    
+assert( pInfo->nBackfill==pWal->hdr.mxFrame );
+    if( pInfo->nBackfill>0 ){
+
+      u32 salt1;
+      sqlite3_randomness(4, &salt1);
+      rc = walLockExclusive(pWal, WAL_READ_LOCK(1), WAL_NREADER-1);
+      if( rc==SQLITE_OK ){
+        /* If all readers are using WAL_READ_LOCK(0) (in other words if no
+        ** readers are currently using the WAL), then the transactions
+        ** frames will overwrite the start of the existing log. Update the
+        ** wal-index header to reflect this.
+        **
+        ** In theory it would be Ok to update the cache of the header only
+        ** at this point. But updating the actual wal-index header is also
+        ** safe and means there is no special case for sqlite3WalUndo()
+        ** to handle if this transaction is rolled back.  */
+        
+walRestartHdr(pWal, salt1);
+
+        walUnlockExclusive(pWal, WAL_READ_LOCK(1), WAL_NREADER-1);
+      }else if( rc!=SQLITE_BUSY ){
+        return rc;
+      }
+    }
+    walUnlockShared(pWal, WAL_READ_LOCK(0));
+    pWal->readLock = -1;
+    cnt = 0;
+    do{
+      int notUsed;
+      rc = walTryBeginRead(pWal, &notUsed, 1, &cnt);
+    }while( rc==WAL_RETRY );
+    assert( (rc&0xff)!=SQLITE_BUSY ); /* BUSY not possible when useWal==1 */
+    testcase( (rc&0xff)==SQLITE_IOERR );
+    testcase( rc==SQLITE_PROTOCOL );
+    testcase( rc==SQLITE_OK );
+  }
+  return rc;
+}
+
+static void walRestartHdr(Wal *pWal, u32 salt1){
+  volatile WalCkptInfo *pInfo = walCkptInfo(pWal);
+  int i;                          /* Loop counter */
+  u32 *aSalt = pWal->hdr.aSalt;   /* Big-endian salt values */
+  pWal->nCkpt++;
+  
+pWal->hdr.mxFrame = 0;
+  sqlite3Put4byte((u8*)&aSalt[0], 1 + sqlite3Get4byte((u8*)&aSalt[0]));
+  memcpy(&pWal->hdr.aSalt[1], &salt1, 4);
+  walIndexWriteHdr(pWal);
+  AtomicStore(&pInfo->nBackfill, 0);
+
+  pInfo->nBackfillAttempted = 0;
+  pInfo->aReadMark[1] = 0;
+  for(i=2; i<WAL_NREADER; i++) pInfo->aReadMark[i] = READMARK_NOT_USED;
+  assert( pInfo->aReadMark[0]==0 );
+}
+
+We highlighted the relevant pieces of the code above, now let’s see how that translates into TLA
++
+. To model the behavior we need, we focus on two actions in the code above: 
+WalAppendTakeLock
+ and 
+WalAppend
+. We also need a new variable to represent the write lock (the first 
+assert
+ in the code above):
+
+ \* Lock needed to write to the WAL.
+
+VARIABLE
+ writeLock
+    
+WalAppendTakeLock ≜
+    ∧ writeLock = 
+"notTaken"
+
+    ∧ writeLock' = 
+"takenForAppend"
+
+    ∧ 
+UNCHANGED
+ ⟨ wal, db, nBackfill, mxFrame, frameNumber, checkPointState, safeMxFrame, walSalt, pWalSalt ⟩
+
+WalAppend ≜
+    ∧ writeLock = 
+"takenForAppend"
+
+\* The if condition is written as an assert in the sqlite code because
+
+\* checking for pWal->readLock == 0 gives us the same guarantee. If the
+
+\* writer has taken the read lock at 0 it means there are no frames in the
+
+\* wal that were not checkpointed.
+
+    ∧ 
+IF
+ (nBackfill > 0 ∧ mxFrame = nBackfill)
+       
+THEN
+
+\* Restart the Wal and Append.
+
+\* We don't have readers so every writer after a checkpoint will
+
+\* restart the wal.
+
+        ∧ wal' = ⟨ frameNumber ⟩
+        ∧ mxFrame' = 1
+        ∧ nBackfill' = 0
+        ∧ walSalt' = walSalt + 1
+       
+ELSE
+
+        ∧ wal' = Append(wal, frameNumber)
+        ∧ mxFrame' = mxFrame + 1
+        ∧ UNCHANGED ⟨ nBackfill, walSalt ⟩
+    ∧ frameNumber' = frameNumber + 1
+    ∧ writeLock' = 
+"notTaken"
+
+    ∧ 
+UNCHANGED
+ ⟨ db, checkpoint_vars ⟩
+
+Next, let’s focus on checkpointing, which is the other piece of the puzzle:
+
+SQLite code responsible for checkpointing 
+
+static int walCheckpoint(
+  Wal *pWal,                      /* Wal connection */
+  sqlite3 *db,                    /* Check for interrupts on this handle */
+  int eMode,                      /* One of PASSIVE, FULL or RESTART */
+  int (*xBusy)(void*),            /* Function to call when busy */
+  void *pBusyArg,                 /* Context argument for xBusyHandler */
+  int sync_flags,                 /* Flags for OsSync() (or 0) */
+  u8 *zBuf                        /* Temporary buffer to use */
+){
+  int rc = SQLITE_OK;             /* Return code */
+  int szPage;                     /* Database page-size */
+  WalIterator *pIter = 0;         /* Wal iterator context */
+  u32 iDbpage = 0;                /* Next database page to write */
+  u32 iFrame = 0;                 /* Wal frame containing data for iDbpage */
+  u32 mxSafeFrame;                /* Max frame that can be backfilled */
+  u32 mxPage;                     /* Max database page to write */
+  int i;                          /* Loop counter */
+  volatile WalCkptInfo *pInfo;    /* The checkpoint status information */
+
+  szPage = walPagesize(pWal);
+  testcase( szPage<=32768 );
+  testcase( szPage>=65536 );
+  
+pInfo = walCkptInfo(pWal);
+  if( pInfo->nBackfill<pWal->hdr.mxFrame ){
+
+    /* EVIDENCE-OF: R-62920-47450 The busy-handler callback is never invoked
+    ** in the SQLITE_CHECKPOINT_PASSIVE mode. */
+    assert( eMode!=SQLITE_CHECKPOINT_PASSIVE || xBusy==0 );
+
+    /* Compute in mxSafeFrame the index of the last frame of the WAL that is
+    ** safe to write into the database.  Frames beyond mxSafeFrame might
+    ** overwrite database pages that are in use by active readers and thus
+    ** cannot be backfilled from the WAL.
+    */
+    
+mxSafeFrame = pWal->hdr.mxFrame;
+
+    mxPage = pWal->hdr.nPage;
+    for(i=1; i<WAL_NREADER; i++){
+      u32 y = AtomicLoad(pInfo->aReadMark+i); SEH_INJECT_FAULT;
+      if( mxSafeFrame>y ){
+        assert( y<=pWal->hdr.mxFrame );
+        rc = walBusyLock(pWal, xBusy, pBusyArg, WAL_READ_LOCK(i), 1);
+        if( rc==SQLITE_OK ){
+          u32 iMark = (i==1 ? mxSafeFrame : READMARK_NOT_USED);
+          AtomicStore(pInfo->aReadMark+i, iMark); SEH_INJECT_FAULT;
+          walUnlockExclusive(pWal, WAL_READ_LOCK(i), 1);
+        }else if( rc==SQLITE_BUSY ){
+          mxSafeFrame = y;
+          xBusy = 0;
+        }else{
+          goto walcheckpoint_out;
+        }
+      }
+    }
+
+/* Allocate the iterator */
+    if( pInfo->nBackfill<mxSafeFrame ){
+      rc = walIteratorInit(pWal, pInfo->nBackfill, &pIter);
+      assert( rc==SQLITE_OK || pIter==0 );
+    }
+
+if( pIter
+     && (rc = walBusyLock(pWal,xBusy,pBusyArg,WAL_READ_LOCK(0),1))==SQLITE_OK
+    ){
+
+      u32 nBackfill = pInfo->nBackfill;
+      pInfo->nBackfillAttempted = mxSafeFrame; SEH_INJECT_FAULT;
+
+      /* Sync the WAL to disk */
+      rc = sqlite3OsSync(pWal->pWalFd, CKPT_SYNC_FLAGS(sync_flags));
+
+      /* If the database may grow as a result of this checkpoint, hint
+      ** about the eventual size of the db file to the VFS layer.
+      */
+      if( rc==SQLITE_OK ){
+        i64 nReq = ((i64)mxPage * szPage);
+        i64 nSize;                    /* Current size of database file */
+        sqlite3OsFileControl(pWal->pDbFd, SQLITE_FCNTL_CKPT_START, 0);
+        rc = sqlite3OsFileSize(pWal->pDbFd, &nSize);
+        if( rc==SQLITE_OK && nSize<nReq ){
+          if( (nSize+65536+(i64)pWal->hdr.mxFrame*szPage)<nReq ){
+            /* If the size of the final database is larger than the current
+            ** database plus the amount of data in the wal file, plus the
+            ** maximum size of the pending-byte page (65536 bytes), then
+            ** must be corruption somewhere.  */
+            rc = SQLITE_CORRUPT_BKPT;
+          }else{
+            sqlite3OsFileControlHint(pWal->pDbFd, SQLITE_FCNTL_SIZE_HINT,&nReq);
+          }
+        }
+
+      }
+
+/* Iterate through the contents of the WAL, copying data to the db file */
+      while( rc==SQLITE_OK && 0==walIteratorNext(pIter, &iDbpage, &iFrame) ){
+
+        i64 iOffset;
+        assert( walFramePgno(pWal, iFrame)==iDbpage );
+        SEH_INJECT_FAULT;
+        if( AtomicLoad(&db->u1.isInterrupted) ){
+          rc = db->mallocFailed ? SQLITE_NOMEM_BKPT : SQLITE_INTERRUPT;
+          break;
+        }
+        
+if( iFrame<=nBackfill || iFrame>mxSafeFrame || iDbpage>mxPage ){
+          continue;
+        }
+
+        iOffset = walFrameOffset(iFrame, szPage) + WAL_FRAME_HDRSIZE;
+        /* testcase( IS_BIG_INT(iOffset) ); // requires a 4GiB WAL file */
+        rc = sqlite3OsRead(pWal->pWalFd, zBuf, szPage, iOffset);
+        if( rc!=SQLITE_OK ) break;
+        iOffset = (iDbpage-1)*(i64)szPage;
+        testcase( IS_BIG_INT(iOffset) );
+        
+rc = sqlite3OsWrite(pWal->pDbFd, zBuf, szPage, iOffset);
+
+        if( rc!=SQLITE_OK ) break;
+      }
+      sqlite3OsFileControl(pWal->pDbFd, SQLITE_FCNTL_CKPT_DONE, 0);
+
+      /* If work was actually accomplished... */
+      if( rc==SQLITE_OK ){
+        if( mxSafeFrame==walIndexHdr(pWal)->mxFrame ){
+          i64 szDb = pWal->hdr.nPage*(i64)szPage;
+          testcase( IS_BIG_INT(szDb) );
+          rc = sqlite3OsTruncate(pWal->pDbFd, szDb);
+          if( rc==SQLITE_OK ){
+            rc = sqlite3OsSync(pWal->pDbFd, CKPT_SYNC_FLAGS(sync_flags));
+          }
+        }
+        if( rc==SQLITE_OK ){
+          
+AtomicStore(&pInfo->nBackfill, mxSafeFrame);
+ SEH_INJECT_FAULT;
+        }
+      }
+
+      /* Release the reader lock held while backfilling */
+      walUnlockExclusive(pWal, WAL_READ_LOCK(0), 1);
+    }
+
+    if( rc==SQLITE_BUSY ){
+      /* Reset the return code so as not to report a checkpoint failure
+      ** just because there are active readers.  */
+      rc = SQLITE_OK;
+    }
+  }
+
+  /* If this is an SQLITE_CHECKPOINT_RESTART or TRUNCATE operation, and the
+  ** entire wal file has been copied into the database file, then block
+  ** until all readers have finished using the wal file. This ensures that
+  ** the next process to write to the database restarts the wal file.
+  */
+  if( rc==SQLITE_OK && eMode!=SQLITE_CHECKPOINT_PASSIVE ){
+    assert( pWal->writeLock );
+    SEH_INJECT_FAULT;
+    if( pInfo->nBackfill<pWal->hdr.mxFrame ){
+      rc = SQLITE_BUSY;
+    }else if( eMode>=SQLITE_CHECKPOINT_RESTART ){
+      u32 salt1;
+      sqlite3_randomness(4, &salt1);
+      assert( pInfo->nBackfill==pWal->hdr.mxFrame );
+      rc = walBusyLock(pWal, xBusy, pBusyArg, WAL_READ_LOCK(1), WAL_NREADER-1);
+      if( rc==SQLITE_OK ){
+        if( eMode==SQLITE_CHECKPOINT_TRUNCATE ){
+          /* IMPLEMENTATION-OF: R-44699-57140 This mode works the same way as
+          ** SQLITE_CHECKPOINT_RESTART with the addition that it also
+          ** truncates the log file to zero bytes just prior to a
+          ** successful return.
+          **
+          ** In theory, it might be safe to do this without updating the
+          ** wal-index header in shared memory, as all subsequent reader or
+          ** writer clients should see that the entire log file has been
+          ** checkpointed and behave accordingly. This seems unsafe though,
+          ** as it would leave the system in a state where the contents of
+          ** the wal-index header do not match the contents of the
+          ** file-system. To avoid this, update the wal-index header to
+          ** indicate that the log file contains zero valid frames.  */
+          walRestartHdr(pWal, salt1);
+          rc = sqlite3OsTruncate(pWal->pWalFd, 0);
+        }
+        walUnlockExclusive(pWal, WAL_READ_LOCK(1), WAL_NREADER-1);
+      }
+    }
+  }
+
+ walcheckpoint_out:
+  SEH_FREE_ON_ERROR(pIter, 0);
+  walIteratorFree(pIter);
+  return rc;
+}
+
+In TLA
++
+ we need to split the function above into several different actions to model reading from shared memory, which can change in between reads! In fact, 
+pInfo
+ is a 
+volatile
+ pointer to the shared memory which can change, even without taking locks, for example by a concurrent writer. On the other hand, 
+pWal
+ is a copy of the wal-index header which does not change after the start of the execution.
+
+\* checkpoint variables:
+
+\* It is set using a copy of the wal-index header (pWal->hdr.mxFrame) when
+
+\* starting the checkpoint.
+
+VARIABLE
+ safeMxFrame
+
+\* It is set using a copy of the wal-index header (pWal->aSalt) when
+
+\* starting the checkpoint.
+
+VARIABLE
+ pWalSalt
+
+\* Running a checkpoint will move the state:
+
+\*    notStarted -> copiedHeader -> waitingForLock -> (finished) -> notStarted
+
+\* Note that only one checkpoint can happen at a time, which is why this is a
+
+\* global variable and that appends can happen concurrently with checkpoints,
+
+\* the exclusion zones correspond to our atomic actions.
+
+VARIABLE
+ checkPointState
+
+CheckPointCopyHeader ≜
+    ∧ checkPointState = 
+"notStarted"
+
+    ∧ safeMxFrame' = mxFrame
+    ∧ pWalSalt' = walSalt
+    ∧ checkPointState' = 
+"copiedHeader"
+
+    ∧ 
+UNCHANGED
+ ⟨ wal, nBackfill, db, mxFrame, frameNumber, walSalt, writeLock ⟩
+
+StartCheckpoint ≜
+    ∧ checkPointState = 
+"copiedHeader"
+
+\* Important: here backfill is read from the live header while safeMxFrame
+
+\* is read from the stale copy of the header.
+
+    ∧ 
+IF
+ nBackfill < safeMxFrame
+       
+THEN
+ checkPointState' = 
+"waitingForLock"
+
+ELSE
+ checkPointState' = 
+"notStarted"
+
+    ∧ 
+UNCHANGED
+ ⟨ wal, nBackfill, db, mxFrame, frameNumber, safeMxFrame, walSalt, pWalSalt, writeLock ⟩
+
+Checkpoint ≜
+    ∧ checkPointState = 
+"waitingForLock"
+
+\* Move pages from wal into db.
+
+    ∧ db' = db ∪ { wal[j] : j ∈ nBackfill+1‥Len(wal) }
+    ∧ nBackfill' = safeMxFrame
+    
+\* Reset the checkpoint state.
+
+    ∧ safeMxFrame' = 0
+    ∧ pWalSalt' = 0
+    ∧ checkPointState' = 
+"notStarted"
+
+    ∧ 
+UNCHANGED
+ ⟨ mxFrame, wal, frameNumber, walSalt, writeLock ⟩
+
+You can download the full TLA
++
+ specifications with instructions here: 
+https://gist.github.com/letFunny/f068b46109d4b59f540df086429da05d
+.
+
+4. Reproducing the bug
+
+Once the model is in place, we can define an invariant that will trigger in the event of data loss or database corruption:
+
+\* There are no "holes" in the database.
+
+\* All the frames that were added to the WAL have landed in order.
+
+NoPageIsLost ≜ ∀ f ∈ 1‥Cardinality(db) : f ∈ db
+
+Running the model-checker quickly finds a counter-example. It takes only 20 states to witness a missing page in the database which can, as stated in the documentation, lead to database corruption. The sequence of states looks very similar to what is included in SQLite’s own report of the bug, validating our model. Let’s break it down, following the description of the bug from the 
+SQLite docs
+:
+
+And now, the all-important question…
+
+5. Is dqlite affected?
+
+To answer the question properly, we will create a model for dqlite that captures the differences with sqlite itself. We will then model-check again to see if the invariant breaks.
+
+Given that dqlite needs to coordinate writes with Raft, it needs to be more restrictive with regards to which operations can proceed simultaneously. For this reason dqlite blocks any user-initiated checkpoint and disables automatic ones. Moreover, it will take more locks than SQLite usually needs to prevent both reads and writes from happening during a checkpoint – in practice, checkpoint is a stop-the-world action in dqlite. 
+
+dqlite code that triggers a checkpoint from the VFS
+
+static int vfsCheckpoint(sqlite3 *conn, struct vfsMainFile *f)
+{
+    PRE(f->sharedMask == 0);
+    PRE(f->exclMask == 0);
+    tracef("[database %p] checkpoint start", (void*)f->database);
+
+    /* Try to lock everything, so that nothing can proceed. */
+    
+int rv = vfsShmLock(&f->database->shm, 0, SQLITE_SHM_NLOCK, true);
+
+    if (rv != SQLITE_OK) {
+        tracef("[database %p] checkpoint busy", (void*)f->database);
+        return rv;
+    }
+    f->exclMask = VFS__CHECKPOINT_MASK;
+
+    PRE(f->database->wal.n_tx == 0);
+
+    int wal_size;
+    int ckpt;
+    
+rv = sqlite3_wal_checkpoint_v2(conn, NULL, SQLITE_CHECKPOINT_TRUNCATE,
+                       &wal_size, &ckpt);
+
+    /* Since no reader transaction is in progress, we must be able to
+     * checkpoint the entire WAL */
+    dqlite_assert(rv == SQLITE_OK);
+    dqlite_assert(wal_size == 0);
+    dqlite_assert(ckpt == 0);
+    tracef("[database %p] checkpointed", (void*)f->database);
+
+    f->exclMask = 0;
+    
+rv = vfsShmUnlock(&f->database->shm, 0, SQLITE_SHM_NLOCK, true);
+
+    dqlite_assert(rv == SQLITE_OK);
+
+    return SQLITE_OK;
+}
+
+As we can see above, the only difference for our model is that the write lock is taken before starting a checkpoint. TLA
++
+ has a useful mechanism for extending existing specs by importing them with the 
+INSTANCE
+ keyword. We will use the base spec with the added locks on top:
+
+SQLITE ≜ 
+INSTANCE
+ sqlite
+
+DqliteCheckpointTakeLock ≜
+    ∧ writeLock = 
+"notTaken"
+
+    ∧ writeLock' = 
+"takenForCheckpoint"
+
+    ∧ 
+UNCHANGED
+ ⟨ wal, db, nBackfill, mxFrame, frameNumber, checkPointState, safeMxFrame, walSalt, pWalSalt ⟩
+
+DqliteCheckpointReleaseLock ≜
+    ∧ writeLock = 
+"takenForCheckpoint"
+
+    ∧ checkPointState = 
+"notStarted"
+
+    ∧ writeLock' = 
+"notTaken"
+
+    ∧ 
+UNCHANGED
+ ⟨ wal, db, nBackfill, mxFrame, frameNumber, checkPointState, safeMxFrame, walSalt, pWalSalt ⟩
+
+\* Overwrite the action in the original model by making sure the lock is taken.
+
+DqliteCheckPointCopyHeader ≜
+    ∧ writeLock = 
+"takenForCheckpoint"
+
+    ∧ SQLITE!CheckPointCopyHeader
+
+\* Add two new actions for taking and releasing the lock.
+
+DqliteNext ≜
+    ∨ DqliteCheckpointTakeLock
+    ∨ DqliteCheckpointReleaseLock
+    ∨ SQLITE!Next
+
+By reusing the same invariant we defined before, we can check if the changes to the spec will affect the bug. When model-checking we find that 
+dqlite is not affected by the bug at all
+! This is because by taking the write lock for both appending and checkpointing, they cannot proceed simultaneously, and there is no data race.
+
+6. Bonus: How was the bug fixed in SQLite?
+
+On March 5, 2026 SQLite disclosed the bug and published a 
+fix
+. A single extra check is enough to avoid the data race by checking that a reset of the WAL did not occur since we started the checkpoint:
+
+SQLite code that fixes the bug
+
+      WalIndexHdr *pLive = (WalIndexHdr*)walIndexHdr(pWal);
+
+/* Now that read-lock slot 0 is locked, check that the wal has not been
+      ** wrapped since the header was read for this checkpoint. If it was, then
+      ** there was no work to do anyway.  In this case the
+      ** (pInfo->nBackfill<pWal->hdr.mxFrame) test above only passed because
+      ** pInfo->nBackfill had already been set to 0 by the writer that wrapped
+      ** the wal file. It would also be dangerous to proceed, as there may be
+      ** fewer than pWal->hdr.mxFrame valid frames in the wal file.  */
+      int bChg = memcmp(pLive->aSalt, pWal->hdr.aSalt, sizeof(pWal->hdr.aSalt));
+      if( 0==bChg ){
+
+          pInfo->nBackfillAttempted = mxSafeFrame; SEH_INJECT_FAULT
+
+Checkpoint ≜
+    ∧ checkPointState = 
+waitingForLock"
+
+    ∧ IF walSalt = pWalSalt
+       
+THEN
+
+\* Move pages from wal into db.
+
+        ∧ db' = db ∪ { wal[j] : j ∈ nBackfill+1‥Len(wal) }
+        ∧ nBackfill' = safeMxFrame
+       
+ELSE
+
+\* Salt changed, we skip the checkpoint.
+
+        ∧ 
+UNCHANGED
+ ⟨ nBackfill, db ⟩
+    
+\* Reset the checkpoint state.
+
+    ∧ safeMxFrame' = 0
+    ∧ pWalSalt' = 0
+    ∧ checkPointState' = 
+notStarted"
+
+    ∧ 
+UNCHANGED
+ ⟨ mxFrame, wal, pageNumber, walSalt, writeLock ⟩
+
+Running the model-checker for the TLA
++
+ model with the same invariant returns no error now, confirming the fix.
+
+Talk to us today
+
+Interested in running Ubuntu in your organisation?

@@ -1,0 +1,972 @@
+Home
+
+  > 
+Blog
+
+â¡
+
+ Home
+>
+ Blog
+
+email
+
+Bluesky
+
+Mastodon
+
+Twitter
+
+Bluesky
+
+Mastodon
+
+X
+
+Local Reasoning for Global Properties
+
+RSS feed: 
+whole site
+ or 
+just the blog
+
+Recent posts
+
+Local Reasoning for Global Properties
+
+Test-case Reducers Are Underappreciated Debugging Tools
+
+Retrofitting JIT Compilers into C Interpreters
+
+PLISS 2026
+
+Upcoming Talk in London
+
+Async and Finaliser Deadlocks
+
+What Context Can Bring to Terminal Mouse Clicks
+
+Why Firsts Matter
+
+LLM Inflation
+
+Comparing the Glove80 and Maltron keyboards
+
+Blog archive
+
+In the last couple of years, Iâve increasingly been asked questions that boil
+down to: will AI benefit from new kinds of programming languages? My answer has
+been âprobably notâ and, so far at least, that answer has held up well: AI is now able to
+generate large quantities of code in just about any programming language you or
+I can think of.
+
+Now that the technology has advanced, and its characteristics have started to
+become clearer, my answer has changed. My experience is that AI â at least as
+it stands right now â often generates high-quality local (e.g. a function)
+chunks of code, but often struggles when asked to generate code that requires
+a global understanding of the program. The easiest way to see this is a
+proliferation of unnecessary defensive checks: these seem benign, but can cause
+an exponential increase in the number of states later readers of the code believe
+can occur, with all the deleterious effects that implies.
+
+Perhaps this struggle will soon be overcome, but if it isnât, we might once
+again look to programming language design for help. My aim in this post isnât
+to try and predict the specific ways that programming languages will, or even
+should, try to address this
+1
+. Instead I want to answer a more basic question: do
+we have a good example of programming language design that allows local
+reasoning to give us assurance about a surprising global property?
+
+Background
+
+Iâve made a fair chunk of my living out of programming languages, so I have
+a vested interest in amplifying their importance. However, while I believe that
+programming languages do have some influence on our productivity,
+and on the reliability of the software we create, there isnât much evidence that they
+make a profound difference.
+
+I donât just mean âno-oneâs been able to do a good experiment which proves
+there are differencesâ â though that is true! Rather, a lot of âgoodâ
+software has been created in âbadâ languages and a lot of âbadâ software has
+been created in âgoodâ languages. It seems unlikely that the particular programming
+language used was the main influence on such outcomes.
+
+The simplest argument for this is that creating software that does everything its users
+need, in a comprehensible and reliable way, requires empathy more
+than it does expertise in challenging programming language features.
+For a slightly more nuanced
+view, Iâve previously tried to capture my thoughts on the 
+nature of
+software
+.
+
+This shouldnât be taken as me saying that programming languages donât make 
+any
+ difference.
+When I moved from programming in assembler to âhighâ level languages like Python and C, my
+productivity increased substantially and I felt able to tackle much larger
+pieces of software. The reason is simple: assembly forces me to deal with so
+many low-level details that I continually forget the more important high-level
+picture. The difference in the software I could create was profound.
+
+Unfortunately, I gradually came to realise that such a huge improvement was
+unlikely to be repeated. I had, slowly and ineptly, reinvented Fred Brooksâs 
+no
+silver bullet
+ argument:
+
+Most of the big past gains in software productivity have come from removing
+artificial barriers that have made the accidental tasks inordinately hard,
+such as severe hardware constraints, awkward programming languages, lack
+of machine time. How much of what software engineers now do is still
+devoted to the accidental, as opposed to the essential? Unless it is more
+than 9/10 of all effort, shrinking all the accidental activities to zero
+time will not give an order of magnitude improvement.
+
+An exception
+
+That meant that when, in a specific context many, many years later, I
+experienced another profound change in productivity for a lot of software I
+write, I was so surprised that I almost didnât notice. When I eventually did,
+and tried to explain to other people the difference, they also seemed baffled.
+The context? Multi-threaded programming in Rust. That experience is what
+informs my opinion on the best course for programming languages in the future,
+so I need to convince you that there is something deep in the way that
+Rust makes multi-threaded programming much easier.
+
+Let me start with a concrete example. I wrote the software that builds the
+website youâre currently reading as normal single-threaded code. Because
+Iâm lazy â and my website isnât 
+that
+ big â every time I run it, the
+entire website is rebuilt.
+
+After a while, I found that the pauses the software needed to rebuild the site
+were long enough that they made editing some pages (like this post!)
+inefficient. I quickly made some single-threaded optimisations, but they
+werenât enough. I then guessed that if I could rewrite this to use
+multi-threading I would get those pauses down to an
+acceptable level.
+
+In nearly any other programming language, rewriting the software to use
+multi-threading would have been a daunting task. Indeed, my past
+experiences with multi-threading showed me that I would immediately
+encounter difficult to debug crashes; and, almost certainly, there would be
+a long tail of such horrors to stumble across over weeks and months. Thereâs
+a good reason why I stopped trying to write multi-threaded programs!
+
+In this particular case, though, the rewrite â which did indeed solve the
+performance problems â took me under 5 minutes. It ran correctly on the first
+try, has stayed working correctly â and I had total confidence that both
+things would be the case.
+
+How can this possibly be? I like Rust a lot â itâs been my main language since
+2015 â but it is not a perfect language. Indeed, I can, and have, bored people
+by going into its flaws in detail. But when it comes to multi-threading, it
+does something which I would never have imagined possible: 
+data
+races
+ (i.e. uncoordinated read /
+writes, where two threads can unexpectedly interfere with each other) become
+static errors. That is no small thing: data races were, before, by far the
+biggest source of errors
+2
+ when I tried to write multi-threaded programs.
+
+How Rust prevents data races
+
+Rust
+3
+ prevents data races through a combination of ownership types and
+the 
+Send
+ and 
+Sync
+ traits. If you know how Rust works, you can skip this
+section. If you donât know Rust, Iâm going to give as brief an overview
+of these features as I know how, simplifying wherever possible.
+
+One can get lost in ownership types but all we need to know is that: a given
+object has an owner which can read/write to it; and objects can be moved to
+other owners, at which point the old owner loses access to the object, and the
+other owner gains access to it.
+
+Send
+ means âinstances of this struct can be moved from the current thread to
+another threadâ (i.e. after the move the current thread canât access the
+object). 
+Sync
+ means âmultiple threads can read from instances of this struct
+simultaneouslyâ. For our purposes, we can assume that Rust automatically works
+out when it is safe for a struct to be 
+Send
+ and/or 
+Sync
+ and implements
+those traits automatically for us.
+
+Letâs start with this very simple Rust code:
+
+fn 
+main
+() {
+
+let
+ x = vec![
+1
+, 
+2
+];
+
+  println!("
+{x:?}
+");
+
+}
+
+The vector created by 
+vec!
+ creates an instance of the 
+Vec
+ type, which
+implements 
+Send
+. So we can send a vector to another thread and have that
+other thread print out the vector:
+
+fn 
+main
+() {
+
+let
+ x = vec![
+1
+, 
+2
+];
+
+  std::thread::spawn(
+move 
+|| println!("
+{x:?}
+")).
+join
+().
+ok
+();
+
+}
+
+std::thread::spawn(...)
+ is how one creates a new thread in Rust: the 
+move || ...
+ is a âclosureâ (i.e. anonymous function) which the new thread will run
+when it starts. The 
+move
+ means that the new thread becomes the owner of
+any data referenced from the outer function (i.e. 
+x
+ is moved to the new thread).
+
+join
+ means that the main thread waits for the new thread to
+finish.
+
+We can see that the main thread really has lost access to the vector because
+this code:
+
+fn 
+main
+() {
+
+let
+ x = vec![
+1
+, 
+2
+];
+
+  std::thread::spawn(
+move 
+|| println!("
+{x:?}
+")).
+join
+().
+ok
+();
+
+  println!("
+{x:?}
+");
+
+}
+
+leads to this compile-time error:
+
+error[E0382]: borrow of moved value: `x`
+
+ --> t.rs:4:14
+
+  |
+
+2 |   let x = vec![1, 2];
+
+  |       - move occurs because `x` has type `Vec<i32>`, which does not implement the `Copy` trait
+
+3 |   std::thread::spawn(move || println!("{x:?}")).join().ok();
+
+  |                      -------            - variable moved due to use in closure
+
+  |                      |
+
+  |                      value moved into closure here
+
+4 |   println!("{x:?}");
+
+  |              ^ value borrowed here after move
+
+  |
+
+help: consider cloning the value before moving it into the closure
+
+  |
+
+3 ~   let value = x.clone();
+
+4 ~   std::thread::spawn(move || println!("{value:?}")).join().ok();
+
+  |
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0382`.
+
+I havenât even got as far as introducing a full-blown data race and Rust has
+already prevented me from doing something naughty!
+
+The error suggests that we should 
+clone
+ values: experienced Rust programmers
+are cautious about this advice as it can lead to terrible performance. Why
+donât we try wrapping the object in the reference counting type 
+Rc
+ instead? That way
+we can happily share the value across both threads:
+
+fn 
+main
+() {
+
+let
+ x = std::rc::Rc::new(vec![
+1
+, 
+2
+]);
+
+  std::thread::spawn(
+move 
+|| println!("
+{x:?}
+")).
+join
+().
+ok
+();
+
+  println!("
+{x:?}
+");
+
+}
+
+but unfortunately that leads to this error:
+
+`Rc<Vec<i32>>` cannot be sent between threads safely
+
+The reason we canât move an 
+Rc
+ instance to another thread is because
+the reference counting is not done in a thread-safe way. Fortunately there is a
+variant which does so: the âatomic reference countingâ 
+Arc
+. For slightly boring
+reasons, I need to clone the 
+Arc
+ (which, fortunately, does not clone the vector inside it!):
+
+fn 
+main
+() {
+
+let
+ x = std::sync::Arc::new(vec![
+1
+, 
+2
+]);
+
+let
+ y = std::sync::Arc::clone(&x);
+
+  std::thread::spawn(
+move 
+|| println!("
+{y:?}
+")).
+join
+().
+ok
+();
+
+  println!("
+{x:?}
+");
+
+}
+
+This compiles and runs successfully: both threads read from the same vector and
+print out the same thing. Finally letâs try to enable shared mutation across
+those threads by introducing Rustâs standard 
+RefCell
+ type:
+
+let
+ x = std::sync::Arc::new(std::cell::RefCell::new(vec![
+1
+, 
+2
+]));
+
+We again get an error but this time itâs not about 
+sending
+ (
+Send
+)
+but 
+sharing
+ (
+Sync
+):
+
+error[E0277]: `RefCell<Vec<i32>>` cannot be shared between threads safely
+
+...
+
+    = help: the trait `Sync` is not implemented for `RefCell<Vec<i32>>`
+
+Arguably this is the first time weâve really tried to introduce a complete data
+race: again Rust has stopped us. If I want to enable the possibility of shared mutation
+across threads, I need to introduce a type such as 
+Mutex
+:
+
+fn 
+main
+() {
+
+let
+ x = std::sync::Arc::new(std::sync::Mutex::new(vec![
+1
+, 
+2
+]));
+
+let
+ y = std::sync::Arc::clone(&x);
+
+  std::thread::spawn(
+move 
+|| {
+
+    y.
+lock
+().
+unwrap
+().
+push
+(
+3
+);
+
+    println!("
+{:?}
+", y.
+lock
+());
+
+  }).
+join
+().
+ok
+();
+
+  println!("
+{:?}
+", x.
+lock
+());
+
+}
+
+This compiles and runs correctly (printing 
+1, 2, 3
+ twice).
+
+Expanding the reasoning globally
+
+At this point, readers have, I hope, got a sense that Rust prevents me from
+introducing data races into my program. An important thing to say is that Rust
+hasnât really had to introduce new features for this: ownership types and the
+
+Send
+ and 
+Sync
+ traits are all thatâs needed. In other words, Iâm still
+writing ânormalâ Rust programs: Iâm not having to use a new sublanguage
+as I would if I was writing 
+async
+ programs.
+
+Because the rules that benefit multi-threaded programs in Rust are, to
+experienced Rust programmers, natural and obvious, it can prevent us observing
+a deeper truth: Rust is enforcing a global data-race-free property on my
+programs in a way I can reason about locally. For example, this property
+is enforced at the level of function signatures:
+
+fn 
+f
+<T: std::fmt::Debug>(
+x
+: T) {
+
+  std::thread::spawn(
+move 
+|| println!("
+{x:?}
+")).
+join
+().
+ok
+();
+
+}
+
+fn 
+main
+() {
+
+f
+(vec![
+1
+,
+2
+]);
+
+}
+
+Because I havenât constrained 
+T
+, Rust canât be sure that a caller to 
+f
+ has
+moved a 
+Send
+able object to 
+f
+, so the 
+spawn
+ on line 2 leads to this error:
+
+`T` cannot be sent between threads safely
+
+For this to work, 
+f
+ must require of its callers that the objects passed to it
+really are allowed to be sent to other threads. The syntax is a bit unwieldy:
+
+fn 
+f
+<T: std::fmt::Debug>(
+x
+: T) 
+where
+ T: Send + 
+'static 
+{
+
+  std::thread::spawn(
+move 
+|| println!("
+{x:?}
+")).
+join
+().
+ok
+();
+
+}
+
+fn 
+main
+() {
+
+f
+(vec![
+1
+,
+2
+]);
+
+}
+
+This does now compile and run! The good news is that by looking at the
+signature of 
+f
+ I know for sure that calling it will not cause a data race on 
+x
+.
+So this fragment fails to compile because Iâve used 
+Rc
+:
+
+f
+(std::rc::Rc::new(vec![
+1
+,
+2
+]));
+
+but if I change that to:
+
+f
+(std::sync::Arc::new(vec![
+1
+,
+2
+]));
+
+it does compile.
+
+Why global reasoning is so powerful
+
+For those of you unfamiliar with Rust, you will be glad to know that the code
+fragments stop here. The reason Iâve shown so many examples is that I
+hope you now believe the following statement:
+
+The combination of ownership types, `Send`, and `Sync` means that I can
+reason globally about the effects of multi-threading and data races while
+only looking at my code locally.
+
+That might sound like a normal static typing guarantee: after all, if I write
+(say) a Haskell program then Iâm guaranteed not to get typing errors at
+runtime. Thatâs true, but Haskellâs normal type system doesnât, on its own,
+give me Rustâs guarantee that concurrent code is free from data races.
+
+Put another way, until Rust I had implicitly assumed that the only global
+property a standard programming language could enforce without undue pain is âthere are
+no runtime type errorsâ
+4
+. I thought one had to use
+exotic and/or experimental languages to achieve such properties, and that the
+compromises this involved would be acceptable to few programmers. Rustâs data
+race freedom guarantees are accurate, the errors when the rules are undermined
+are (mostly) comprehensible, and the overall result highly usable
+5
+.
+
+Languages of the future
+
+We can now go back to the original topic. What makes programming difficult
+on even moderately sized programs is that each local change is a butterfly â
+and some of those butterfliesâ wing flaps cause great storms (i.e. bugs!) faraway.
+
+This has always been a problem: even the very best human programmers struggle
+to gain, and maintain, a global view of the software theyâre working on. Right
+now, though, AI often struggles even more.
+
+Ask AI to generate a single function with a well-defined specification and it
+will often create better code than I can, and do so more quickly. Ask AI to
+generate a moderately sized piece of software and then refine it, and you will
+often have unappealing results. People often talk about code bloat in this
+regard, and while thatâs true, that misses a more profound problem: the
+global view of the system is often ineptly, and sometimes incorrectly,
+captured in the generated code. The easiest â though definitely not the only! â
+way to see this problem is that AI-generated code tends to contain vast numbers
+of 
+defensive checks
+.
+
+Assertions and defensive checks are sometimes conflated, but they are very
+different. Assertions abort a program as soon as an unexpected situation is observed: they
+encode the idea that âif this condition fails to hold, the programmer
+misunderstood how the system works or other parts of the system have gone
+wrongâ. Defensive checks, in contrast, do not abort the program: execution
+deliberately continues if the check fails. Defensive checks are thus better
+thought of as encoding the idea that âIâm not sure if this condition holds or
+not, but if it does fail, I want to have a graceful way of handling itâ.
+
+Defensive checks seem like an unambiguously good thing: the current operation
+tends to finish early, but the program as a whole carries on. However, one can have too much of a
+good thing. Just as with human written code, many of the defensive checks in AI-generated code are
+unnecessary (i.e. they cannot fail).
+
+A common example I notice in a lot of AI-generated code are checks for âthis list
+must be non-emptyâ, even though that has been checked (often multiple times) at
+all paths that lead to the check. Code that looks like the following is common:
+
+def 
+f
+(
+x
+):
+
+if 
+len
+(x) == 
+0
+: 
+return
+
+else
+: 
+... 
+# do something with x
+
+# This is the only place that f is called from
+
+for 
+x 
+in 
+...
+:
+
+if 
+len
+(x) > 
+0
+: 
+f
+(x)
+
+In this example, the defensive check in 
+f
+ is at best unnecessary
+6
+7
+.
+
+Unnecessary checks are intrusive; they undermine performance; and they mislead
+those reading the code as to the programâs state at a given point in time.
+We often underestimate how pernicious the last of these is. If you
+think a program can be in states A, B, and C at the point you want to edit,
+then you have to consider all three states. If, in fact, two of those states
+cannot happen, youâve not just wasted effort, but created a potentially
+exponential explosion of states for subsequent edits to consider, with
+all the impacts on productivity and reliability that entails.
+
+Given how fast AI code generation has progressed in the last year, it would be
+foolish to rule out the possibility that this problem is soon solved.
+It is possible, though, that, short of another major breakthrough or
+two, AI will continue to be excellent locally and weak globally. If that is
+the case
+8
+, then we will have a much stronger incentive than in the past to
+have our programming languages help us enforce global properties, because
+each time we do that, we remove an entire class of bugs.
+
+In this post what I hope Iâve shown you is that a surprising global property â
+data race freedom â can be enforced through purely local reasoning. Whatâs
+interesting to me about this is that it makes a slew of important programming
+tasks more reliable whilst imposing little additional burden on the programmer. It gives
+me hope that there are other desirable global properties that can be similarly
+dealt with by programming language design
+9
+.
+
+We have to be realistic though: we wonât be able to enforce every global property we
+might want. These might range from guarantees about performance, isolation of
+subcomponents, non-interference of various kinds, resource cleanup, to state
+changes, and so on. Some of those will almost certainly be in conflict with
+each other; some will prove too onerous to be worthwhile; and some we simply
+wonât be able to handle at all.
+
+The good news is that there are a number of experimental programming language
+features
+10
+ that might turn out to be relevant to this. For
+example, effects systems allow us to reason about things like what parts of a
+program perform input/output through local reasoning. As things stand now, none
+of those has been tested at the same scale as the Rust features Iâve talked
+about in this post: itâs difficult to know which, if any, might turn out to be
+winners. Itâs also impossible to know which features have yet to be thought of.
+
+However, there is enough evidence for us to realistically imagine usable future
+programming languages allowing us to write programs with many more guarantees
+about global properties. Whoever, or whatever, is creating and modifying
+programs may benefit substantially from this. Personally I hope that it enables
+us to 
+rethink how we structure programs
+entirely
+!
+
+In summary, until recently, I didnât think that AI changed the incentives we
+have for programming languages. Now those incentives are changing; fortunately,
+we have some indications that we may be able to meet those incentives. Whether anyone
+with sufficient resources has this level of ambition is unclear to me. But it
+wouldnât surprise me if at least one large company â and, even in 2026, this will almost
+certainly require a companyâs resources â tries to do so. I cheer them on in
+advance: there may be some very interesting programming languages to come!
+
+2026-06-30 10:50
+
+Older
+
+If youâd like updates on new blog posts: follow me on
+
+Mastodon
+
+or 
+Twitter
+;
+or 
+subscribe to the RSS feed
+;
+or 
+subscribe to email updates
+:
+
+Footnotes
+
+1
+Partly because this is an active area of research / design in
+programming languages; and partly because guessing how AI code generation
+will change is above my pay grade.
+
+â
+Partly because this is an active area of research / design in
+programming languages; and partly because guessing how AI code generation
+will change is above my pay grade.
+
+2
+There are, of course, other kinds of errors one can encounter,
+notably deadlocks. Still, those are easier to debug, and in my experience
+happen much less often.
+
+â
+There are, of course, other kinds of errors one can encounter,
+notably deadlocks. Still, those are easier to debug, and in my experience
+happen much less often.
+
+3
+Technically âsafe Rustâ.
+
+â
+Technically âsafe Rustâ.
+
+4
+Other languages, notably Pony, do offer the same guarantee, though via
+rather different mechanisms.
+
+â
+Other languages, notably Pony, do offer the same guarantee, though via
+rather different mechanisms.
+
+5
+With the mild exception that one does tend to end up calling
+
+Arc::clone
+ enough that it becomes an eyesore.
+
+â
+With the mild exception that one does tend to end up calling
+
+Arc::clone
+ enough that it becomes an eyesore.
+
+6
+Depending on what 
+f
+ is supposed to do, the check may even
+be incorrect. I have seen functions called things like 
+print_sum
+ which
+should print the sum of the elements passed, but which print nothing for
+the empty list!
+
+â
+Depending on what 
+f
+ is supposed to do, the check may even
+be incorrect. I have seen functions called things like 
+print_sum
+ which
+should print the sum of the elements passed, but which print nothing for
+the empty list!
+
+7
+A brave programmer might remove the check entirely; I would tend to
+encode it as an assertion.
+
+â
+A brave programmer might remove the check entirely; I would tend to
+encode it as an assertion.
+
+8
+And perhaps even if not. Even if humans are relegated to a role
+where we solely review AI-generated code, anything we can do to make it
+easier for us to have confidence in the code weâre reading would be useful.
+
+â
+And perhaps even if not. Even if humans are relegated to a role
+where we solely review AI-generated code, anything we can do to make it
+easier for us to have confidence in the code weâre reading would be useful.
+
+9
+I also have no idea what this language design will, or
+wonât, look like, or whether it will even be influenced by Rust. The overall point Iâm
+making in this post is, I believe, independent of the particular language I
+used as a motivating example.
+
+â
+I also have no idea what this language design will, or
+wonât, look like, or whether it will even be influenced by Rust. The overall point Iâm
+making in this post is, I believe, independent of the particular language I
+used as a motivating example.
+
+10
+To say nothing of the growing external integration of formal
+methods into programming.
+
+â
+To say nothing of the growing external integration of formal
+methods into programming.
+
+Comments
+
+Home
+
+  > 
+Blog
+
+â¡
+
+ Home
+>
+ Blog
+
+email
+
+Bluesky
+
+Mastodon
+
+Twitter
+
+Bluesky
+
+Mastodon
+
+X
