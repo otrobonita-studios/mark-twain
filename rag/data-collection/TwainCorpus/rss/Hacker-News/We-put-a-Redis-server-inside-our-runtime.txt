@@ -1,0 +1,277 @@
+We put a Redis server inside our runtime
+How we run an in-memory Redis inside the runtime for local development and tests, and how we keep it behaving the same as the Redis you run in production.
+Jun 25, 2026
+6
+ Min Read
+Ivan Cernja
+Jun 25, 2026
+We put a Redis server inside our runtime
+How we run an in-memory Redis inside the runtime for local development and tests, and how we keep it behaving the same as the Redis you run in production.
+Ivan Cernja
+6
+ Min Read
+Encore runs the same backend code in local development, in tests, and in production. The infrastructure an application depends on is 
+declared in its code
+, and Encore provisions that infrastructure for each environment. For local development to be useful, the infrastructure has to actually be present on your machine, and it has to behave the way it does in production.
+
+Most of it is straightforward to stand up locally, with databases running in Docker and pub/sub running against a local NSQ daemon. A cache is harder, because the realistic options are to run a real Redis in Docker, which is another container to install and keep alive, or to replace it with a mock, which only behaves like Redis until your code relies on something the mock implements differently.
+
+We took a different approach, where the runtime has an in-memory Redis server built into it that starts automatically in local development and tests, in the same process as the runtime. This post covers how that works, why we ported a Go implementation to Rust to get there, and how we make sure the in-memory server behaves the same as the Redis an application talks to in production.
+
+An in-memory Redis, in the same process
+
+Encore's Go runtime has worked this way for a long time. On the Go side, local development uses 
+alicebob/miniredis
+, an in-memory Redis server written in Go, so that running an application locally needs no external Redis.
+
+When we built the 
+Rust runtime
+ that powers TypeScript applications, we needed the same capability there. One option was to keep the Go implementation and run it as a separate process that the runtime starts and stops, but that means shipping a second binary and supervising another process alongside the runtime, with its own startup, shutdown, and failure modes. We wanted the in-memory server to live inside the runtime, the way the rest of the infrastructure layer does.
+
+So we ported miniredis to Rust (
+#2300
+), where it runs as a library inside the runtime. The port is about 25,000 lines of Rust and implements the data types applications actually use: strings, hashes, lists, sets, sorted sets, streams, pub/sub, transactions, and Lua scripting. It is a real Redis server that listens on a TCP socket and speaks the Redis wire protocol (RESP), rather than a stub that emulates a subset of commands.
+
+Porting it also meant carrying over the operational behavior the Go version had. miniredis keeps its own mock clock, so the embedded server runs a small background task that advances that clock once a second to keep time-based expiry working during a long session, and prunes back to a bounded number of keys so a local cache does not grow without limit:
+
+// runtimes/core/src/cache/miniredis.rs
+
+// Fast-forward time by 1s every second, and prune back to 100 keys
+
+// every 15s, matching the old Go miniredis binary's cleanup.
+
+async
+ 
+fn
+ 
+cleanup_task
+(server: Miniredis) {
+    
+let
+ 
+mut 
+interval
+ = tokio::time::
+interval
+(Duration::
+from_secs
+(
+1
+));
+    
+loop
+ {
+        interval.
+tick
+().
+await
+;
+        server.
+fast_forward
+(Duration::
+from_secs
+(
+1
+));
+        
+// every 15s, prune down to 100 keys
+
+    }
+}
+
+How the runtime chooses where to connect
+
+A cache in an Encore application is 
+declared in code
+, the same way every other resource is:
+
+import
+ { 
+CacheCluster
+, 
+IntKeyspace
+, expireIn } 
+from
+ 
+"encore.dev/storage/cache"
+;
+
+const
+ cluster = 
+new
+ 
+CacheCluster
+(
+"rate-limit"
+, {
+  
+evictionPolicy
+: 
+"allkeys-lru"
+,
+});
+
+const
+ requestsPerUser = 
+new
+ 
+IntKeyspace
+<{ 
+userId
+: 
+string
+ }>(cluster, {
+  
+keyPattern
+: 
+"requests/:userId"
+,
+  
+defaultExpiry
+: 
+expireIn
+(
+10
+ * 
+1000
+),
+});
+
+That declaration is all the runtime needs. In a deployed environment, Encore provisions a real Redis and the runtime connects to it, and in local development and tests the runtime starts the built-in server on a local address and connects to that instead. The decision comes from the runtime configuration, where each Redis cluster carries an 
+in_memory
+ flag, and when that flag is set the runtime starts the embedded server rather than dialing the configured servers (
+#2322
+).
+
+In the runtime that decision is small. When the embedded server is needed, the runtime starts it and hands the same Redis client it would use for a managed cluster a 
+redis://
+ address pointing at the local server:
+
+// runtimes/core/src/cache/manager.rs
+
+// Use miniredis for testing or when any cluster has in_memory set.
+
+let
+ 
+needs_miniredis
+ = 
+self
+.testing || 
+self
+.clusters.
+iter
+().
+any
+(|c| c.in_memory);
+
+if
+ needs_miniredis {
+    
+let
+ 
+server
+ = 
+self
+.runtime.
+block_on
+(MiniredisServer::
+start
+())?;
+    
+let
+ 
+url
+ = 
+format!
+(
+"redis://{}"
+, server.
+addr
+());
+    
+// The same redis client used for a managed cluster, pointed at the local server.
+
+let
+ 
+client
+ = redis::Client::
+open
+(url)?;
+    
+// ...
+
+}
+
+The application code is identical in both cases. It holds a keyspace and calls 
+get
+, 
+set
+, 
+increment
+, and the rest against a Redis client. The only thing that changes between local and production is the address the client connects to. Because the embedded server speaks the same protocol over the same kind of socket, the client connects to it exactly as it connects to a managed Redis.
+
+Keeping it faithful to real Redis
+
+An embedded server is only useful if it behaves like the Redis it stands in for. A small difference in how one command handles an edge case is the kind of thing that passes locally and fails in production, which is the situation local-production parity exists to avoid.
+
+To guard against that, we test the Rust server against the implementation we ported from. miniredis ships with a Go integration suite that runs commands against a live server and checks the responses. We run that same suite against our Rust server and compare the raw RESP responses byte for byte. When the bytes match, our server is answering the way the reference implementation does.
+
+Running the reference suite this way surfaced differences that would be easy to miss otherwise. One of them was in how expiry is tested, where the suite advances a mock clock to check that keys expire on schedule, so the Rust server needed a command the tests could call to fast-forward its own clock to the same effect. Another was TLS, where the certificate chain the suite used was accepted by Go's TLS implementation but rejected by Rust's, so connecting at all required building a proper certificate hierarchy for the tests. Neither difference is one a hand-written mock would reproduce, and both would have gone unnoticed without comparing against the reference.
+
+Where this leaves local development
+
+In local development and tests, a cache is something you declare and use without installing or running anything alongside your application. Tests exercise a real Redis server rather than a mock, so the command behavior a test depends on is the behavior it will meet in production.
+
+The embedded server is only for local development and tests. In production Encore provisions a real, managed Redis, because the embedded server is a development fixture and is not built to scale. Building it into the runtime is what lets local development and tests match production without anyone standing up a cache to get there.
+
+If you want to go deeper, the docs cover 
+how Encore provisions infrastructure
+ from your code and 
+the cache primitive
+ itself.
+Related Articles
+Infrastructure
+06/10/26
+ /
+ 
+7
+ Min Read
+Infrastructure
+06/10/26
+ /
+ 
+7
+ Min Read
+Why infrastructure changes still take a week
+Application code ships in hours and the infrastructure it needs waits days for review. Where the queue comes from, what AI coding tools did to it, and how teams remove it.
+Ivan Cernja
+AI
+06/03/26
+ /
+ 
+7
+ Min Read
+AI
+06/03/26
+ /
+ 
+7
+ Min Read
+AI agents love type errors
+An agent only fixes what it can see before it stops, and a compile error is the one signal that always lands in time.
+Ivan Cernja
+AI
+05/20/26
+ /
+ 
+14
+ Min Read
+AI
+05/20/26
+ /
+ 
+14
+ Min Read
+Are TypeScript backend frameworks ready for AI agents?
+We set out to run one benchmark across five TypeScript backend frameworks. Reading the diffs sent us into two more runs, and the picture changed each time.
+Ivan Cernja
