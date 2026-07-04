@@ -1,0 +1,190 @@
+Interact
+
+    Live preview, streamed and decoded in your browser: a 2-second dynamic scene as one 
+7.4 MB
+
+.splat4d
+ file — 
+58×
+ smaller than its 427 MB of raw 
+.splat
+ frames.
+    Press 
+Interact
+ to take the camera: drag to orbit, ctrl-scroll to zoom.
+    Needs WebGPU (Chrome 113+, Safari 26+, Firefox 141+ on Windows) —
+    
+open the full demo
+ for more scenes and live encoding controls.
+
+How it works
+
+Static / dynamic split
+
+  In a typical dynamic capture, most splats are background that never moves beyond the bound.
+  They are stored once — the entire background of a 1.6 GB sequence costs a few MB.
+  Classification is exact: a splat is static iff a single quantized value satisfies the bound
+  against its min and max over the whole clip.
+
+Deadband “hold” tracks
+
+  A dynamic splat’s stored value changes only when the true value would violate the bound against it.
+  This kills quantization flicker, makes temporal deltas mostly zero, and the check itself enforces
+  the guarantee before every emitted symbol.
+
+H.265-style closed GOPs
+
+  Keyframe (absolute quantized values) every N frames, then P-frames of exact integer deltas.
+  Every GOP chunk decodes independently → seeking never touches other chunks.
+  Key streams are laid out 
+before
+ delta streams inside each chunk, so a scrub can fetch
+  ~10% of a chunk and show the keyframe instantly.
+
+Entropy stack
+
+  Morton-ordered splats, zigzag-coded integer deltas, byte-plane shuffle (Blosc-style), zstd per
+  stream. Output lands at ≈100% of the order-0 entropy of its own symbol streams.
+
+Inside the file
+
+A 
+.splat4d
+ file has three parts. A small header carries the bounds, the quantization
+steps, and a chunk index with absolute byte ranges — everything a client needs to plan its
+fetches. The static section holds the per-splat masks and base values: fetch it once and the complete
+scene is on screen. The rest is one self-contained GOP chunk per ~1 s of video, with key streams
+laid out before delta streams.
+
+"SP4D" + header JSON
+STATIC section     → full first view
+GOP chunk 0        [keys][deltas]
+GOP chunk 1        …
+
+Error bounds
+
+Every attribute of every splat in every decoded frame is within a user-chosen bound of the source —
+not on average, not in PSNR: pointwise and deterministic.
+
+attribute
+bound
+default
+
+position
+± millimeters, L∞ per axis
+±2 mm
+
+color RGB
+± 8-bit levels per channel
+±4/255
+
+opacity
+± 8-bit levels
+±4/255
+
+rotation
+± quaternion component (units of 1/128, up to sign)
+exact (±0)
+
+scale
+± relative %, per axis
+±2%
+
+Mechanism: SZ/ZFP-style error-bounded quantization (step = 2×bound ⇒ error ≤ bound by
+construction). After quantization everything is integer math — temporal deltas can never drift, and the
+Rust and JavaScript decoders reconstruct bit-identical values.
+
+Stream from object store
+
+The format is designed for plain HTTP 
+Range
+ requests against S3 / GCS / R2 / any static host —
+no server logic, no manifest files, no video container. A client needs exactly:
+
+bytes=0-262143
+ → magic + header JSON (all byte offsets are absolute)
+
+one range for the STATIC section (a few MB) → complete first view on screen
+
+one range per GOP chunk during playback / prefetch
+
+on seek: the chunk-prefix range (TOC + keys) first → keyframe on screen in ~100–150 ms,
+      then the rest of the chunk → exact frame
+
+Object stores support this natively. For browser clients, set CORS to allow the
+
+Range
+ header and expose 
+Content-Range
+:
+
+[{ "AllowedMethods": ["GET", "HEAD"],
+   "AllowedOrigins": ["https://your-site"],
+   "AllowedHeaders": ["Range"],
+   "ExposeHeaders":  ["Content-Range", "Content-Length", "Accept-Ranges"] }]
+
+Payloads are already zstd-compressed inside the container, so store objects with no
+
+Content-Encoding
+ — range math stays byte-exact and nothing double-compresses.
+
+Benchmarks
+
+Eight sequences from three independent capture pipelines:
+
+Dynamic 3D Gaussians
+ (CMU Panoptic dome —
+juggle, boxes, softball, tennis), Neu3D cooking scenes via
+SpacetimeGaussians/
+splaTV
+ (flame = backyard
+BBQ, sear = kitchen chef), and Technicolor (birthday party, 659k splats) — all converted to
+per-frame antimatter15 
+.splat
+ files (32 B/splat), 20 fps. splat4d encodes use default
+bounds (±2 mm / ±4 color / exact rot / ±2% scale); gzip is per-frame 
+-9
+.
+For context, the best generic lossless baseline (zstd-19 
+--long
+ over the whole series)
+reaches only 2.5×. Full methodology and more baselines:
+
+BENCHMARKS.md
+.
+
+loading benchmarks.json…
+
+Viewer
+
+Raw WebGPU, a line-by-line port of the
+
+antimatter15/splat
+ renderer, pixel-verified against it.
+
+metric
+local
+throttled 50 Mbps
+
+full first view (header + static section)
+141–157 ms
+791 ms
+
+scrub into unbuffered region → keyframe visible
+—
+145 ms
+
+playback
+60 fps @ 336k splats · worker decode 2.5–27 ms/frame · sort 1–25 ms
+
+Using it
+
+A time series of antimatter15 
+.splat
+ frames → one small, seekable file:
+
+# Python (pip install splats4d)
+splat4d encode -i frames_dir -o out.splat4d
+
+MIT · built on the shoulders of: antimatter15/splat (format), Dynamic 3D Gaussians (data),
+SZ/ZFP (error-bounded quantization), H.264/H.265 (GOP structure), SPZ/SOGS (attribute packing), zstd.
