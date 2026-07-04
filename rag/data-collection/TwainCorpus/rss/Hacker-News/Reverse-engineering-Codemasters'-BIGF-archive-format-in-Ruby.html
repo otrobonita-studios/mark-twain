@@ -1,0 +1,157 @@
+<article class="post-reading">
+
+
+<details class="post-contents-mobile">
+<summary>On this page</summary>
+
+</details>
+<div class="post-content post-prose">
+<p>When you say “I’m going to reverse-engineer a binary file format,” people picture C,
+or Python with <code class="language-plaintext highlighter-rouge">struct</code>, or Kaitai. Nobody pictures Ruby. Ruby is for web apps and
+DSLs and being pleasant; it is not, in the popular imagination, for byte-banging
+floats out of a 2003 racing game.</p>
+<p>That popular imagination is wrong. The reader for Codemasters’ BIGF archive format —
+the container that holds the AI data in TOCA Race Driver — is pure, dependency-free
+Ruby, and it reads four different games’ archives. I should be upfront about how it
+came to be: this was reverse engineering done <em>with</em> an AI the whole way — me
+steering, deciding what to trust and verifying every claim against the bytes; the
+model drafting code, recalling the corners of the standard library, and proposing
+hypotheses I then tested. What follows is the part of Ruby that made that
+collaboration genuinely pleasant: <strong>Ruby strings are byte buffers, and
+<code class="language-plaintext highlighter-rouge">String#unpack</code> is a tiny, fast binary parser hiding in plain sight.</strong></p>
+<h2 id="strings-are-bytes">Strings are bytes</h2>
+<p>The first thing to internalise is that a Ruby <code class="language-plaintext highlighter-rouge">String</code> is not “text.” It’s a
+sequence of bytes with an encoding label attached. Read a file in binary mode and
+you get the raw bytes, indexable and sliceable like any string:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">data</span> <span class="o">=</span> <span class="no">File</span><span class="p">.</span><span class="nf">binread</span><span class="p">(</span><span class="s2">"aib.big"</span><span class="p">)</span>   <span class="c1"># the whole file as an ASCII-8BIT String</span>
+<span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>                        <span class="c1"># =&gt; "BIGF"  — the first four bytes</span>
+<span class="n">data</span><span class="p">.</span><span class="nf">bytesize</span>                     <span class="c1"># =&gt; 3448832</span>
+</code></pre></div></div>
+<p><code class="language-plaintext highlighter-rouge">File.binread</code> is the key: it reads the file as binary (<code class="language-plaintext highlighter-rouge">ASCII-8BIT</code> / <code class="language-plaintext highlighter-rouge">BINARY</code>
+encoding), so no UTF-8 interpretation mangles your <code class="language-plaintext highlighter-rouge">0x80</code>+ bytes. From there,
+<code class="language-plaintext highlighter-rouge">data[offset, length]</code> carves out byte ranges, and <code class="language-plaintext highlighter-rouge">data.index(needle, from)</code> finds
+a magic number or a marker anywhere in the file. That’s most of a parser already.</p>
+<h2 id="unpack-the-binary-decoder-you-already-have"><code class="language-plaintext highlighter-rouge">unpack</code>: the binary decoder you already have</h2>
+<p>The workhorse is <code class="language-plaintext highlighter-rouge">String#unpack</code> (and its single-value sibling <code class="language-plaintext highlighter-rouge">unpack1</code>). You hand
+it a <em>format string</em> of directives and it decodes the bytes. The two directives that
+did 90% of the work here:</p>
+<ul>
+<li><strong><code class="language-plaintext highlighter-rouge">V</code></strong> — an unsigned 32-bit integer, <strong>little-endian</strong>. Every count, block index,
+offset and size in BIGF is a <code class="language-plaintext highlighter-rouge">V</code>.</li>
+<li><strong><code class="language-plaintext highlighter-rouge">e</code></strong> — a <strong>little-endian single-precision float</strong> (32-bit). The AI data is
+arrays of these: the racing-line coordinates, the control values, the padding.</li>
+</ul>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">data</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">].</span><span class="nf">unpack1</span><span class="p">(</span><span class="s2">"V"</span><span class="p">)</span>      <span class="c1"># =&gt; 39        — the entry count, as a u32 LE</span>
+<span class="n">data</span><span class="p">[</span><span class="mi">12</span><span class="p">,</span> <span class="mi">16</span><span class="p">].</span><span class="nf">unpack</span><span class="p">(</span><span class="s2">"e4"</span><span class="p">)</span>    <span class="c1"># =&gt; [0.0, 0.0, 137.0, 0.0]   — four float32s</span>
+</code></pre></div></div>
+<p>Endianness lives in the directive, which is the whole game: <code class="language-plaintext highlighter-rouge">V</code> is little-endian
+u32, <code class="language-plaintext highlighter-rouge">N</code> is big-endian; <code class="language-plaintext highlighter-rouge">e</code> is little-endian float, <code class="language-plaintext highlighter-rouge">g</code> is big-endian. Codemasters’
+PC games are little-endian, so it’s <code class="language-plaintext highlighter-rouge">V</code> and <code class="language-plaintext highlighter-rouge">e</code> throughout. (When we later looked at
+an Xbox 360 file, big-endian PowerPC, it would have been <code class="language-plaintext highlighter-rouge">N</code> and <code class="language-plaintext highlighter-rouge">g</code> — the format
+string is the only thing that changes.)</p>
+<p><code class="language-plaintext highlighter-rouge">unpack</code> is implemented in C inside the interpreter, so decoding a few hundred
+thousand floats is not slow. You are not paying a “scripting language” tax here.</p>
+<h2 id="walking-the-container">Walking the container</h2>
+<p>BIGF is a header, a directory, and a data section. The header check is a one-liner:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="no">MAGIC</span> <span class="o">=</span> <span class="s2">"BIGF"</span><span class="p">.</span><span class="nf">b</span>
+<span class="k">raise</span> <span class="s2">"not a BIGF archive"</span> <span class="k">unless</span> <span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span> <span class="o">==</span> <span class="no">MAGIC</span>
+</code></pre></div></div>
+<p>That <code class="language-plaintext highlighter-rouge">.b</code> is worth a footnote: it returns a binary copy of the string literal, so
+the comparison is byte-for-byte regardless of source-file encoding. I use it for
+every binary constant.</p>
+<p>BIGF has two directory layouts. One is a flat table of <strong>fixed 24-byte records</strong> —
+<code class="language-plaintext highlighter-rouge">char name[16]; u32 size; u32 offset</code> — which is a textbook <code class="language-plaintext highlighter-rouge">unpack</code> loop:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">count</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">].</span><span class="nf">unpack1</span><span class="p">(</span><span class="s2">"V"</span><span class="p">)</span>
+<span class="n">base</span>  <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">4</span><span class="p">].</span><span class="nf">unpack1</span><span class="p">(</span><span class="s2">"V"</span><span class="p">)</span>    <span class="c1"># data-section base, read from the header (not assumed!)</span>
+<span class="n">off</span>   <span class="o">=</span> <span class="mh">0x24</span>                        <span class="c1"># records start after the 0x20 header + a 4-byte pad</span>
+
+<span class="n">count</span><span class="p">.</span><span class="nf">times</span> <span class="k">do</span>
+  <span class="n">rec</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">off</span><span class="p">,</span> <span class="mi">24</span><span class="p">]</span>
+  <span class="nb">name</span>          <span class="o">=</span> <span class="n">rec</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">16</span><span class="p">].</span><span class="nf">split</span><span class="p">(</span><span class="s2">"</span><span class="se">\x00</span><span class="s2">"</span><span class="p">).</span><span class="nf">first</span><span class="p">.</span><span class="nf">to_s</span>   <span class="c1"># NUL-terminated name field</span>
+  <span class="n">size</span><span class="p">,</span> <span class="n">offset</span>  <span class="o">=</span> <span class="n">rec</span><span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">8</span><span class="p">].</span><span class="nf">unpack</span><span class="p">(</span><span class="s2">"V2"</span><span class="p">)</span>               <span class="c1"># two u32s in one go</span>
+  <span class="n">members</span> <span class="o">&lt;&lt;</span> <span class="no">Entry</span><span class="p">.</span><span class="nf">new</span><span class="p">(</span><span class="nb">name</span><span class="p">:,</span> <span class="ss">offset: </span><span class="n">base</span> <span class="o">+</span> <span class="n">offset</span><span class="p">,</span> <span class="n">size</span><span class="p">:)</span>
+  <span class="n">off</span> <span class="o">+=</span> <span class="mi">24</span>
+<span class="k">end</span>
+</code></pre></div></div>
+<p>Three small Ruby niceties are doing real work there. <code class="language-plaintext highlighter-rouge">rec[0, 16].split("\x00").first</code>
+turns a fixed-width, NUL-padded C string into a Ruby string. <code class="language-plaintext highlighter-rouge">unpack("V2")</code> pulls
+<em>two</em> integers at once (the count suffix). And — a hard-won detail — <code class="language-plaintext highlighter-rouge">base</code> is read
+from the header field at <code class="language-plaintext highlighter-rouge">0x08</code> rather than hard-coded, because measuring 1,371 real
+files showed it isn’t always the <code class="language-plaintext highlighter-rouge">0x800</code> everyone assumes.</p>
+<p>The other layout is variable-length: names interspersed with a <code class="language-plaintext highlighter-rouge">0x44 00 00 00</code>
+marker. That’s where <code class="language-plaintext highlighter-rouge">String#index</code> shines — you scan for the extension, walk back to
+the preceding NUL to find the name’s start, then look just past it for the marker:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">while</span> <span class="p">(</span><span class="n">idx</span> <span class="o">=</span> <span class="n">data</span><span class="p">.</span><span class="nf">index</span><span class="p">(</span><span class="s2">".aib"</span><span class="p">,</span> <span class="n">pos</span><span class="p">))</span> <span class="o">&amp;&amp;</span> <span class="n">idx</span> <span class="o">&lt;</span> <span class="n">limit</span>
+  <span class="n">s</span> <span class="o">=</span> <span class="n">idx</span>
+  <span class="n">s</span> <span class="o">-=</span> <span class="mi">1</span> <span class="k">while</span> <span class="n">s</span><span class="p">.</span><span class="nf">positive?</span> <span class="o">&amp;&amp;</span> <span class="n">data</span><span class="p">.</span><span class="nf">getbyte</span><span class="p">(</span><span class="n">s</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span>   <span class="c1"># walk back to the NUL</span>
+  <span class="nb">name</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">s</span><span class="o">...</span><span class="p">(</span><span class="n">idx</span> <span class="o">+</span> <span class="mi">4</span><span class="p">)]</span>
+  <span class="c1"># ...marker + block index follow the name...</span>
+  <span class="n">pos</span> <span class="o">=</span> <span class="n">idx</span> <span class="o">+</span> <span class="mi">4</span>
+<span class="k">end</span>
+</code></pre></div></div>
+<p><code class="language-plaintext highlighter-rouge">getbyte</code> reads a single byte as an integer without allocating a substring — exactly
+what you want in a tight backwards scan.</p>
+<h2 id="decoding-the-records-inside">Decoding the records inside</h2>
+<p>Carving a member is just a slice — <code class="language-plaintext highlighter-rouge">data[entry.offset, entry.size]</code> — and Ruby
+slicing is <em>safe</em>: ask for bytes past the end of the file and you get a short string
+or <code class="language-plaintext highlighter-rouge">nil</code>, never a crash. Inside an AI profile, every 16 bytes is four float32s, and
+the parser classifies each record by its bit pattern:</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="no">SENTINEL</span>   <span class="o">=</span> <span class="s2">"</span><span class="se">\x3f\x3f\x3f\x3f</span><span class="s2">"</span><span class="p">.</span><span class="nf">b</span><span class="p">.</span><span class="nf">unpack1</span><span class="p">(</span><span class="s2">"e"</span><span class="p">)</span>        <span class="c1"># =&gt; 0.7470588…  (the padding value)</span>
+<span class="no">KTAG_MAGIC</span> <span class="o">=</span> <span class="s2">"</span><span class="se">\x0c\x00\x00\x00\x08\x00\x00\x00</span><span class="s2">"</span><span class="p">.</span><span class="nf">b</span>
+
+<span class="k">def</span> <span class="nf">classify</span><span class="p">(</span><span class="n">bytes</span><span class="p">)</span>
+  <span class="k">return</span> <span class="p">[</span><span class="ss">:ktag</span><span class="p">,</span> <span class="n">bytes</span><span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">4</span><span class="p">].</span><span class="nf">unpack1</span><span class="p">(</span><span class="s2">"e"</span><span class="p">)]</span> <span class="k">if</span> <span class="n">bytes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">8</span><span class="p">]</span> <span class="o">==</span> <span class="no">KTAG_MAGIC</span>
+
+  <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">d</span> <span class="o">=</span> <span class="n">bytes</span><span class="p">.</span><span class="nf">unpack</span><span class="p">(</span><span class="s2">"e4"</span><span class="p">)</span>
+  <span class="k">if</span> <span class="p">[</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">d</span><span class="p">].</span><span class="nf">all?</span> <span class="p">{</span> <span class="o">|</span><span class="n">x</span><span class="o">|</span> <span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="no">SENTINEL</span><span class="p">).</span><span class="nf">abs</span> <span class="o">&lt;</span> <span class="mf">1e-5</span> <span class="p">}</span> <span class="k">then</span> <span class="ss">:pad</span>
+  <span class="k">elsif</span> <span class="n">a</span><span class="p">.</span><span class="nf">zero?</span> <span class="o">&amp;&amp;</span> <span class="n">b</span><span class="p">.</span><span class="nf">zero?</span> <span class="o">&amp;&amp;</span> <span class="n">c</span><span class="p">.</span><span class="nf">zero?</span> <span class="o">&amp;&amp;</span> <span class="n">d</span><span class="p">.</span><span class="nf">zero?</span>         <span class="k">then</span> <span class="ss">:zero</span>
+  <span class="k">elsif</span> <span class="n">b</span><span class="p">.</span><span class="nf">zero?</span> <span class="o">&amp;&amp;</span> <span class="n">d</span><span class="p">.</span><span class="nf">zero?</span>                               <span class="k">then</span> <span class="ss">:scalar</span>   <span class="c1"># (v,0,v,0)</span>
+  <span class="k">elsif</span> <span class="p">[</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">d</span><span class="p">].</span><span class="nf">all?</span> <span class="p">{</span> <span class="o">|</span><span class="n">x</span><span class="o">|</span> <span class="n">coordish?</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="p">}</span>              <span class="k">then</span> <span class="ss">:path</span>     <span class="c1"># (x,y,x,y)</span>
+  <span class="k">else</span> <span class="ss">:other</span>
+  <span class="k">end</span>
+<span class="k">end</span>
+</code></pre></div></div>
+<p>That <code class="language-plaintext highlighter-rouge">SENTINEL</code> line is a small joy: nobody had to look up “what float is
+<code class="language-plaintext highlighter-rouge">0x3f3f3f3f</code>?” in a calculator — we let Ruby tell us by unpacking the four bytes
+(<code class="language-plaintext highlighter-rouge">0.7470588…</code>). The classifier then reads almost like prose, which matters when the
+prose <em>is</em> the format specification you’re trying to pin down.</p>
+<p>One genuine gotcha lives in <code class="language-plaintext highlighter-rouge">coordish?</code>: some 16-byte records, read as floats, are
+denormals or <code class="language-plaintext highlighter-rouge">NaN</code>. Ruby’s <code class="language-plaintext highlighter-rouge">Float#nan?</code> and a magnitude check handle it cleanly —
+but you have to remember that <code class="language-plaintext highlighter-rouge">x == x</code> is <code class="language-plaintext highlighter-rouge">false</code> for <code class="language-plaintext highlighter-rouge">NaN</code>, so the guard is
+<code class="language-plaintext highlighter-rouge">!x.nan? &amp;&amp; x.abs &lt; 1e30 &amp;&amp; …</code> rather than a naive comparison. (RuboCop will even nag
+you toward <code class="language-plaintext highlighter-rouge">nan?</code> if you write the <code class="language-plaintext highlighter-rouge">x == x</code> trick.)</p>
+<h2 id="why-ruby-specifically">Why Ruby, specifically</h2>
+<p>Having done this, the case for Ruby on a binary-RE task is concrete:</p>
+<ul>
+<li><strong>Strings-as-buffers + slicing</strong> make navigation ergonomic — no cursor object, no
+read/seek ceremony, just <code class="language-plaintext highlighter-rouge">data[off, len]</code>.</li>
+<li><strong><code class="language-plaintext highlighter-rouge">unpack</code> is a complete, fast, C-backed binary decoder</strong> with a one-character
+vocabulary for every integer and float width and endianness.</li>
+<li><strong>Zero dependencies.</strong> The whole reader is standard library. A research tool that
+has to run on a stranger’s machine in five years should not depend on a gem whose
+API has since drifted.</li>
+<li><strong>It reads like the spec.</strong> When the code that classifies a record is short enough
+to hold in your head, the code <em>becomes</em> your documentation of the format — which is
+the entire point of reverse-engineering.</li>
+<li><strong>The REPL closes the loop.</strong> During the actual work, <code class="language-plaintext highlighter-rouge">irb</code> with <code class="language-plaintext highlighter-rouge">File.binread</code> and
+a one-line <code class="language-plaintext highlighter-rouge">unpack</code> is the fastest way to ask “what is at offset <code class="language-plaintext highlighter-rouge">0x5c00</code>?” and get
+an answer before the thought has finished.</li>
+</ul>
+<p>The gotchas are few and all about staying in binary-land: read with <code class="language-plaintext highlighter-rouge">binread</code>, write
+binary constants with <code class="language-plaintext highlighter-rouge">.b</code>, get the endianness directive right (<code class="language-plaintext highlighter-rouge">V</code>/<code class="language-plaintext highlighter-rouge">e</code>, not <code class="language-plaintext highlighter-rouge">N</code>/<code class="language-plaintext highlighter-rouge">g</code>),
+use <code class="language-plaintext highlighter-rouge">unpack1</code> when you want one value instead of an array, and treat <code class="language-plaintext highlighter-rouge">NaN</code> with
+respect. None of them are Ruby’s fault; they’re just what binary is.</p>
+<p>A 2003 racing game’s AI, a four-byte magic, a table of offsets, and a few hundred
+thousand little-endian floats — all read by twenty lines of standard-library Ruby. The
+language people use for <code class="language-plaintext highlighter-rouge">has_many :comments</code> turns out to be a perfectly good
+disassembler’s notebook — and, paired with an AI that never tires of unpacking the
+next sixteen bytes, a fast one.</p>
+
+<h3 id="where-to-look">Where to look</h3>
+<p>The full reader is open source — <code class="language-plaintext highlighter-rouge">String#unpack</code> in anger across two table layouts and
+four games:</p>
+<ul>
+<li><strong>Repository:</strong> <a href="https://github.com/davidslv/bigf"><code class="language-plaintext highlighter-rouge">github.com/davidslv/bigf</code></a> (MIT)</li>
+<li>The container parser: <code class="language-plaintext highlighter-rouge">lib/bigf/archive.rb</code> · the record decoder: <code class="language-plaintext highlighter-rouge">lib/bigf/toca/profile.rb</code></li>
+</ul>
+</div></article>
