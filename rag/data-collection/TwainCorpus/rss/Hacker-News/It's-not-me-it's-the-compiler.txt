@@ -1,0 +1,929 @@
+It's not me, it's the compiler!
+
+Every programmer has, at least once, thought to themselves that "it's not me, it's the compiler!". Usually,
+we're wrong, but this is the story of the time 
+I was actually right
+.
+
+On a Saturday evening, as one usually does, I was refactoring my JavaScript engine's parser, eariler I had
+written this code in the project:
+
+impl
+ 
+LexerConsumer
+ 
+{
+
+#[inline]
+
+pub
+ 
+fn
+ 
+consume
+(
+&
+mut
+ 
+self
+)
+ 
+{
+
+self
+.
+0
+ 
++=
+ 
+1
+;
+
+}
+
+#[inline]
+
+pub
+ 
+fn
+ 
+consume_test
+(
+&
+mut
+ 
+self
+,
+ store
+:
+ 
+&
+LexStore
+,
+ expected
+:
+ 
+TokenKind
+)
+ 
+->
+ 
+bool
+ 
+{
+
+if
+ 
+self
+.
+peek
+(
+store
+)
+ 
+==
+ expected 
+{
+
+self
+.
+consume
+(
+)
+;
+
+true
+
+}
+ 
+else
+ 
+{
+
+false
+
+}
+
+}
+
+}
+Which is on its own a fairly common pattern in a parser, but I didn't love the shape of this code,
+each branch is returning the value of the comparison, so what if I just returned the value myself?
+
+I got to work and wrote this version instead, and I was happy with the aesthetics of the generated asm
+in isolation, it was a few bytes shorter and didn't have the branch.
+
+#[inline]
+
+pub
+ 
+fn
+ 
+consume_test
+(
+&
+mut
+ 
+self
+,
+ store
+:
+ 
+&
+LexStore
+,
+ expected
+:
+ 
+TokenKind
+)
+ 
+->
+ 
+bool
+ 
+{
+
+let
+ x 
+=
+ 
+self
+.
+peek
+(
+store
+)
+ 
+==
+ expected
+;
+
+self
+.
+0
+ 
++=
+ x 
+as
+ 
+u32
+;
+
+    x
+
+}
+
+  mov    eax,DWORD PTR [rdi]
+  mov    ecx,eax
+  and    ecx,0x3f
+  movzx  ecx,BYTE PTR [rsi+rcx*1]
+  cmp    cl,dl
+  jne    233263 
+  inc    eax
+  mov    DWORD PTR [rdi],eax
+  cmp    cl,dl
+  sete   al
+  ret
+
+  mov    ecx,DWORD PTR [rdi]
+  mov    r8d,ecx
+  and    r8d,0x3f
+  xor    eax,eax
+  cmp    BYTE PTR [rsi+r8*1],dl
+  sete   al
+  add    ecx,eax
+  mov    DWORD PTR [rdi],ecx
+  ret
+
+So I went ahead to try and parse a simple statement, and right at the top of my bash
+history was a command to parse a for-loop.
+
+> joe parse - 'for (var lol; false; false) {}'
+Error was found
+Diagnostic { kind: E079, flag: Flag(11529215046068469773), byte: 5, current_token: Var }
+Parse error
+Wait! What just happened?! Did I somehow mess up the function? Maybe 
+x as u32
+ has different semantics
+than I remember... let me just write it more explicitly.
+
+#[inline]
+
+pub
+ 
+fn
+ 
+consume_test
+(
+&
+mut
+ 
+self
+,
+ store
+:
+ 
+&
+LexStore
+,
+ expected
+:
+ 
+TokenKind
+)
+ 
+->
+ 
+bool
+ 
+{
+
+let
+ x 
+=
+ 
+self
+.
+peek
+(
+store
+)
+ 
+==
+ expected
+;
+
+self
+.
+0
+ 
++=
+ 
+if
+ x 
+{
+ 
+1
+ 
+}
+ 
+else
+ 
+{
+ 
+0
+ 
+}
+;
+
+    x
+
+}
+And somehow this version was working!
+
+> joe parse - 'for (var lol; false; false) {}'
+Parsed 8 nodes in 14ns
+
+Raw nodes:
+  [0] POS=0		 ScriptStart payload=0
+  [1] POS=9		 VariableDeclaration payload=0
+  [2] POS=14		 FalseLit payload=0
+  [3] POS=21		 FalseLit payload=0
+  [4] POS=28		 BlockStatementStart payload=0
+  [5] POS=29		 BlockStatement payload=0
+  [6] POS=0		 ForStatement payload=0
+  [7] POS=0		 Script payload=0
+
+POS=000	[7] Script
+POS=000	  [6] ForStatement
+POS=009	    [1] VariableDeclaration @A0
+POS=014	    [2] FalseLit
+POS=021	    [3] FalseLit
+POS=029	    [5] BlockStatement
+For a second I doubted my sanity, but I was fairly confident that I know what 
+bool as u32
+ does, I've written that
+exact cast hundreds of times, so at that momenet I said what any desperate and mildly confused programmer would:
+
+It's not me, it's the compiler!
+
+I had to look at what my for statement parser is really doing, lucky for me, with my in-house custom build system looking
+at the assembly of any function is a command away, and no it's not a 
+cargo asm
+ wrapper, my project doesn't use 
+cargo
+,
+since I've made my own build system in TypeScript and it runs on Deno, which actually supports 
+--dry
+ mode as well, so you
+can see what it runs under the hood, yayyy transparency!
+
+> x -b --fn ForOrInOfStatement 1 --dry  
+MKDIR ./out
+RUN rustc src/main.rs --crate-name=joe --crate-type=staticlib
+    --edition=2024 --out-dir=./out --target=x86_64-unknown-linux-gnu
+    --cfg joe_no_libc --emit=link,obj -Crelocation-model=static
+    -Copt-level=3 -Clto -Ccodegen-units=1
+    -Cdebuginfo=line-tables-only --diagnostic-width=150
+    -Cpanic=abort -Ztemps-dir=out/tmp -Zhuman-readable-cgu-names
+    --extern proc=./out/libproc.so
+
+RUN mold -melf_x86_64 -o ./out/joe ./out/joe.o --static
+    --package-metadata="Joe!" -zrelro -znoexecstack
+    --discard-locals --build-id --gc-sections --no-undefined
+    --icf=safe --compress-debug-sections=zlib
+
+RUN bash -c nm out/joe | rustfilt | grep ForOrInOfStatement
+    | grep -oP '^[0-9a-f]+ t\s+\K.+' | sed -n '1p'
+    | xargs -I {} objdump -WK -M intel -d --disassembler-color=on --visualize-jumps=color
+        --demangle=rust ./out/joe --disassemble={} 2>/dev/null
+    | grep -v 'Disassembly of section' | grep -v './out/joe:' | less -R
+
+# line breaks added for readability, btw. you're welcome.
+Anyway... back to inspecting the assembly, but maybe you should see the rust version first, so here
+is a trimmed down version of the code, the real function is a few hundred lines long :D
+
+fn
+ 
+ForOrInOfStatement
+(
+
+    store
+:
+ 
+&
+mut
+ 
+Storage
+,
+
+mut
+ lex
+:
+ 
+LexerConsumer
+,
+
+mut
+ emit
+:
+ 
+EmitBuffer
+,
+
+mut
+ stack
+:
+ 
+StateStack
+,
+
+)
+ 
+->
+ 
+Termination
+ 
+{
+
+debug_assert_eq!
+(
+lex
+.
+peek
+(
+store
+)
+,
+ 
+TokenKind
+::
+For
+)
+;
+
+    lex
+.
+consume
+(
+)
+;
+ 
+// `for`
+
+if
+ lex
+.
+peek_test
+(
+store
+,
+ 
+TokenKind
+::
+Await
+/*=0x6e*/
+)
+ 
+{
+
+if
+ 
+!
+stack
+.
+has_flag
+(
+Flag
+::
+AWAIT
+)
+ 
+{
+
+return
+ 
+raise_diagnostic
+(
+store
+,
+ lex
+,
+ emit
+,
+ stack
+,
+ 
+DiagnosticKind
+::
+E056
+)
+;
+
+}
+
+if
+ 
+!
+lex
+.
+consume_test
+(
+store
+,
+ 
+TokenKind
+::
+LParen
+)
+ 
+{
+
+return
+ 
+raise_diagnostic
+(
+store
+,
+ lex
+,
+ emit
+,
+ stack
+,
+ 
+DiagnosticKind
+::
+E057
+)
+;
+
+}
+
+wip!
+(
+)
+
+}
+
+if
+ 
+!
+lex
+.
+consume_test
+(
+store
+,
+ 
+TokenKind
+::
+LParen
+/*=0x04*/
+)
+ 
+{
+
+return
+ 
+raise_diagnostic
+(
+store
+,
+ lex
+,
+ emit
+,
+ stack
+,
+ 
+DiagnosticKind
+::
+E058
+)
+;
+
+}
+
+match
+ lex
+.
+peek
+(
+store
+)
+ 
+{
+
+TokenKind
+::
+Var
+ 
+=>
+ 
+{
+ 
+/* */
+ 
+}
+
+// ...
+
+        _ 
+=>
+ 
+{
+
+            stack
+.
+use_flags
+(
+store
+,
+ 
+FlagDiff
+::
+clear
+(
+Flag
+::
+IN
+)
+)
+;
+ 
+// [~In]
+
+            stack
+.
+push
+(
+store
+,
+ 
+State
+::
+ForOrInOfStatement_decide
+)
+;
+
+LeftHandSideExpression
+(
+store
+,
+ lex
+,
+ emit
+,
+ stack
+)
+
+}
+,
+
+}
+
+}
+
+fn
+ 
+PrimaryExpression
+(
+
+    store
+:
+ 
+&
+mut
+ 
+Storage
+,
+
+mut
+ lex
+:
+ 
+LexerConsumer
+,
+
+mut
+ emit
+:
+ 
+EmitBuffer
+,
+
+mut
+ stack
+:
+ 
+StateStack
+,
+
+)
+ 
+->
+ 
+Termination
+ 
+{
+
+match
+ lex
+.
+peek
+(
+store
+)
+ 
+{
+
+// ...
+
+        _ 
+=>
+ 
+raise_diagnostic
+(
+store
+,
+ lex
+,
+ emit
+,
+ stack
+,
+ 
+DiagnosticKind
+::
+E079
+)
+,
+
+}
+
+}
+and now the reveal:
+
+> x -b --fn ForOrInOfStatement 1
+000000000021e290 <joe::fe::parser_handlers::ForOrInOfStatement>:
+  21e290:              ff c6                    inc    esi
+  21e292:              89 f0                    mov    eax,esi
+  21e294:              83 e0 3f                 and    eax,0x3f
+  21e297:              0f b6 04 07              movzx  eax,BYTE PTR [rdi+rax*1]
+  21e29b:              83 f8 04                 cmp    eax,0x4 # cmp TokenKind::LParen
+  21e29e:       ,----- 75 70                    jne    21e310 <joe::fe::parser_handlers::ForOrInOfStatement+0x80>
+  21e2a0:       |      4d 85 c0                 test   r8,r8
+  21e2a3:       |  ,-- 78 14                    js     21e2b9 <joe::fe::parser_handlers::ForOrInOfStatement+0x29>
+  21e2a5:       |  |   41 0f b6 c0              movzx  eax,r8b
+  21e2a9:       |  |   c6 84 07 10 56 00 00     mov    BYTE PTR [rdi+rax*1+0x5610],0x20
+  21e2b0:       |  |   20 
+  21e2b1:       |  |   49 ff c0                 inc    r8
+  21e2b4:       |  |   e9 d7 45 00 00           jmp    222890 <joe::fe::parser_handlers::LeftHandSideExpression>
+  21e2b9:       |  '-> 48 b8 00 ff ff ff ff     movabs rax,0x7fffffffffffff00
+  21e2c0:       |      ff ff 7f 
+  21e2c3:       |      4c 21 c0                 and    rax,r8
+  21e2c6:       |      45 0f b6 c8              movzx  r9d,r8b
+  21e2ca:       |      42 c6 84 0f 10 56 00     mov    BYTE PTR [rdi+r9*1+0x5610],0x0
+  21e2d1:       |      00 00 
+  21e2d3:       |      45 89 c9                 mov    r9d,r9d
+  21e2d6:       |      4d 89 c2                 mov    r10,r8
+  21e2d9:       |      49 c1 ea 10              shr    r10,0x10
+  21e2dd:       |      49 bb 00 00 00 00 ff     movabs r11,0xffff00000000
+  21e2e4:       |      ff 00 00 
+  21e2e7:       |      4d 21 d3                 and    r11,r10
+  21e2ea:       |      4e 89 9c cf d0 56 00     mov    QWORD PTR [rdi+r9*8+0x56d0],r11
+  21e2f1:       |      00 
+  21e2f2:       |      41 ff c0                 inc    r8d
+  21e2f5:       |      45 0f b6 c0              movzx  r8d,r8b
+  21e2f9:       |      49 09 c0                 or     r8,rax
+  21e2fc:       |      41 0f b6 c0              movzx  eax,r8b
+  21e300:       |      c6 84 07 10 56 00 00     mov    BYTE PTR [rdi+rax*1+0x5610],0x20
+  21e307:       |      20 
+  21e308:       |      49 ff c0                 inc    r8
+  21e30b:       |      e9 80 45 00 00           jmp    222890 <joe::fe::parser_handlers::LeftHandSideExpression>
+  21e310:       '----> 48 89 ca                 mov    rdx,rcx
+  21e313:              83 f8 6e                 cmp    eax,0x6e # cmp TokenKind::Await
+  21e316:          ,-- 75 15                    jne    21e32d <joe::fe::parser_handlers::ForOrInOfStatement+0x9d>
+  21e318:          |   4c 89 c1                 mov    rcx,r8
+  21e31b:          |   49 0f ba e0 3d           bt     r8,0x3d
+  21e320:       ,--|-- 72 19                    jb     21e33b <joe::fe::parser_handlers::ForOrInOfStatement+0xab>
+  21e322:       |  |   41 b8 37 00 00 00        mov    r8d,0x37
+  21e328:       |  |   e9 b3 ae 00 00           jmp    2291e0 <joe::fe::parser::raise_diagnostic>
+  21e32d:       |  '-> 4c 89 c1                 mov    rcx,r8
+  21e330:       |      41 b8 39 00 00 00        mov    r8d,0x39
+  21e336:       |      e9 a5 ae 00 00           jmp    2291e0 <joe::fe::parser::raise_diagnostic>
+  21e33b:       '----> 41 b8 38 00 00 00        mov    r8d,0x38
+  21e341:              e9 9a ae 00 00           jmp    2291e0 <joe::fe::parser::raise_diagnostic>
+Oh! That's it?! Where did my 
+match
+ statement go?! I already knew what my 
+ForOrInOfStatement
+ used to look like
+prior to the change, it was a monster with a few register-to-stack spills that I was trying to get rid of earlier
+that week. But looking more closely to the asm we can see the compare against 
+TokenKind::LParen
+ which is almost
+certainly coming from our 
+consume_test(store, TokenKind::LParen)
+, but first a little note on the parser's ABI,
+and in particular SysV ABI, which is the default behaviour in rust for now.
+
+pub
+ 
+struct
+ 
+LexerConsumer
+(
+u32
+ 
+/* pos */
+,
+ 
+u32
+ 
+/* buffer_len */
+)
+;
+
+pub
+ 
+struct
+ 
+EmitBuffer
+(
+usize
+)
+;
+
+pub
+ 
+struct
+ 
+StateStack
+(
+u64
+)
+;
+
+fn
+ 
+Foo
+(
+
+    store
+:
+ 
+&
+mut
+ 
+Storage
+,
+        
+// rdi
+
+mut
+ lex
+:
+ 
+LexerConsumer
+,
+     
+// rsi, rdx
+
+mut
+ emit
+:
+ 
+EmitBuffer
+,
+       
+// rcx
+
+mut
+ stack
+:
+ 
+StateStack
+,
+      
+// r8
+
+)
+ 
+->
+ 
+Termination
+ 
+{
+...
+}
+So the assembly is now pretty straight forward to read:
+
+# lex.consume() // `for`
+  21e290:              ff c6                    inc    esi
+# the lexer's ring buffer indexing math:
+  21e292:              89 f0                    mov    eax,esi
+  21e294:              83 e0 3f                 and    eax,0x3f
+# load the token at the current position
+  21e297:              0f b6 04 07              movzx  eax,BYTE PTR [rdi+rax*1]
+# compare it with a TokenKind::LParen
+  21e29b:              83 f8 04                 cmp    eax,0x4
+# If not a LParen jump to 21e310
+  21e29e:              75 70                    jne    21e310 <joe::fe::parser_handlers::ForOrInOfStatement+0x80>
+  # if we're here the token was a LParen, and we're in the `consume_test`.
+  # but... didn't consume_test have a `self.0 += x as u32`?
+  # WAIT.... WHO ATE MY `INC ESI`?!
+So yeah that was pretty much the confirmation that the compiler is wrong, the rest was writing a minimum reproducible
+example, and since I was on 
+1.94.0-nightly
+, I suspected that perhaps this is fixed on nightly, I checked and it wasn't!
+which meant I had to try and see if I can find the culprit, my first attempt was looking at the LLVM IR before any
+optimization so I added 
+-Cno-prepopulate-passes
+ to my build flags and saw a load from uninitialized memory, and then
+to see if it was a rust/mir issue vs an llvm issue I also used 
+-Zmir-opt-level=0
+ and the issue was fixed.
+
+I opened an issue and I was a bit nervous about it at first "this seems like such a common pattern, what if I'm just being
+dumb and embarrass myself in public?" and that's why the title of the issue says "
+Suspected
+ miscompilation" that word
+was what I tried to hide behind in case I was being a silly cat (meow), and by the time I opened the issue it was already
+late and I had to sleep.
+
+Next day, I woke up and there was already a 
+PR open with the fix
+
+from 
+Hanna Kruppe
+, which was the best turnaround.
+
+The issue was labeled 
+p-critical
+ and 
+i-miscompile
+, out of +61K rust issues there only 7 (including this one) that
+are both 
+p-critical
+ and 
+i-miscompile
+, to me those are the most dangerous kind of bugs a compiler can have, given
+that they violate the contract between the programmer and the language. They show that not every safe code you write
+is safe. And also more generally there are only 247 
+p-critical
+ issues to begin with.
+
+The best part was seeing the community responding to the issue so fast and having an actual fix landed within 18 hours,
+that was the most impressive part of this story and kudos to 
+tmiasko
+ and 
+hanna-kruppe
+
+for the quick response time.
+
+Now I get to live and tell the story of the time I fought 
+rustc
+ and won :D
