@@ -1,0 +1,125 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">cardiag — diagnose a car fault from its sound</h1></div>
+<p dir="auto"><code>cardiag</code> is an end-to-end audio-ML pipeline. It scrapes fault-sound clips from
+YouTube/TikTok, cleans the audio (isolating the mechanical sound from speech, music,
+and noise), embeds it with a frozen CLAP model, and trains small linear heads to
+triage the fault. It is exposed as a CLI and a live web app.</p>
+<details class="details-reset border rounded-2" open="">
+<summary class="tmp-px-3 py-2">
+
+<span class="m-1">cardiag-demo.mp4</span>
+
+</summary>
+
+</details>
+<p dir="auto">This is a proof of concept, and honest about what that means. Diagnosing a car fault
+from a phone recording is genuinely hard, so <code>cardiag</code> is built as a calibrated
+triage aid rather than a diagnoser: it tells you whether something sounds wrong,
+roughly <em>where in the car</em> it is, and a ranked shortlist of likely parts. When the
+audio won't support a call, it says "uncertain" instead of bluffing.</p>
+<blockquote>
+<p dir="auto">The real contribution is the cleaning + honest-training recipe, which is reusable
+on other audio datasets. The modest accuracy here reflects how hard the problem is
+from crude phone audio (we hit the literature ceiling); the <em>same</em> method reaches
+0.93 AUROC on clean engine audio. See <a href="/adam-s/car-diagnosis/blob/main/docs/DEFENSE.md">docs/DEFENSE.md</a>.</p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Interactive demos</h2></div>
+<p dir="auto">Two pages visualize the first two stages of the pipeline:</p>
+<ul dir="auto">
+<li><a href="https://adamsohn.com/separate/" rel="nofollow">Isolating the engine audio</a> — an interactive look at the <code>clean()</code> cascade pulling a short mechanical span out of noisy YouTube audio (speech, music, road noise).</li>
+<li><a href="https://adamsohn.com/clap/" rel="nofollow">CLAP, visualized</a> — how the frozen CLAP model turns those spans into the 512-d embedding the linear heads classify.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">What it actually achieves</h2></div>
+<p dir="auto">Measured out-of-sample, leakage-safe (by-video grouped CV over 1,031 video groups;
+permutation <strong>p = 0.0005</strong>). These are honest numbers, not a leaderboard.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Result</th>
+<th>vs. chance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Is something wrong? (fault/normal)</td>
+<td><strong>AUROC 0.79</strong> [0.76, 0.83]</td>
+<td>0.50</td>
+</tr>
+<tr>
+<td>Where in the car? (6 zones)</td>
+<td>right zone in <strong>top-3 ≈ 75%</strong></td>
+<td>2×</td>
+</tr>
+<tr>
+<td>Which part? (12+ families)</td>
+<td>right part in <strong>top-3 ≈ 45–65%</strong></td>
+<td>3–4×</td>
+</tr>
+<tr>
+<td>Knows when it doesn't know</td>
+<td>calibrated (ECE ≈ 0.04), returns <code>UNCERTAIN</code></td>
+<td>—</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Full details, and the one head we <em>demoted</em> for failing out-of-sample (knock), are
+in <a href="/adam-s/car-diagnosis/blob/main/docs/MODEL_CARD.md">docs/MODEL_CARD.md</a>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Quickstart: clone to inference</h2></div>
+<p dir="auto">A fresh clone is immediately usable. A small pre-trained model ships in <code>models/</code>,
+and a synthetic demo clip is bundled, so nothing needs to be downloaded or scraped.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="git clone &lt;this-repo&gt; &amp;&amp; cd car-diagnosis
+uv venv &amp;&amp; source .venv/bin/activate
+uv pip install -e &quot;.[scrape,web,dev,viz]&quot;     # Python 3.11
+
+cardiag doctor                 # preflight: what's installed
+cardiag train --fixtures       # a working model offline in ~2s (no scrape, no 2 GB download)
+cardiag diagnose &lt;clip.wav&gt;    # verdict + where-in-the-car + ranked parts
+cardiag serve --model models   # live web app: drop a clip / paste a link, &quot;explain why&quot;" dir="auto"><pre>git clone <span class="pl-k">&lt;</span>this-repo<span class="pl-k">&gt;</span> <span class="pl-k">&amp;&amp;</span> <span class="pl-c1">cd</span> car-diagnosis
+uv venv <span class="pl-k">&amp;&amp;</span> <span class="pl-c1">source</span> .venv/bin/activate
+uv pip install -e <span class="pl-s"><span class="pl-pds">"</span>.[scrape,web,dev,viz]<span class="pl-pds">"</span></span>     <span class="pl-c"><span class="pl-c">#</span> Python 3.11</span>
+
+cardiag doctor                 <span class="pl-c"><span class="pl-c">#</span> preflight: what's installed</span>
+cardiag train --fixtures       <span class="pl-c"><span class="pl-c">#</span> a working model offline in ~2s (no scrape, no 2 GB download)</span>
+cardiag diagnose <span class="pl-k">&lt;</span>clip.wav<span class="pl-k">&gt;</span>    <span class="pl-c"><span class="pl-c">#</span> verdict + where-in-the-car + ranked parts</span>
+cardiag serve --model models   <span class="pl-c"><span class="pl-c">#</span> live web app: drop a clip / paste a link, "explain why"</span></pre></div>
+<p dir="auto">Verify the whole thing end-to-end in an isolated worktree: <code>bash scripts/clone_verify.sh</code>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How it works</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="audio ──► clean() cascade ──► CLAP embedding ──► linear heads ──► Diagnosis
+          (isolate spans)     (frozen, 512-d)    (fault/region/    (calibrated,
+                                                  part/knock)       UNCERTAIN-aware)"><pre class="notranslate" lang="text"><code>audio ──► clean() cascade ──► CLAP embedding ──► linear heads ──► Diagnosis
+          (isolate spans)     (frozen, 512-d)    (fault/region/    (calibrated,
+                                                  part/knock)       UNCERTAIN-aware)
+</code></pre></div>
+<p dir="auto">There is <strong>one segmentation path</strong>. Scraped clips, your own recordings (<code>cardiag ingest</code>, any length), and uploads at inference all flow through the same <code>clean()</code>
+cascade that isolates short mechanical spans. Spans over ~10 s are split into windows
+so CLAP never silently truncates them. Training and serving share one embedding
+contract, so there is no train/serve skew.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Usage</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cardiag diagnose clip.wav            # full model: verdict + region + ranked parts
+cardiag triage   clip.wav            # calibrated engine-vs-running-gear
+cardiag clean    clip.wav            # isolate the mechanical sound (no model needed)
+cardiag inspect  clip.wav -o r.html  # SEE/HEAR the pipeline: spans, spectrograms, scores
+cardiag ingest   ./my_audio --kind fault --cause wheel_bearing   # bring your own audio
+cardiag scrape   youtube|tiktok      # build a corpus (Reddit is deprecated — too noisy)
+cardiag train                        # train on your corpus" dir="auto"><pre>cardiag diagnose clip.wav            <span class="pl-c"><span class="pl-c">#</span> full model: verdict + region + ranked parts</span>
+cardiag triage   clip.wav            <span class="pl-c"><span class="pl-c">#</span> calibrated engine-vs-running-gear</span>
+cardiag clean    clip.wav            <span class="pl-c"><span class="pl-c">#</span> isolate the mechanical sound (no model needed)</span>
+cardiag inspect  clip.wav -o r.html  <span class="pl-c"><span class="pl-c">#</span> SEE/HEAR the pipeline: spans, spectrograms, scores</span>
+cardiag ingest   ./my_audio --kind fault --cause wheel_bearing   <span class="pl-c"><span class="pl-c">#</span> bring your own audio</span>
+cardiag scrape   youtube<span class="pl-k">|</span>tiktok      <span class="pl-c"><span class="pl-c">#</span> build a corpus (Reddit is deprecated — too noisy)</span>
+cardiag train                        <span class="pl-c"><span class="pl-c">#</span> train on your corpus</span></pre></div>
+<p dir="auto">Add <code>--json</code> to any inference command for machine-readable output.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Documentation</h2></div>
+<ul dir="auto">
+<li><a href="/adam-s/car-diagnosis/blob/main/docs/DEFENSE.md">docs/DEFENSE.md</a> — the honest case that a deliberately crude method earns a real triage result.</li>
+<li><a href="/adam-s/car-diagnosis/blob/main/docs/MODEL_CARD.md">docs/MODEL_CARD.md</a> — per-head metrics, intended use, limitations.</li>
+<li><a href="/adam-s/car-diagnosis/blob/main/docs/architecture.md">docs/architecture.md</a> — pipeline diagrams.</li>
+<li><a href="/adam-s/car-diagnosis/blob/main/docs/scraping-guide.md">docs/scraping-guide.md</a> — start-to-finish corpus building.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Scope &amp; honesty</h2></div>
+<p dir="auto">Valid for social-style / targeted-upload audio (YouTube, TikTok, or a phone clip a
+user records deliberately). It is <strong>not</strong> a safety-critical or standalone diagnostic.
+It is a triage assistant that narrows where to look and is honest about its
+uncertainty. Model files are joblib artifacts: load only ones you trust.</p>
+<p dir="auto">License: see <a href="/adam-s/car-diagnosis/blob/main/LICENSE">LICENSE</a>.</p>
+</article>
