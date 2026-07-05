@@ -1,0 +1,159 @@
+For most of the last few years, giving an AI system knowledge meant building infrastructure.
+
+You wanted your agent to know things about your business, your data, your decisions. So you reached for the standard playbook. Chunk the documents. Pick an embedding model. Stand up a vector database. Tune the retrieval. Wrap it in an SDK. Maybe, if you were feeling ambitious, build a graph on top of it all.
+
+By the time you were done, your company's knowledge was no longer a thing you could read. It was a thing you queried, through a pipeline, behind a service, owned by whichever framework you happened to pick.
+
+I want to argue something that has been quietly true for a while and is now becoming obvious: that whole approach gated knowledge that never needed gating. And the correction is almost embarrassingly simple. It is markdown.
+
+The era of locking knowledge behind tooling
+
+RAG was a good idea. I am not here to dunk on it.
+
+When context windows were small and models were expensive, retrieval-augmented generation solved a real problem. You could not fit your whole knowledge base into a prompt, so you retrieved the relevant slice and fed only that. Graph RAG pushed it further, building a structured graph of entities and relationships so the model could reason across connections instead of isolated chunks.
+
+These techniques work. But look at what they cost.
+
+To put knowledge into a RAG system, you have to transform it into a shape only the system understands. Your documents become embeddings. Your relationships become edges in a database. The knowledge stops being human-readable the moment it enters the pipeline. If you want to see what your agent actually "knows," you cannot just open a file. You have to run a query against the same machinery that locked it away.
+
+And every team rebuilds this from scratch. Every agent builder solves the same context-assembly problem. Every catalog vendor reinvents the same data models. The knowledge itself ends up trapped behind whichever surface created it, in a format the next tool cannot read without a translator.
+
+That is the gate. Not a paywall, exactly. A format wall. Your own knowledge, made unreadable by the tools meant to make it useful.
+
+The thing we kept rediscovering
+
+While all of that infrastructure was being built, something quieter was happening in the way people actually worked with agents day to day.
+
+They started writing markdown.
+
+If you have used Claude Code or Codex, you have written a 
+CLAUDE.md
+ or an 
+AGENTS.md
+ without thinking of it as architecture. You wrote down how your project works, what conventions to follow, what not to touch, and the agent got better. No embeddings. No vector store. Just a file the model reads at the top of every session.
+
+The pattern kept showing up under different names. Obsidian vaults full of linked notes. 
+DESIGN.md
+ for how something should look. 
+MEMORY.md
+ for what an agent should remember between runs. "Metadata as code" repositories. Every one of these is the same instinct: write the knowledge down as plain text, link the pieces together, and let the model read it directly.
+
+It turns out the format LLMs are genuinely, reliably good at is the one we were treating as too primitive to bother standardizing. Markdown has structure without ceremony. Headings, lists, links, a little frontmatter. It is exactly enough scaffolding for a model to navigate and exactly little enough that a human can read the same file and understand it instantly.
+
+We spent years trying to compress knowledge into something machines could query. The machines, as it turns out, would rather just read.
+
+Karpathy said the quiet part
+
+Andrej Karpathy put a name on this with his 
+LLM Wiki
+ pattern, and it crystallized the whole thing for me.
+
+The idea is a three-layer setup, all in plain files. A 
+sources/
+ directory of raw material the model treats as immutable and never edits. A 
+wiki/
+ of markdown pages the model generates and owns: summaries, concept pages, entity pages, a synthesis that ties them together. And a schema file, the 
+CLAUDE.md
+ or 
+AGENTS.md
+, that tells the agent how to maintain the whole thing: how pages are structured, how new sources get ingested, how cross-references stay current.
+
+The insight underneath it is the one that reframes RAG entirely. Karpathy's line is worth quoting:
+
+LLMs don't get bored, don't forget to update a cross-reference, and can touch 15 files in one pass. The bookkeeping that causes humans to abandon personal wikis is exactly what LLMs are good at.
+
+Personal wikis always died for the same reason. Keeping them current was tedious, and humans hate tedium. But the tedium is the one thing language models are immune to. They will happily re-link, re-summarize, and reconcile contradictions across a hundred files without complaining.
+
+So the trade flips. RAG rediscovers your knowledge from scratch on every single query, re-retrieving and re-assembling context each time. A wiki compiles the knowledge once and keeps it current. The cross-references are already there. The contradictions have already been flagged. The synthesis already reflects everything you have fed it. You are not paying the retrieval tax on every question. You are reading a thing that was already organized.
+
+And it is all just files. You can open them. You can edit them. You can put them in git. The knowledge is not gated behind anything.
+
+What Google actually shipped
+
+This is where the Open Knowledge Format comes in, and why I think it matters more than the modest announcement suggests.
+
+In June, Google Cloud introduced 
+OKF
+, currently at version 0.1. The one-line description is that it is "an open specification that formalizes the LLM-wiki pattern into a portable, interoperable format." In plainer terms: it takes the markdown-wiki instinct everyone was already acting on and turns it into a vendor-neutral standard so the files one tool produces can be read by any other tool without translation.
+
+Here is the whole shape of it.
+
+An OKF bundle is a directory of markdown files. Each file is one concept: a dataset, a table, a metric, a runbook, an API, anything you want to capture. They sit in a sensible hierarchy:
+
+sales/
+├── index.md
+├── datasets/
+│   └── orders_db.md
+├── tables/
+│   ├── orders.md
+│   └── customers.md
+└── metrics/
+    └── weekly_active_users.md
+
+Each file carries a little YAML frontmatter for the structured, queryable fields:
+
+---
+type: BigQuery Table
+title: Orders
+description: One row per completed customer order.
+resource: https://console.cloud.google.com/bigquery?...
+tags: [sales, revenue]
+timestamp: 2026-05-28T14:30:00Z
+---
+# Markdown body follows
+
+And the spec requires exactly one field of you: 
+type
+. Everything else is a convention you can follow or ignore. The standard queryable fields are 
+type
+, 
+title
+, 
+description
+, 
+resource
+, 
+tags
+, and 
+timestamp
+, and that is the extent of the ceremony.
+
+Concepts link to each other with normal markdown links. A foreign key in your orders table just points at 
+[customers](/tables/customers.md)
+. Those links turn the directory into a graph of relationships, richer than the parent-child nesting the folders imply. You get the graph RAG benefit, the structured web of connections, without standing up a graph database. The links are the graph. There is an optional 
+index.md
+ for progressive disclosure as an agent walks the hierarchy, and an optional 
+log.md
+ for change history. That is the entire model.
+
+The part I keep coming back to is how Google describes what it is not:
+
+That's it. No complex compression scheme, no new runtime, no required SDK.
+
+It is "just markdown," readable in any editor and renderable on GitHub. It is "just files," shippable as a tarball, hostable in a git repo, mountable on a filesystem. It is "just YAML frontmatter" for the handful of structured fields. The spec cleanly separates whoever writes the knowledge from whoever consumes it. A human can hand-author a bundle or a pipeline can generate one, and an agent, a search tool, or a plain markdown viewer can read it. No lock-in. No SDK gating the door.
+
+That is the whole point, and it is why I think a 0.1 spec with almost nothing in it is more significant than it looks. The value is not in the features. It is in the agreement.
+
+Why a boring format is the interesting part
+
+It would be easy to read OKF as anticlimactic. A folder of markdown with one required field is not a technical achievement. You could have built it yourself in an afternoon, and many people effectively did.
+
+But that is exactly why it matters.
+
+The hard problem with knowledge was never expressiveness. It was interoperability. Everyone had their own folder of markdown, their own frontmatter conventions, their own linking scheme. Each one worked beautifully in isolation and was useless to the next tool. The wiki you wrote for your coding agent could not be read by your data catalog could not be read by your analytics agent, not because the knowledge differed, but because the conventions did.
+
+A standard does not make any single bundle better. It makes all of them portable. When a metadata pipeline, a hand-written runbook, and an agent's generated memory all speak the same dialect of markdown, knowledge stops being something you re-encode at every boundary and becomes something that simply flows. The format being boring is the feature. Boring is what travels.
+
+This is the line I would draw under the whole arc. We tried to make knowledge powerful by making it complicated, and complication is what gated it. The thing that ungates it is a convention plain enough that a junior engineer, a senior engineer's notes, a data pipeline, and a language model can all read the same file and agree on what it says.
+
+Knowledge should not be gated. Not behind a vector database, not behind an SDK, not behind a vendor's proprietary catalog, and not behind your own clever tooling. It should be in files you can open, in a format the machines are already fluent in, organized well enough that both you and your agents can find what you need.
+
+The same lesson, one layer down
+
+I think about this constantly at Formaly, because we are in the knowledge business too, just at the front of the pipe instead of the back.
+
+A survey is a knowledge-collection tool. When someone answers a Formaly interview, what comes out is not rows in a table. It is understanding: why a customer churned, what confused a user, where a product fell short. The old instinct would be to lock that insight inside a dashboard, queryable only through us, exportable only as a CSV that throws the meaning away and keeps the cells.
+
+The lesson of OKF applies cleanly here. The knowledge you collect should be as readable and portable as the knowledge you store. A response, a summary, a synthesis across a thousand interviews; these are concepts too, and they belong in a form your tools, your agents, and your teammates can all read without asking permission from the system that produced them.
+
+The infrastructure era taught us to gate knowledge to make it useful. It turns out the opposite is true. Knowledge gets useful when you stop gating it. Google just wrote that down as a spec, and I think a lot more of our tools are about to follow.
