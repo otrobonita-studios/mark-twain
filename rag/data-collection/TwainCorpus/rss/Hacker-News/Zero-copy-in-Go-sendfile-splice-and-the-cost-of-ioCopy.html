@@ -1,0 +1,136 @@
+<article><p>A small file-serving service of mine slowed to a crawl one afternoon after a
+“harmless” middleware change. CPU on the server box doubled, throughput
+roughly halved. The diff was a single line: instead of handing a <code>*os.File</code>
+to <code>io.Copy</code>, somebody had wrapped it in a tiny logging reader to count
+bytes.</p><p>That one wrap quietly turned off <code>sendfile(2)</code>.</p><p>This post is about that fast path: what Go does for you for free, how to see
+it actually fire, and the surprisingly easy ways to lose it.</p><h2 id="the-setup">The setup</h2><ul><li>Linux 6.6 / Ubuntu 24.04 (WSL2), AMD Ryzen 5 9600X, 16 GiB RAM</li><li>Go 1.22.12</li><li>512 MiB random-bytes file, page cache warm</li></ul><p>Every benchmark below serves the same <code>big.bin</code> file over plain TCP to a Go
+client on the same machine. Server pinned to CPU 0, client to CPU 1, so we
+can read <code>/usr/bin/time</code> server-side and compare apples to apples. Syscall
+counts come from a vanilla <code>strace -c -e trace=read,write,sendfile,splice</code>.</p><h2 id="what-sendfile-actually-does">What <code>sendfile</code> actually does</h2><p>A normal “send this file” looks like this:</p><pre tabindex="0"><code>disk -&gt; page cache -&gt; read() into user buffer -&gt; write() into socket buffer -&gt; NIC
+                          ^ copy 1                 ^ copy 2
+</code></pre><p><code>sendfile(2)</code> collapses those two copies into one in-kernel transfer:</p><pre tabindex="0"><code>disk -&gt; page cache --(sendfile)--&gt; socket buffer -&gt; NIC
+                       ^ no userspace round trip
+</code></pre><p>No <code>read</code>, no <code>write</code>, no 32 KiB buffer bouncing through your address space.
+The kernel just splices page-cache pages straight into the socket’s send
+queue. For socket-to-socket forwarding the equivalent is <code>splice(2)</code>, which
+moves bytes through a kernel pipe without ever materialising them in user
+memory.</p><p>You don’t call either of these directly in Go. The standard library does it
+for you, when it can.</p><h2 id="the-fast-path">The fast path</h2><p>The Go runtime gives <code>*net.TCPConn</code> a <code>ReadFrom</code> method. When you write</p><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-go" data-lang="go"><span style="display:flex"><span><span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">Copy</span>(<span style="color:#a6e22e">conn</span>, <span style="color:#a6e22e">f</span>)
+</span></span></code></pre></div><p><code>io.Copy</code> checks whether the destination implements <code>io.ReaderFrom</code>. A
+<code>*net.TCPConn</code> does, so the call gets dispatched to its <code>ReadFrom</code>. That
+method’s first job is to look at the source: is it a <code>*os.File</code>? Is it an
+<code>*io.LimitedReader</code> wrapping a <code>*os.File</code>? If yes, it calls into
+<code>internal/poll.SendFile</code>, which loops over <code>sendfile(2)</code> until the file is
+drained.</p><p>The whole detection chain lives in two files:
+<code>net/sendfile_linux.go</code> and <code>os/zero_copy_linux.go</code>. It is roughly:</p><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-go" data-lang="go"><span style="display:flex"><span><span style="color:#75715e">// (simplified, in net/sendfile_linux.go)</span>
+</span></span><span style="display:flex"><span><span style="color:#a6e22e">lr</span>, <span style="color:#a6e22e">ok</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">r</span>.(<span style="color:#f92672">*</span><span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">LimitedReader</span>)
+</span></span><span style="display:flex"><span><span style="color:#66d9ef">if</span> <span style="color:#a6e22e">ok</span> { <span style="color:#a6e22e">remain</span>, <span style="color:#a6e22e">r</span> = <span style="color:#a6e22e">lr</span>.<span style="color:#a6e22e">N</span>, <span style="color:#a6e22e">lr</span>.<span style="color:#a6e22e">R</span> }
+</span></span><span style="display:flex"><span><span style="color:#a6e22e">f</span>, <span style="color:#a6e22e">ok</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">r</span>.(<span style="color:#f92672">*</span><span style="color:#a6e22e">os</span>.<span style="color:#a6e22e">File</span>)
+</span></span><span style="display:flex"><span><span style="color:#66d9ef">if</span> !<span style="color:#a6e22e">ok</span> { <span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>, <span style="color:#66d9ef">nil</span>, <span style="color:#66d9ef">false</span> } <span style="color:#75715e">// fall back</span>
+</span></span><span style="display:flex"><span><span style="color:#75715e">// ... sendfile loop ...</span>
+</span></span></code></pre></div><p>Two type assertions and a syscall loop. That’s the whole thing.</p><h2 id="three-handlers-one-file">Three handlers, one file</h2><p>Here are the three reader shapes I want to compare. All three serve the
+same 512 MiB file over plain TCP. The only difference is what gets passed
+to <code>io.Copy</code>.</p><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-go" data-lang="go"><span style="display:flex"><span><span style="color:#75715e">// raw: hand io.Copy a *os.File directly.</span>
+</span></span><span style="display:flex"><span><span style="color:#a6e22e">_</span>, <span style="color:#a6e22e">_</span> = <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">Copy</span>(<span style="color:#a6e22e">conn</span>, <span style="color:#a6e22e">f</span>)
+</span></span><span style="display:flex"></span><span style="display:flex"><span><span style="color:#75715e">// wrapped: hide *os.File behind a "just an io.Reader" struct.</span>
+</span></span><span style="display:flex"><span><span style="color:#66d9ef">type</span> <span style="color:#a6e22e">justReader</span> <span style="color:#66d9ef">struct</span>{ <span style="color:#a6e22e">r</span> <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">Reader</span> }
+</span></span><span style="display:flex"><span><span style="color:#66d9ef">func</span> (<span style="color:#a6e22e">j</span> <span style="color:#a6e22e">justReader</span>) <span style="color:#a6e22e">Read</span>(<span style="color:#a6e22e">p</span> []<span style="color:#66d9ef">byte</span>) (<span style="color:#66d9ef">int</span>, <span style="color:#66d9ef">error</span>) { <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">j</span>.<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">Read</span>(<span style="color:#a6e22e">p</span>) }
+</span></span><span style="display:flex"><span><span style="color:#a6e22e">_</span>, <span style="color:#a6e22e">_</span> = <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">Copy</span>(<span style="color:#a6e22e">conn</span>, <span style="color:#a6e22e">justReader</span>{<span style="color:#a6e22e">r</span>: <span style="color:#a6e22e">f</span>})
+</span></span><span style="display:flex"></span><span style="display:flex"><span><span style="color:#75715e">// limit: wrap in *io.LimitedReader, the only wrapper the runtime sniffs.</span>
+</span></span><span style="display:flex"><span><span style="color:#a6e22e">_</span>, <span style="color:#a6e22e">_</span> = <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">Copy</span>(<span style="color:#a6e22e">conn</span>, <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">LimitReader</span>(<span style="color:#a6e22e">f</span>, <span style="color:#a6e22e">fileSize</span>))
+</span></span></code></pre></div><p>A <code>justReader</code> does nothing. It’s the minimal example of a piece of
+middleware that “just wants to count bytes” or “just wants to inject a
+tracing span” or any other innocent reason to slip an <code>io.Reader</code> in front
+of the file. As far as the type system is concerned, the value is now an
+<code>io.Reader</code>, full stop. The runtime’s type switch on <code>*os.File</code> fails and
+the optimization is gone.</p><p><code>io.LimitReader</code> looks just as wrappy, but the runtime explicitly checks
+for <code>*io.LimitedReader</code> before giving up, unwraps it, and keeps going. So
+it preserves the fast path.</p><p>Three handlers, three different things happening under the hood.</p><h2 id="watching-it-with-strace">Watching it with strace</h2><p>Run each handler under <code>strace -c -e trace=read,write,sendfile,splice</code>,
+fire five 512 MiB transfers, and look at the summary.</p><p><strong><code>raw</code> (<code>io.Copy(conn, f)</code>):</strong></p><pre tabindex="0"><code>% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 99.79    0.231981          78      2958       860 sendfile
+  0.15    0.000359          51         7         1 write
+  0.05    0.000126          18         7           read
+------ ----------- ----------- --------- --------- ----------------
+100.00    0.232466          78      2972       861 total
+</code></pre><p>2,958 <code>sendfile</code> calls, 7 <code>read</code>s, 7 <code>write</code>s. The <code>read</code>s and <code>write</code>s
+are accept/setup chatter, not file data. The 860 “errors” are <code>EAGAIN</code>
+returns where the socket buffer was full and the runtime poller bounced
+back, which is normal under sendfile.</p><p><strong><code>wrapped</code> (<code>io.Copy(conn, justReader{f})</code>):</strong></p><pre tabindex="0"><code>% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 56.67    3.202339          48     65546         3 write
+ 43.33    2.448353          37     65547           read
+------ ----------- ----------- --------- --------- ----------------
+100.00    5.650692          43    131093         3 total
+</code></pre><p>Zero <code>sendfile</code>. ~131 thousand combined <code>read</code> and <code>write</code> syscalls, all
+of them 32 KiB chunks bouncing the data through a userspace buffer. That
+32 KiB number is the default in <code>io.copyBuffer</code>. The wall time spent in
+syscalls is roughly <strong>24x</strong> the fast path.</p><p>A CPU profile of the wrapped handler under load makes the call chain
+obvious:</p><p></p><p>Of 1,670 CPU samples collected during the run, <strong>1,362 (~82%) are inside
+syscalls</strong>: 761 in <code>syscall.Write</code> writing to the socket, 522 in
+<code>syscall.Read</code> pulling the next 32 KiB out of the file. The frame
+sequence at the top of every hot stack is <code>io.Copy -&gt; io.copyBuffer -&gt; (*TCPConn).ReadFrom -&gt; readFrom -&gt; io.Copy -&gt; io.copyBuffer -&gt; ...</code>.
+That nested <code>io.copyBuffer</code> is the signature: <code>*TCPConn.readFrom</code>
+couldn’t find a <code>*os.File</code> to hand to <code>sendfile</code>, so it threw the work
+back to <code>io.copyBuffer</code>, which is now doing the bounce by hand. The
+flamegraph shows where every cycle of that bounce went.</p><p><strong><code>limit</code> (<code>io.Copy(conn, io.LimitReader(f, n))</code>):</strong></p><pre tabindex="0"><code>% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 99.84    0.239191          82      2896       893 sendfile
+  0.14    0.000330          47         7         1 write
+  0.02    0.000047           6         7           read
+</code></pre><p>Indistinguishable from <code>raw</code>. 2,896 <code>sendfile</code>s. The LimitReader wrap is
+free, because the runtime knows about that one specific type.</p><h2 id="what-this-costs">What this costs</h2><p>Loopback throughput is a misleading number: the receiver and the TCP
+buffers absorb a lot, so the wall clock looks similar across all three
+modes (1.5 - 1.7 GiB/s per request). A more honest measure is the
+<strong>server’s own CPU time</strong> to ship the file:</p><table><thead><tr><th>mode</th><th>server user+sys CPU (10 x 512 MiB)</th><th>per-GiB CPU</th></tr></thead><tbody><tr><td>raw</td><td>0.27 s</td><td>~54 ms</td></tr><tr><td>wrapped</td><td>0.92 s</td><td>~184 ms</td></tr><tr><td>limit</td><td>0.30 s</td><td>~60 ms</td></tr></tbody></table><p>The wrapped path costs roughly <strong>3.4x</strong> the CPU per byte. On localhost
+that gets absorbed; on a real network or under concurrent load it pegs a
+core and tanks tail latency. 2,972 syscalls vs 131,093 syscalls to move
+the same 2.5 GiB is the cost of saying “I just want an <code>io.Reader</code>”.</p><p>The same data viewed the other way around, as MiB of payload shipped per
+second of server CPU consumed, makes the gap stand out:</p><p></p><h2 id="splice-for-socket-to-socket"><code>splice</code> for socket-to-socket</h2><p><code>sendfile</code> is file-to-socket. The symmetric case is socket-to-socket,
+which is the bread and butter of proxies. There the runtime uses
+<code>splice(2)</code> instead. A 30-line TCP proxy:</p><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none" tabindex="0"><code class="language-go" data-lang="go"><span style="display:flex"><span><span style="color:#a6e22e">ln</span>, <span style="color:#a6e22e">_</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">net</span>.<span style="color:#a6e22e">Listen</span>(<span style="color:#e6db74">"tcp"</span>, <span style="color:#e6db74">":9100"</span>)
+</span></span><span style="display:flex"><span><span style="color:#66d9ef">for</span> {
+</span></span><span style="display:flex"><span>    <span style="color:#a6e22e">c</span>, <span style="color:#a6e22e">_</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">ln</span>.<span style="color:#a6e22e">Accept</span>()
+</span></span><span style="display:flex"><span>    <span style="color:#66d9ef">go</span> <span style="color:#66d9ef">func</span>(<span style="color:#a6e22e">client</span> <span style="color:#a6e22e">net</span>.<span style="color:#a6e22e">Conn</span>) {
+</span></span><span style="display:flex"><span>        <span style="color:#66d9ef">defer</span> <span style="color:#a6e22e">client</span>.<span style="color:#a6e22e">Close</span>()
+</span></span><span style="display:flex"><span>        <span style="color:#a6e22e">server</span>, <span style="color:#a6e22e">_</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">net</span>.<span style="color:#a6e22e">Dial</span>(<span style="color:#e6db74">"tcp"</span>, <span style="color:#a6e22e">upstream</span>)
+</span></span><span style="display:flex"><span>        <span style="color:#66d9ef">defer</span> <span style="color:#a6e22e">server</span>.<span style="color:#a6e22e">Close</span>()
+</span></span><span style="display:flex"><span>        <span style="color:#66d9ef">go</span> <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">Copy</span>(<span style="color:#a6e22e">server</span>, <span style="color:#a6e22e">client</span>)
+</span></span><span style="display:flex"><span>        <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">Copy</span>(<span style="color:#a6e22e">client</span>, <span style="color:#a6e22e">server</span>)
+</span></span><span style="display:flex"><span>    }(<span style="color:#a6e22e">c</span>)
+</span></span><span style="display:flex"><span>}
+</span></span></code></pre></div><p>Two <code>io.Copy</code> calls, both between <code>*net.TCPConn</code>s. Strace one transfer
+through the proxy and watch:</p><pre tabindex="0"><code>% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 99.98    0.754999          70     10677       481 splice
+  0.01    0.000109          13         8           read
+  0.01    0.000065          65         1           write
+</code></pre><p>10,677 <code>splice</code> calls. Zero <code>read</code> or <code>write</code> on the data path. The proxy
+never touches the bytes. <code>(*TCPConn).readFrom</code> looks at the source, sees
+another <code>*TCPConn</code>, and dispatches to <code>spliceFrom</code>. The same fragility
+rule applies: wrap either side in your own <code>io.Reader</code> or <code>io.Writer</code>
+and you fall back to the 32 KiB bounce.</p><h2 id="rules-of-thumb">Rules of thumb</h2><p>A few things I took away from the file server that started this whole
+thing:</p><p><strong>Don’t wrap if you can avoid it.</strong> Every layer of <code>io.Reader</code> between
+the file and the connection is a chance to type-assert your way out of
+the fast path. The runtime only recognises <code>*os.File</code>,
+<code>*io.LimitedReader</code>, and a handful of <code>*net.TCPConn</code>-shaped types.
+Anything else is opaque.</p><p><strong>If you must wrap, preserve the optional interfaces.</strong> A wrapper that
+implements <code>io.WriterTo</code> (when wrapping a source) or <code>io.ReaderFrom</code>
+(when wrapping a destination) and forwards through can keep <code>io.Copy</code>
+dispatching all the way down. It is slightly fiddly to get right, but
+the stdlib does it routinely.</p><p><strong><code>io.LimitReader</code> is free, anything else isn’t.</strong> For ranged responses
+this is the wrap to reach for. It’s exactly how <code>http.ServeContent</code>
+keeps <code>sendfile</code> active for <code>Range</code> requests.</p><p><strong>Trust <code>strace -c</code>, not your intuition.</strong> Two sendfile counts and zero
+<code>write</code>s mean you’re on the fast path. Hundreds of thousands of
+<code>read+write</code> pairs mean you’re not. There is no middle ground.</p><p><strong>Don’t assume sendfile is always reachable.</strong> A surprise I’ll save for
+another post: even the textbook <code>io.Copy(w, f)</code> against an
+<code>http.ResponseWriter</code> can route around <code>sendfile</code> for reasons that have
+nothing to do with your code. The principle is the same, but the trigger
+is hiding in the framework, not the handler.</p><p><code>sendfile</code> and <code>splice</code> are old, boring kernel APIs that you almost
+never have to reach for in Go. The runtime mostly does it for you, for
+free. The trick is knowing what to leave alone for that to keep being
+true. When <code>strace</code> shows read/write spam where you expected zero-copy,
+the cause is almost always an innocent wrapper somebody added for the
+best of reasons.</p><p>And when even sendfile isn’t enough, when you want the file mapped into
+your address space so the kernel never has to copy it out at all, you go
+user-space. But that’s a different story.</p></article>
