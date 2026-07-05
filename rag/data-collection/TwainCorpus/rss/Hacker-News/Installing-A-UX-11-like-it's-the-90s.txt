@@ -1,0 +1,179 @@
+Recently, I have been successful in making A/UX boot and run stable on my vintage
+Macintosh emulator; 
+Snow
+. A/UX was Apple’s version of UNIX
+that ran on the 68k-based series Macs. It required a Memory Management Unit to achieve
+process isolation; either the optional 68851 PMMU on the original 68020-based Macintosh
+II or the integrated MMU in the 68030- and 68040-based machines. It also required an
+FPU; making it only run on the higher end machines such as the Macintosh II series
+and later the Quadra, but the LC was out of luck.
+
+A/UX Penelope
+ is a nice resource on A/UX compatibility
+info.
+
+You can try A/UX 3.1.1 on the Macintosh IIx emulated by Snow in your browser on
+
+Infinite Mac
+.
+
+Recently I had the chance to play with a newly archived A/UX 1.1 installation
+media set, courtesy of Dominic Sharp, whom I had been talking to on
+
+Tinker Different
+. Dominic obtained this set and wanted
+to archive it publicly, but wasn’t sure about the state of the disks.
+I’m not aware of any A/UX 1.1 software being publicly archived; the closest is a
+preinstalled image of 1.1.1, which didn’t work yet on Snow at the time.
+Dominic agreed to share the set with me so I could give it a try and fix Snow in the
+process.
+
+The set consists of 34 floppy images, all 800K GCR. They came as raw flux images,
+which I first converted using 
+Applesauce
+.
+
+First, the proper emulated hardware had to be available. Snow emulates the machine,
+CPU, FPU and PMMU required, but only emulated the 
+Macintosh Display Card 8-24
+, which
+I wasn’t sure was supported by A/UX 1.x, which is particularly picky about its video
+hardware. According to A/UX Penelope, the 
+Macintosh II video card (“Toby”)
+ is natively
+supported, so I first implemented this card as an additional option in Snow.
+
+Then it was time to get to work with the installation. A/UX came with lovely
+very UNIX-y binders, which you definitely needed as the OS and installation
+aren’t exactly straight forward.
+
+Luckily, that is archived on 
+Bitsavers
+.
+Armed with my digital binders, I proceeded with the installation.
+
+To start off the install, we begin with the “System setup and README” disk. We need
+to partition the disk, and then do something counter-intuitive: install System 6 on
+a Mac partition. This is because there’s a Mac application that kicks off the A/UX
+boot process: SASH; the A/UX standalone shell. This ‘pre-boot environment’ allows for
+launching an A/UX kernel and also some disk and recovery operations.
+
+Partitioning is through the familiar HD SC Setup and can be pretty straightforward;
+the included HD SC Setup includes a template layout for A/UX.
+
+And then, we can move on to install a pretty bare System 6 and afterwards copy the
+contents of the “SASH and utilities” disk to the new installation.
+
+Now, it’s finally time to actually get into A/UX. This happens by booting off the
+“Floppy Launch” disk. This disk autostarts a SASH, launches an A/UX kernel and will
+then request the “Floppy Root” disk.  This begins part 1 of the installation, which
+formats the A/UX partitions and copies a bootstrapping system into it.
+
+At this point, I had to fix a Snow bug, which was causing the modifier keys to be
+stuck due to an invalid ADB Talk 2 implementation. Interestingly first time this
+is an issue; even A/UX 3.x was fine with it before.
+
+diff --git a/core/src/mac/adb/keyboard.rs b/core/src/mac/adb/keyboard.rs
+index 4e828fc..9edf31e 100644
+--- a/core/src/mac/adb/keyboard.rs
++++ b/core/src/mac/adb/keyboard.rs
+@@ -140,29 +146,34 @@ impl AdbDevice for AdbKeyboard {
+                 response
+             }
+             2 => AdbDeviceResponse::from_iter(
+-                AdbKeyboardReg2::default()
++                // The key/modifier bits of register 2 are ACTIVE LOW
++                AdbKeyboardReg2(0xFFFF)
++                    // LED state bits (0..2) are host-controlled and active-high
+                     .with_led_numlock(self.keystate[SC_NUMLOCK as usize])
+                     .with_led_capslock(self.capslock)
+                     .with_led_scrolllock(self.keystate[SC_SCROLLOCK as usize])
+-                    .with_numlock(self.keystate[SC_NUMLOCK as usize])
+-                    .with_capslock(self.capslock)
+-                    .with_scrolllock(self.keystate[SC_SCROLLOCK as usize])
+-                    .with_cmd(self.keystate[SC_COMMAND as usize])
++                    .with_numlock(!self.keystate[SC_NUMLOCK as usize])
++                    .with_capslock(!self.capslock)
++                    .with_scrolllock(!self.keystate[SC_SCROLLOCK as usize])
++                    .with_cmd(!self.keystate[SC_COMMAND as usize])
+                     .with_control(
+-                        self.keystate[SC_LCTRL as usize] || self.keystate[SC_RCTRL as usize],
++                        !(self.keystate[SC_LCTRL as usize] || self.keystate[SC_RCTRL as usize]),
+                     )
+                     .with_option(
+-                        self.keystate[SC_LOPTION as usize] || self.keystate[SC_ROPTION as usize],
++                        !(self.keystate[SC_LOPTION as usize] || self.keystate[SC_ROPTION as usize]),
+                     )
+-                    .with_delete(self.keystate[SC_DELETE as usize])
++                    .with_shift(
++                        !(self.keystate[SC_LSHIFT as usize] || self.keystate[SC_RSHIFT as usize]),
++                    )
++                    .with_delete(!self.keystate[SC_DELETE as usize])
+                     .to_be_bytes(),
+             ),
+             3 => AdbDeviceResponse::from_iter(
+                 AdbReg3::default()
+                     .with_exceptional(true)
+                     .with_srq(true)
+-                    .with_address(Self::INITIAL_ADDRESS)
+-                    .with_handler_id(2) // Apple Extended Keyboard M0115
++                    .with_address(self.address)
++                    .with_handler_id(self.handler_id)
+                     .to_be_bytes(),
+             ),
+             _ => {
+
+Then, we reboot to the hard disk where we launch SASH and A/UX for real for part 2
+of the installation.
+
+Here I hit another Snow bug: the kernel launch froze waiting for the NCR 5390’s
+‘DMA end’ bit. Again; interestingly never was a problem before, even in newer A/UX versions.
+
+diff --git a/core/src/mac/scsi/controller.rs b/core/src/mac/scsi/controller.rs
+index 44f3959..a22ab29 100644
+--- a/core/src/mac/scsi/controller.rs
++++ b/core/src/mac/scsi/controller.rs
+@@ -771,10 +771,13 @@ impl BusMember<Address> for ScsiController {
+             NcrReadReg::BSR => Some(
+                 self.reg_bsr
+                     .with_dma_req(self.get_drq())
+-                    .with_dma_end(!matches!(
+-                        self.busphase,
+-                        ScsiBusPhase::DataIn | ScsiBusPhase::DataOut,
+-                    ))
++                    .with_dma_end(
++                        self.reg_mr.dma_mode()
++                            && !matches!(
++                                self.busphase,
++                                ScsiBusPhase::DataIn | ScsiBusPhase::DataOut,
++                            ),
++                    )
+                     .with_phase_match(self.phase_match())
+                     .0,
+             ),
+
+Part 2 leads us through a whopping total of 26 “Installation disks” which contains the actual OS.
+As you can imagine, this took a while…
+
+If you had a tape drive, you could opt for installing from tape, instead, saving you all that
+floppy swapping. Dominic also has this piece of history in his collection. If this tape ever
+gets archived, I’m definitely adding an emulated Apple 40SC tape drive to Snow so it is
+possible to do an installation from tape.
+
+After the 26 disks, you reboot again, and there’s finally your final A/UX installation,
+booted by SASH on hard drive.
+
+Now it was time for some peak UNIX gaming to celebrate. I’m happy Snow managed to get through
+this entire installation and A/UX 1.x now also runs smoothly.
+
+You may be wondering if A/UX 1.x has any graphical interface. A/UX 3.x’s is pretty fancy and
+even allows you to run Macintosh applications through the ‘mac32’ emulation layer (I have ran
+Myst on A/UX 3.x) and even supports X11 applications.
+
+Turns out, if you enter multi-user mode through 
+init 2
+, you can run some graphical
+applications, called Toolbox applications (referring to the GUI ‘Toolbox’ in the Macintosh ROM)
+but there are only three such applications available..
+
+Thanks again to Dominic for sharing the disks, which will eventually be publicly archived.
