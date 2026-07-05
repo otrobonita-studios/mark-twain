@@ -1,0 +1,688 @@
+← Blog
+ 
+Last updated
+			Jul 5, 2026 
+ 
+Why DMARC's new "np" tag can fail with DNSSEC
+
+Matteo
+ 
+ 18 min. read
+ 
+The recently updated DMARC specification, published as RFC 9989, introduces the new 
+np
+ tag. Its purpose is to specify the policy that receivers should apply 
+when the sender domain is a non-existent subdomain
+ of the domain where the DMARC record is published.
+ 
+We discovered that the definition of “non-existent domain” contained in RFC 9989 clashes with another recent specification, RFC 9824, known as ”
+Compact Denial of Existence in DNSSEC
+”, resulting in the 
+np
+ tag not always working as expected. Although DNSSEC usage is far from being widespread, the issue affects all domains using DNSSEC with major DNS providers like 
+Cloudflare, NS1, AWS Route 53 and Azure
+.
+ 
+We raised the issue with the IETF working group responsible for DMARC: the issue was acknowledged but no solution was agreed upon. In this article, we’ll explain the whole story and try to assess the impact of this incompatibility.
+
+The new 
+np
+ tag
+ 
+In May 2026, the IETF published an updated version of the DMARC specification, consisting of three documents. RFC 9989 introduces a new DMARC record tag called 
+np
+, standing for 
+non-existent subdomain policy
+.
+ 
+In a DMARC record, it looks like this:
+ 
+v=DMARC1; p=none; sp=quarantine; np=reject;
+ 
+The policy specified by the 
+p
+ tag applies to the domain where the record is published, the 
+sp
+ tag applies to existing subdomains of the policy domain that do not publish their own DMARC record, while the 
+np
+ tag applies to non-existent subdomains.
+ 
+Setting different policies is helpful when you want to “block” malicious email on unused subdomains while keeping a less strict policy on the other subdomains.
+ 
+Non-existent subdomains in the DNS
+ 
+The DMARC RFC defines non-existent domains as follows:
+ 
+For DMARC purposes, a non-existent domain is consistent with the term’s meaning as described in 
+RFC8020
+. That is, if the response code received for a query for a domain name is NXDOMAIN, then the domain name and any possible subdomains do not exist.
+ 
+This is a common definition, nothing surprising. DNS servers typically return the 
+NXDOMAIN
+ response code to signal that the queried domain name and all its subdomains don’t exist, meaning that they do not have any DNS record associated with them. Here’s an example:
+ 
+~ ❯ dig non-existent-subdomain.rai.it +noall +comments +answer
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 17031
+;; flags: qr rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 1232
+ 
+A different situation is when the specific resource record type that was requested is not found, but other record types for the queried domain exist. In that case, the DNS name exists so the server can’t return 
+NXDOMAIN
+. It would instead use 
+NOERROR
+ with an empty answer section, also known as 
+NODATA
+.
+ 
+(A previous experimental extension to DMARC, 
+RFC 9091
+, specified that non-existent domains are those where there is an 
+NXDOMAIN
+ or 
+NODATA
+ response for A, AAAA, and MX records, explicitly mentioning that this is a broader definition than that in RFC 8020. This definition was changed when it was incorporated into RFC 9989.)
+ 
+In the above example, we can determine that the 
+non-existent-subdomain.rai.it
+ name and all its subdomains don’t exist.
+ 
+On the other hand, in the following example we can determine that the domain 
+news.rai.it
+ doesn’t have 
+MX
+ records, but it exists because it has other record types:
+ 
+~ ❯ dig news.rai.it MX +noall +comments +answer
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 37891
+;; flags: qr rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 1232
+ 
+In the DNSSEC world, things get a bit more complicated.
+ 
+DNSSEC in short
+ 
+DNSSEC is a security extension for DNS that lets resolvers verify that DNS answers are authentic and haven’t been tampered with. It does so by adding cryptographic signatures that resolvers can verify.
+ 
+In the following example we explicitly ask the DNS resolver to return DNSSEC-related data. We can see that the DNS response contains an additional record in the ANSWER section, with type 
+RRSIG
+.
+ 
+~ ❯ dig dmarcwise.io +dnssec +noall +comments +answer
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 49227
+;; flags: qr rd ra; QUERY: 1, ANSWER: 3, AUTHORITY: 0, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags: do; udp: 1232
+;; ANSWER SECTION:
+dmarcwise.io.		892	IN	A	94.237.30.173
+dmarcwise.io.		892	IN	A	94.237.26.215
+dmarcwise.io.		892	IN	RRSIG	A 13 2 900 20260801080000 20260704073000 20768 dmarcwise.io. bPF4BFfnETKC4GGwrmi0xlOzvBaotX8DG5E8/rpmelxoXJ2eA8RJtUrN JVFjFVCq5ZP/Ul9XYgT86c8Vw5Y4Sw==
+ 
+The 
+RRSIG
+ record contains the signature that the resolver verifies. The verification process involves querying other records in the zone (
+DNSKEY
+), and in the parent zone (
+DS
+), moving upward in the DNS hierarchy until the root zone is reached.
+ 
+Denial of existence in DNSSEC
+ 
+In standard DNS, queries for non-existent domains produce replies with an empty answer section, as we’ve seen above. This doesn’t play well with DNSSEC because an empty ANSWER section contains no records, so 
+there’s nothing to sign
+.
+ 
+DNSSEC solves this using the 
+NSEC
+ record type. Instead of signing the non-existent name, it identifies an existing name coming before the requested name and reports the next existing name in canonical DNS order, 
+proving that the requested name does not exist between them
+. The 
+NSEC
+ record is then signed so that any alteration can be detected. The DNS response code remains 
+NXDOMAIN
+.
+ 
+For example, a zone may contain the following domain names:
+ 
+a.example.com
+z.example.com
+ 
+When we query domain 
+f.example.com
+, which doesn’t exist, the response will say:
+ 
+a.example.com 300 IN NSEC z.example.com. A RRSIG NSEC
+ 
+It confirms that 
+f.example.com
+ doesn’t exist by letting us know that 
+a.example.com
+ exists and that the following domain in the canonical DNS ordering is 
+z.example.com
+, with record types 
+A
+, 
+RRSIG
+ and 
+NSEC
+. Nothing else exists in between.
+ 
+In practice, it’s slightly more complicated than this, because we also need a second 
+NSEC
+ record to prove that no wildcard record exists that would have covered 
+f.example.com
+.
+ 
+One exception is when we want to say that the domain name exists, just not with that record type. In this case, we can use just 
+one 
+NSEC
+ record
+, as above, and list which record types exist.
+ 
+Nowadays, many DNS servers use a variant of 
+NSEC
+ called 
+NSEC3
+, which uses 
+hashed names
+ instead of the original names to make it harder for attackers to “walk” the DNS zone and enumerate all the domain names contained in it. For this to work, we then need a third 
+NSEC3
+ record to prove that 
+the “closest encloser” exists
+.
+ 
+In the worst case we’re now at 8 records in total (
+SOA + SOA RRSIG + 3x NSEC3 + 3x NSEC3 RRSIG
+), just to prove that a domain doesn’t exist. In some cases, this can approach the size limit of DNS UDP packets, potentially causing truncated responses and a switch to TCP.
+ 
+~ ❯ dig non-existent.rcodezero.at +dnssec +noall +comments +authority
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 28077
+;; flags: qr rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 8, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags: do; udp: 1232
+;; AUTHORITY SECTION:
+rcodezero.at.		30	IN	SOA	ns1.rcodezero.at. rcodezero.ipcom.at. 2025113549 10800 3600 604800 30
+rcodezero.at.		30	IN	RRSIG	SOA 13 2 3600 20260716000000 20260625000000 61192 rcodezero.at. m2lRXWLkudZ/DMpS0VPiaNwkN2Wak44JjLNM2VsfY4pwOuVeEOE+Yip5 g4QaVC4vOhuTDikl6RG2XbTJhJIIjQ==
+5fck5kit9i35fg68phiu98n07jqtcbe5.rcodezero.at. 30 IN NSEC3 1 0 0 - 5O2N7HE1TQ836ADQ0G40SEJUHNT866RF A NS SOA TXT AAAA RRSIG DNSKEY NSEC3PARAM
+5fck5kit9i35fg68phiu98n07jqtcbe5.rcodezero.at. 30 IN RRSIG NSEC3 13 3 30 20260716000000 20260625000000 61192 rcodezero.at. Ix74l+UIyGSWfhymQJgrHRceKtzla5yCyF56yZfawS4JLak+ECXniLoM MMEZKF+2Q4jQ+UeLV6+oT54wov1YJw==
+dqj11be2u7pvv034803fs4s4v1i77o5c.rcodezero.at. 30 IN NSEC3 1 0 0 - EH6FBIEDOMTC5LBAADQPMESG8V80K14I
+dqj11be2u7pvv034803fs4s4v1i77o5c.rcodezero.at. 30 IN RRSIG NSEC3 13 3 30 20260716000000 20260625000000 61192 rcodezero.at. q7ydqY3L8MgC+HvuFVLSnuGkvoGLbWu8UDGFQgAPYU9wRQTTG2dmULl8 vFvPnXRWwIGzpMBQDzyODDCXnIjjPw==
+goujsva9gi69p68758u2bmh1b09fm0d4.rcodezero.at. 30 IN NSEC3 1 0 0 - K93HCBG8K15UQVA0LORHV7CSPS32A51P A AAAA RRSIG
+goujsva9gi69p68758u2bmh1b09fm0d4.rcodezero.at. 30 IN RRSIG NSEC3 13 3 30 20260716000000 20260625000000 61192 rcodezero.at. /dvDo61kcqHe6UN4YzMCXjGbSgsaC9CRNMmG30BaZPBDLJNrGxVMyMZs ijtpeHOrSfIfW/MPAi/s6Mp8sZ0zhw==
+ 
+Another issue with this denial of existence approach is that some DNS providers, 
+famously Cloudflare
+, sign DNS answers on the fly, instead of having pre-computed signatures. This is known as 
+online signing
+. The problem is that to produce the 
+NSEC
+ records, the server needs to know not only the data for the record itself, but also the rest of the zone, to determine the previous and next record.
+ 
+Minimally covering NSEC records
+ 
+An initial attempt to better support online DNSSEC signing was introduced very early in 2006 with 
+RFC 4470
+, titled ”
+Minimally Covering NSEC Records and DNSSEC On-line Signing
+” and informally known as “white lies”.
+ 
+The core idea is that instead of responding with actual domain names in an 
+NSEC
+ record, authoritative servers can make up a previous and next name that are slightly before and after the queried name. While this helps deploy DNSSEC with online signing, it can still require two 
+NSEC
+ records, so the DNS answer is still quite large compared to standard 
+NXDOMAIN
+ answers.
+ 
+Compact denial of existence
+ 
+The turning point came in 2016, when Cloudflare implemented DNSSEC and chose not to use standard 
+NSEC
+, 
+NSEC3
+ or white lies, but a new method they initially called ”
+black lies
+“.
+ 
+The fundamental idea is to return a 
+NOERROR
+ response instead of 
+NXDOMAIN
+ for a non-existent domain, claiming that the name exists but has no records for the queried type. With this approach, just a single 
+NSEC
+ record is needed.
+ 
+The DNS answer then becomes very compact: as seen in the following example, to prove that 
+non-existent.ietf.org
+ does not exist there’s only one 
+NSEC
+ record claiming the next domain is 
+\000.non-existent.ietf.org
+.
+ 
+~ ❯ dig non-existent.ietf.org +dnssec +noall +comments +authority
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1086
+;; flags: qr rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 4, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags: do; udp: 1232
+;; AUTHORITY SECTION:
+ietf.org.		1726	IN	SOA	jill.ns.cloudflare.com. dns.cloudflare.com. 2408613648 10000 2400 604800 1800
+non-existent.ietf.org.	1726	IN	NSEC	\000.non-existent.ietf.org. RRSIG NSEC TYPE128
+non-existent.ietf.org.	1726	IN	RRSIG	NSEC 13 3 1800 20260705100533 20260703080533 34505 ietf.org. 4J0vQB8RCW6ZcVBz7euKBbQcGYIP3IS1QqACdSJHh9kCUGIaWxMgQyXq ujBP+LQvuoJcCxn8rSKYin3ZDX5wmw==
+ietf.org.		1726	IN	RRSIG	SOA 13 2 1800 20260705100533 20260703080533 34505 ietf.org. 11YLhkreISTOxD0rO3OLTJUFtJOReQOxy9x6KzTXSTEENmoFuzriHr10 Q+j+pkrMde4qzp9X7J+OKlA0kBB1tQ==
+ 
+This method is valid from a DNSSEC-validation perspective because it builds on the existing specifications, as Cloudflare says:
+ 
+RFC4470, White Lies, allows us to randomly generate next names in 
+NSEC
+. Not setting the second 
+NSEC
+ for the wildcard subdomain is also allowed, so long as there exists an 
+NSEC
+ record on the actual queried name. And lastly, our lie of setting every record type in 
+NSEC
+ records for 
+NODATA
+, is okay too –– after all, domains are constantly changing, it’s feasible that the zone file changed in between the time the 
+NSEC
+ record indicated to you there was no 
+MX
+ record on 
+blog.cloudflare.com
+ and when you queried successfully for 
+MX
+ on 
+blog.cloudflare.com
+.
+ 
+This method is now used by many large authoritative DNS providers, including 
+Cloudflare, NS1, AWS Route 53 and Azure DNS
+ (full list below).
+ 
+Despite its popularity, the main drawback of this approach is that you lose the explicit 
+NXDOMAIN
+ response code. Many applications rely on it to determine when a domain does not exist, including DMARC software when evaluating the 
+np
+ tag (more on this below).
+ 
+Compact denial becomes RFC 9824, with the NXNAME signal
+ 
+After Cloudflare introduced DNSSEC “black lies”, an effort was started to standardize the approach and find a proper solution to the 
+NXDOMAIN
+ visibility issue. This process completed in September 2025 with the publication of 
+RFC 9824
+, or ”
+Compact Denial of Existence in DNSSEC
+“.
+ 
+The base technique is the same as that used by Cloudflare since 2016, but it evolved to improve compatibility with the DNS ecosystem that still relies on reading the 
+NXDOMAIN
+ response code. As one of the authors of the RFC 
+explains
+, this caused issues in internal Salesforce systems:
+ 
+This technique to respond to queries for non-existent names with NODATA rather than the traditional NXDOMAIN response was originally devised by Cloudflare. I became involved when NS1 (one of our key DNS providers) also implemented it, and negatively impacted a variety of tools at Salesforce due to the critical loss of the NXDOMAIN signal. I worked with Jan Vcelak of NS1 at that time to devise the ENT sentinel that allowed precise distinguishability for non existent names.
+ 
+In early 2023, Christian Elmerot (Cloudflare) and I got together to propose to standardize the protocol in the IETF. Subsequent work involved redefining the NXDOMAIN distinguisher (the “NXNAME” pseudo RR that appears in the Type Bitmaps field of an NSEC record), and a signaled mechanism to optionally restore the NXDOMAIN response code utilizing a new EDNS header flag (Compact Answer OK).
+ 
+The compact denial of existence specification therefore requires authoritative name servers to explicitly expose the fact that a domain is non-existent by adding the 
+NXNAME
+ signal to the 
+NSEC
+ or 
+NSEC3
+ record.
+ 
+In this example, the compact 
+NSEC
+ record proves that the domain name 
+a.example.com
+ does not exist, because the 
+NXNAME
+ bit/type is set:
+ 
+a.example.com. 300 IN NSEC \000.a.example.com. RRSIG NSEC NXNAME
+ 
+The following is a real-world example of a domain name that doesn’t exist. Notice the 
+TYPE128
+ flag, which corresponds to 
+NXNAME
+, in the second record in the AUTHORITY section. (The current stable version of 
+dig
+, included in BIND 9.20, does not fully support 
+NXNAME
+.)
+ 
+~ ❯ dig doesnotexist.cloudflare.com MX +dnssec +noall +comments +authority
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 61680
+;; flags: qr rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 4, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags: do; udp: 1232
+;; AUTHORITY SECTION:
+cloudflare.com.		291	IN	SOA	ns3.cloudflare.com. dns.cloudflare.com. 2407081620 10000 2400 604800 300
+doesnotexist.cloudflare.com. 291 IN	NSEC	\000.doesnotexist.cloudflare.com. RRSIG NSEC TYPE128
+cloudflare.com.		291	IN	RRSIG	SOA 13 2 300 20260705103523 20260703083523 34505 cloudflare.com. u6pDc961FGq0rOBLW8c7D8cjPgW3keDM16d18INAPfACEF6WcyRmr9y3 EOJfv3AT9DdvHP6HZjPF9nY6v+WpIg==
+doesnotexist.cloudflare.com. 291 IN	RRSIG	NSEC 13 3 300 20260705103523 20260703083523 34505 cloudflare.com. PGff3k7iGs3XPYbwYVtaRAqZO3o6Y6AK32ukfIShZU6YlHWyuEFv98Pc dJ1hzE010gOcEGz2tMgFS7uCf8sROQ==
+ 
+To ensure compatibility with existing DNS software that still expects 
+NXDOMAIN
+, optional features for restoring the response code were introduced, as we’ll see in the next section. They are, however, optional, and the RFC explicitly mentions that if a DNS resolver doesn’t implement these measures it’s up to the client to read the 
+NXNAME
+ bit to infer domain non-existence:
+ 
+In the absence of this, tools that rely on accurately determining nonexistent names will need to infer them from the presence of the NXNAME RR type in the Type Bit Maps field of the NSEC record in NODATA responses from these servers.
+ 
+Let’s see how these 
+NXDOMAIN
+ restoration methods work, what they leave out and what their real-world adoption rates are, and therefore how RFC 9824 affects DMARC.
+ 
+Restoration of NXDOMAIN response code
+ 
+We can split DNS queries into two categories: 
+DNSSEC-enabled
+ and 
+non-DNSSEC-enabled
+.
+ 
+When you send a query from your computer, for example when using the 
+dig
+ command, the 
+nslookup
+ command or system primitives for DNS resolution, you’re sending 
+non-DNSSEC queries
+ by default. Technically, this means that the 
+DO
+ flag (“DNSSEC Answer OK”) in the EDNS section of the request is not set.
+ 
+When a non-DNSSEC query reaches a recursive DNS resolver, different things can happen:
+ 
+The DNS resolver is not DNSSEC-aware:
+ the authoritative nameserver will normally reply with a conventional unsigned 
+NXDOMAIN
+ response, and everything works normally. This scenario is however of little relevance because 
+most modern DNS resolvers
+ are DNSSEC-aware.
+ 
+The DNS resolver is DNSSEC-aware but not NXNAME-aware:
+ the authoritative nameserver will reply with compact denial of existence (
+NOERROR
+ and one 
+NSEC
+ record). The client sees no 
+NXDOMAIN
+.
+ 
+The DNS resolver is DNSSEC-aware and NXNAME-aware:
+ according to RFC 9824, the resolver «could modify the response code from 
+NOERROR
+ to 
+NXDOMAIN
+ in responses they return to downstream queriers». According to our research (June 2026) the main commercial resolvers, such as 8.8.8.8 and 1.1.1.1, and the main open source DNS resolvers, BIND9, Unbound, PowerDNS and Knot Resolver 
+do not restore 
+NXDOMAIN
+ as suggested
+.
+ 
+A DNS query sent from a client to a resolver can 
+have the 
+DO
+ bit set
+ in the EDNS section of the request, informing the DNS resolver that the client knows how to process DNSSEC responses. According to 
+Cloudflare Radar
+, these queries account for 10-12% of the total queries observed. In this case, if the authoritative nameserver responds with compact denial of existence, it will just pass the response to the client, who therefore sees no 
+NXDOMAIN
+.
+ 
+A DNS client that is aware of RFC 9824 can also 
+set the 
+CO
+ flag
+, standing for 
+Compact Answers OK
+, informing the resolver that it knows how to interpret compact denial of existence even if the response code is 
+NXDOMAIN
+. A resolver implementing RFC 9824 can then set the same flag in the query sent to the authoritative nameserver, which will respond with 
+NXDOMAIN
+ if it implements the optional 
+CO
+-signaled code restoration. If all hops support this mechanism and set the 
+CO
+ flag, the client receives 
+NXDOMAIN
+ and doesn’t need to read the 
+NXNAME
+ bit. If any of the hops, including the client, doesn’t set the 
+CO
+ flag, the response code is reverted to 
+NOERROR
+ and the client ultimately receives 
+NOERROR
+.
+ 
+This mechanism, defined in 
+Section 5.1
+ of RFC 9824, is however optional, although «recommended». According to our research, Cloudflare, NS1, AWS Route 53, Azure DNS and Oracle Cloud DNS authoritative servers don’t appear to support response code restoration with the 
+CO
+ flag, while Bunny DNS does. DNS libraries and tools (like 
+dig
+) don’t set the 
+CO
+ flag by default, even when DNSSEC is requested.
+ 
+All response code restoration mechanisms are 
+optional
+ and 
+they don’t appear to be widely deployed currently
+. Most DNS queries are likely to fall into the non-DNSSEC bucket, and none of the popular DNS resolvers we tested currently restores 
+NXDOMAIN
+ as suggested by RFC 9824.
+ 
+When a client decides to request DNSSEC data from a resolver (
+DO
+ bit), 
+NXDOMAIN
+ restoration does not apply automatically. It needs every hop in the resolution chain to set the 
+CO
+ flag: according to our research (June 2026), popular resolvers BIND9, Unbound, PowerDNS and Knot Resolver don’t set this flag for outgoing queries to authoritative servers.
+ 
+Real-world impact
+ 
+The issue of a DMARC client not detecting non-existent domains properly is present when the domain uses DNSSEC and its authoritative nameserver uses compact denial of existence.
+ 
+Several surveys estimate the percentage of domains using DNSSEC signing at around 8-10%. According to 
+this research
+ conducted in December 2024 on the top one million domains, out of the 73k domains with valid DNSSEC 
+44% were using NSEC compact denial
+.
+ 
+This is confirmed by the fact that 
+many major DNS providers
+ use compact denial of existence, although full support for RFC 9824 is inconsistent:
+ 
+Provider
+Introduced in
+Denial
+NXNAME
+CO support
+Cloudflare
+2016
+Compact NSEC
+✅
+❌
+NS1
+2019
+Compact NSEC
+✅
+❌
+AWS Route 53
+2020
+Compact NSEC
+❌
+❌
+Azure DNS
+2025
+Compact NSEC
+❌
+❌
+Oracle Cloud DNS
+2024
+Compact NSEC3
+❌
+❌
+Bunny DNS
+2025
+Compact NSEC
+✅
+✅
+ 
+Some DNS authoritative servers implement NSEC “black lies” but not the full RFC 9824 specification, which requires the 
+NXNAME
+ bit to be set in responses. Notably, Azure DNS mentions implementing RFC 9824 while it’s not true in practice; Bunny DNS mentions supporting “black lies” while fully supporting RFC 9824 in practice. Find the commands used for testing 
+here
+.
+ 
+As for 
+DMARC implementations
+, we cannot know what closed-source ones do, i.e. whether they support the 
+np
+ tag, how they check for 
+NXDOMAIN
+, whether they use DNSSEC or are aware of RFC 9824 and the 
+NXNAME
+ bit. We can however determine this for open-source implementations.
+ 
+We analyzed the following popular open-source DMARC implementations:
+ 
+OpenDMARC
+ doesn’t fully support the 
+np
+ tag yet, but it 
+enables
+ DNSSEC when available. It does not set the 
+CO
+ flag, so 
+NXDOMAIN
+ restoration would not apply even if supported by the resolver. It is not aware of RFC 9824 and the 
+NXNAME
+ bit.
+ 
+Stalwart (
+mail-auth
+) does not fully support the 
+np
+ tag yet, does not use DNSSEC and is not aware of RFC 9824.
+ 
+Mail::DMARC
+ supports the 
+np
+ tag, checks for 
+NXDOMAIN
+ 
+strictly
+ treating 
+NODATA
+ as existence, does not use DNSSEC and is not aware of RFC 9824.
+ 
+Rspamd
+ does not support the 
+np
+ tag, does not use DNSSEC and is not aware of RFC 9824.
+ 
+Postal Systems mailauth
+ does not support the 
+np
+ tag, does not use DNSSEC, is not aware of RFC 9824 but treats both 
+NXDOMAIN
+ and 
+NODATA
+ as non-existence.
+ 
+Maddy
+ (
+emersion/go-msgauth
+) does not support the 
+np
+ tag, does not use DNSSEC and is not aware of RFC 9824.
+ 
+In summary, support for the 
+np
+ tag in DMARC implementations is still sparse, but those who do follow RFC 9989 strictly by checking for 
+NXDOMAIN
+. With 
+NXDOMAIN
+ restoration not seen in the real world, domains using DNSSEC and the DNS providers listed above would find that the 
+np
+ tag is not applied correctly.
+ 
+To avoid misclassifying a non-existent domain as existent, implementations would need to deviate from the DMARC RFC and also check for the 
+NXNAME
+ bit on 
+NSEC
+/
+NSEC3
+ records (RFC 9824). This 
+short code snippet
+ shows how to do it. Until all DNS providers support all the mandatory parts of RFC 9824, this won’t be perfectly reliable.
+ 
+Finally, one aspect to consider is that many mail servers reject mail when the Envelope From domain has no MX or A/AAAA records. When the Envelope From domain and From domain are identical, this may reduce the number of relevant cases. The 
+np
+ tag was nonetheless introduced, so it was probably deemed realistic that a mail receiver reaches the point where the 
+np
+ policy is evaluated.
+ 
+Raising the issue at the IETF
+ 
+We raised the issue of the incompatibility of the 
+np
+ tag with Compact Denial of Existence on the mailing list of the DMARC working group. You can read the whole 
+thread
+ here. In short, the issue was not found to be suitable for an erratum, which is usually reserved for typos or technical errors (an engineer at bunny.net 
+submitted
+ the erratum report). Opinions differ, but it currently seems unlikely that the DMARC RFC will be revised to mention RFC 9824.
+ 
+Further discussion happened in the 
+dnsop mailing list
+, where it was mentioned that some mainstream resolvers are considering introducing 
+NXDOMAIN
+ restoration, with options including updating RFC 9824 to make response code restoration mandatory (
+MUST
+) or strongly recommending it (
+SHOULD
+), or changing RFC 9989 (DMARC) to account for RFC 9824.
+ 
+At the time of writing, discussions have been stale for a few weeks and there doesn’t appear to be a strong consensus on moving forward with either of these options.
+ 
+Conclusion
+ 
+Most DMARC implementations don’t currently support the new 
+np
+ tag (non-existent subdomain policy), but when they do, it’s likely that it won’t be applied correctly to DNSSEC-signed domains hosted by DNS providers using compact denial of existence. As we’ve seen, many large DNS providers use compact denial and many domain names using DNSSEC are therefore affected.
+ 
+DMARC implementations can choose to deviate from RFC 9989 (DMARC) to account for RFC 9824 (compact denial of existence) and recognize the 
+NXNAME
+ bit on 
+NSEC
+/
+NSEC3
+ records. Alternatively, the solution is to ensure that 
+NXDOMAIN
+ restoration and the 
+CO
+ flag are consistently supported and used in the DNS resolution ecosystem.
+ 
+For domain owners, it’s wise to assume that using the 
+np
+ tag will not be guaranteed to work in practice.
