@@ -1,0 +1,485 @@
+July 2, 2026 
+ 
+  | 
+Bill Grieser
+ , Senior Software Engineer 
+
+My quest to see all of Tetris
+
+Early in 2026 I was sweating. A few years before, I had made the statement that Antithesis had âbeatenâ Tetris. We have a tradition that we name conference rooms after games that we have beaten, and since 2021 there has been a room in the office named Tetris.
+
+However, my statement of victory had been overtaken by events. As we shall see, teenage gamers had learned how to extend human performance into parts of the game our product had not reached. I made it my side quest to use my free time to catch up to the teenagers.
+
+The goal was ârebirthâ â running through all the levels of Tetris until the level counter rolled over from 255 back to 0. When this happens, the game returns to the speed and color scheme of level 0 and starts the climb through the levels again. If we could see all of Tetris, surely we could claim we had beaten it.
+
+Unfortunately, our exploration was stuck on level 160. I was about to join a new department, and I knew once that happened I would not have time to work on Tetris, maybe ever again. Yet there I was, stuck.
+
+But I am getting ahead of myself. I want to say up front that this does have a happy ending, despite a most exasperating resolution of the âstuckâ situation. I should start the story at the beginning.
+
+If you just want to see what we did in the end, and the weird glitches we found on the way, you can jump straight to 
+Rebirth!
+
+Why Tetris?
+
+Back in the early days of Antithesis, new engineers would go through an initiation rite: learn our system by using it to play and hopefully beat a game from the iconic 1980s Nintendo Entertainment System. Over time weâve tackled a lot of classics, including 
+Mario
+, 
+Zelda
+ and 
+Metroid
+. When I joined in 2019, I chose Arkanoid, because it was my second favorite NES game. My favorite game, Tetris, had already been tried.
+1
+
+1
+
+I am happy to say that today we have a conference room named âArkanoidâ. But thatâs another story.
+
+I had become semi-addicted to Tetris in the 90s when I was flying back from visiting a customer in Europe. The then-revolutionary in-flight entertainment system had a version you could play at your seat. I enjoyed using spatial reasoning to figure out how to rotate and position a piece mid-flight. Seeing completed rows vaporize as my score increased gave me an immediate sense of accomplishment.
+
+Of course, Tetris doesnât let you stay comfortable for long. Just when you get in the groove, the pieces drop faster. If you make a mistake, like covering up an empty spot with a new piece, youâre now playing defense and having to trade off future health for not crashing out right now. There is no such thing as a finish line: you simply keep playing until you lose. No one gets out clean. (Maybe this is all a metaphor for something.)
+
+When we had tried before to beat Tetris we had made progress, but we had not managed to get very far in the game. But the idea of beating Tetris stuck with me, and became a (very) long-running side project. But what does âbeatingâ even mean?
+
+Normally at Antithesis, âbeatingâ a game means that we discover a set of user inputs that play the game to a winning conclusion. As Tetris has no win state, defining exactly should count as beating the game is a bit slippery. Our understanding of this evolved along the way (with some help from the teenage gamers).
+
+How Antithesis plays games
+
+Antithesis plays Tetris in an unusual way, so first Iâll explain how that works. We donât do the typical kind of 
+tool-assisted speedrun
+ that crafts a set of perfect user inputs from first principles. Nor do we create a robot that knows how to play the game, watches the screen and reacts.
+
+Instead, we run smallish trials of random inputs at known starting game states, evaluate the effect each trial has on the game, and remember game situations that we deem to be interesting with respect to a goal.
+
+We take advantage of the fact that what happens in a NES game is completely determined by the user inputs it receives, which allows us to be stingy about taking game snapshots. As long as we save every input we have sent to the game, we can recreate an arbitrary game state by starting from the closest snapshot in the stateâs history and feeding it the inputs needed to get us to the exact game moment we want.
+2
+
+2
+
+Our 
+deterministic hypervisor
+ lets you do the same thing with arbitrary programs! You can exactly recreate any moment from a test execution by replaying the randomness we injected into the system to get there. During a run, this lets us return to interesting places in the programs we are testing. After a run, it lets us spin up a recreation of bug situations so customers can capture data and do what-if analysis.
+
+In a typical setup for a test run, one Antithesis fuzzer feeds 32 emulated NES sessions, each loaded with the game we are fuzzing. We host each session with the 
+fceux
+ emulator, and use fceuxâs Lua integration to create a harness script that runs the emulator in headless mode.
+3
+
+3
+
+We use the original unmodified NTSC version of Tetris, from the ROM with MD5 of 0x5b0e571558c8c796937b96af469561c6. For the emulator, we use fceux version â2.2.3 debugâ. To create the examples in this post, we generate an fceux movie from the fuzzer inputs, and play the movie with fceux version â2.7.0-interim gitâ.
+
+Inside the fuzzer, we have a component called a âtacticâ which generates input for the game we are testing. A second âstrategyâ component then observes what the result of the input is and guides the fuzzer for what to do next. (See our previous post on 
+beating Gradius
+ for more on this.)
+
+To see how this all fits together, it helps to zoom into a single frame. An NES game cycles at a rate of 60 screen updates per second. Each cycle has the following actions:
+
+Our harness receives an input byte from the fuzzer from an input pipe.
+
+The harness reads the input byte and sends it to the waiting emulator.
+
+The emulator processes the input byte, modifying game memory, and generating a new game screen, and then returns to the harness.
+
+The harness interrogates the emulator and captures values of specific game memory locations and optionally the new game screen. The results get put on an output pipe that goes back to the fuzzer to process asynchronously.
+
+The harness loops back to process the next input.
+
+The core loop.
+
+The fuzzer is asynchronous with respect to this loop. It pre-generates batches of inputs for the harnesses, and observes the returns from the harnesses as they arrive.
+
+With that machinery in place, beating a game comes down to two things:
+
+Finding the right tactic (algorithm for generating inputs)
+
+Finding the right strategy to guide the fuzzer to winning the game.
+
+For Tetris, a game with no end, our first thought was that beating it would mean to do as well as the best humans could do. The thing we failed to take into account was all the other humans.
+
+Round one: learning
+
+My coworker Alex Pshenichkin had already tried getting the fuzzer to play Tetris. Heâd figured out the foundations of how to get the current piece layout by reading emulator memory. He used this to calculate our first goodness measure, based on 
+some
+ 
+research
+ he found about playing Tetris.
+
+This version took a long time to play because the tactic that generated input created basically random inputs.
+4
+ When we took the results of our runs and converted them into a movie, watching the pieces drop was like watching snowflakes caught in a gentle breeze. They would slowly meander down the screen, undulating back and forth, and eventually settle in a random place.
+
+4
+
+The only exception was the button-press to pause the game. We needed that key to get past the start screen, but then never emitted it once game play started.
+
+Our strategy measured the board state at each frame, and explored in parallel many diverse patterns of board layout. Combined with the random tactic, this gave us an approach where we were all-in on randomness. In the time we devoted to running this, we never could clear more than a few lines.
+
+Alex did amazing work getting the core setup working, but his real job pulled at his time, and he went on to be the key person on the 
+deterministic hypervisor
+ at the core of our product. Tetris would have to sit on the shelf until a global pandemic brought it front and center again.
+5
+
+5
+
+This is likely the 
+post hoc ergo propter hoc
+ logical fallacy, but being stuck at home did make my mind crave some âfunâ work.
+
+Round two: naive success
+
+In 2020, while we were stuck at home due to COVID, I started work on Tetris as a side project. I wanted to make our tactics and strategy behave more like the best humans did.
+
+Our aim was to beat the game for good by getting past level 29, the point that traditionally defeated human gamers. At level 29 the speed that pieces drop suddenly doubles, from 2 frames per row to 1 frame per row, so that a piece falls the full height of the playfield in about a third of a second. At this speed, the standard method of holding down left or right canât move a piece all the way from the spawn point to the far edge before it reaches the bottom. So for decades, level 29 was considered unsurvivable: a âkill screenâ where the game effectively ended itself no matter how good you were.
+
+My new tactic generated input bytes specifically for Tetris. It mimicked what the top players did when encountering a new piece â first rotate, then move left or right to a particular column, then go down-down-down until the piece was placed.
+
+I coupled this with a revamped strategy. I took the game board evaluation function from the first attempt, and converted it to an objective function that was designed to run when a new piece was ready to drop. The objective function took into account how tall the stack of pieces was (smaller is better), how far down the board the piece was when we locked it (deeper is better), and how many âbubblesâ we left in the assembled mass of pieces, where a bubble is a trapped empty square we canât fill. More bubbles, more troubles.
+
+The strategy we used ran the objective function when game memory told us there was a new piece. With each new piece, we also determined what âstrategy bucketâ we had reached. A bucket is defined by a tuple made up of:
+
+(number of pieces seen so far in the game, column the last piece was placed into).
+
+In each bucket, we stored its score from the objective function and a game state we could use to return to that point in the game.
+
+When the strategy chose a bucket to explore, the fuzzer loaded the saved game state into an emulator. From there, it invoked the tactic to generate random Tetris moves. We were constantly jumping back in time to interesting game states and trying again. When we landed back in a bucket we had already filled, the objective function decided whether to keep the state we had, or replace it with the newly-discovered one. Across thousands of runs, each bucket slowly accumulated the best game state we had found for each 
+(piece count, column)
+ combination.
+
+This objective function naturally goes up as we clear more and more lines: the only way to satisfy it is to keep going a little further. As we played more and more games we would improve the game states we saved for each game position.
+
+This same strategy had worked well for other NES games. Tetris, however, was different. We ended up making progress, but stalled out around level 15. The breakthrough came from my coworker Josh Reagan, who was building a new strategy with our co-founder Dave Scherer: a âgraph-awareâ strategy. Their insight was to stop treating the buckets as a disconnected pile and instead wire them into a graph: each bucket becomes a node, each edge carries the reward for getting from one node to the next. The strategy searches for the highest-reward path to each node on the way to the deepest one. The objective function was perfect to hand out those rewards. Josh switched us over, and kicked off an overnight run. We would know more in the morning.
+6
+
+6
+
+For another example of using the graph-aware strategy, see 
+Optimizing our way through Metroid
+.
+
+We got to level 41, well past the level 29 âkill screenâ. When we got back to the office we named a conference room âTetrisâ. We were done!
+
+Antithesis vs. various teenagers
+
+As you can probably tell from the length of the remaining blog post, we were in fact very much not done.
+
+We thought weâd beaten human gamers, but the definition of what that meant was changing out from under us. We happened to be trying to beat Tetris at exactly the time that gamers were blowing right past the old limits.
+
+Even in 2020, the human state of the art had advanced beyond level 29. Weirdly, it was 
+very
+ close to where we had landed, with level 38 
+reached for the first time
+ by teenage gamer Eric Tolt.
+
+The breakthrough that made this possible was more advanced button pressing techniques. Instead of holding down left or right, you tap them extremely rapidly instead. The first technique developed, hypertapping, relied on using arm muscle tremors to vibrate the button. This was what was used by Tolt in 2020. However, hypertapping caused a lot of physical strain and so stayed pretty niche.
+
+Around the same time, a new technique, rolling, was developed. Rolling involved placing one finger on left or right while drumming the fingers of the other hand against the back of the controller, pushing the button down repeatedly. This was much less physically demanding, and importantly, even faster. Gamers started switching to it and smashing more records.
+
+In 2023, the 13-year-old gamer Willis Gibson, known as âBlue Scutiâ, used the rolling technique to reach level 157, and became the first human player ever to crash the game. As the game plays on into uncharted territory, 
+strange bugs
+ start to appear that cause the game to reset, freeze or just go black.
+
+This was about the time that Antithesis came out of stealth. When our blog launched people asked âHey, we beat Tetris, right? You should do a blog post.â I had to sheepishly admit, âwell, thereâs this 13-year-old who can outplay usâ¦ and please donât ask about the conference room.â
+
+Then in late 2024, the 16-year-old Michael Artiaga (âdogplayingtetrisâ, or just âDogâ) achieved the unthinkable. Playing by hand on a modified cartridge that let him get past the crash triggers, he got to level 255 and then advanced one more level, rolling the level counter back to 0. When this happens, the colors, piece speed, and scoring increments all go back to where they are at game start. This achievement, known as ârebirthâ, had been seen in tool-assisted runs, but this was the first time that a human had reached it.
+
+What makes this feat particularly impressive is 
+all the bugs
+ he had to navigate around in the high levels. A particularly bad one at level 235 stops the level counter from incrementing after the normal 10 lines; instead, Artiaga had to clear a ridiculous 810 lines. To make things even worse, he hit an unrelated color palette glitch that 
+turned all the pieces dark green
+, making them very hard to see on the black background.
+
+The teenagers had moved the goalposts again. We had climbed a mountain only to see that there was a bigger mountain. We 
+had
+ to get to rebirth.
+
+Round three: Project 999999
+
+April 2025: I had a window between projects, and the marketing people were asking for the Tetris post again.
+
+With the help of my coworker Peter Stiglitz, Iâd been researching the way humans played Tetris. I expected that we would need some counter-measures against the glitches in the game that were known to happen in deep levels.
+
+Peter found that some of the glitches required clearing multiple lines at a time in certain places in the game. Also we had not yet maxed the score. The humans in the Tetris world championships competed on score, and could occasionally reach 999999, the maximum score possible in the original version. Our strategy did not care about the score as much, so as part of matching the best humans and getting to rebirth, I thought we should also max the score on the way. Thus âProject 999999â was born.
+
+Looking at the humans, I saw that the competitive players tried to clear four lines with one piece. You get a bigger bonus the more lines you clear at once. The biggest bonus, called a âTetrisâ in the game, is to clear four at once. The only piece that can reach four lines at the same time is the straight âIâ piece.
+7
+ To score a Tetris, a player must build a solid structure four tetrominoes high and completely filled in, 
+except
+ for an empty well one square wide. Then the player must maintain this until an I piece appears, rotate the I to a vertical position and drop it in the well. This will clear all four lines and earn the Tetris bonus.
+
+7
+
+Each Tetris piece is made up of four little squares, known as a âtetrominoâ, in different arrangements. The pieces are referred to by the letter they kind of remind people of: I, O, J, L, S, Z, and T.
+
+This led me to create an addition to the objective function. I wrote code that would evaluate a Tetris board and score it on Tetris readiness. A deeper well meant a higher readiness score.
+8
+
+8
+
+More specifically, I used scores of 0, 1, 5, 14, or 30 for wells of depth 0 to 4 â a sum of the first n squares, with n being the depth of the well. Why those numbers? I wanted to capture that wells get progressively harder to recreate as they get deeper. Also I studied Data Science in night school and wanted to use my degree. One thing I learned in school is that sometimes you just go with your gut until it doesnât work.
+
+The objective function we landed on
+
+This is the objective function that would (eventually) carry us to Tetris victory:
+
+score
+=
+â
+1
+â
+(
+Level
++
+50
+)
+â
+BubbleCount
+2
++
+10
+â
+â
+all pieces
+PieceDepth
++
+30
+â
+LinesCleared
++
+50
+â
+TetrisReadiness
++
+GameScore
+\begin{aligned}
+\text{score} &= -1 \cdot (\text{Level} + 50) \cdot \text{BubbleCount}^2 \\
+             &+ 10 \cdot \sum_{\text{all pieces}} \text{PieceDepth} \\
+             &+ 30 \cdot \text{LinesCleared} \\
+             &+ 50 \cdot \text{TetrisReadiness} \\
+             &+ \text{GameScore}
+\end{aligned}
+score
+â
+=
+â
+1
+â
+(
+Level
++
+50
+)
+â
+BubbleCount
+2
++
+10
+â
+all pieces
+â
+â
+PieceDepth
++
+30
+â
+LinesCleared
++
+50
+â
+TetrisReadiness
++
+GameScore
+â
+
+Hereâs what all the terms mean:
+9
+
+Level
+: the game level of the board; nominally the level goes up by 1 after every 10 line clears. Getting to higher levels is good.
+
+BubbleCount
+: the number of empty squares in the build completely surrounded by other pieces or the game edge. Bubbles are bad (hence the -1 on the term in the function).
+
+PieceDepth
+: how far down on the screen did we originally place the piece. Avoiding towers of pieces is good.
+
+TetrisReadiness
+: the score described above that rewards preparing for a four-line clear.
+
+GameScore
+: the score displayed to the user. It rewards doing things that earn points and bonuses.
+
+9
+
+If youâre wondering about the coefficients: I tried to pick values that weighted the relative importance of each term. I did some tuning, but once I found a combination that worked I left it. Also see the previous sidenote about going with your gut.
+
+How the objective function scores different situations.
+
+At the same time, I made a few other changes to the specialized input-generation tactic we were using:
+
+When dropping a piece, we occasionally move one column to the left or right while dropping so we can do a tuck which might help.
+10
+
+Peterâs research revealed that to bypass certain latent glitches it helped to turn off the ânext pieceâ display in the UI, so we occasionally generate the key press to do that while a piece is falling.
+
+10
+
+Humans will also do a tuck-and-roll sometimes when placing a piece, but we donât do that.
+
+(Full disclosure: we run two objective functions in parallel, one with the Tetris readiness term and one without. This lets us try 
+not
+ preferring to clear multiple lines, to handle glitchy parts of the game where clearing only one line at a time is important.)
+
+Hitting the wall at Level 160
+
+The first results of the changes were good. We achieved the first goal of reaching 999999. Realtime telemetry showed we were tearing through levels we had never reached before.
+
+I was watching a run I had hope for. We were well in the 100s. Then I remember being excited that we were in the 150s. Then 159. Then 160. And a few minutes later, still 160. Later, still 160. Another run: 160. Starting a run from 159 and running for hours: also 160.
+11
+ We were stuck, long before our goal of getting to level 255 and rolling over back to level 0.
+
+11
+
+We have the capability to pick a game state from another run and start a new run that explores from there.
+
+I assumed the reason we were stuck is that we must have run into some really glitchy part of the game that was going to take a whole new objective function filled with special-casing galore. We saw 
+garbage on the screen
+ at level 160. That fed into my belief that we had reached some super fragile code. I had other responsibilities that I had to attend to, so I had to (temporarily) put Tetris aside.
+
+The key word in that last paragraph is 
+assumed
+. And I think we all know what happens when you assume.
+
+Round four: if I knew thenâ¦
+
+January 2026: The project that pulled me away wrapped up. I bargained for some more time to work on Tetris.
+
+This time, I started looking for specific, known game glitches that happened right when reaching level 160 â in other words, right after clearing 1600 lines. I could not find any known bugs. The collective knowledge of the internet is generally  good at identifying the game problems as well as the workarounds (like making sure to clear more than one line at some points, or at others to clear 
+only
+ one line).  But this time the internet was silent. I looked at my objective function and I could see no reason why it worked to get to 1599 lines but stopped working as soon as we cleared 1600 lines. It should be working. In fact it should be 
+impossible
+ not to work.
+
+Ugh. I was just like the junior engineers who would ask for my help when the signals they got while debugging were âimpossibleâ. I tell them to test their assumptions â do stuff like print the inputs, intermediate values, and outputs of their code. Make sure it looks correct. I decided to follow my own advice before doing something rash, like posting on an internet message board for help.
+
+When I printed out the value of âlines clearedâ and watched it advance from 1599, the next value it went to was 
+not
+ 1600. It was 1000. That must be the glitch! I did a query to find every value of lines in every trial we made that was immediately after 1599. None of these were in the 1600s.
+
+I looked at the code, and saw that we calculate the number of lines cleared by looking at two consecutive bytes of memory in the game. The code treated them each as binary-coded decimal (BCD).
+12
+ I looked at the intermediate values: each individual byte. I saw that they were 0x0F99 for 1599 and then incremented to 0x1000 on the next line clear.
+
+12
+
+In binary-coded decimal, each 4 bit nibble of a byte represents one digit of a decimal number, so 0x1729 when interpreted as BCD would be the decimal number 1729. If interpreted as base 16 it would be 5929 in decimal.
+
+Exclamation marks were circling my head. 
+The high order byte was not BCD.
+
+The BCD bug.
+
+It turned out the high-order byte was just an unsigned byte to represent the hundreds place.
+13
+ One of the components in the objective function is â30 * LinesClearedâ. By calculating the wrong version for 
+LinesCleared
+ (1000 vs. 1600), the objective function scores clearing line 1600 as negative progress. It will never select a game state with 1600 lines cleared as a state worth saving or exploring from. This explains the wall we ran into.
+
+13
+
+The original game was never supposed to reach more than 300 lines cleared so the game developers did not need to wire up the high-order byte as BCD.
+
+The bug was introduced in 2020, and I had no one to 
+git blame
+ but myself. I had noticed back then we were only observing one byte of game memory for line count, and this would break at line 100. I added the second byte of game memory that held the rest of the line count and assumed it too was BCD. This worked until we hit line 1600. We had run 6 years with false confidence in something with a stupid bug in it.
+
+Rebirth!
+
+After making the trivial fix, we sailed through the remaining levels, up to level 255. There were some interesting glitches right at 255, but it was not long before we got through those too, saw the rebirth, and pulled even with the teenagers. We had been closer to success than we had known. It was just a bug fix in âprovenâ code away.
+
+Hereâs what it looked like:
+
+Rebirth! With bonus cathedral lift-off if youâre patient enough.
+
+In the end, our updated objective function (and a little bit of extra randomness in our input generator) was all we needed. I am very happy that there were not a lot of special cases we had to handle. The general approach of optimizing a function to explore arbitrarily deep levels of the game worked. And lessons of the importance of humility while leading a life in software were relearned.
+
+Weird stuff we saw along the way
+
+Getting to rebirth meant playing through hundreds of levels that were never expected to be reached. As we explored further into the game, we found lots of weird bugs and crashes. Weâve already come across one bug: the score maxes out at 999999, because the counter gets stuck there.
+
+Another well-known bug that we ran into is the 
+color palette glitch
+ that assigns arbitrary colors to pieces that can be hard to see (like the dark green level Artiaga had to clear). Hereâs an example with an awkward dark grey and black palette:
+
+We saw freezes as expected, as well as cases where the game would reset while we were playing it. We ran into the famous glitch where one level requires clearing 80 lines to advance instead of the usual 10.
+
+We also saw some odd glitches that we couldnât find references to on the internet.
+14
+
+14
+
+If you have any information about these glitches, weâd love to hear from you!
+
+One occurs at level 255, like rebirth, but instead of going back to level 0, the system hangs and the score jumps from the stuck 999999 count to a value of âFBFBFBâ. The line count also jumps to the value âFBâ. Here is a movie of reaching it:
+
+Hitting the weird score.
+
+Another bug that we hit on level 160 briefly adds some garbage characters to the screen:
+
+Some odd characters appear three seconds in.
+
+The most visually striking glitch we found is a path that messes with the colors of the whole screen a few levels before rebirth. It is truly wild:
+
+More weird color schemes if you wait for itâ¦
+
+Itâs impressive that the game keeps chugging along happily through all this chaos!
+
+We also noticed something interesting about the paths we discovered that went deep into the game. We do not intentionally manipulate the random number generator in the game. (You can find videos where someone has hacked the RNG and every piece is the same, for instance). We let the inputs we send influence the RNG as the original designers intended. However, since our fuzzing strategy works on survival of the fittest, it may be that the user inputs we find just 
+happen
+ to bias the RNG towards more of certain pieces. When you watch a replay and see strange things like a piece getting nudged over and then nudged back when dropping, it might be that this made the RNG more favorable later in the game and is why this is the piece drop choice that survived.
+
+Here is a screenshot from deep in the game, showing the reported number of each different piece:
+
+If the game received purely random input, the expectation is that all of the piece counts would be about the same. However, this screen that came from a rebirth run shows a clear bias for the I-piece. Not only is this piece the only one that can lead to a Tetris (and this screen is just before one is about to happen), it is also useful for cleaning up mistakes deep in the build. There is also a bias against the S and Z pieces.
+
+Because we save every input we send to a system we are testing, we can mine our runs looking for interesting things. For instance, we could query the database we create for a run and ask to see any line count that was not 0 to 4 greater than the previous count. If we get any results, those are glitches. That would have discovered the FBFBFB bug and some freezes. We call the conditions that should hold for the systems we are testing âtest propertiesâ, and the cases where the properties do not hold, âbugsâ.
+
+Parting thoughts
+
+Tetris is a good analogue for many software projects. People play the early levels all the time, so they work as expected. But once you push past level 29, things start getting strange, with crashes, garbled colors, and broken counters.
+
+Most software has weird corners like this once you explore away from the happy path. Antithesis can hunt for them in the same way we hunted for rebirth, trying lots of possibilities, remembering the interesting ones, and pushing a little further each time.
+
+Iâll leave you with one last glitch video. Hereâs a garbled St. Basilâs Cathedral taking off in the ending cutscene. Early on I said Tetris might be a metaphor for something (I meant âlifeâ if it wasnât obvious) and I hope that this ending can itself be a metaphor for what can happen when you defeat the bugs that hold you down.
+
+Sound on for the full effect!
+
+If you want even more Tetris, weâve put a couple of runs on YouTube:
+
+Full run with rebirth
+
+Weird color glitch
+
+Weâre also releasing some .fm2 input files, which you can play back in 
+fceux
+:
+
+Full run with rebirth
+
+Weird color glitch
+
+FBFBFB glitch
+
+Garbage at level 160 glitch
+
+Special thanks to Lucy Keer for providing indispensable help with this post.
+
+ get started 
+
+Velocity and verification. Finally, both.
+
+Talk with one of our product experts to see how Antithesis can help
+          you ship confidently, no matter whoâs writing your code.
+
+ Book a demo
+ 
+ Chat with us
