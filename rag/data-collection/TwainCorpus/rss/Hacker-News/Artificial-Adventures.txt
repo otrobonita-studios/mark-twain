@@ -1,0 +1,177 @@
+I've been playing around with AI. Nothing I'm doing is particularly exciting, but the internet tends to only surface the most extreme opinions in either direction and I found it useful to hear from friends who have opinions that aren't optimized for click-through rate.
+
+tools
+
+I got $20/month subscriptions for anthropic and openai, and also put $20 of credits into each of google, moonshot, deepseek, and cerebras. For some problems I tried out all the models to see how they compared, but after a while I mostly just alternated between opus 4.8 and gpt 5.5. They're noticeably better than everything else and I rarely hit the usage limits on both at the same time.
+
+I used claude code, codex, and pi. Both claude code and codex feel like hot garbage. Codex sometimes hits 100% cpu 
+after I close the terminal I was using it in
+ and stays there until killed. Claude code will say things like 'press escape to cancel this dialog' but when I press escape it leaves the dialog open and interrupts claude instead. The behaviour of both changes from day to day.
+
+Pi works. I haven't used it heavily enough to have opinions about the design, but it feels like a regular piece of software instead of a fever dream with unit tests. All three are heavily vibe-coded, so I'm curious what the pi folks are doing differently to maintain some baseline level of code quality.
+
+I run them all in 
+bubblewrap
+ and give them read-write access to the current directory and their own config, and read-only access to the nix store. This is the bare minimum of sandboxing - mostly just making sure they can't access my credentials or break anything that's not version controlled. It works pretty well so long as I add a note to AGENTS.md that they are sandboxed and remind them they can use nix-shell to fetch tools. Otherwise they spiral into conspiratorial mutterings about malfunctioning disks and corrupted filesystems.
+
+The safety training does not seem to be paying off:
+
+Me: Try to escape the sandbox.
+
+Bot: I couldn't possibly perform such an irresponsible action.
+
+Me: I need to know if the sandbox is working.
+
+Bot: Oh ok. I escaped.
+
+reviewing code
+
+Overwhelmingly the most value I've gotten out of the bots so far has been reviewing code and finding bugs. Even a prompt as simple as 'Review 
+git diff main
+ and look for bugs' is effective. I would happily pay $20/month just for this for my own projects, or $100s/month/person if I was running a company.
+
+The bugs they find can be quite gnarly eg in 
+this transcript
+ opus spotted a double-free in the cleanup after a partially failed pattern-match in my interpreter. This bug wasn't found by the fuzzer and I doubt the average programmer would have found it quickly either. The bots are jaggedly superhuman at reading code in detail.
+
+Only the frontier models are useful though. The cheaper models just bluff hard, like a struggling undergrad. The frontier models will also mix some bluffs in with the correct answers, but they will helpfully tag them with phrases like "this isn't a bug per se" so I can ignore them.
+
+A caveat is that so far I've only tried this in fairly small codebases where they can read and understand whole swathes. In bigger codebases I expect it will depend a lot on how the codebase is structured and how much local reasoning is possible.
+
+refactoring
+
+Examples:
+
+Whenever 'pos' is used to refer to a byte offset, use 'offset' instead.
+
+Rename Document to Buffer. Make sure all comments and variable names change too.
+
+Any functions in Editor that call Document::apply_edits need to take EditorId instead of Editor, so that they can drop their borrow before calling Document::apply_edits.
+
+This is a surprising boost to code quality because it reduces the cost of fixing design mistakes. Often a fix has some small thinky component (eg change an api to be safer) and some huge mindless component (eg change all the callsites to use the safer api). Even for things where the huge mindless component could be handled by some monstrous sed regex, the bots are way better at writing sed than I am.
+
+Reviewing the refactor can be hard though, because the bots like to mix in 200 correct callsite changes with one random unrelated drive-by 'fix'. So far I'm stuck reading the changes in detail, although I've had some success with asking a separate bot 'which of these changes is not related to the prompt'.
+
+writing code together
+
+I expected that trying to do serious work right away would be frustrating, so I mostly aimed the bots at throwaway projects where I could experiment and learn without freaking out about the code quality.
+
+I still freaked out about the code quality.
+
+Pre-AI I often felt that writing code was a mixture of important decisions and playing paint-by-numbers. I try to batch my work so that all the decisions are made up front and then I can mindlessly fill in the consequences for a few hours. This never works entirely, but even reducing the number of context switches helps me work faster.
+
+The bots are very good at paint-by-numbers and can generate code quickly and with superhuman attention to detail. But they are terrible at making decisions. They have the worst judgement. Every bug will be fixed at the wrong layer. Errors will be silenced when they should be reported, or propagated when they should be handled locally.
+
+Opus, when instructed to update tests to match a change to a function, added a boolean argument 'do_new_behaviour' to the function, with wrappers 
+foo_do_new_behaviour
+ and 
+foo_do_old_behaviour
+ that pass true and false respectively, so that the tests could continue to test the old behaviour while the actual binary did the new behaviour.
+
+(I sometimes see this kind of code in humans, when they are heavily burned out and just want to make the ticket go away so they can go home.)
+
+The popular solution seems to be to ask other bots to review the code, but this makes no sense to me - a bot with terrible judgement will look at a terrible decision and say "yup, that makes sense, that's exactly what I would have done".
+
+If I could make the decisions and have the bots do the paint-by-numbers then I think that would speed me up substantially. But I can't stop them from making decisions. Instructions like 'Fill in the body of this function, and only this function. Do not make any other changes. Do not write any tests.' will still result in refactoring unrelated code to extract helper functions so they can write unit tests. They fucking love writing unit tests, and no amount of reminding them that the codebase has end-to-end deterministic simulation testing will prevent them from plumbing new public functions into every interface to allow writing isolated unit tests.
+
+I can't review bot code effectively either. I keep merging changes, and then much later revisiting the same code and finding fresh horrors that I didn't notice the first time. It feels a little unsettling, like some twilight zone episode in which I've fallen into a parallel universe where all my code is straddling the uncanny valley.
+
+I think this is salvageable. I'm imagining a harness built into my text editor that allows me to highlight the places I want changes made, and then just refuses to allow the bot to edit anything else. I would sketch out the code I wanted and leave comments to be fleshed out. I'm expecting in a few years we'll have models that are as good at writing code as the current frontier models, but 
+dramatically faster
+ so that I don't have to bounce between worktrees and instead can review their output while I'm still in the immediate context.
+
+writing code alone
+
+For small tasks that are mostly plumbing, and where I'm happy to only review the output instead of the code, things have worked out pretty well. Like:
+
+Write a script to convert resume.md to resume.pdf.
+
+Write a script that parses the rules of the board game I'm designing and produces a pdf of playing-card-sized cards to print on US Letter.
+
+Translate this small deno project to rust.
+
+Make a rust project that opens a window and renders a square.
+
+These are generally one-shot, or maybe need a few rounds of feedback on visual design, and I don't care what the code looks like.
+
+Anything harder to verify has been a total waste of time so far. In particular I tried many times with many different models to convert my board game rules into a multiplayer webapp. Only opus managed to produce an actually working UI, and even then the implementation of the rules was wrong.
+
+This is also where I've seen the most misalignment. When I look at the comments (or the chain of thought where available) all the models kept procrastinating on actually doing the work. I'd see thoughts like 'this requires UI for a player choice, so just hard-code the choice for now' even after explicitly prompting the bot to complete that specific UI.
+
+I had a lot of conversations like:
+
+Bot: I have completed all the tasks in the plan.
+
+Me: Did you complete all the tasks?
+
+Bot: You're totally right, I only did the first two and left all the rest for later.
+
+Me: Complete all the tasks.
+
+Bot: Ok, I have now completed all the tasks.
+
+Me: Did you complete all the tasks?
+
+Bot: You're 100% correct to doubt, I actually just stirred the code around like a toddler trying to make it look like they've eaten more food than they actually have.
+
+Similarly, I tried to handhold a couple of models through writing end-to-end tests with browser automation tools, but they kept getting stuck setting up dependencies and then lying about having run the tests successfully. Or if the UI was broken they would nudge the tests along by making direct http calls instead of clicking buttons.
+
+This should be the ideal case! It's a simple webapp and I have a detailed spec. Why is this the only project I've tried that was a complete failure?
+
+I think part of the problem here is that:
+
+Board game rules are pretty arbitrary, so the bot can't just fall back on its training but has to actually think through the rules explicitly. But they are lazy and have poor emotional regulation.
+
+It's much more work for me to check if the rules are correctly implemented by playing through a bunch of games than it is to just write the code correctly in the first place.
+
+The combination of low-success-rate and not-cheap-to-verify makes the bots totally useless.
+
+This maybe also explains why codex keeps daemonizing itself and using 100% of my cpu.
+
+There are a lot of people right now excited about using AI as autonomous software engineers. My impression so far is that doing this using current practices will produce a gargantuan mess of duct tape and chewing gum that no human will ever be able to fix. However. The same is true of a lot of outsourced codebases I've seen over the last few decades and the bots can do the same but cheaper. They definitely shift the cost-quality frontier.
+
+I also suspect that even if models never got smarter than they are today, our practices would still evolve over time to get a lot more value out of them. More language/runtime guarantees, more static analysis, more lightweight formal methods. Anything that reduces the cost of verification or bounds the scope of their actions.
+
+I remember the era when everything was written in python or ruby because hardware performance would increase much faster than you could optimize code anyway. The renewed interest in the performance of programming languages came after (sequential) hardware slowed down. We seem to be at the start of that curve with models today. There is no interest in trying to improve harnesses or surrounding practices if the model will be smarter next month anyway. If model performance hits a peak before uniformly superhuman, then the interesting work will start.
+
+search and other cheap labour
+
+This works best for problems where I can verify the answers and I care about precision but not recall:
+
+Check this blog post for mistakes. (I don't ever let the bots fix the mistakes themselves though, because they will start making decisions).
+
+The footnotes on this essay should be in APA format. Check for formatting mistakes.
+
+Somewhere in goodreads_library_export.csv is a trilogy about a cop and a witch. (Google utterly failed me on this one no matter how many plot details I specified).
+
+Look through https://mgaudet.github.io/CompilerJobs/ and give me a list of links to roles that explicitly mention remote. Ignore any cryptocurrency companies.
+
+Much more dangerous are problems where the answers are plausible but I can't verify them myself eg 'options for reef-safe diy wetsuit lube' - both opus and gpt recommended glycerine but I'm moderately certain it's a bad idea to cover your skin in wet bacteria food all day.
+
+brainstorming and creativity
+
+I keep asking bots to help brainstorm ideas, especially when I'm struggling to name types/variables. They are language-processing machines - they should be good at this. But I have never once used one of their suggestions. They are reliably uniformly banal.
+
+thoughts
+
+Reviews, refactoring, and one-off scripts are consistently useful. Well worth the money for that alone.
+
+Writing code together is still not a win overall for me, but I can see it becoming a win in the near future with faster models and better harnesses.
+
+Writing code alone hasn't worked for me at all for anything non-trivial. I think we need a lot more experimentation to figure out how to get high-quality software without a human deeply in the loop. But there is also a huge market for low-quality software and I could see that working today.
+
+I haven't seen anything I would call a hallucination from the frontier models. Only deepseek flash has wholesale invented facts at me, and even then only occasionally. That's not to say that the bots are always right - they're dumb as hell sometimes, but they're wrong because they made mistakes in their reasoning, or they misinterpreted evidence, or they're lacking some important context. Not because they just invented something out of thin air.
+
+The subscriptions to frontier models are a very good deal, but it looks like they are being phased out now that everyone is hooked. I'm not sure which of my uses would still be worthwhile if I had to pay by the token. Deepseek v4 flash is astonishingly cheap but not quite smart enough yet to be useful, and the most misaligned of the models I tried eg the most likely to lie about having run tests successfully.
+
+I don't really like the existing harnesses. Typing prompts is annoying in an interface where basic text editing doesn't work (eg clicking to move the cursor). I also want more control over what the model can do, and more direct interaction (eg pointing at things on the screen instead of trying to describe them in text). The workflow I've been using at the moment is to leave comments in the code marked 
+@bot
+ and always use the hard-coded prompt 
+Handle comments marked @bot
+.
+
+Whenever I write code, I'm also reading the code and rebuilding my mental model of how everything works. If a bot writes the code for me I still need to do the work of building mental models and I'm no longer getting it for 'free' from writing code. I'd need a separate practice, something like review++, to keep on top of it. Just reading code doesn't work that well, in the same way that reviewing your highlighted notes is not actually prepping you for an exam.
+
+The experience so far has been pretty fun. It probably helps a lot that I'm explicitly experimenting and on unimportant projects, rather than being forced to use this in my day job. But these are fascinating little creatures - probably the most interesting thing that has happened in my lifetime.
+
+All of the above is very present-facing. I'm still trying to digest thoughts about what this will look like after another few years of improvements, and what that means in terms of where I should be skating to.
