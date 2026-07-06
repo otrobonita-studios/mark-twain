@@ -1,0 +1,1336 @@
+Automated Unit
+Testing On-The-Cheap: Part 2
+
+C++ Code Capsules
+
+In 
+Part
+1
+ of this two-part series I introduced a time-tested (i.e., old :-))
+technique that handled automated unit testing in a remarkably simple
+way, including validating proper exception handling. The previous post
+left two problems on the table, however, and the journey to fix them
+turns out to be a nice tour of two key features of modern C++:
+
+inline variables
+ and 
+modules
+.
+
+The simplicity of the test framework discussed in Part 1 follows from
+everything being contained in a small header file, 
+test.h
+
+(include guards not shown):
+
+namespace
+ 
+{
+
+std::
+size_t nPass 
+=
+ 
+0
+;
+
+std::
+size_t nFail 
+=
+ 
+0
+;
+
+inline
+ 
+void
+ do_fail
+(
+const
+ 
+char
+*
+ text
+,
+ 
+const
+ 
+char
+*
+ fileName
+,
+ 
+long
+ lineNumber
+)
+ 
+{
+
+std::
+cout 
+<<
+ 
+"FAILURE: "
+ 
+<<
+ text 
+<<
+ 
+" in file "
+ 
+<<
+ fileName
+
+<<
+ 
+" on line "
+ 
+<<
+ lineNumber 
+<<
+ 
+std::
+endl
+;
+
+++
+nFail
+;
+
+}
+
+inline
+ 
+void
+ do_test
+(
+const
+ 
+char
+*
+ condText
+,
+ 
+bool
+ cond
+,
+ 
+const
+ 
+char
+*
+ fileName
+,
+ 
+long
+ lineNumber
+)
+ 
+{
+
+if
+ 
+(!
+cond
+)
+
+            do_fail
+(
+condText
+,
+ fileName
+,
+ lineNumber
+);
+
+else
+
+++
+nPass
+;
+
+}
+
+inline
+ 
+void
+ 
+succeed_
+()
+ 
+noexcept
+ 
+{
+
+++
+nPass
+;
+
+}
+
+inline
+ 
+void
+ 
+report_
+()
+ 
+{
+
+std::
+cout 
+<<
+ 
+"
+\n
+Test Report:
+\n\n
+"
+;
+
+std::
+cout 
+<<
+ 
+"
+\t
+Number of Passes = "
+ 
+<<
+ nPass 
+<<
+ 
+std::
+endl
+;
+
+std::
+cout 
+<<
+ 
+"
+\t
+Number of Failures = "
+ 
+<<
+ nFail 
+<<
+ 
+std::
+endl
+;
+
+}
+
+}
+
+#define test_
+(
+cond
+)
+do_test
+(#
+cond
+,
+cond
+,
+__FILE__
+,
+__LINE__
+)
+
+#define fail_
+(
+expr
+)
+do_fail
+(
+expr
+,
+__FILE__
+,
+__LINE__
+)
+
+#define throw_
+(
+expr
+,
+T
+)
+\
+
+try
+{
+\
+
+expr
+;
+\
+
+std::
+cout
+<<
+"THROW "
+;
+\
+
+do_fail
+(#
+expr
+,
+__FILE__
+,
+__LINE__
+);
+\
+
+}
+catch
+(
+const
+T
+&)
+{
+\
+
+++
+nPass
+;
+\
+
+}
+catch
+(...)
+{
+\
+
+std::
+cout
+<<
+"THROW "
+;
+\
+
+do_fail
+(#
+expr
+,
+__FILE__
+,
+__LINE__
+);
+\
+
+}
+
+#define nothrow_
+(
+expr
+)
+\
+
+try
+{
+\
+
+expr
+;
+\
+
+++
+nPass
+;
+\
+
+}
+catch
+(...)
+{
+\
+
+std::
+cout
+<<
+"NOTHROW "
+;
+\
+
+do_fail
+(#
+expr
+,
+__FILE__
+,
+__LINE__
+);
+\
+
+}
+
+Generally users only have to call the 
+test_
+ macro, which
+captures the expression being tested as text along with its associated
+file name and line number. For example, if a source line is
+
+test_
+(
+stk
+.
+top
+()
+ 
+==
+ 
+1
+);
+
+then the preprocessor replaces it with the following text in the
+compilation stream:
+
+do_test
+(
+"stk.top() == 1"
+,
+ stk
+.
+top
+()
+ 
+==
+ 
+1
+,
+ 
+"tstack.cpp"
+,
+ 
+17
+);
+
+indicating that the name of the file is 
+tstack.cpp
+ and
+the call occurred on line 17 of that file. If the test fails then the
+followed is printed to the console:
+
+FAILURE: stk.top() == 1 in file tstack.cpp on line 17
+
+The 
+report_
+ function prints the number of success and
+failures, for example:
+
+Test Report:
+
+    Number of Passes = 13
+    Number of Failures = 0
+
+The other functions exist for completeness but are rarely needed by
+users.
+
+In this article I will fix the two problems identified at the end of
+Part 1:
+
+The counters in the anonymous namespace are specific to each
+individual file. This was by design to avoid global variables and
+because this framework was meant to be used in single-file student
+projects, but is an unnecessary constraint; a large project should share
+the total counts of successes and failures across all project files
+without violating the
+
+One
+Definition Rule
+ (ODR).
+
+Dependencies on header files have long been recognized as a source
+of headaches in C++. The macros above call inline functions contained in
+the anonymous namespace, so each file under test gets it own copy of the
+code. Modules were introduced in C++20 to alleviate such issues.
+
+It turns out that macros will still be needed here, so I will take a
+hybrid approach to move as much as possible into a module.
+
+Inline Variables
+
+C++17 introduced the notion of 
+inline
+
+variables
+. Just as with functions, 
+inline
+
+variables may be defined in multiple translation units, and the linker
+is required to collapse all those definitions into one. The rules mirror
+those for inline functions:
+
+All definitions must be identical (same tokens, same types, same
+initializer).
+
+The variable has external linkage by default at namespace
+scope.
+
+It is guaranteed to be the same object across all translation units
+(same address everywhere).
+
+The fix here is to choose a 
+named namespace
+ and declare
+
+nPass
+ and 
+nFail
+ to be 
+inline
+:
+
+namespace
+ TestFramework 
+{
+
+inline
+ 
+std::
+size_t nPass 
+=
+ 
+0
+;
+
+inline
+ 
+std::
+size_t nFail 
+=
+ 
+0
+;
+
+// Other functions reside in the same namespace...
+
+inline
+ 
+void
+ fail
+...
+
+inline
+ 
+void
+ test
+...
+
+inline
+ 
+void
+ succeed
+...
+
+inline
+ 
+void
+ report
+...
+
+Since the functions are all in the 
+TestFramework
+
+namespace, I have renamed 
+do_fail
+ to 
+fail
+ and
+
+do_test
+ to 
+test
+. I have also removed trailing
+underscores in the last two functions. Only the macros retain the
+trailing underscores. The macros will also need to make fully qualified
+calls to the associated functions, e.g.,
+
+#define test_
+(
+cond
+)
+TestFramework
+::
+test
+(#
+cond
+,
+cond
+,
+__FILE__
+,
+__LINE__
+)
+
+The variables satisfy the ODR and donât pollute the global namespace.
+This is a fine solution if you want to remain header-only. That was
+easy.
+
+Module Migration
+
+Modules are a cleaner more modern approach for packaging
+functionality. In fact there is little call for 
+inline
+
+variables now that we have modules in C++. The variables and functions
+can now be moved into their own module. Before doing that we need to
+decide if we still need the macros, and how they will interact with the
+module.
+
+The main motivation for using macros in the first place was to
+capture the 
+expression
+ being tested 
+as a string
+. I
+know of no substitute for this, so the macros 
+test_
+,
+
+fail_
+, 
+throw_
+, and 
+nothrow_
+
+remain.
+
+To capture the file name and line number, however, I will use
+
+std::source_location
+
+introduced in C++20:
+
+void
+ test
+(
+
+bool
+ cond
+,
+
+std::
+string_view expr
+,
+
+const
+ 
+std::
+source_location
+&
+ loc 
+=
+ 
+std::
+source_location::current
+())
+
+{
+
+if
+ 
+(
+cond
+)
+
+++
+nPass
+;
+
+else
+
+        fail
+(
+expr
+,
+ loc
+);
+
+}
+
+Since 
+std::source_location::current()
+ appears as a
+default argument, it captures the correct information at the call site.
+(I also used 
+std::string_view
+ to receive the expression
+text.)
+
+Macros are an artifact of the preprocessor and cannot be exported
+from a module. The solution here is to keep the macros in a separate
+header file, and to have them call into the 
+TestFramework
+
+namespace, as previously mentioned:
+
+// test_macros.h: Macro companions to the test module.
+
+// Include this in any test driver that uses test_.
+
+// Macros cannot be exported from modules â this header bridges that gap.
+
+// AUTHOR: Chuck Allison (Creative Commons License, 2001 - 2026)
+
+// This header must appear after `import test;` in client code.
+
+#ifndef TEST_MACROS_H
+
+#define TEST_MACROS_H
+
+#define test_
+(
+cond
+)
+TestFramework
+::
+test
+(
+cond
+,
+#
+cond
+)
+
+#define fail_
+(
+msg
+)
+TestFramework
+::
+fail
+(
+msg
+)
+
+#define throw_
+(
+expr
+,
+T
+)
+\
+
+try
+{
+\
+
+expr
+;
+\
+
+TestFramework
+::
+fail
+(
+"THROW expected in: "
+#
+expr
+);
+\
+
+}
+catch
+(
+const
+T
+&)
+{
+\
+
+++
+TestFramework
+::
+nPass
+;
+\
+
+}
+catch
+(...)
+{
+\
+
+TestFramework
+::
+fail
+(
+"THROW wrong exception: "
+#
+expr
+);
+\
+
+}
+
+#define nothrow_
+(
+expr
+)
+\
+
+try
+{
+\
+
+expr
+;
+\
+
+++
+TestFramework
+::
+nPass
+;
+\
+
+}
+catch
+(...)
+{
+\
+
+TestFramework
+::
+fail
+(
+"NOTHROW expected: "
+#
+expr
+);
+\
+
+}
+
+#define report_
+()
+TestFramework
+::
+report
+()
+// For consistency
+
+#endif
+
+Following current convention, I will move the variables and functions
+into a module named 
+test
+ in a file named
+
+test.cppm
+:
+
+// test.cppm: Simple but effective automated test scaffolding
+
+// C++20 module version using import std and std::source_location.
+
+// Macros live in companion header test_macros.h (modules cannot export macros).
+
+// AUTHOR: Chuck Allison (Creative Commons License, 2001 - 2026)
+
+export
+ 
+module
+ test
+;
+
+import
+ std
+;
+
+export
+ 
+namespace
+ TestFramework 
+{
+
+std::
+size_t nPass 
+=
+ 
+0
+;
+
+std::
+size_t nFail 
+=
+ 
+0
+;
+
+void
+ fail
+(
+
+std::
+string_view msg
+,
+
+const
+ 
+std::
+source_location
+&
+ loc 
+=
+ 
+std::
+source_location::current
+())
+
+{
+
+std::
+cout 
+<<
+ 
+"FAILURE: "
+ 
+<<
+ msg
+
+<<
+ 
+" in file "
+ 
+<<
+ loc
+.
+file_name
+()
+
+<<
+ 
+" on line "
+ 
+<<
+ loc
+.
+line
+()
+
+<<
+ 
+" in function "
+ 
+<<
+ loc
+.
+function_name
+()
+ 
+<<
+ 
+'
+\n
+'
+;
+
+++
+nFail
+;
+
+}
+
+void
+ test
+(
+
+bool
+ cond
+,
+
+std::
+string_view expr
+,
+
+const
+ 
+std::
+source_location
+&
+ loc 
+=
+ 
+std::
+source_location::current
+())
+
+{
+
+if
+ 
+(
+cond
+)
+
+++
+nPass
+;
+
+else
+
+            fail
+(
+expr
+,
+ loc
+);
+
+}
+
+void
+ succeed
+()
+ 
+{
+
+++
+nPass
+;
+
+}
+
+void
+ report
+()
+ 
+{
+
+std::
+cout 
+<<
+ 
+"
+\n
+Test Report:
+\n\n
+"
+
+<<
+ 
+"
+\t
+Number of Passes = "
+ 
+<<
+ nPass 
+<<
+ 
+'
+\n
+'
+
+<<
+ 
+"
+\t
+Number of Failures = "
+ 
+<<
+ nFail 
+<<
+ 
+'
+\n
+'
+;
+
+}
+
+}
+
+Note that the 
+TestFramework
+ namespace must also be
+explicitly exported.
+
+The 
+inline
+ keyword is no longer needed now that
+everything resides in its own module. But to use this module it is
+necessary to import the 
+test
+ module 
+before
+
+including the 
+test_macros.h
+ header, so that the
+
+TestFramework
+ namespace is visible to the macros. Here is
+the 
+Stack
+ test example from Part 1 rewritten to use the
+
+test
+ module. (I also made the 
+Stack
+ class a
+module.)
+
+// tstack.cpp: Test driver for Stack<T>
+
+// C++20 module version.
+
+import
+ stack
+;
+
+import
+ std
+;
+
+import
+ test
+;
+
+#include 
+"test_macros.h"
+
+int
+ main
+()
+ 
+{
+
+    Stack
+<
+int
+>
+ stk
+;
+
+test_
+(
+stk
+.
+size
+()
+ 
+==
+ 
+0
+);
+
+// Test exceptions (top and pop are invalid on empty stack)
+
+throw_
+(
+stk
+.
+top
+(),
+ 
+std::
+underflow_error
+);
+
+throw_
+(
+stk
+.
+pop
+(),
+ 
+std::
+underflow_error
+);
+
+nothrow_
+(
+stk
+.
+size
+());
+
+// Test push and top
+
+    stk
+.
+push
+(
+1
+);
+
+test_
+(
+stk
+.
+top
+()
+ 
+==
+ 
+1
+);
+
+test_
+(
+stk
+.
+size
+()
+ 
+==
+ 
+1
+);
+
+    stk
+.
+push
+(
+2
+);
+
+test_
+(
+stk
+.
+top
+()
+ 
+==
+ 
+2
+);
+
+test_
+(
+stk
+.
+size
+()
+ 
+==
+ 
+2
+);
+
+// Test pop
+
+    stk
+.
+pop
+();
+
+test_
+(
+stk
+.
+top
+()
+ 
+==
+ 
+1
+);
+
+test_
+(
+stk
+.
+size
+()
+ 
+==
+ 
+1
+);
+
+    stk
+.
+pop
+();
+
+test_
+(
+stk
+.
+size
+()
+ 
+==
+ 
+0
+);
+
+throw_
+(
+stk
+.
+top
+(),
+ 
+std::
+underflow_error
+);
+
+throw_
+(
+stk
+.
+pop
+(),
+ 
+std::
+underflow_error
+);
+
+report_
+();
+
+}
+
+The only difference in the client code is the use of
+
+import
+ and including the header file after the import.
+
+Which One Should You Actually
+Use?
+
+If youâre keeping score: both versions fix the ODR bug that started
+this series. The inline variable fix costs you one keyword and works
+everywhere -std=c++17 does â no module-dependency scanner, no BMI
+worries, no compile-order gotchas to explain to a student at 11pm before
+an assignment is due. If you have C++20 available, you could also
+replace 
+__FILE__
+ and 
+__LINE__
+ with
+
+std::source_location
+ and still go header only.
+
+The module version buys you real encapsulation (not just a polite
+namespace) and skips re-parsing the header in every translation unit,
+but it asks you to juggle two files and get the import-before-#include
+order right, on a toolchain story thatâs still finding its footing
+outside Visual C++.
+
+My recommendation: default to the header-only version for coursework
+and anything that needs to build anywhere, on anything, today. Consider
+reaching for the module version once your build environment has
+genuinely solid modules support and you actually want the stronger
+boundary â treat it as the destination, not the daily driver, until the
+ecosystem catches up to the language. The module-#include hybrid
+approach is likely to be a reality for a long time to come.
+
+(
+Note
+: This code was developed in Visual C++ on Visual
+Studio 2026 Community Edition. You can download the code
+
+here
+. I would like to
+thank Bjarne Stroustrup for his helpful comments on a previous draft of
+this post.)
