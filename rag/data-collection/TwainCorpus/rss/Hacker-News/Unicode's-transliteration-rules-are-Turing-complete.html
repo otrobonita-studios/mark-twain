@@ -1,0 +1,138 @@
+<body>
+<h3>Nicolas Seriot</h3>
+<h4><a href="/computation/">Computation</a> &gt; Unicode's Transliteration Rules Are Turing-Complete</h4>
+<h1>ð¦ Unicode's Transliteration Rules Are Turing-Complete</h1>
+<p><em>July 2026</em></p>
+<p>See also: <a href="https://seriot.ch/computation/jira.html">Jira is Turing-Complete</a></p>
+<p><strong>Table of Contents</strong></p>
+<ol>
+<li><a href="#1">Transliteration Rules</a></li>
+<li><a href="#2">2-Tag Systems</a></li>
+<li><a href="#3">The Collatz Function</a></li>
+<li><a href="#4">Correctness and Universality</a></li>
+<li><a href="#5">ICU's Rewrite Guard</a></li>
+<li><a href="#6">Rule 110</a></li>
+<li><a href="#7">Prime Numbers</a></li>
+<li><a href="#8">Conclusion</a></li>
+<li><a href="#9">Appendix: Files</a></li>
+</ol>
+<p>I've been wondering for a while whether Unicode allows universal computation. The core Unicode algorithms (normalization, casing, bidi, collation) are deliberately bounded, but <a href="https://www.unicode.org/reports/tr35/tr35-general.html#Transforms">UTS #35 transliteration rules</a>, under their natural unbounded semantics, are not. This is a result I haven't found published before.</p>
+<p>These rules ship as <a href="https://github.com/unicode-org/cldr/tree/main/common/transforms">locale data</a> in <a href="https://icu.unicode.org/">ICU</a>, the widely used Unicode/globalization library used in most operating systems, browsers, runtimes, and databases. Whether a given rule file terminates on a given input is <a href="https://en.wikipedia.org/wiki/Halting_problem">undecidable</a>.</p>
+<h3> 1. Transliteration Rules</h3>
+<p>A transliterator typically turns "Ã©" into "e", using a list of ordered <a href="https://www.unicode.org/reports/tr35/tr35-general.html#Conversion_Rules">rewrite rules</a>:</p>
+<pre><code>L { x } R &gt; y ;
+</code></pre>
+<p>The substring <code>x</code> is replaced by <code>y</code> when it sits between (optional) contexts <code>L</code> and <code>R</code>. The <a href="https://www.unicode.org/reports/tr35/tr35-general.html#Revisiting">revisiting</a> feature allows <code>|</code> in the replacement, which places the cursor inside the new text so that newly written material can trigger further rules.</p>
+<p>Example:</p>
+<pre><code>x &gt; y | z ;
+za &gt; w ;
+</code></pre>
+<p><code>xa</code> rewrites to <code>y|za</code> (cursor before <code>z</code>). The engine rescans and <code>za</code> matches, producing <code>yw</code>.</p>
+<p>Using the Python <a href="https://pypi.org/project/pyicu/">PyICU</a> module:</p>
+<pre><code>from icu import Transliterator as T
+t = T.createFromRules("", "x &gt; y|z; za &gt; w;")
+print(t.transliterate("xa")) # yw
+</code></pre>
+<p>Here is the <a href="https://github.com/unicode-org/cldr/blob/main/common/transforms/Latin-Katakana.xml#L126-L127">Latin-Katakana</a> transform. It uses contexts, capture groups, quantifiers and the cursor. Before <code>i</code> or <code>e</code>, <code>c</code> rewrites to <code>s</code> and the cursor backs up so the <code>s</code> rules re-fire. Same revisiting trick as above, shipped in production locale data.</p>
+<pre><code>c } i â | s ;
+c } e â | s ;
+</code></pre>
+<h3> 2. 2-Tag Systems</h3>
+<p>To prove UTS #35 universality, we compile a <a href="https://en.wikipedia.org/wiki/Tag_system">2-tag system</a> (<a href="https://archive.org/details/sim_american-journal-of-mathematics_1943-04_65_2/page/n3/mode/2up">Post, 1943</a>) into transliteration rules, a model proven universal (<a href="https://dl.acm.org/doi/10.1145/321203.321206">Cocke &amp; Minsky, 1964</a>).</p>
+<p>A 2-tag system has one production per letter. Each step removes the first two letters and appends the production of the first one. It halts when fewer than two letters remain. </p>
+<h3> 3. The Collatz Function</h3>
+<p>Our example is <a href="https://doi.org/10.1016/j.tcs.2007.10.020">Liesbeth De Mol</a>'s 2-tag system for the <a href="https://en.wikipedia.org/wiki/Collatz_conjecture">Collatz</a> function (even n â n/2, odd n â (3n+1)/2): <code>a â bc</code>, <code>b â a</code>, <code>c â aaa</code>, on the unary word <code>aaa...a</code>. We prefix the word with a read marker <code>M</code>, which pins the machine to the front. When no rule matches at <code>M</code>, no rule matches anywhere.</p>
+<p>The construction uses one rule per letter:</p>
+<pre><code>M a [abc] ([abc]*) &gt; | M $1 b c ;
+M b [abc] ([abc]*) &gt; | M $1 a ;
+M c [abc] ([abc]*) &gt; | M $1 a a a ;
+</code></pre>
+<p>The first rule matches the marker, the letter <code>a</code>, one more letter, then captures everything else. The replacement writes the next configuration and puts the cursor back before the marker so the next step fires immediately.</p>
+<p></p>
+<p>The character class, the capturing group and <code>$1</code>, the quantifier and the cursor are standard rule syntax (the spec's <a href="https://www.unicode.org/reports/tr35/tr35-general.html#Transform_Syntax_Characters">Transform Syntax Characters</a> table).</p>
+<p>You can run this machine with <a href="uts35.py">uts35.py</a> â <a href="collatz.txt">collatz.txt</a> is the rules above with the <code>|</code> deleted, so each pass performs exactly one tag step. From <code>aaa</code>, the run replicates the worked example on the Wikipedia <a href="https://en.wikipedia.org/wiki/Tag_system">tag system</a> page (<code>aaa</code>, <code>abc</code>, <code>cbc</code>, <code>caaa</code>, <code>aaaaa</code>, ...) with the values appearing as runs of <code>a</code>s. The same rules also run with no Python at all, through ICU's stock <code>uconv</code> (<a href="uts35.sh">uts35.sh</a>). <a href="test.sh">test.sh</a> checks the machine against expected outputs.</p>
+<pre><code>% python3 uts35.py collatz.txt aaa
+ICU 78.3
+  0 - M<span style="color:#c00;font-weight:bold">aaa</span>         # 3
+  1 - Mabc
+  2 - Mcbc
+  3 - Mcaaa
+  4 - M<span style="color:#c00;font-weight:bold">aaaaa</span>       # 5
+  5 - Maaabc
+  6 - Mabcbc
+  7 - Mcbcbc
+  8 - Mcbcaaa
+  9 - Mcaaaaaa
+ 10 - M<span style="color:#c00;font-weight:bold">aaaaaaaa</span>    # 8
+ 11 - Maaaaaabc
+ 12 - Maaaabcbc
+ 13 - Maabcbcbc
+ 14 - Mbcbcbcbc
+ 15 - Mbcbcbca
+ 16 - Mbcbcaa
+ 17 - Mbcaaa
+ 18 - M<span style="color:#c00;font-weight:bold">aaaa</span>        # 4
+ 19 - Maabc
+ 20 - Mbcbc
+ 21 - Mbca
+ 22 - M<span style="color:#c00;font-weight:bold">aa</span>          # 2
+ 23 - Mbc
+ 24 - M<span style="color:#c00;font-weight:bold">a</span>           # 1
+</code></pre>
+<h3> 4. Correctness and Universality</h3>
+<ol>
+<li><strong>At most one rule matches.</strong> There is exactly one marker. The letter after it selects the rule. <code>([abc]*)</code> captures all remaining letters.</li>
+<li><strong>One rewrite is exactly one tag step.</strong> The rule for letter <code>x</code> matches precisely when the marker faces <code>x</code> plus at least one more letter. The replacement constructs the next configuration.</li>
+<li><strong>Halting corresponds.</strong> Every rule requires two letters after the marker, so <code>Ma</code> and <code>M</code> are fixed points. The transform terminates exactly when the tag system halts.</li>
+</ol>
+<p>Together, by induction: after <em>k</em> rewrites the string is exactly <code>M</code> followed by the tag system's word after <em>k</em> steps, and the transform reaches a fixed point exactly when the tag system halts. Nothing here is specific to Collatz. One rule per letter compiles <em>any</em> 2-tag system, so a universal one yields a fixed rule file that simulates any Turing machine, encoded in the initial word.</p>
+<h3> 5. ICU's Rewrite Guard</h3>
+<p>ICU stops each <code>transliterate()</code> call after 16 rewrites per input code point (<code>loopLimit = span &lt;&lt; 4</code> in <a href="https://github.com/unicode-org/icu/blob/main/icu4c/source/i18n/rbt.cpp">rbt.cpp</a>; the Java port has the <a href="https://github.com/unicode-org/icu/blob/main/icu4j/main/translit/src/main/java/com/ibm/icu/text/RuleBasedTransliterator.java">same guard</a>). However, the specification itself defines no limit. The guard is ICU's pragmatic addition to prevent infinite computation, as termination is undecidable. Here, each rewrite performs a full tag step, so iterating until the string stabilizes is safe.</p>
+<h3> 6. Rule 110</h3>
+<p>The runner is not limited to tag systems. Any rule file is a program. <a href="rule110.txt">rule110.txt</a> implements the Rule 110 cellular automaton in 14 rules. Cells are written <code>.</code> (0) and <code>*</code> (1). A head carries the previous two cells and rewrites each cell in place. One pass is one generation. One fuel <code>g</code> per generation, spent into <code>s</code>; the run halts by itself when the fuel is out.</p>
+<pre><code>python3 uts35.py rule110.txt "ggggggggg*"
+ICU 78.3
+  0 - Mggggggggg*
+  1 - Mggggggggs**.
+  2 - Mgggggggss***..
+  3 - Mggggggsss**.*...
+  4 - Mgggggssss*****....
+  5 - Mggggsssss**...*.....
+  6 - Mgggssssss***..**......
+  7 - Mggsssssss**.*.***.......
+  8 - Mgssssssss*******.*........
+  9 - Msssssssss**.....***.........
+</code></pre>
+<h3> 7. Prime Numbers</h3>
+<p><a href="primes.txt">primes.txt</a> is Wolfram's real-time prime-generating cellular automaton (<em>A New Kind of Science</em>, <a href="https://www.wolframscience.com/nks/p640--computations-in-cellular-automata/">p. 640</a>); 16 states (<code>0</code>-<code>f</code>) and 223 transform rules. The first cell after the fuel is <code>0</code> exactly at prime ticks.</p>
+<pre><code>% python3 uts35.py primes.txt gggggggggggg0a048
+ICU 78.3
+  0 - Mgggggggggggg0a048
+  1 - Mgggggggggggs9604d7
+  <span style="color:#c00;font-weight:bold">2</span> - Mggggggggggss<span style="color:#c00;font-weight:bold">0</span>6f5d80
+  <span style="color:#c00;font-weight:bold">3</span> - Mgggggggggsss<span style="color:#c00;font-weight:bold">0</span>ad3d870
+  4 - Mggggggggssss96fc0d700
+  <span style="color:#c00;font-weight:bold">5</span> - Mgggggggsssss<span style="color:#c00;font-weight:bold">0</span>adb008000
+  6 - Mggggggssssss96fad087000
+  <span style="color:#c00;font-weight:bold">7</span> - Mgggggsssssss<span style="color:#c00;font-weight:bold">0</span>a960f870000
+  8 - Mggggssssssss9af6f01700000
+  9 - Mgggsssssssss9adad018000000
+ 10 - Mggssssssssss96f60f187000000
+ <span style="color:#c00;font-weight:bold">11</span> - Mgsssssssssss<span style="color:#c00;font-weight:bold">0</span>a06f02870000000
+ 12 - Mssssssssssss96fad02d700000000
+</code></pre>
+<h3> 8. Conclusion</h3>
+<p>Transliteration rules were designed to turn "Ã©" into "e". Three lines of them can compute the Collatz function.</p>
+<p>Unbounded rewriting with a revisiting cursor is an old recipe for universality. The surprise is that it lives in a data format for locale files, shipped in every OS, whose specification doesn't mention the possibility.</p>
+<p>The above discussion demonstrates that a transliteration rule file is not just data, it's a program. If you accept transform rules from outside, you are accepting code, which should be reviewed and bound at runtime, as ICU already does.</p>
+<h3> Appendix: Files</h3>
+<ul>
+<li><a href="collatz.txt">collatz.txt</a> â the three-rule Collatz machine (one tag step per pass)</li>
+<li><a href="rule110.txt">rule110.txt</a> â Rule 110 in 14 rules</li>
+<li><a href="primes.txt">primes.txt</a> â Wolfram's prime-generating cellular automaton in 223 rules</li>
+<li><a href="uts35.py">uts35.py</a> â runner, PyICU</li>
+<li><a href="uts35.sh">uts35.sh</a> â runner, ICU's stock <code>uconv</code>, no Python</li>
+<li><a href="test.sh">test.sh</a> â self checks</li>
+</ul>
+<p><em>Environment: ICU 78.3, PyICU 2.16.2, macOS; also verified with ICU 72.1 on Debian 12; July 2026</em></p>
+</body>
