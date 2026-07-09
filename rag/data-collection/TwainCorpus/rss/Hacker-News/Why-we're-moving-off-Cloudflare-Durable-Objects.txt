@@ -1,0 +1,65 @@
+Why we're moving Wire off Cloudflare Durable Objects 
+
+JP
+ 
+Â·
+ 
+ July 7, 2026 
+ 
+Â·
+ 
+4 min read
+
+Wire is context containers for AI agents: isolated stores of processed knowledge (entries, embeddings, knowledge and provenance graphs) queried over MCP. Since day one, every container has been a Cloudflare Durable Object.
+
+That is changing. We rebuilt the container runtime from the ground up, benchmarked it against the old one on identical data (
+same container, same questions, same judge
+), and the first workspaces have moved to a data plane we built ourselves. This is the story behind the benchmark.
+
+This is not a âwe left Cloudflareâ post. I love Cloudflare and Wire stays on it everywhere it can: the API, the frontends, the control plane, and processing all still run on Workers. Durable Objects are close to a perfect fit for thousands of small, mostly idle stateful units, and I have not seen anything faster to build on. We left because of four structural limits, not reliability.
+
+1. The vector index lived outside the object
+
+Retrieval is the most important thing a container does, and the embeddings lived in Vectorize, a separate service. That is a network hop on the hottest path and a second copy of state that can drift. DO SQLite cannot load extensions, so the index could never come inside.
+
+2. We wanted the compute next to the data
+
+Retrieval is a multi-stage pipeline: hybrid candidate generation, fusion, query expansion, and a wide rerank. On Durable Objects only a thin slice of that could run where the data lives; the rest was exported to services around the object. Agents call containers inside tool loops, and every hopâs variance lands on the critical path.
+
+3. Placement is creation-time only, and compute is always shared
+
+Location hints exist at creation, but an object never moves afterward, so a container created from London serves an agent fleet in Virginia forever. And you cannot buy dedicated capacity for one tenant. We wanted placement that follows the callers, and isolation as a product tier: paid workspaces get their own process and machines.
+
+4. You canât self-host a Durable Object
+
+Regulated teams keep asking to run containers on infrastructure they control. A runtime that only exists on Cloudflare canât.
+
+What we built
+
+Each organization gets one host process (Bun) on Fly Machines for all its containers. A container is one SQLite file with the vector index embedded via sqlite-vec, so candidate retrieval runs in-process; the model calls, query embedding and the rerank, still go out to inference. Snapshots go to object storage, so a container rebuilds byte for byte anywhere. A per-region router places containers near the caller, and the control plane talks to the data plane via signed requests and never touches container content.
+
+Warm tool calls hold roughly 0.3 seconds, steady, versus roughly 0.4 seconds with spikes past 2 seconds before. An idle container wakes in 1.4 seconds end to end versus 3.7. To be precise about that last number: it was never âDurable Object cold start,â isolates wake in milliseconds. The 3.7 seconds was our own stack reassembling itself.
+
+Nothing changed at the surface. Same container URLs, same five MCP tools, same REST API, same response shapes. Agents keep calling the same address; requests to a migrated container are just answered by the new runtime.
+
+Buying durability back
+
+Durable Objects hand you durability and single-writer consistency for free, and leaving means buying them back. Cloudflare replicates every DO storage write before acking it. Our first cut was only âdurable at next checkpoint,â and soak tests that kill machines under load showed exactly what that means: a handful of acked writes, gone. The real fix is continuous WAL shipping. A write does not ack until its WAL frame is in object storage; group commit keeps that to about 100 ms, and a dead machine cannot take acked writes with it.
+
+If you do not need the four things above, stay on the platform.
+
+The honest read on the numbers
+
+The retrieval gains (recall@5 from 78.1% to 89.1%) are not all architecture; we also moved to a newer embedding model. What the architecture does is make the expensive parts cheap: in-process retrieval lets you over-fetch and rerank wide, and per-container indexes are small enough for exact nearest-neighbor search. The full before/after tables and methodology are in 
+the benchmark write-up
+.
+
+Where it stands
+
+The new runtime is in beta: our preview environment plus opt-in production workspaces today, with full production migration following as our durability tripwires stay green. Once the cutover is done, we plan to open-source the container runtime. We should ship the code we actually run.
+
+Ready to give your AI agents better context?
+
+Wire transforms your documents into structured, AI-optimized context containers. Upload files, get MCP tools instantly.
+
+Create Your First Container
