@@ -1,0 +1,438 @@
+<article class="article-main">
+<div class="toc">
+<details>
+<summary accesskey="c" title="(Alt + C)">
+<span class="details">Table of Contents</span>
+</summary>
+<div class="inner">
+<ul>
+<li>
+<a aria-label="Setup" href="#setup">Setup</a>
+</li>
+<li>
+<a aria-label="Snapshot before any deletes" href="#snapshot-before-any-deletes">Snapshot before any deletes</a>
+</li>
+<li>
+<a aria-label="Create dead tuples" href="#create-dead-tuples">Create dead tuples</a>
+</li>
+<li>
+<a aria-label="How VACUUM processes a table" href="#how-vacuum-processes-a-table">How VACUUM processes a table</a>
+<ul>
+<li>
+<a aria-label="Phase 1: Heap scan - prune, freeze, collect dead TIDs" href="#phase-1-heap-scan-prune-freeze-collect-dead-tids">Phase 1: Heap scan - prune, freeze, collect dead TIDs</a>
+</li>
+<li>
+<a aria-label="Phase 2: Index cleanup" href="#phase-2-index-cleanup">Phase 2: Index cleanup</a>
+</li>
+<li>
+<a aria-label="Phase 3: Heap cleanup - freeing the line pointers" href="#phase-3-heap-cleanup-freeing-the-line-pointers">Phase 3: Heap cleanup - freeing the line pointers</a>
+</li>
+</ul>
+</li>
+<li>
+<a aria-label="After the prune: LP_DEAD, and space already back" href="#after-the-prune-lp-dead-and-space-already-back">After the prune: LP_DEAD, and space already back</a>
+</li>
+<li>
+<a aria-label="After the full VACUUM: LP_UNUSED" href="#after-the-full-vacuum-lp-unused">After the full VACUUM: LP_UNUSED</a>
+</li>
+<li>
+<a aria-label="The line pointer lifecycle, precisely" href="#the-line-pointer-lifecycle-precisely">The line pointer lifecycle, precisely</a>
+</li>
+<li>
+<a aria-label="Free space map" href="#free-space-map">Free space map</a>
+</li>
+<li>
+<a aria-label="Visibility map" href="#visibility-map">Visibility map</a>
+</li>
+<li>
+<a aria-label="Freezing" href="#freezing">Freezing</a>
+</li>
+<li>
+<a aria-label="VACUUM FULL vs regular VACUUM" href="#vacuum-full-vs-regular-vacuum">VACUUM FULL vs regular VACUUM</a>
+</li>
+<li>
+<a aria-label="Putting it all together" href="#putting-it-all-together">Putting it all together</a>
+</li>
+</ul>
+</div>
+</details>
+</div>
+<div class="post-content">
+<p>In <a href="/posts/hot-updates/">HOT Updates in Postgres</a> we covered page pruning clean up HOT chains, an elegant shortcut where PostgreSQL reclaims dead tuple space during ordinary reads. All that without waiting for any background process. But pruning is exactly that: a shortcut. It only works within a single page, and only for HOT-updated tuples. For everything else (cold updates that touch indexed columns, plain DELETEs, index entry cleanup, free space map registration, visibility map maintenance) we need VACUUM.</p>
+<p>This article won't repeat what VACUUM does operationally. The <a href="/posts/deletes-are-difficult/">DELETEs are difficult</a> article covers autovacuum tuning, worker allocation, and the operational side of dead tuple cleanup. Here we are going to watch VACUUM work byte by byte. We'll snapshot a page before and after each phase, tracking exactly what changes in the page header, line pointers, tuple headers, free space map, and visibility map. Same tools as always: <code>pageinspect</code>, <code>pg_visibility</code>, and <code>pg_freespacemap</code>.</p>
+<h2 id="setup">Setup
+</h2>
+<p>We need a table with enough rows to make the before-and-after comparison meaningful, plus indexes to demonstrate the full VACUUM cycle.</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">CREATE</span><span> EXTENSION </span><span style="color: #F97583;">IF NOT EXISTS</span><span> pageinspect;</span></span>
+<span class="giallo-l"><span style="color: #F97583;">CREATE</span><span> EXTENSION </span><span style="color: #F97583;">IF NOT EXISTS</span><span> pg_visibility;</span></span>
+<span class="giallo-l"><span style="color: #F97583;">CREATE</span><span> EXTENSION </span><span style="color: #F97583;">IF NOT EXISTS</span><span> pg_freespacemap;</span></span>
+
+<span class="giallo-l"><span style="color: #F97583;">CREATE TABLE</span><span style="color: #B392F0;"> vacuum_demo</span><span> (</span></span>
+<span class="giallo-l"><span>    id </span><span style="color: #F97583;">integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY</span><span>,</span></span>
+<span class="giallo-l"><span>    category </span><span style="color: #F97583;">text NOT NULL</span><span>,</span></span>
+<span class="giallo-l"><span>    payload </span><span style="color: #F97583;">text</span></span>
+<span class="giallo-l"><span>);</span></span>
+
+<span class="giallo-l"><span style="color: #F97583;">INSERT INTO</span><span> vacuum_demo (category, payload)</span></span>
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span></span>
+<span class="giallo-l"><span style="color: #9ECBFF;">    'cat_'</span><span style="color: #F97583;"> ||</span><span> (i % </span><span style="color: #79B8FF;">5</span><span>),</span></span>
+<span class="giallo-l"><span style="color: #F97583;">    repeat</span><span>(</span><span style="color: #9ECBFF;">'x'</span><span>, </span><span style="color: #79B8FF;">100</span><span>)</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span style="color: #79B8FF;"> generate_series</span><span>(</span><span style="color: #79B8FF;">1</span><span>, </span><span style="color: #79B8FF;">50</span><span>) </span><span style="color: #F97583;">AS</span><span> i;</span></span></code></pre>
+<p>Fifty rows with a 100-byte payload each. The primary key gives us an index, which matters: VACUUM's behavior changes when indexes are involved. Run VACUUM once upfront so we start from a clean baseline:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span>VACUUM vacuum_demo;</span></span></code></pre><h2 id="snapshot-before-any-deletes">Snapshot before any deletes
+</h2>
+<p>Record the baseline state of page 0. First the page header:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> lower, upper, special, pagesize</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> page_header(get_raw_page(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>, </span><span style="color: #79B8FF;">0</span><span>));</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> lower | upper | special | pagesize</span></span>
+<span class="giallo-l"><span>-------+-------+---------+----------</span></span>
+<span class="giallo-l"><span>   224 |  1392 |    8192 |     8192</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>pd_lower is at 224: that's the 24-byte page header plus 50 line pointers at 4 bytes each (24 + 200 = 224). pd_upper is at 1392, so our tuples occupy bytes 1392 through 8191. Free space is 1392 - 224 = 1168 bytes. Not much room left; those 100-byte payloads add up.</p>
+<p>Now the line pointers and tuple headers:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> lp, lp_flags, lp_off, lp_len, t_xmin, t_xmax, t_ctid</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> heap_page_items(get_raw_page(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>, </span><span style="color: #79B8FF;">0</span><span>))</span></span>
+<span class="giallo-l"><span style="color: #F97583;">LIMIT</span><span style="color: #79B8FF;"> 10</span><span>;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> lp | lp_flags | lp_off | lp_len | t_xmin | t_xmax | t_ctid</span></span>
+<span class="giallo-l"><span>----+----------+--------+--------+--------+--------+--------</span></span>
+<span class="giallo-l"><span>  1 |        1 |   8056 |    135 |    746 |      0 | (0,1)</span></span>
+<span class="giallo-l"><span>  2 |        1 |   7920 |    135 |    746 |      0 | (0,2)</span></span>
+<span class="giallo-l"><span>  3 |        1 |   7784 |    135 |    746 |      0 | (0,3)</span></span>
+<span class="giallo-l"><span>  4 |        1 |   7648 |    135 |    746 |      0 | (0,4)</span></span>
+<span class="giallo-l"><span>  5 |        1 |   7512 |    135 |    746 |      0 | (0,5)</span></span>
+<span class="giallo-l"><span>  6 |        1 |   7376 |    135 |    746 |      0 | (0,6)</span></span>
+<span class="giallo-l"><span>  7 |        1 |   7240 |    135 |    746 |      0 | (0,7)</span></span>
+<span class="giallo-l"><span>  8 |        1 |   7104 |    135 |    746 |      0 | (0,8)</span></span>
+<span class="giallo-l"><span>  9 |        1 |   6968 |    135 |    746 |      0 | (0,9)</span></span>
+<span class="giallo-l"><span> 10 |        1 |   6832 |    135 |    746 |      0 | (0,10)</span></span>
+<span class="giallo-l"><span>(10 rows)</span></span></code></pre>
+<p><span class="sidenote"><code>lp_len</code> is 135, the tuple's actual byte length, but each tuple occupies MAXALIGN'd slot of 136 bytes on the page; notice the <code>lp_off</code> values step down by 136. That aligned stride is what the free-space arithmetic below uses.</span></p>
+<p>Every line pointer is LP_NORMAL (lp_flags = 1). Every tuple has <code>t_xmax = 0</code>: nobody has touched these rows since they were inserted. Every <code>t_ctid</code> points to itself. This is a perfectly clean page.</p>
+<h2 id="create-dead-tuples">Create dead tuples
+</h2>
+<p>Now make some rows dead:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">DELETE FROM</span><span> vacuum_demo </span><span style="color: #F97583;">WHERE</span><span> id % </span><span style="color: #79B8FF;">3</span><span style="color: #F97583;"> =</span><span style="color: #79B8FF;"> 0</span><span>;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span>DELETE 16</span></span></code></pre>
+<p>That deletes roughly every third row: IDs 3, 6, 9, 12, and so on. Sixteen rows are now dead. Look at the page before VACUUM runs:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> lp, lp_flags, lp_off, lp_len, t_xmin, t_xmax, t_ctid</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> heap_page_items(get_raw_page(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>, </span><span style="color: #79B8FF;">0</span><span>))</span></span>
+<span class="giallo-l"><span style="color: #F97583;">LIMIT</span><span style="color: #79B8FF;"> 10</span><span>;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> lp | lp_flags | lp_off | lp_len | t_xmin | t_xmax | t_ctid</span></span>
+<span class="giallo-l"><span>----+----------+--------+--------+--------+--------+--------</span></span>
+<span class="giallo-l"><span>  1 |        1 |   8056 |    135 |    746 |      0 | (0,1)</span></span>
+<span class="giallo-l"><span>  2 |        1 |   7920 |    135 |    746 |      0 | (0,2)</span></span>
+<span class="giallo-l"><span>  3 |        1 |   7784 |    135 |    746 |    747 | (0,3)</span></span>
+<span class="giallo-l"><span>  4 |        1 |   7648 |    135 |    746 |      0 | (0,4)</span></span>
+<span class="giallo-l"><span>  5 |        1 |   7512 |    135 |    746 |      0 | (0,5)</span></span>
+<span class="giallo-l"><span>  6 |        1 |   7376 |    135 |    746 |    747 | (0,6)</span></span>
+<span class="giallo-l"><span>  7 |        1 |   7240 |    135 |    746 |      0 | (0,7)</span></span>
+<span class="giallo-l"><span>  8 |        1 |   7104 |    135 |    746 |      0 | (0,8)</span></span>
+<span class="giallo-l"><span>  9 |        1 |   6968 |    135 |    746 |    747 | (0,9)</span></span>
+<span class="giallo-l"><span> 10 |        1 |   6832 |    135 |    746 |      0 | (0,10)</span></span>
+<span class="giallo-l"><span>(10 rows)</span></span></code></pre>
+<p>Look at rows 3, 6, and 9. Their <code>t_xmax</code> is now 747, the transaction ID of the DELETE statement. But everything else is unchanged. lp_flags is still 1 (LP_NORMAL). lp_off and lp_len are the same. The tuples are still physically sitting on the page, consuming space. The page header hasn't changed either:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> lower, upper, special, pagesize</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> page_header(get_raw_page(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>, </span><span style="color: #79B8FF;">0</span><span>));</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> lower | upper | special | pagesize</span></span>
+<span class="giallo-l"><span>-------+-------+---------+----------</span></span>
+<span class="giallo-l"><span>   224 |  1392 |    8192 |     8192</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>pd_lower and pd_upper are identical to before the DELETE. PostgreSQL marked the rows as dead (by stamping t_xmax) but did not reclaim a single byte. The dead tuples are bloat, and they will stay that way until VACUUM arrives.</p>
+<h2 id="how-vacuum-processes-a-table">How VACUUM processes a table
+</h2>
+<p>Before we run VACUUM and watch the page change, one thing about <em>how</em> it runs will explain everything the snapshots are about to show. VACUUM does its work in three passes, and the split between them is the whole reason a deleted tuple's storage disappears at one moment and its line pointer disappears at another. Keep an eye on that gap: it is what the rest of this article makes visible.</p>
+<h3 id="phase-1-heap-scan-prune-freeze-collect-dead-tids">Phase 1: Heap scan - prune, freeze, collect dead TIDs
+</h3>
+<p>VACUUM scans every heap page sequentially, and this first pass does far more than look. For each page, it runs page pruning (the same <code>heap_page_prune_and_freeze</code> machinery that fires opportunistically during ordinary reads). Pruning is where the bytes actually come back: it removes the storage of dead tuples, defragments the page, and advances pd_upper. It also opportunistically freezes tuples that are old enough.</p>
+<div class="sidenote">
+Prior to PostgreSQL 17, VACUUM stored dead TIDs in a flat array allocated from <code>maintenance_work_mem</code>. If the array filled up, VACUUM had to pause, perform index and heap cleanup for the collected batch, then resume scanning. Since PostgreSQL 17, VACUUM uses a radix tree-based TID store that is far more memory-efficient, making <code>maintenance_work_mem</code> much less likely to be a bottleneck.
+</div>
+<p>But here is the subtlety that the rest of this article hinges on. Pruning cannot simply mark a deleted tuple's line pointer LP_UNUSED, because indexes still point at it by TID. So for a table with indexes, a dead tuple's line pointer is set to <strong>LP_DEAD</strong>: its storage is gone, but the 4-byte slot stays put, holding the TID's place until the index entries are removed. Those LP_DEAD TIDs are what VACUUM collects into its dead-TID store for the next phase.</p>
+<h3 id="phase-2-index-cleanup">Phase 2: Index cleanup
+</h3>
+<p>With the list of dead TIDs in hand, VACUUM scans each index on the table. For every index, it walks through all index entries and removes any that point to a dead TID. This is the expensive part. VACUUM must read every index page, even if only handful of entries need removal.</p>
+<p>This is also why index bloat happens. If VACUUM cannot finish this phase, because a long-running transaction is holding back the visibility horizon or the table has many indexes and the dead TID list exceeds memory, index entries pointing to dead tuples accumulate. We covered the index bloat implications in detail in <a href="/posts/vacuum-is-lie/">VACUUM Is a Lie</a>.</p>
+<h3 id="phase-3-heap-cleanup-freeing-the-line-pointers">Phase 3: Heap cleanup - freeing the line pointers
+</h3>
+<p>After the indexes are clean, no index entry references those dead TIDs anymore, so the reserved slots can finally be released. VACUUM revisits each page that had dead tuples and does what it couldn't do in phase 1:</p>
+<ol>
+<li>Flips each collected LP_DEAD line pointer to LP_UNUSED (0), reclaiming the slot</li>
+<li>Sets the visibility map bit if all remaining tuples are visible to everyone</li>
+</ol>
+<div class="sidenote">
+A table with <strong>no indexes</strong> skips this split entirely: with no index entries to worry about, phase 1's prune sets dead line pointers straight to LP_UNUSED in a single heap pass, and there is no phase 3. The two-pass dance, LP_DEAD now and LP_UNUSED later, exists precisely because of the indexes.
+</div>
+<p>Notice what is <em>not</em> on that list. The tuple data was already removed and the page already defragmented back in phase 1's prune; that is where pd_upper moved. Phase 3 reclaims the line-pointer slots, not the tuple bytes. The distinction is invisible if you only look before and after plain <code>VACUUM</code>, so let's make it visible.</p>
+<p>Let's run VACUUM in two steps to catch the intermediate state. <code>VACUUM (INDEX_CLEANUP OFF)</code> performs phase 1's prune but skips index cleanup, and therefore skips the second heap pass too; it has no choice but to leave the dead line pointers as LP_DEAD.</p>
+<div class="visualizer-banner">
+<div class="visualizer-banner__preview" style="grid-template-columns: 1fr; gap: 3px; width: 54px; padding: 0.4rem;">
+
+
+
+
+</div>
+<div class="visualizer-banner__content">
+<strong>Interactive VACUUM Visualizer</strong>
+<p>Run DELETE across three heap pages and watch nothing get reclaimed, page-prune to reach <code>LP_DEAD</code>, then step VACUUM through heap scan, index cleanup, and heap cleanup that flips the slots to <code>LP_UNUSED</code>.</p>
+<a class="visualizer-banner__button" href="/visualizers/vacuum/">Open Visualizer</a>
+</div>
+</div>
+<h2 id="after-the-prune-lp-dead-and-space-already-back">After the prune: LP_DEAD, and space already back
+</h2>
+<p>Page header after pruning:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> lower, upper, special, pagesize</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> page_header(get_raw_page(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>, </span><span style="color: #79B8FF;">0</span><span>));</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> lower | upper | special | pagesize</span></span>
+<span class="giallo-l"><span>-------+-------+---------+----------</span></span>
+<span class="giallo-l"><span>   224 |  3568 |    8192 |     8192</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>pd_lower is still 224; the line pointer array hasn't shrunk. But pd_upper jumped from 1392 to 3568. That's 2176 bytes of reclaimed space (16 dead tuples at the 136-byte aligned stride = 2176). Free space on the page went from 1168 to 3344 bytes. And we have not touched an index yet: this all happened during pruning, in the first heap pass.</p>
+<p>Now the line pointers:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> lp, lp_flags, lp_off, lp_len, t_xmin, t_xmax, t_ctid</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> heap_page_items(get_raw_page(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>, </span><span style="color: #79B8FF;">0</span><span>))</span></span>
+<span class="giallo-l"><span style="color: #F97583;">LIMIT</span><span style="color: #79B8FF;"> 10</span><span>;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> lp | lp_flags | lp_off | lp_len | t_xmin | t_xmax | t_ctid</span></span>
+<span class="giallo-l"><span>----+----------+--------+--------+--------+--------+--------</span></span>
+<span class="giallo-l"><span>  1 |        1 |   8056 |    135 |    746 |      0 | (0,1)</span></span>
+<span class="giallo-l"><span>  2 |        1 |   7920 |    135 |    746 |      0 | (0,2)</span></span>
+<span class="giallo-l"><span>  3 |        3 |      0 |      0 |        |        |</span></span>
+<span class="giallo-l"><span>  4 |        1 |   7784 |    135 |    746 |      0 | (0,4)</span></span>
+<span class="giallo-l"><span>  5 |        1 |   7648 |    135 |    746 |      0 | (0,5)</span></span>
+<span class="giallo-l"><span>  6 |        3 |      0 |      0 |        |        |</span></span>
+<span class="giallo-l"><span>  7 |        1 |   7512 |    135 |    746 |      0 | (0,7)</span></span>
+<span class="giallo-l"><span>  8 |        1 |   7376 |    135 |    746 |      0 | (0,8)</span></span>
+<span class="giallo-l"><span>  9 |        3 |      0 |      0 |        |        |</span></span>
+<span class="giallo-l"><span> 10 |        1 |   7240 |    135 |    746 |      0 | (0,10)</span></span>
+<span class="giallo-l"><span>(10 rows)</span></span></code></pre>
+<p>Line pointers 3, 6, and 9 are now <strong>lp_flags = 3 (LP_DEAD)</strong>, not LP_UNUSED. Their storage is gone (lp_off and lp_len are 0), but the slots are still there, reserving those TIDs. They can't be freed yet, because the primary key still points at them:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> live_items </span><span style="color: #F97583;">FROM</span><span> bt_page_stats(</span><span style="color: #9ECBFF;">'vacuum_demo_pkey'</span><span>, </span><span style="color: #79B8FF;">1</span><span>);</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> live_items</span></span>
+<span class="giallo-l"><span>------------</span></span>
+<span class="giallo-l"><span>         50</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>Fifty index entries, same as before the delete. The index cleanup we skipped is exactly what removes the sixteen stale ones, and until it runs, those LP_DEAD slots stay stuck.</p>
+<h2 id="after-the-full-vacuum-lp-unused">After the full VACUUM: LP_UNUSED
+</h2>
+<p>Now run an ordinary VACUUM to finish the job:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span>VACUUM vacuum_demo;</span></span>
+
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> lower, upper, special, pagesize</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> page_header(get_raw_page(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>, </span><span style="color: #79B8FF;">0</span><span>));</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> lower | upper | special | pagesize</span></span>
+<span class="giallo-l"><span>-------+-------+---------+----------</span></span>
+<span class="giallo-l"><span>   224 |  3568 |    8192 |     8192</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>pd_upper is unchanged at 3568. That is the point: the second heap pass reclaims no tuple bytes; there are none left, pruning already took them. What it does is free the line-pointer slots, now that the index is clean:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> lp, lp_flags, lp_off, lp_len, t_xmin, t_xmax, t_ctid</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> heap_page_items(get_raw_page(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>, </span><span style="color: #79B8FF;">0</span><span>))</span></span>
+<span class="giallo-l"><span style="color: #F97583;">LIMIT</span><span style="color: #79B8FF;"> 10</span><span>;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> lp | lp_flags | lp_off | lp_len | t_xmin | t_xmax | t_ctid</span></span>
+<span class="giallo-l"><span>----+----------+--------+--------+--------+--------+--------</span></span>
+<span class="giallo-l"><span>  1 |        1 |   8056 |    135 |    746 |      0 | (0,1)</span></span>
+<span class="giallo-l"><span>  2 |        1 |   7920 |    135 |    746 |      0 | (0,2)</span></span>
+<span class="giallo-l"><span>  3 |        0 |      0 |      0 |        |        |</span></span>
+<span class="giallo-l"><span>  4 |        1 |   7784 |    135 |    746 |      0 | (0,4)</span></span>
+<span class="giallo-l"><span>  5 |        1 |   7648 |    135 |    746 |      0 | (0,5)</span></span>
+<span class="giallo-l"><span>  6 |        0 |      0 |      0 |        |        |</span></span>
+<span class="giallo-l"><span>  7 |        1 |   7512 |    135 |    746 |      0 | (0,7)</span></span>
+<span class="giallo-l"><span>  8 |        1 |   7376 |    135 |    746 |      0 | (0,8)</span></span>
+<span class="giallo-l"><span>  9 |        0 |      0 |      0 |        |        |</span></span>
+<span class="giallo-l"><span> 10 |        1 |   7240 |    135 |    746 |      0 | (0,10)</span></span>
+<span class="giallo-l"><span>(10 rows)</span></span></code></pre>
+<p>Line pointers 3, 6, and 9 have gone from LP_DEAD to <strong>lp_flags = 0 (LP_UNUSED)</strong>. The slots are now empty and available for reuse by the next INSERT that lands on this page. And the index has dropped to 34 entries; the sixteen stale ones are gone:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> live_items </span><span style="color: #F97583;">FROM</span><span> bt_page_stats(</span><span style="color: #9ECBFF;">'vacuum_demo_pkey'</span><span>, </span><span style="color: #79B8FF;">1</span><span>);</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> live_items</span></span>
+<span class="giallo-l"><span>------------</span></span>
+<span class="giallo-l"><span>         34</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>The surviving heap tuples were compacted back in the prune; notice the lp_off values shifted from their pre-VACUUM positions, VACUUM having moved surviving tuples to form a single contiguous block of free space between pd_lower and pd_upper.</p>
+<div class="callout">
+<strong>pd_lower didn't change.</strong> Even though line pointers 3, 6, and 9 are now LP_UNUSED, they still occupy slots in the array. The next INSERT will reuse one of these slots rather than appending a new one at the end. PostgreSQL tracks reusable slots via the <code>PD_HAS_FREE_LINES</code> flag in the page header.
+</div>
+<h2 id="the-line-pointer-lifecycle-precisely">The line pointer lifecycle, precisely
+</h2>
+<p>Let's be exact about how line pointers transition between states. This matters because different code paths produce different transitions:</p>
+<p><strong>LP_UNUSED (0)</strong>: the slot is empty. Either it was never used, or VACUUM has fully reclaimed it. The next INSERT that targets this page will grab this slot and assign it to a new tuple, transitioning it to LP_NORMAL.</p>
+<p><strong>LP_NORMAL (1)</strong>: the slot points to a tuple on the page. That tuple might be live (t_xmax = 0 or t_xmax aborted), or it might be dead (t_xmax committed and invisible to all). The line pointer itself doesn't encode liveness; that's determined by the tuple header and the visibility rules we covered in <a href="/posts/postgresql-mvcc-byte-by-byte/">PostgreSQL MVCC, Byte by Byte</a>.</p>
+<p><strong>LP_REDIRECT (2)</strong>: the slot points not to a tuple but to another line pointer. This is created by HOT pruning: when the head of a HOT chain is pruned, its line pointer becomes a redirect so that indexes (which still reference the original line pointer number) can follow the redirect to find the current version. We saw this in <a href="/posts/hot-updates/">HOT Updates in Postgres</a>.</p>
+<p><strong>LP_DEAD (3)</strong>: the slot is known to contain a dead tuple whose storage has been reclaimed, but whose TID may still be referenced by index entries. Index scans that encounter it skip it immediately without a visibility check. On the heap it is set by page pruning, including the prune in VACUUM's own first heap pass. The index side carries the same LP_DEAD hint, and ordinary readers set it: when an index scan follows an entry to a heap tuple that turns out to be dead to everyone, the <code>kill_prior_tuple</code> optimization flags that index entry LP_DEAD so later scans skip it without a heap visit, cleanup work that plain SELECTs do long before VACUUM arrives. For a table with indexes, this is the state a plain deleted tuple sits in between pruning and index cleanup, exactly as we watched above.</p>
+<p>The transitions look like this:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span>LP_UNUSED (0) ----INSERT----&gt; LP_NORMAL (1)</span></span>
+
+<span class="giallo-l"><span>-- table WITH indexes: two heap passes</span></span>
+<span class="giallo-l"><span>LP_NORMAL (1) --prune (1st pass)--&gt; LP_DEAD (3)</span></span>
+<span class="giallo-l"><span>LP_DEAD (3) --index cleanup + 2nd pass--&gt; LP_UNUSED (0)</span></span>
+
+<span class="giallo-l"><span>-- table WITHOUT indexes: single heap pass</span></span>
+<span class="giallo-l"><span>LP_NORMAL (1) --prune--&gt; LP_UNUSED (0)</span></span>
+
+<span class="giallo-l"><span>-- HOT</span></span>
+<span class="giallo-l"><span>LP_NORMAL (1) --HOT prune (chain head)--&gt; LP_REDIRECT (2)</span></span>
+<span class="giallo-l"><span>LP_NORMAL (1) --HOT prune (heap-only chain member)--&gt; LP_UNUSED (0)</span></span>
+<span class="giallo-l"><span>LP_REDIRECT (2) --VACUUM (when target is also dead)--&gt; LP_UNUSED (0)</span></span></code></pre>
+<p>Whether a deleted tuple passes through LP_DEAD depends on whether the table has indexes. With indexes, pruning can't free the slot (an index entry still references the TID), so it parks the line pointer at LP_DEAD, and only the second heap pass, after index cleanup, turns it into LP_UNUSED. Without indexes there is nothing to reference the TID, so pruning sets it straight to LP_UNUSED in a single pass. Either way the tuple's <em>storage</em> is reclaimed during the prune; LP_DEAD is only ever about the fate of the 4-byte slot.</p>
+<h2 id="free-space-map">Free space map
+</h2>
+<p>Before VACUUM, PostgreSQL's free space map (FSM) had no idea that our page contained reclaimable space. The dead tuples were invisible to the FSM; they still looked like occupied bytes. After VACUUM, the reclaimed space is registered:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> blkno, avail</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> pg_freespace(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>);</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> blkno | avail</span></span>
+<span class="giallo-l"><span>-------+-------</span></span>
+<span class="giallo-l"><span>     0 |  3328</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>Page 0 now reports 3,328 bytes of available space. This is slightly less than the raw pd_upper - pd_lower value of 3,344 because the FSM tracks free space in coarse categories of roughly 32 bytes and rounds down. But the critical point is that this page is now a candidate for new INSERTs.</p>
+<p>Without this FSM update, PostgreSQL would skip past this page when inserting new rows and extend the table file with a fresh page instead. That's how tables grow even when they contain plenty of free space internally; the FSM wasn't updated because VACUUM never ran.</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #6A737D;">-- New inserts reuse the vacuumed space instead of extending the file</span></span>
+<span class="giallo-l"><span style="color: #F97583;">INSERT INTO</span><span> vacuum_demo (category, payload)</span></span>
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span style="color: #9ECBFF;"> 'cat_new'</span><span>, </span><span style="color: #F97583;">repeat</span><span>(</span><span style="color: #9ECBFF;">'y'</span><span>, </span><span style="color: #79B8FF;">100</span><span>)</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span style="color: #79B8FF;"> generate_series</span><span>(</span><span style="color: #79B8FF;">1</span><span>, </span><span style="color: #79B8FF;">10</span><span>) </span><span style="color: #F97583;">AS</span><span> i;</span></span>
+
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> pg_relation_size(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>) </span><span style="color: #F97583;">AS size</span><span>;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> size</span></span>
+<span class="giallo-l"><span>------</span></span>
+<span class="giallo-l"><span> 8192</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>The table is still a single 8 KB page. The ten new rows landed in the space VACUUM freed on page 0; the FSM pointed the inserter straight at it, so no new page was appended. Delete-then-insert without a VACUUM in between would tell a different story: the FSM would still report the page as full, the inserter would skip it, and the file would grow. That is the mechanism behind a table that keeps expanding on disk while sitting half empty.</p>
+<h2 id="visibility-map">Visibility map
+</h2>
+<p>The visibility map tracks two bits per heap page. Those ten inserts we just did left fresh, not-yet-all-visible tuples on page 0, so the bit is currently clear. One more VACUUM settles the page, and now it's set:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span>VACUUM vacuum_demo;</span></span>
+
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> blkno, all_visible, all_frozen</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> pg_visibility(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>);</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> blkno | all_visible | all_frozen</span></span>
+<span class="giallo-l"><span>-------+-------------+------------</span></span>
+<span class="giallo-l"><span>     0 | t           | f</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>Page 0 is marked <strong>all_visible</strong>. This means every tuple currently on the page is visible to all transactions. The implications are significant:</p>
+<ul>
+<li><strong>Index-only scans</strong> can return results from the index without fetching this heap page at all. The visibility map confirms that whatever is on this page, it's visible, so the index's copy of the data is guaranteed to be correct.</li>
+<li><strong>Future VACUUM passes</strong> can potentially skip this page during the heap scan phase, since there's nothing dead to find.</li>
+</ul>
+<p><span class="sidenote">The visibility map is stored as a separate fork file alongside the main heap file. For a table in <code>base/16384/24601</code>, the visibility map is <code>base/16384/24601_vm</code>. It's tiny: two bits per page means a 1 GB table (131,072 pages) needs only about 32 KB for its visibility map.</span></p>
+<p>The <strong>all_frozen</strong> bit is still false. That flag indicates something stronger: not only are all tuples visible, but all of their xmin values have been frozen: they will survive XID wraparound without any further attention.</p>
+<p>If we now delete a row from this page, the all_visible bit gets cleared:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">DELETE FROM</span><span> vacuum_demo </span><span style="color: #F97583;">WHERE</span><span> id </span><span style="color: #F97583;">=</span><span style="color: #79B8FF;"> 1</span><span>;</span></span>
+
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> blkno, all_visible, all_frozen</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> pg_visibility(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>);</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> blkno | all_visible | all_frozen</span></span>
+<span class="giallo-l"><span>-------+-------------+------------</span></span>
+<span class="giallo-l"><span>     0 | f           | f</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>A single dead tuple on the page is enough to invalidate the all_visible flag. PostgreSQL clears this bit eagerly, at the moment of the DELETE, because it must be conservative. Index-only scans rely on this flag being correct.</p>
+<h2 id="freezing">Freezing
+</h2>
+<p>Let's bring the page to its final resting state. Running <code>VACUUM FREEZE</code> forces PostgreSQL to freeze every tuple on the table, regardless of age:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span>VACUUM FREEZE vacuum_demo;</span></span></code></pre>
+<p>Now inspect the tuples:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> lp, t_xmin, t_infomask,</span></span>
+<span class="giallo-l"><span style="color: #F97583;">    CASE WHEN</span><span> (t_infomask &amp; </span><span style="color: #79B8FF;">256</span><span>) </span><span style="color: #F97583;">&gt;</span><span style="color: #79B8FF;"> 0</span><span style="color: #F97583;"> AND</span><span> (t_infomask &amp; </span><span style="color: #79B8FF;">512</span><span>) </span><span style="color: #F97583;">&gt;</span><span style="color: #79B8FF;"> 0</span><span style="color: #F97583;"> THEN</span><span style="color: #9ECBFF;"> 'FROZEN'</span></span>
+<span class="giallo-l"><span style="color: #F97583;">         WHEN</span><span> (t_infomask &amp; </span><span style="color: #79B8FF;">256</span><span>) </span><span style="color: #F97583;">&gt;</span><span style="color: #79B8FF;"> 0</span><span style="color: #F97583;"> THEN</span><span style="color: #9ECBFF;"> 'XMIN_COMMITTED'</span></span>
+<span class="giallo-l"><span style="color: #F97583;">         ELSE</span><span style="color: #9ECBFF;"> 'no hint bits'</span><span style="color: #F97583;"> END AS</span><span> freeze_status</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> heap_page_items(get_raw_page(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>, </span><span style="color: #79B8FF;">0</span><span>))</span></span>
+<span class="giallo-l"><span style="color: #F97583;">WHERE</span><span> lp_flags </span><span style="color: #F97583;">=</span><span style="color: #79B8FF;"> 1</span></span>
+<span class="giallo-l"><span style="color: #F97583;">LIMIT</span><span style="color: #79B8FF;"> 8</span><span>;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> lp | t_xmin | t_infomask | freeze_status</span></span>
+<span class="giallo-l"><span>----+--------+------------+---------------</span></span>
+<span class="giallo-l"><span>  2 |    746 |       2818 | FROZEN</span></span>
+<span class="giallo-l"><span>  3 |    748 |       2818 | FROZEN</span></span>
+<span class="giallo-l"><span>  4 |    746 |       2818 | FROZEN</span></span>
+<span class="giallo-l"><span>  5 |    746 |       2818 | FROZEN</span></span>
+<span class="giallo-l"><span>  6 |    748 |       2818 | FROZEN</span></span>
+<span class="giallo-l"><span>  7 |    746 |       2818 | FROZEN</span></span>
+<span class="giallo-l"><span>  8 |    746 |       2818 | FROZEN</span></span>
+<span class="giallo-l"><span>  9 |    748 |       2818 | FROZEN</span></span>
+<span class="giallo-l"><span>(8 rows)</span></span></code></pre><div class="sidenote">
+In older PostgreSQL versions (before 9.4), freezing literally rewrote <code>t_xmin</code> to 2 (FrozenTransactionId). Modern PostgreSQL preserves the original xmin value and sets the infomask bits instead. This is better for debugging: you can still see which transaction originally created the row.
+</div>
+<p>Line pointer 1 is gone: that was <code>id = 1</code>, which we just deleted, and <code>VACUUM FREEZE</code> pruned it away before freezing the rest. Line pointers 3, 6, and 9 now carry <code>t_xmin = 748</code>: those are the <code>cat_new</code> rows from the free space map section, which reused the very slots the earlier VACUUM had freed. Every surviving tuple is FROZEN. The t_infomask value of 2818 is <code>0x0B02</code>, which is <code>HEAP_XMIN_COMMITTED</code> (0x0100) plus <code>HEAP_XMIN_INVALID</code> (0x0200) plus <code>HEAP_XMAX_INVALID</code> (0x0800), plus the <code>HEAP_HASVARWIDTH</code> attribute bit (0x0002) that every row here carries because of its <code>text</code> columns. As we covered in <a href="/posts/postgresql-mvcc-byte-by-byte/">PostgreSQL MVCC, Byte by Byte</a>, the combination of both XMIN_COMMITTED and XMIN_INVALID is the freeze marker. It means "this tuple's xmin is permanently in the past, regardless of what the XID counter does."</p>
+<p>We can also verify the table-level freeze horizon:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> relfrozenxid </span><span style="color: #F97583;">FROM</span><span> pg_class </span><span style="color: #F97583;">WHERE</span><span> relname </span><span style="color: #F97583;">=</span><span style="color: #9ECBFF;"> 'vacuum_demo'</span><span>;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> relfrozenxid</span></span>
+<span class="giallo-l"><span>--------------</span></span>
+<span class="giallo-l"><span>          750</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>This tells PostgreSQL: every tuple in <code>vacuum_demo</code> has an xmin that's either frozen or newer than XID 750. Autovacuum uses this value to decide when anti-wraparound freezing is needed. Since we just froze everything, this horizon advanced to the current transaction ID.</p>
+<p>And the visibility map now shows both flags set:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> blkno, all_visible, all_frozen</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span> pg_visibility(</span><span style="color: #9ECBFF;">'vacuum_demo'</span><span>);</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> blkno | all_visible | all_frozen</span></span>
+<span class="giallo-l"><span>-------+-------------+------------</span></span>
+<span class="giallo-l"><span>     0 | t           | t</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>The <strong>all_frozen</strong> bit is now true. Future VACUUM passes, including anti-wraparound freezing passes, can skip this page entirely. There is nothing to clean and nothing to freeze. For large, mostly-static tables (lookup tables, historical data, archived partitions), this is a substantial performance benefit: VACUUM can skip millions of pages in seconds by checking two bits per page instead of reading every tuple.</p>
+<h2 id="vacuum-full-vs-regular-vacuum">VACUUM FULL vs regular VACUUM
+</h2>
+<p>Everything we've seen so far is regular (lazy) VACUUM. There is a persistent myth that it can never shrink a table's file on disk. That's not quite right: at the very end of its run, lazy VACUUM tries to truncate trailing pages that have become completely empty, handing that space back to the operating system. What it <em>cannot</em> do is compact free space stranded in the interior of the file: half-empty pages surrounded by full ones. That distinction is the whole story, and both halves are easy to see.</p>
+<p>Start with a table that fills 18 pages:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">CREATE TABLE</span><span style="color: #B392F0;"> vt</span><span> (id </span><span style="color: #F97583;">int GENERATED ALWAYS AS IDENTITY PRIMARY KEY</span><span>, category </span><span style="color: #F97583;">text</span><span>, payload </span><span style="color: #F97583;">text</span><span>);</span></span>
+<span class="giallo-l"><span style="color: #F97583;">INSERT INTO</span><span> vt (category, payload)</span></span>
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span style="color: #9ECBFF;"> 'cat_'</span><span style="color: #F97583;"> ||</span><span> (i % </span><span style="color: #79B8FF;">5</span><span>), </span><span style="color: #F97583;">repeat</span><span>(</span><span style="color: #9ECBFF;">'x'</span><span>, </span><span style="color: #79B8FF;">100</span><span>)</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span style="color: #79B8FF;"> generate_series</span><span>(</span><span style="color: #79B8FF;">1</span><span>, </span><span style="color: #79B8FF;">1000</span><span>) </span><span style="color: #F97583;">AS</span><span> i;</span></span>
+
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> pg_relation_size(</span><span style="color: #9ECBFF;">'vt'</span><span>) </span><span style="color: #F97583;">AS</span><span> full_size;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> full_size</span></span>
+<span class="giallo-l"><span>-----------</span></span>
+<span class="giallo-l"><span>    147456</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>147,456 bytes is 18 pages. Now delete everything past the first fifty rows, which all live on page 0, and vacuum:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">DELETE FROM</span><span> vt </span><span style="color: #F97583;">WHERE</span><span> id </span><span style="color: #F97583;">&gt;</span><span style="color: #79B8FF;"> 50</span><span>;</span></span>
+
+<span class="giallo-l"><span>VACUUM vt;</span></span>
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> pg_relation_size(</span><span style="color: #9ECBFF;">'vt'</span><span>) </span><span style="color: #F97583;">AS</span><span> after_regular_vacuum;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> after_regular_vacuum</span></span>
+<span class="giallo-l"><span>----------------------</span></span>
+<span class="giallo-l"><span>                 8192</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>Down to a single page. Every page after the first became completely empty, so those seventeen pages sat at the tail of the file with nothing live on them, and VACUUM's truncation phase returned them to the OS. Regular VACUUM <em>did</em> shrink the file, because the free space happened to be all at the end.</p>
+<p>Now the case it can't help with. Rebuild the table and delete every <em>other</em> row, so no page ever fully empties:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span style="color: #F97583;">DROP TABLE</span><span> vt;</span></span>
+<span class="giallo-l"><span style="color: #F97583;">CREATE TABLE</span><span style="color: #B392F0;"> vt</span><span> (id </span><span style="color: #F97583;">int GENERATED ALWAYS AS IDENTITY PRIMARY KEY</span><span>, category </span><span style="color: #F97583;">text</span><span>, payload </span><span style="color: #F97583;">text</span><span>);</span></span>
+<span class="giallo-l"><span style="color: #F97583;">INSERT INTO</span><span> vt (category, payload)</span></span>
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span style="color: #9ECBFF;"> 'cat_'</span><span style="color: #F97583;"> ||</span><span> (i % </span><span style="color: #79B8FF;">5</span><span>), </span><span style="color: #F97583;">repeat</span><span>(</span><span style="color: #9ECBFF;">'x'</span><span>, </span><span style="color: #79B8FF;">100</span><span>)</span></span>
+<span class="giallo-l"><span style="color: #F97583;">FROM</span><span style="color: #79B8FF;"> generate_series</span><span>(</span><span style="color: #79B8FF;">1</span><span>, </span><span style="color: #79B8FF;">1000</span><span>) </span><span style="color: #F97583;">AS</span><span> i;</span></span>
+
+<span class="giallo-l"><span style="color: #F97583;">DELETE FROM</span><span> vt </span><span style="color: #F97583;">WHERE</span><span> id % </span><span style="color: #79B8FF;">2</span><span style="color: #F97583;"> =</span><span style="color: #79B8FF;"> 0</span><span>;</span></span>
+
+<span class="giallo-l"><span>VACUUM vt;</span></span>
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> pg_relation_size(</span><span style="color: #9ECBFF;">'vt'</span><span>) </span><span style="color: #F97583;">AS</span><span> after_regular_vacuum;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> after_regular_vacuum</span></span>
+<span class="giallo-l"><span>----------------------</span></span>
+<span class="giallo-l"><span>               147456</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>Still 18 pages. Half the rows are gone and VACUUM registered all that free space in the FSM, but every page still holds live tuples, so there are no trailing empty pages to truncate. The file cannot shrink; the free space is stranded in the interior. This is exactly the bloat people mean when they say "I deleted half the table and it's still the same size on disk."</p>
+<p>That is what VACUUM FULL is for:</p>
+<pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="sql"><span class="giallo-l"><span>VACUUM FULL vt;</span></span>
+<span class="giallo-l"><span style="color: #F97583;">SELECT</span><span> pg_relation_size(</span><span style="color: #9ECBFF;">'vt'</span><span>) </span><span style="color: #F97583;">AS</span><span> after_vacuum_full;</span></span></code></pre><pre class="giallo" style="color: #E1E4E8; background-color: #24292E;"><code data-lang="plain"><span class="giallo-l"><span> after_vacuum_full</span></span>
+<span class="giallo-l"><span>-------------------</span></span>
+<span class="giallo-l"><span>             73728</span></span>
+<span class="giallo-l"><span>(1 row)</span></span></code></pre>
+<p>147 KB down to 73 KB, 18 pages to 9. VACUUM FULL rewrote the entire table into a fresh file, packing the 500 surviving rows tightly and deleting the old file. Regular VACUUM had already made that space reusable, but only VACUUM FULL could compact it back out of the file.</p>
+<div class="callout">
+VACUUM FULL requires an <strong>AccessExclusiveLock</strong>: it blocks ALL reads and writes on the table for the entire duration. For a large table, that can mean minutes or hours of complete downtime for that table. In production, consider <a href="/posts/the-bloat-busters-pg-repack-pg-squeeze/">pg_repack or pg_squeeze</a> as online alternatives that achieve the same compaction without exclusive locks.
+</div>
+<p>The tradeoff is clear: regular VACUUM is lightweight (ShareUpdateExclusiveLock, doesn't block reads or writes) and makes space reusable, truncating the file only when trailing pages are empty. VACUUM FULL compacts interior free space out of the file but takes an AccessExclusiveLock and blocks everything. For most workloads, regular VACUUM is sufficient: new INSERTs reuse the freed space, and the table reaches a steady-state size. VACUUM FULL is a remediation tool for when bloat has gotten out of hand.</p>
+<h2 id="putting-it-all-together">Putting it all together
+</h2>
+<p>Let's trace the complete lifecycle of a tuple from INSERT to VACUUM, with every state change visible:</p>
+<p><strong>INSERT</strong></p>
+<ul>
+<li>Line pointer allocated as LP_NORMAL (1), pointing to the new tuple</li>
+<li>Tuple stamped with t_xmin = inserting XID, t_xmax = 0</li>
+<li>pd_lower advances by 4 bytes (new line pointer); pd_upper decreases by the tuple size</li>
+</ul>
+<p><strong>DELETE</strong></p>
+<ul>
+<li>Tuple's t_xmax set to the deleting XID</li>
+<li>Visibility map all_visible bit cleared for the page</li>
+<li>No space reclaimed, no line pointer change, no pd_lower/pd_upper change</li>
+</ul>
+<p><strong>VACUUM phase 1 (heap scan + prune)</strong></p>
+<ul>
+<li>Each page pruned: dead tuple data removed, page defragmented</li>
+<li>pd_upper increases; free space map updated</li>
+<li>Dead line pointers set to LP_DEAD (indexed table) or LP_UNUSED (no indexes)</li>
+<li>Dead TIDs collected; tuples opportunistically frozen</li>
+</ul>
+<p><strong>VACUUM phase 2 (index cleanup)</strong></p>
+<ul>
+<li>Index entries pointing to dead TIDs removed from every index</li>
+<li>Heap pages untouched</li>
+</ul>
+<p><strong>VACUUM phase 3 (heap cleanup, indexed tables only)</strong></p>
+<ul>
+<li>LP_DEAD line pointers flipped to LP_UNUSED (0), slots reusable</li>
+<li>No tuple bytes reclaimed here; pruning already did that in phase 1</li>
+<li>Visibility map all_visible bit set (if all remaining tuples are visible)</li>
+</ul>
+<p><strong>VACUUM FREEZE</strong></p>
+<ul>
+<li>Tuple infomask bits set to XMIN_COMMITTED + XMIN_INVALID (frozen)</li>
+<li>Visibility map all_frozen bit set</li>
+<li>pg_class.relfrozenxid advanced</li>
+</ul>
+<p>The line pointers move through the state machine we traced above (LP_NORMAL to LP_DEAD to LP_UNUSED on an indexed table, straight to LP_UNUSED without one), but the phase trace is where the <em>why</em> lives.</p>
+<p>Every INSERT creates a line pointer. Every DELETE stamps t_xmax but changes nothing else on the page. And every VACUUM cycle (prune, index cleanup, heap cleanup) converts dead space back into reusable space. The page never grows beyond 8 KB, and VACUUM's job is to make sure as much of those 8,192 bytes as possible are available for live data.</p>
+</div>
+
+</article>
