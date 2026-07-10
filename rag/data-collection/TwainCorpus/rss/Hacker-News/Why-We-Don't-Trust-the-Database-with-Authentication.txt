@@ -1,0 +1,161 @@
+When writing an API, itâs easy to unknowingly introduce a dangerous, implicit assumption: that the database is the ultimate source of truth. If a record is in the database, an application often treats it as authoritative. I want to explain in this post why that might be a very bad idea.
+
+Here at Sturdy Statistics, our core engineering philosophy is Defense in Depth: we work to prevent failure at every layer, but we design each layer as though the others could fail. When it comes to API authentication, trusting the database as the sole arbiter of identity is a critical vulnerability masquerading as standard practice.
+
+Here is why we donât trust our database with authentication, and how we structurally prevent database-level compromises from becoming full-system breaches.
+
+The Bypass: When SQL Injection Grants System-Wide Access
+
+Consider the dangerous implicit default for handling API keys. If you treat a machine token like a user password, the implementation seems obvious:
+
+Generate a random secret.
+
+Hash it (e.g., SHA-256).
+
+Store the hash in an 
+api_keys
+ table alongside an 
+org_id
+.
+
+When a request comes in, hash the provided secret and look for a matching row.
+
+This feels secure because the database only holds hashes, not plaintext secrets. But letâs look at what happens if an attacker discovers a blind SQL injection vulnerability anywhere else in the application.
+
+The attacker doesnât need to read the database or invert any hashes. An attacker can simply register a legitimate account and generate his own valid API key. Since the key is both legitimate and legitimately his, he knows the plaintext secret, and he knows the application will successfully verify it. So far, this is 
+entirely licit
+.
+
+Now letâs imagine the attacker finds a SQL injection exploit. By executing a simple 
+UPDATE
+ statement, he can copy the hash of 
+his
+ key and paste it over the hash of 
+the victimâs
+ key. When the attacker sends a request attempting to access the victimâs data, he uses his own (valid) key. The API middleware hashes it, finds 
+the victimâs
+ row (which now contains the attackerâs pasted hash), and grants access.
+
+Boom. Now it doesnât matter how many other security measures we have in place; the attacker has just bypassed the API security perimeter and the entire key-based tenant boundary layer. His attack uses a 
+valid
+ key. Because the application blindly trusts the databaseâs record of the hash, a simple database write translated into complete tenant takeover.
+
+The Fix: Cryptographic Binding
+
+Securing the database against SQL injection is obviously a priority, but the âbypassâ nature of this attack means we need Defense in Depth comparable to what we apply at the perimeter. We must separate the security of the authentication system from the security of the database.
+
+To achieve this, Sturdy Statistics does not store simple hashes of API keys. Instead, we use a server-side cryptographic pepper â a high-entropy secret TPM-sealed to the backend â to compute an HMAC-SHA512 signature.
+
+Crucially, we donât just sign the secret. We sign the structural context of the key:
+
+Stored Hash = HMAC-SHA512(Pepper, api-key-id
+                                  || rotation-version
+                                  || org-id
+                                  || secret)
+
+Where do these pieces come from? The 
+api-key-id
+, 
+rotation-version
+, and 
+secret
+ are parsed directly from the incoming client token. The 
+org-id
+ is strictly pulled from the requested URL path parameter. The database provides the stored hash to check against, along with its record of the 
+api-key-id
+, 
+rotation-version
+, and 
+org-id
+. Thus, the secret and stored hash each appear only once. The other identifiers are each stored in two locations. This âdouble-book accountingâ allows us to check for consistency.
+
+If an attacker manages to write to the database and swaps a hash from Organization A into Organization Bâs row, the attack fails immediately. When our authentication middleware verifies the incoming token, it pulls Organization Bâs 
+org-id
+ from the URL path and injects it into the HMAC calculation. Because the hash encodes the wrong 
+org-id
+, the hash changes, the signature is rejected, and the attacker is locked out.
+
+Crucially, because this signature requires the Pepper â which lives exclusively in backend memory and never touches the database â even an attacker with full DB read and write access is thwarted. It is impossible for him to mint or modify keys without the pepper. The database no longer decides identity on its own; it stores verifiers that only the backend can validate. Thus the backendâs defense layers remain intact and canât be bypassed via the DB.
+
+Rollback Resistance, or Zombie Keys
+
+You might wonder why we also include the 
+rotation-version
+ in the hash. This binds the signature to a specific epoch in the keyâs lifecycle, which is the first half of defending against 
+rollback attacks
+. If a key is compromised and eventually rotated, its old V1 hash is invalidated.
+
+But what if an attacker with DB access tries to resurrect that revoked key by overwriting the active row, setting the 
+hash
+ back to the V1 hash, and the 
+rotation-version
+ back to 1?
+
+Because the HMAC prevents a V1 hash from being passed off as a V2 key, the attacker 
+must
+ roll back the version column to make the hashing math work. We stop this by pairing the cryptographic signature with a database 
+TRIGGER
+. We configure the database engine to enforce a strict, one-way ratchet on the 
+rotation_version
+ column: it can only ever increase. When the attacker attempts their 
+UPDATE
+ statement to roll the version backwards, the database schema itself rejects the transaction. This combination locks out even an attacker with write access to the DB 
+and
+ access to an expired key from the victimâs organization.
+
+Paranoid Tenancy: Four Layers of Verification
+
+Cryptographically binding the API key to the tenant is the first step, but Defense in Depth requires overlapping security boundaries. In a multi-tenant environment, cross-tenant data leakage is the most common security failure identified by OWASP.
+
+To ensure absolute isolation, we enforce tenancy checks repeatedly throughout the lifecycle of every single request:
+
+The Routing Layer:
+ Tenancy is explicitly declared in every request path itself (as a path parameter), ensuring the routing infrastructure knows exactly which logical boundary is being accessed before any application code executes.
+
+The Authentication Layer:
+ As detailed above, API key verification is cryptographically tied directly to the 
+org-id
+.
+
+The Application Layer:
+ Every read and write operation at the application level enforces tenant scoping. Business logic functions do not accept naked identifiers; they require the authorized tenant context to proceed.
+
+The Database Schema Layer:
+ As the final failsafe, we enforce tenancy at the lowest possible level using database 
+TRIGGER
+s. Even if a logic error in the application code attempts a cross-tenant write, the schema rejects it.
+
+Graceful Security: Zero-Downtime Rotation
+
+Security mechanisms that are hard to use usually end up being bypassed. Key rotation is notoriously painful, often requiring coordinated downtime between the API provider and the client.
+
+Because we explicitly control the exact mechanics of our hashing and database schema, we built zero-downtime rotation directly into the architecture. Our 
+api_keys
+ table includes a 
+prev-hash
+ column and a 
+grace-period-expires-at
+ timestamp.
+
+When a user rotates a key, we generate a new secret, increment the rotation version, and compute the new primary hash. The old hash is demoted to the 
+prev-hash
+ column and given a strict time-to-live (e. g., 24 hours). During this window, the backend checks will authorize 
+either
+ key. This allows distributed client systems to update their environment variables asynchronously without dropping a single licit request.
+
+If youâre paying attention, this re-introduces the rollback vulnerability: an attacker with DB write access 
+and
+ access to an expired key could resuscitate the key by overwriting the grace period. We solve this with another 
+TRIGGER
+: the grace period can only be extended when the rotation version is also being incremented.
+
+Containment without Containers
+
+At Sturdy Statistics, we donât believe that adding complex layers of distributed infrastructure is the only way to achieve security.
+
+True security comes from architectural simplicity and mathematical rigor. By moving the trust anchor out of the database and enforcing strict cryptographic boundaries at the application edge, we ensure that a failure in one layer remains precisely that: a contained failure, not a catastrophic breach.
+
+Nota bene:
+ Throughout this post, I used the language of SQL injection and database 
+TRIGGER
+s because those are the familiar terms of relational database architecture. Under the hood, Sturdy Statistics actually uses Datomic. Datomicâs immutable ledger means authentication state is never simply overwritten in place, which adds protection against attacks that depend on rewriting stored data. While Datomic does not use SQL triggers, we enforce the same one-way ratchets and boundary conditions through Datomic transaction functions. I chose SQL terminology here for accessibility, but the core lesson is the same regardless of storage engine: database state alone should not be able to grant authentication.
