@@ -18,7 +18,7 @@
 <li>the <strong>dense part</strong> (attention, shared experts, embeddings — ~17B params) stays <strong>resident in RAM at int4</strong> (~9.9 GB);</li>
 <li>the <strong>21,504 routed experts</strong> (75 MoE layers × 256 experts + the MTP head, ~19 MB each at int4) live <strong>on disk</strong> (~370 GB) and are <strong>streamed on demand</strong>, with a per-layer LRU cache, an optional pinned hot-store, and the OS page cache as a free L2.</li>
 </ul>
-<p dir="auto">The engine is a single C file (<code>c/glm.c</code>, ~1,300 lines) plus small headers. No BLAS, no Python at runtime, no GPU.</p>
+<p dir="auto">The engine is a single C file (<code>c/glm.c</code>, ~2,400 lines) plus small headers. No BLAS, no Python at runtime, no GPU required (an opt-in CUDA tier for pinned experts exists — see below).</p>
 <div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">What's implemented</h2></div>
 <ul dir="auto">
 <li><strong>Faithful GLM-5.2 (<code>glm_moe_dsa</code>) forward</strong> — validated token-exact against a <code>transformers</code> oracle (teacher-forcing 32/32, greedy 20/20 on a tiny-random model with the real architecture).</li>
@@ -30,11 +30,13 @@
 <li><strong>MLA weight absorption</strong> (DeepSeek trick) for decode: no per-token k/v reconstruction — the query absorbs <code>kv_b</code>, context is projected after attention. Validated exact: TF 32/32 and generation 20/20 with absorption forced everywhere.</li>
 <li><strong>Async expert readahead</strong>: while one block of experts is being multiplied, the kernel is already reading the next (<code>WILLNEED</code>).</li>
 <li><strong>Quantization kernels</strong>: int8 / packed int4 / packed int2, per-row scales, AVX2, dequant-on-use. Packing validated bit-identical to the int8 container.</li>
-<li><strong>DSA sparse attention: in progress</strong> — the lightning-indexer weights (a ~108 GB extraction from the FP8 repo, <code>--indexer</code> converter mode) are downloading; the indexer forward lands next. Until then attention is dense and exact for contexts ≤ 2048 tokens.</li>
+<li><strong>DSA sparse attention</strong> — GLM-5.2's lightning indexer, faithful to the reference <code>glm_moe_dsa</code> modeling: per-layer top-2048 causal key selection (full/shared indexer layers), auto-detected from the <code>out-idx-*</code> weights (<code>--indexer</code> converter mode, ~189 MB extracted from the FP8 repo). Validated exact: forcing the selection to keep every key reproduces dense attention token-for-token. <code>DSA=0</code> disables, <code>DSA_TOPK</code> overrides.</li>
+<li><strong>KV-cache persistence</strong> — conversations reopen <strong>warm</strong> across engine restarts: serve mode appends the compressed MLA KV to <code>.coli_kv</code> after every turn (~182 KB/token, crash-safe) and resumes it at startup with zero re-prefill. Validated byte-identical to an uninterrupted session. <code>KVSAVE=0</code> disables.</li>
+<li><strong>Router-lookahead prefetch</strong> (<code>PILOT=1</code>, experimental) — the next layer's routing is 71.6% predictable from the current layer's post-attention state (measured); a dedicated I/O thread prefetches those experts while the current layer computes.</li>
 <li><strong>Batch-union MoE</strong>: in prefill (and MTP verification), each unique expert of the batch is read once and applied to every position that routes to it.</li>
 <li><strong>Byte-level BPE tokenizer in C</strong> (GPT-2-style with Unicode-property regex, 320k merges).</li>
 <li><strong>RAM safety</strong>: the expert cache is auto-sized from <code>MemAvailable</code> at startup — an honest peak projection (working set, KV, MTP row, reconstruction buffers) so the kernel OOM-killer never fires.</li>
-<li><strong>Offline FP8→int4 converter</strong> (<code>c/convert_fp8_to_int4.py</code>): downloads one shard at a time (~5 GB), dequants (128×128 block scales), requantizes to the engine's container, deletes the shard — the 756 GB FP8 checkpoint never needs to exist on disk at once. Resumable.</li>
+<li><strong>Offline FP8→int4 converter</strong> (<code>c/tools/convert_fp8_to_int4.py</code>): downloads one shard at a time (~5 GB), dequants (128×128 block scales), requantizes to the engine's container, deletes the shard — the 756 GB FP8 checkpoint never needs to exist on disk at once. Resumable.</li>
 </ul>
 <div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Honest numbers (WSL2, 12 cores, 25 GB RAM, NVMe via VHDX)</h2></div>
 <markdown-accessiblity-table><table>
@@ -76,11 +78,12 @@
 </tbody>
 </table></markdown-accessiblity-table>
 <p dir="auto">This is not fast. It is a 744B frontier-class model <strong>answering correctly on a machine that costs less than one H100 fan</strong>. Warm cache, pinned hot experts and MTP push the useful-response latency down considerably; the physics of the disk does the rest.</p>
-<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">SSD Wear Warning</h3></div>
-<p dir="auto">Cold starts are heavy on random reads (~11 GB/token). Reads themselves are safe, but the OS page cache can generate writes. Heavy use may accelerate wear on cheaper SSDs. Use with caution and monitor your drive health.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">SSD note</h3></div>
+<p dir="auto">Cold starts are heavy on random reads (~11 GB/token), but reads don't meaningfully wear an SSD — colibrì's streaming is read-only. The real concerns under heavy use are (1) <strong>swap traffic</strong> if the system runs out of RAM (writes do wear the drive — keep a sane <code>--ram</code> budget; colibrì's auto-budget is designed to stay clear of swap) and (2) <strong>sustained thermals</strong>: hours at full read duty cycle will heat cheaper drives. Monitor drive temperature and health.</p>
 <div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Download the model</h2></div>
 <p dir="auto">A pre-converted <strong>GLM-5.2 int4</strong> model for colibrì is available on Hugging Face:</p>
 <p dir="auto"><strong><a href="https://huggingface.co/jlnsrk/GLM-5.2-colibri-int4" rel="nofollow">https://huggingface.co/jlnsrk/GLM-5.2-colibri-int4</a></strong></p>
+<p dir="auto">If the MTP files there are still the int4 head (see <a data-hovercard-type="issue" data-hovercard-url="/JustVugg/colibri/issues/8/hovercard" href="https://github.com/JustVugg/colibri/issues/8">#8</a> — sizes <code>1765523544/2686077736/536747200</code> = int4, unusable), grab the <strong>int8 MTP heads</strong> from the community clone by matey-0: <strong><a href="https://huggingface.co/mateogrgic/GLM-5.2-colibri-int4-with-int8-mtp" rel="nofollow">https://huggingface.co/mateogrgic/GLM-5.2-colibri-int4-with-int8-mtp</a></strong></p>
 <p dir="auto">Download the repository and point <code>COLI_MODEL</code> to its directory:</p>
 <div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="COLI_MODEL=/path/to/GLM-5.2-colibri-int4 ./coli chat" dir="auto"><pre>COLI_MODEL=/path/to/GLM-5.2-colibri-int4 ./coli chat</pre></div>
 <p dir="auto">This skips the FP8 → int4 conversion step entirely.</p>
@@ -107,9 +110,171 @@ COLI_MODEL=/nvme/glm52_i4 ./coli chat" dir="auto"><pre><span class="pl-c1">cd</s
 
 <span class="pl-c"><span class="pl-c">#</span> chat — RAM budget, expert cache and MTP are all detected automatically:</span>
 COLI_MODEL=/nvme/glm52_i4 ./coli chat</pre></div>
+<p dir="auto">Inspect the planned storage hierarchy before loading the model:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="COLI_MODEL=/nvme/glm52_i4 ./coli plan
+COLI_MODEL=/nvme/glm52_i4 ./coli plan --gpu 0,1 --ram 128 --vram 48 --json
+
+# apply the bounded plan to the normal runner
+COLI_MODEL=/nvme/glm52_i4 ./coli chat --auto-tier" dir="auto"><pre>COLI_MODEL=/nvme/glm52_i4 ./coli plan
+COLI_MODEL=/nvme/glm52_i4 ./coli plan --gpu 0,1 --ram 128 --vram 48 --json
+
+<span class="pl-c"><span class="pl-c">#</span> apply the bounded plan to the normal runner</span>
+COLI_MODEL=/nvme/glm52_i4 ./coli chat --auto-tier</pre></div>
+<p dir="auto"><code>coli plan</code> reads only safetensors headers and reports the model's exact dense/expert
+footprint, runtime RAM reserve, safe expert-cache cap, and bounded VRAM hot tier. Its
+versioned JSON output is intended to be shared by the CLI, API server, Web UI, and
+desktop shell; it does not allocate model tensors or start inference.
+<code>--auto-tier</code> applies the same plan to <code>chat</code>, <code>run</code>, <code>serve</code>, and benchmarks. It
+sets the RAM budget and context immediately; the VRAM tier is enabled only when
+the current <code>glm</code> binary is linked with CUDA. Explicit flags and environment
+variables keep precedence over automatic values.</p>
 <p dir="auto">The engine at runtime is pure C — python is only used by the one-time converter.</p>
-<p dir="auto">Useful knobs (env or flags): <code>--temp T</code> token sampling temperature (default 0.7 + nucleus 0.90 — tuned for int4; 0 = greedy), <code>--topp 0.7</code> adaptive expert top-p (30–40% less disk), <code>--ngen N</code> max tokens per answer (<code>:piu</code> in chat continues a truncated one), <code>AUTOPIN=0</code> disable the learning cache's auto-pin, <code>THINK=1</code> enable GLM-5.2's reasoning block, <code>DRAFT=n</code> MTP draft depth, <code>TF=1</code> teacher-forcing validation.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">OpenAI-compatible API</h3></div>
+<p dir="auto"><code>coli serve</code> keeps one model process loaded and exposes a text-only OpenAI-compatible
+HTTP API. The gateway uses only the Python standard library; inference still runs in
+the same dependency-free C engine.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cd c
+COLI_MODEL=/nvme/glm52_i4 COLI_API_KEY=local-secret ./coli serve \
+  --host 127.0.0.1 --port 8000 --model-id glm-5.2-colibri
+
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Authorization: Bearer local-secret' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    &quot;model&quot;: &quot;glm-5.2-colibri&quot;,
+    &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Hello&quot;}],
+    &quot;stream&quot;: true
+  }'" dir="auto"><pre><span class="pl-c1">cd</span> c
+COLI_MODEL=/nvme/glm52_i4 COLI_API_KEY=local-secret ./coli serve \
+  --host 127.0.0.1 --port 8000 --model-id glm-5.2-colibri
+
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H <span class="pl-s"><span class="pl-pds">'</span>Authorization: Bearer local-secret<span class="pl-pds">'</span></span> \
+  -H <span class="pl-s"><span class="pl-pds">'</span>Content-Type: application/json<span class="pl-pds">'</span></span> \
+  -d <span class="pl-s"><span class="pl-pds">'</span>{</span>
+<span class="pl-s">    "model": "glm-5.2-colibri",</span>
+<span class="pl-s">    "messages": [{"role": "user", "content": "Hello"}],</span>
+<span class="pl-s">    "stream": true</span>
+<span class="pl-s">  }<span class="pl-pds">'</span></span></pre></div>
+<p dir="auto">Implemented endpoints are <code>GET /v1/models</code>, <code>GET /v1/models/{model}</code>,
+<code>POST /v1/chat/completions</code>, and legacy <code>POST /v1/completions</code>. Chat and
+completion requests support JSON responses, SSE streaming, usage counts,
+<code>max_tokens</code>/<code>max_completion_tokens</code>, <code>temperature</code>, and <code>top_p</code>. The extension
+<code>enable_thinking: true</code> enables GLM-5.2's reasoning block; the standard
+<code>reasoning_effort</code> field also enables it unless set to <code>none</code>.</p>
+<p dir="auto">The first version is deliberately text-only and serves one generation at a time:
+the 744B model stays in one persistent process, so concurrent HTTP requests queue
+instead of loading duplicate model copies. Tools, image/audio input, custom stop
+sequences, log probabilities, and token penalties return an explicit error rather
+than being silently ignored. The default bind address is localhost; set
+<code>COLI_API_KEY</code> before exposing the server beyond the machine.</p>
+<p dir="auto">Browser access from the Vite development server and Tauri local origins is enabled
+by default. Repeat <code>--cors-origin https://your-ui.example</code> to allow another exact
+origin, or use <code>--cors-origin '*'</code> only on a trusted local network.</p>
+<p dir="auto">The engine owns one mutable KV context, so HTTP generation uses a bounded FIFO
+admission queue instead of pretending to run unsafe parallel sequences. Configure it
+with <code>--max-queue N</code> (default 8) and <code>--queue-timeout SECONDS</code> (default 300), or the
+<code>COLI_MAX_QUEUE</code> / <code>COLI_QUEUE_TIMEOUT</code> environment variables. Saturated and timed-out
+requests receive OpenAI-shaped HTTP 429 errors before streaming headers are sent.
+<code>GET /health</code> exposes active/queued/completed/rejected counters, and successful
+generation responses include <code>x-colibri-queue-wait-ms</code>.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Isolated KV contexts</h3></div>
+<p dir="auto"><code>coli serve --kv-slots N</code> allocates up to 16 independent sequence contexts. Requests
+select one with the optional integer <code>cache_slot</code> field; ordinary OpenAI clients omit
+it and keep the original slot 0 behavior.</p>
+<div class="highlight highlight-source-json notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='{
+  "model": "glm-5.2-colibri",
+  "messages": [{"role": "user", "content": "Continue this conversation"}],
+  "cache_slot": 1
+}' dir="auto"><pre>{
+  <span class="pl-ent">"model"</span>: <span class="pl-s"><span class="pl-pds">"</span>glm-5.2-colibri<span class="pl-pds">"</span></span>,
+  <span class="pl-ent">"messages"</span>: [{<span class="pl-ent">"role"</span>: <span class="pl-s"><span class="pl-pds">"</span>user<span class="pl-pds">"</span></span>, <span class="pl-ent">"content"</span>: <span class="pl-s"><span class="pl-pds">"</span>Continue this conversation<span class="pl-pds">"</span></span>}],
+  <span class="pl-ent">"cache_slot"</span>: <span class="pl-c1">1</span>
+}</pre></div>
+<p dir="auto">Each slot owns its token history, compressed MLA/DSA KV memory, MTP window, and
+crash-safe persistence file (<code>.coli_kv</code>, <code>.coli_kv.1</code>, ...). The engine still executes
+one sequence at a time; this establishes explicit KV ownership without pretending that
+threaded HTTP is continuous batching. RAM admission accounts for every configured slot.
+Use <code>COLI_KV_SLOTS=N</code> as the environment equivalent. Start with a small value: at the
+default 4096-token context, every slot costs hundreds of MB.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Experimental resident CUDA backend</h3></div>
+<p dir="auto">colibrì includes an opt-in CUDA backend for model-resident tensors. Streaming
+experts deliberately remain on the original CPU path for now: copying an expert
+from NVMe to the GPU on every use would only replace the disk bottleneck with a
+PCIe bottleneck. Resident quantized tensors are uploaded lazily once and reused.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cd c
+make cuda-test CUDA=1                  # q8/q4/q2/f32 kernel correctness
+make CUDA=1
+# optional dense-path experiment (hot experts are configured below)
+COLI_CUDA=1 COLI_GPU=0 CUDA_DENSE=1 SNAP=/nvme/glm52_i4 ./glm 64 4 4" dir="auto"><pre><span class="pl-c1">cd</span> c
+make cuda-test CUDA=1                  <span class="pl-c"><span class="pl-c">#</span> q8/q4/q2/f32 kernel correctness</span>
+make CUDA=1
+<span class="pl-c"><span class="pl-c">#</span> optional dense-path experiment (hot experts are configured below)</span>
+COLI_CUDA=1 COLI_GPU=0 CUDA_DENSE=1 SNAP=/nvme/glm52_i4 ./glm 64 4 4</pre></div>
+<p dir="auto">Requirements: Linux, an NVIDIA driver, and a CUDA Toolkit under
+<code>/usr/local/cuda</code> (override with <code>CUDA_HOME=/path/to/cuda</code>). <code>CUDA_ARCH=native</code>
+builds for the GPU in the current machine; set an explicit architecture when
+cross-compiling. Requesting CUDA with a CPU-only binary, an invalid device, or
+an unavailable runtime fails at startup instead of silently falling back.</p>
+<p dir="auto">The normal <code>make</code> build and runtime behavior are unchanged. CUDA defaults to an
+expert-only accelerator: resident dense/attention tensors stay on CPU because
+fixture measurements show that moving them does not help while expert I/O is
+the bottleneck. <code>CUDA_DENSE=1</code> keeps the earlier all-resident experimental path.
+A measured <code>PIN</code> profile can promote its hottest experts into the persistent
+VRAM tier while keeping the rest in RAM:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="STATS=stats.txt SNAP=/nvme/glm52_i4 ./glm 64 4 4   # collect routing frequencies first
+COLI_CUDA=1 COLI_GPU=0 CUDA_EXPERT_GB=16 \
+PIN=stats.txt PIN_GB=160 SNAP=/nvme/glm52_i4 ./glm 64 4 4
+# multi-GPU expert tier, 96 GB total budget across six devices
+COLI_CUDA=1 COLI_GPUS=0,1,2,3,4,5 CUDA_EXPERT_GB=96 \
+PIN=stats.txt PIN_GB=160 SNAP=/nvme/glm52_i4 ./glm 64 4 4" dir="auto"><pre>STATS=stats.txt SNAP=/nvme/glm52_i4 ./glm 64 4 4   <span class="pl-c"><span class="pl-c">#</span> collect routing frequencies first</span>
+COLI_CUDA=1 COLI_GPU=0 CUDA_EXPERT_GB=16 \
+PIN=stats.txt PIN_GB=160 SNAP=/nvme/glm52_i4 ./glm 64 4 4
+<span class="pl-c"><span class="pl-c">#</span> multi-GPU expert tier, 96 GB total budget across six devices</span>
+COLI_CUDA=1 COLI_GPUS=0,1,2,3,4,5 CUDA_EXPERT_GB=96 \
+PIN=stats.txt PIN_GB=160 SNAP=/nvme/glm52_i4 ./glm 64 4 4</pre></div>
+<p dir="auto">Selected experts are uploaded during startup, so capacity failures occur before
+inference and the log reports their exact tensor footprint. The budget is clamped
+against free VRAM after reserving the projected dense resident set and 2 GB of
+runtime headroom per selected device. With <code>COLI_GPUS</code>, <code>CUDA_EXPERT_GB</code> is a
+total budget across the device set; experts are assigned whole to the
+least-loaded device that can hold them. A NUMA-local RAM backing store is not
+implemented yet.</p>
+<p dir="auto">Current limitations: devices use independent contexts and synchronous
+host-staged activation copies—there is no P2P/NCCL dependency yet. The kernels
+are correctness-first custom kernels rather than cuBLAS/Tensor Core kernels.
+This draft intentionally makes no end-to-end speedup claim before the full model
+is benchmarked.</p>
+<p dir="auto">For a reproducible backend A/B without the full checkpoint, generate the
+deterministic 313M-parameter <code>glm_moe_dsa</code> fixture and run fixed-token replay:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cd c
+python tools/make_glm_bench_model.py --output /nvme/colibri-bench-medium --device cuda
+python tools/benchmark_cuda_fixture.py --model /nvme/colibri-bench-medium --gpu 0" dir="auto"><pre><span class="pl-c1">cd</span> c
+python tools/make_glm_bench_model.py --output /nvme/colibri-bench-medium --device cuda
+python tools/benchmark_cuda_fixture.py --model /nvme/colibri-bench-medium --gpu 0</pre></div>
+<p dir="auto">The fixture has random weights and is not a language model. It exists only to
+preserve the real MLA/MoE/streaming shapes and compare CPU streaming, dense-only
+CUDA, CPU hot-store, and CUDA hot-expert execution with identical replay tokens.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Web interface</h3></div>
+<p dir="auto"><code>web/</code> contains a community-contributed browser UI (React + TypeScript, ~390
+lines of source, a pure API client — it never touches the engine directly):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cd web
+npm ci &amp;&amp; npm run dev        # then point it at an OpenAI-compatible endpoint" dir="auto"><pre><span class="pl-c1">cd</span> web
+npm ci <span class="pl-k">&amp;&amp;</span> npm run dev        <span class="pl-c"><span class="pl-c">#</span> then point it at an OpenAI-compatible endpoint</span></pre></div>
+<p dir="auto">It speaks the standard OpenAI Chat Completions protocol with SSE streaming, so it
+works against the colibrì OpenAI-compatible server (in review, #21) or any other
+compatible endpoint. Nothing leaves the endpoint you configure. The terminal
+<code>coli chat</code> remains the first-class interface.</p>
+<p dir="auto">Useful knobs (env or flags): <code>--temp T</code> token sampling temperature (default 0.7 + nucleus 0.90 — tuned for int4; 0 = greedy), <code>--topp 0.7</code> adaptive expert top-p (30–40% less disk), <code>--ngen N</code> max tokens per answer (<code>:piu</code> in chat continues a truncated one), <code>--repin N</code> adapt RAM/VRAM hot experts every N emitted tokens, <code>AUTOPIN=0</code> disable the learning cache's auto-pin, <code>THINK=1</code> enable GLM-5.2's reasoning block, <code>DRAFT=n</code> MTP draft depth, <code>TF=1</code> teacher-forcing validation, <code>PILOT=1</code> router-lookahead disk prefetch (experimental — see below), <code>CAP_RAISE=0</code> don't auto-grow the expert cache.</p>
+<p dir="auto"><strong>The expert cache auto-sizes to your RAM</strong> (since 2026-07-10): the engine now <em>raises</em> the LRU cap to fill your <code>--ram</code> budget instead of only lowering it. Before this fix a 128 GB machine ran with the same 8-experts/layer cache as a 16 GB one (issue #12) — <strong>if you benchmarked colibrì before this date, rerun: your numbers were capped.</strong></p>
+<p dir="auto"><strong>Router-lookahead prefetch</strong> (<code>PILOT=1</code>, experimental): GLM-5.2's expert routing is measurably predictable <em>ahead of time</em> — applying layer L+1's router to layer L's post-attention state recalls <strong>71.6%</strong> of the true top-8 (vs 41.3% for "same experts as last token"). <code>PILOT=1</code> uses this to issue next-layer expert readahead from a dedicated I/O thread while the current layer computes. On our dev box the disk is already ~80% saturated, so it measures neutral; on machines where compute and disk are balanced (like the Ryzen AI 9 in issue #12: 43% disk / 46% matmul) it should overlap real work — measurements welcome.</p>
 <p dir="auto"><strong>The learning cache</strong>: the engine records which experts your usage actually routes to (<code>.coli_usage</code> next to the model, updated every turn) and at startup automatically pins the hottest ones in spare RAM. colibrì literally gets faster the more you use it.</p>
+<p dir="auto"><strong>Live tier adaptation</strong> (<code>--repin N</code>, opt-in): at safe turn boundaries, a decaying
+session heat map replaces cold pinned experts with hotter streamed experts. Replacement
+loads the expert from disk into the existing RAM slot; GPU-backed slots immediately
+refresh the same VRAM tier budget. A 25% hysteresis and a four-swap limit prevent tier
+thrashing. Persistent <code>.coli_usage</code> remains the long-term signal and is not decayed.</p>
+<p dir="auto"><strong>Conversations reopen warm</strong> (<code>.coli_kv</code>, since 2026-07-10): <code>coli chat</code> persists the compressed MLA KV-cache to disk after every turn (~182 KB/token, appended incrementally, crash-safe). Close the chat, reopen it tomorrow — the model still remembers the whole conversation and <strong>zero re-prefill happens</strong>: validated byte-identical to an uninterrupted session. <code>:reset</code> clears it, <code>KVSAVE=0</code> disables it.</p>
 <div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Got a better machine? Try it — here's what to expect</h2></div>
 <p dir="auto">colibrì was built on deliberately humble hardware (12 cores, 25 GB RAM, NVMe behind a WSL2 VHDX that caps random reads at ~1 GB/s). <strong>Every one of those constraints is a knob your machine can turn up.</strong> The engine needs: Linux (or WSL2), gcc with OpenMP, AVX2, ≥16 GB RAM, and the ~370 GB int4 model on a local NVMe (ext4 — never a network/9p mount).</p>
 <p dir="auto"><strong>How to test it, in order:</strong></p>
@@ -206,9 +371,45 @@ PIN=stats.txt PIN_GB=20 ./coli chat        <span class="pl-c"><span class="pl-c"
 <td>default, MTP off</td>
 <td><strong>1.06 tok/s</strong> · expert hit 23% · RSS 21.8 GB</td>
 </tr>
+<tr>
+<td>Epyc 9654 ES · Linux · 4x16GB DDR5-4800-rdimm · Samsung PCIe Gen3 x4 NVME SSD</td>
+<td>—</td>
+<td><code>MTP=1 DIRECT=1</code></td>
+<td>0.31 tok/s · expert hit 35% · RSS 21.52 GB</td>
+</tr>
+<tr>
+<td>Ryzen AI 9 HX 370 (Framework 13) · Arch Linux · 128 GB · WD SN850X, BTRFS zstd (<a data-hovercard-type="issue" data-hovercard-url="/JustVugg/colibri/issues/12/hovercard" href="https://github.com/JustVugg/colibri/issues/12">#12</a>)</td>
+<td>—</td>
+<td>int8 MTP head · <code>--cap 32</code> · 46.7 GB auto-learned PIN</td>
+<td><strong>0.37 tok/s</strong> · expert hit 66% · MTP acceptance 52% (2.59 tok/fw) · RSS 105 GB</td>
+</tr>
+<tr>
+<td>Ryzen 9 9950X (32 threads) · Linux · 123 GB · Crucial P3 QLC Gen3 (<a data-hovercard-type="issue" data-hovercard-url="/JustVugg/colibri/issues/31/hovercard" href="https://github.com/JustVugg/colibri/issues/31">#31</a>)</td>
+<td>1.51 GB/s buffered</td>
+<td>default, 2 runs from cold</td>
+<td>0.10 tok/s · hit 53% · profile 66% disk</td>
+</tr>
+<tr>
+<td>〃 same machine, model moved to a Samsung 9100 PRO PCIe 5.0 (<a data-hovercard-type="issue" data-hovercard-url="/JustVugg/colibri/issues/31/hovercard" href="https://github.com/JustVugg/colibri/issues/31">#31</a>)</td>
+<td><strong>8.81 GB/s</strong> O_DIRECT</td>
+<td>〃 (usage history retained)</td>
+<td><strong>0.28 tok/s</strong> · hit 57% · profile flips: 32% disk / <strong>57% matmul</strong></td>
+</tr>
+<tr>
+<td>Ryzen AI Max+ 395 (Framework Desktop) · Ubuntu · 128 GB LPDDR5x · Intel Optane 905p PCIe 3.0 (<a data-hovercard-type="issue" data-hovercard-url="/JustVugg/colibri/issues/39/hovercard" href="https://github.com/JustVugg/colibri/issues/39">#39</a>)</td>
+<td>3.27 GB/s buffered</td>
+<td>int8 MTP head · fresh history (pure LRU, auto-raised cap 65)</td>
+<td>0.16 tok/s · hit 57% · profile 49% disk / 47% matmul</td>
+</tr>
+<tr>
+<td>〃 five runs later — learned pin 47.6 GB (<a data-hovercard-type="issue" data-hovercard-url="/JustVugg/colibri/issues/39/hovercard" href="https://github.com/JustVugg/colibri/issues/39">#39</a>)</td>
+<td>〃</td>
+<td><code>--temp 0.7 --topp 0.7</code></td>
+<td><strong>0.40 tok/s</strong> · hit 71% · fastest non-Apple datapoint</td>
+</tr>
 </tbody>
 </table></markdown-accessiblity-table>
-<p dir="auto">Takeaways: with 24 GB of RAM the engine auto-caps the expert cache to 2 slots/layer, so decode stays cold even on a disk 2–2.7× faster than the dev box — <strong>on small-RAM machines the RAM cap, not the disk, is the binding constraint</strong>, exactly as the table above predicts; <code>--topp 0.7</code> alone bought a clean 1.6× end-to-end speedup. The M5 Max datapoint lands right on the table's second row: <strong>~1 tok/s of a 744B model on a laptop SSD</strong> — and its 14 GB/s disk shifts the bottleneck back to RAM budget and kernels.</p>
+<p dir="auto">Takeaways: with 24 GB of RAM the engine auto-caps the expert cache to 2 slots/layer, so decode stays cold even on a disk 2–2.7× faster than the dev box — <strong>on small-RAM machines the RAM cap, not the disk, is the binding constraint</strong>, exactly as the table above predicts; <code>--topp 0.7</code> alone bought a clean 1.6× end-to-end speedup. The M5 Max datapoint lands right on the table's second row: <strong>~1 tok/s of a 744B model on a laptop SSD</strong> — and its 14 GB/s disk shifts the bottleneck back to RAM budget and kernels. The Framework 13 rows are the cache thesis proven end-to-end on one machine: 0.29 → 0.37 tok/s (hit 28% → 66%, speculation finally engaging at 52% acceptance) just by giving the cache its RAM — int8 MTP head + a bigger cap + the learned pin. The cap part is now automatic (cap auto-raise, 2026-07-10). The 9950X pair is the cleanest bottleneck experiment yet — same machine, same history, only the disk swapped: ×5.8 disk bandwidth bought ×2.9 tokens, and the profile <strong>flipped from 66% disk to 57% matmul</strong>. Past ~5 GB/s the disk stops being the story and the CPU (or the CUDA expert tier) becomes it.</p>
 <div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Quality benchmark — help wanted</h2></div>
 <p dir="auto">We have never measured how much the int4 quantization costs in accuracy — the harness is built and wired, but scoring is one forward per answer option, and on the dev box's ~1 GB/s disk a full run takes the better part of a day. <strong>This is the single most valuable thing a faster machine can contribute.</strong> The code is here and ready; one command runs it end to end (it auto-downloads the datasets on first use):</p>
 <div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cd c
@@ -228,22 +429,37 @@ PIN=stats.txt PIN_GB=20 ./coli chat        <span class="pl-c"><span class="pl-c"
 </ul>
 <p dir="auto">Every contribution, from a datapoint to a disk, moves the ceiling.</p>
 <div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Repo layout</h2></div>
-<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="c/glm.c          the engine (GLM-5.2 forward, streaming MoE, MTP, serve mode)
-c/st.h           safetensors reader: pread + fadvise, no mmap (RSS stays flat)
-c/tok.h          byte-level BPE tokenizer in C
-c/coli           CLI: chat / run / bench / convert / info
-c/iobench.c      parallel disk microbenchmark (measures what the engine feels)
-c/convert_fp8_to_int4.py   disk-safe FP8 → int4 converter
-c/make_glm_oracle.py       tiny-random oracle generator for validation
-c/olmoe.c        stage-A engine (OLMoE), first validation target"><pre class="notranslate"><code>c/glm.c          the engine (GLM-5.2 forward, streaming MoE, MTP, serve mode)
-c/st.h           safetensors reader: pread + fadvise, no mmap (RSS stays flat)
-c/tok.h          byte-level BPE tokenizer in C
-c/coli           CLI: chat / run / bench / convert / info
-c/iobench.c      parallel disk microbenchmark (measures what the engine feels)
-c/convert_fp8_to_int4.py   disk-safe FP8 → int4 converter
-c/make_glm_oracle.py       tiny-random oracle generator for validation
-c/olmoe.c        stage-A engine (OLMoE), first validation target
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="Makefile                  root build/check entry point
+c/
+├── glm.c                 single-file GLM engine
+├── st.h, tok.h, json.h   runtime headers
+├── backend_cuda.*        optional CUDA tier
+├── Makefile              build and local checks
+├── coli                  user-facing CLI
+├── openai_server.py      OpenAI-compatible HTTP gateway
+├── setup.sh              one-command local setup
+├── tools/                offline conversion, fixtures and benchmarks
+├── scripts/              long-running conversion helpers
+└── tests/                dependency-free C and Python tests
+web/                      browser UI (pure OpenAI-API client, community-maintained)"><pre class="notranslate"><code>Makefile                  root build/check entry point
+c/
+├── glm.c                 single-file GLM engine
+├── st.h, tok.h, json.h   runtime headers
+├── backend_cuda.*        optional CUDA tier
+├── Makefile              build and local checks
+├── coli                  user-facing CLI
+├── openai_server.py      OpenAI-compatible HTTP gateway
+├── setup.sh              one-command local setup
+├── tools/                offline conversion, fixtures and benchmarks
+├── scripts/              long-running conversion helpers
+└── tests/                dependency-free C and Python tests
+web/                      browser UI (pure OpenAI-API client, community-maintained)
 </code></pre></div>
+<p dir="auto">The runtime path intentionally stays flat and readable: <code>glm.c</code> plus its small
+headers. Auxiliary Python and shell tooling is grouped separately and is never a
+runtime dependency of the engine.</p>
+<p dir="auto">From the repository root, <code>make</code>, <code>make check</code>, and <code>make clean</code> delegate to the
+engine Makefile. Existing commands run from <code>c/</code> continue to work unchanged.</p>
 <div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Why "colibrì"</h2></div>
 <p dir="auto">The hummingbird weighs a few grams, hovers in place, and visits a thousand flowers a day. This engine keeps a 744-billion-parameter giant alive on hummingbird rations: 25 GB of RAM, twelve CPU cores, and a lot of disk patience.</p>
 <div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
