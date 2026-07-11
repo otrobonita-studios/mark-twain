@@ -1,0 +1,234 @@
+←
+ Back to blog
+
+ZeroFS vs. Amazon S3 Files
+
+July 11, 2026
+·
+
+Pierre Barre
+·
+
+8 min read
+
+Amazon S3 Files and ZeroFS expose POSIX filesystems backed by object storage, but the shared interface hides opposite bucket layouts. The choice turns on the role of the bucket: if files must remain ordinary S3 objects, S3 Files preserves that identity; if the bucket can be an internal persistence layer, ZeroFS trades direct S3 access for packing, compression, and client-side encryption.
+
+Storage layout
+
+The defining property of 
+S3 Files, which is built using Amazon EFS
+, is that 
+images/cat.jpg
+ on the mount corresponds to the same key in the bucket, with changes flowing in both directions. Active data and metadata reside in a low-latency tier that AWS calls “high-performance storage.”
+
+That one-file, one-object identity is deliberately absent from the 
+ZeroFS storage format
+. Metadata lives in an LSM tree; file contents are split into extents, compressed and encrypted, then packed into immutable segment objects. An S3 client sees an opaque internal layout rather than the mounted files.
+
+flowchart TB
+    subgraph CLIENTS["Client Layer"]
+        NFS["NFS Client"]
+        P9["9P Client"]
+        NBD["NBD Client"]
+        WEB["Web Browser"]
+    end
+    subgraph CORE["ZeroFS Core"]
+        NFSD["NFS Server"]
+        P9D["9P Server"]
+        NBDD["NBD Server"]
+        WEBUI["Web UI"]
+        VFS["Virtual Filesystem"]
+        SEG["Segment store: compressed, encrypted file-data frames"]
+        SLATE["LSM tree: metadata and 32-byte extent pointers"]
+        CACHE["Local Cache"]
+        NFSD --> VFS
+        P9D --> VFS
+        NBDD --> VFS
+        WEBUI --> VFS
+        VFS --> SEG
+        VFS --> SLATE
+        SEG --> CACHE
+        SLATE --> CACHE
+    end
+    subgraph BACKEND["Storage Backend"]
+        SEGOBJ["Immutable segment objects"]
+        SSTS["Metadata SSTs and manifest"]
+        S3["S3 Object Store"]
+        CACHE --> SEGOBJ
+        CACHE --> SSTS
+        SEGOBJ --> S3
+        SSTS --> S3
+    end
+    NFS --> NFSD
+    P9 --> P9D
+    NBD --> NBDD
+    WEB --> WEBUI
+
+ZeroFS keeps file data and filesystem metadata on separate paths until both reach the object store.
+
+Both mounts use the client page cache. The write-path row below starts after the client sends the write to the server.
+
+Amazon S3 Files
+ZeroFS
+
+Storage model
+AWS-managed high-performance storage synchronized with a bucket; internal layout not documented
+An LSM tree and immutable data segments on object storage
+
+Object layout
+One file maps to one S3 object
+Metadata in an LSM tree; file-data frames packed into segments
+
+Write path after client cache
+NFS write to high-performance storage, durable immediately; asynchronous S3 export after write inactivity
+Over 9P, 
+fsync
+ uploads data segments and flushes LSM metadata to object storage before returning success
+
+Cold read and read-ahead
+Linux NFS read-ahead, directory metadata import, optional small-file import, or direct S3 read
+LSM lookup, then adaptive object and cross-segment frame prefetch
+
+S3 API access to files
+Yes; filesystem changes appear after asynchronous export
+No; reading files requires ZeroFS and the encryption password
+
+Client interface
+NFS 4.1/4.2
+9P or NFS for files; NBD for blocks
+
+Object-store choice
+Amazon S3
+Amazon S3, S3-compatible stores, Azure Blob, or Google Cloud Storage
+
+Cost model
+S3 plus high-performance storage, file access, and synchronization charges
+Object storage and requests, plus the compute and cache running ZeroFS
+
+Object interoperability
+
+Keeping that one-to-one mapping means a file written through the mount 
+eventually becomes a normal S3 object
+. Export begins after 60 seconds without a write, so continued writes postpone S3 visibility. Once export completes, existing tools can read the object with 
+GetObject
+, and S3-side changes flow back into the filesystem. If both sides modify the same file before synchronization, S3 wins and the file-side version moves to 
+lost+found
+.
+
+A ZeroFS pathname cannot be fetched with the S3 API, and a segment cannot be scanned as Parquet. In exchange, small files need neither one data object nor one PUT each: their extents are compressed, encrypted, and packed together. The bucket and raw local cache contain ciphertext, so mounting or recovery requires ZeroFS and its encryption password. The 
+encryption documentation
+ lists the structural metadata that remains visible.
+
+If other applications need immediate S3 visibility after a filesystem write, neither model provides it: S3 Files exports asynchronously, while ZeroFS never exposes mounted files through the S3 API.
+
+Cold access
+
+The first S3 Files access can trigger an import: listing a directory loads every object's metadata and asynchronously copies files below the import threshold, 128 KiB by default, into high-performance storage. 
+AWS says a first listing of 1,000 objects may take several seconds
+. Larger files stay in S3, and 
+reads of at least 1 MiB go directly to S3
+.
+
+ZeroFS instead populates a 
+local RAM and disk cache
+ from reads and uploads. Newly sealed segments enter the cache from bytes already in hand, so read-after-write needs no GET; the cache is not write-back, and writes still reach object storage when segments are sealed and metadata is flushed. A cold miss resolves the requested extents through the LSM tree and coalesces adjacent frames into ranged GETs. It pays the first object-store round trip without importing the rest of the file or every small file in the directory; once the working set fits locally, data reads generate few S3 requests.
+
+Both paths add read-ahead for sequential traffic: ZeroFS prefetches within and across segment objects, while S3 Files relies on Linux NFS read-ahead alongside its direct-S3 routing.
+
+Cost
+
+S3 storage and request charges apply in either case. S3 Files also charges for its high-performance storage tier: resident storage per GB-month and reads and writes per GB. The 
+AWS pricing example
+ current at publication uses these rates:
+
+S3 Files charge
+Rate used in AWS's example
+When it applies
+
+High-performance storage
+$0.30 per GB-month
+Files have a 10 KiB minimum billable size
+
+File reads
+$0.03 per GB
+Reads from high-performance storage, including exports to S3
+
+File writes
+$0.06 per GB
+Writes to high-performance storage, including imports from S3
+
+The amount resident in high-performance storage depends on the configured 
+import threshold and expiration window
+. Listing imports metadata and eligible small files, reads can load more data, and 
+file metadata does not expire
+. Imports are metered as filesystem writes and exports as reads; the 
+minimum operation sizes
+ are 32 KiB for file data and 4 KiB for metadata. AWS reports resident bytes and inodes in 
+CloudWatch
+, but total bucket size alone cannot forecast the bill.
+
+Illustrative model: store 10,000 GiB and read it once
+
+This is an illustrative scenario, not a general cost comparison.
+ It uses 10,000 AWS billable GB (GiB) of logical data in S3 Standard in 
+us-east-1
+, at 
+$0.023 per GB-month
+. The direct case assumes 1 MiB reads from data already in S3; the resident case assumes reads below 1 MiB with all data also in high-performance storage. Internet egress is excluded.
+
+Case
+Storage/month
+Read once
+Illustrative subtotal
+
+ZeroFS (2:1)
+~$115 + overhead
+S3 GETs
+~$115 + infrastructure
+
+ZeroFS (1:1)
+~$230 + overhead
+S3 GETs
+~$230 + infrastructure
+
+S3 Files (1 MiB direct reads)
+~$230 + metadata
+~$1.17 + S3 GETs
+~$231 + metadata and requests
+
+S3 Files (small resident reads)
+$3,230
+$300
+$3,530
++$600 if imported
+
+The ZeroFS figures are estimates: compression reduces payload bytes, while metadata, temporary compaction data, and requests add cost. At an ideal 8 MiB GET size, reading the file data costs about $0.26 at 2:1 compression or $0.51 at 1:1, before metadata and short or random reads. ZeroFS also requires one server, or two for high availability, plus local disk cache; each node needs about 2 GB of RAM beyond its configured memory cache. S3 Files may therefore cost less for large-file streaming. The difference grows when data is imported into, or written through, high-performance storage: writing 10,000 GiB through S3 Files adds $600 in filesystem writes and $300 for export, while a month of residency adds $3,000.
+
+Actual costs depend on file count, compression, I/O size, residency, 
+fsync
+ frequency, and infrastructure. S3 Files also 
+requires bucket versioning
+, so noncurrent versions need an appropriate lifecycle rule.
+
+fsync
+ and S3 visibility
+
+Durability and S3 visibility are separate events in S3 Files. 
+Writes to high-performance storage are durable immediately
+, but export starts only after 
+approximately 60 seconds without a write
+; calling 
+fsync
+ does not make the object immediately visible through the S3 API. ZeroFS has no second visibility event because there is no export step. Over 9P, a 
+successful 
+fsync
+ returns after object storage acknowledges the data segment and its LSM metadata, leaving the file recoverable after a cold restart.
+
+Rename
+
+S3 has no directories or atomic rename for general-purpose buckets
+. S3 Files renames on the mount, then copies each affected object to a new key and deletes the old one; during a directory rename, both prefixes can be visible. AWS says 
+synchronizing 100,000 renamed files takes a few minutes
+. ZeroFS changes only its LSM directory entries, with no copy per descendant and no S3 prefix exposed to object clients.
+
+The mount points may look similar, but the buckets make different promises: S3 Files preserves ordinary objects for the surrounding S3 ecosystem; ZeroFS treats object storage as the private substrate of the filesystem.
