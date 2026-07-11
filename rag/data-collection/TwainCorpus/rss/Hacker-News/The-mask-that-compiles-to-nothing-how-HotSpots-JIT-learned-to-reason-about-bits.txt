@@ -1,0 +1,791 @@
+When a developer types 
+(x << 2) & -4
+, an optimizing compiler should compile it to just the shift,
+
+x << 2
+: the bitwise 
+AND
+ should disappear. Why? Imagine we have an 8-bit number 
+x = 1011 0111
+ and my expression looks like 
+(x << 2) & -4;
+
+  x         1011 0111     (the original x)
+----------------------
+  x << 2    1101 1100     (x after lshift, the 2 lowest bits are always 0s)
+  & -4      1111 1100     (-4 in two's complement -> the mask only clears lowest 2 bits)
+----------------------
+  result    1101 1100     (same as x << 2, the bitwise AND has no effect)
+
+But how does the C2 compiler actually do this? The optimization relies on a general abstraction, built over multiple changesets.
+This post is my attempt to understand it and explain it.
+
+What does the JIT actually 
+know
+ about your numbers?
+
+When C2 is compiling a method, what does it know about the value in a given variable?
+
+The answer is "a set of possible values." The compiler usually can't know the exact runtime value of
+
+x
+ (that's the whole point of a variable), but it can often prove that 
+x
+ is
+
+constrained
+. If it can prove the constraint is tight enough, it can rewrite the code. A classic
+example: if the compiler proves an array index is always in 
+[0, length)
+, it deletes
+the 
+bounds check
+. Constant folding, dead branch elimination, and other optimizations often come down to
+"prove the set of possible values is small enough to act on."
+
+C2 stores this "set of possible values" as a 
+type
+. Don't imagine a Java types 
+int
+ or 
+long
+, but a much
+richer 
+internal type
+ that carries a 
+range
+. For most of HotSpot's life, an integer type was
+essentially:
+
+[lo, hi]   // the value is somewhere in this signed range, inclusive
+
+So the type of 
+x & 0xFF
+ would be 
+[0, 255]
+, and the compiler could use that. This signed range is simple and useful,
+but it is too weak for our purpose.
+
+Consider 
+x << 2
+. What's the range of 
+x << 2
+ if 
+x
+ can be anything? Well... almost anything.
+Shifting left can overflow, wrap around, produce huge positives and huge negatives. The tightest
+signed interval covering the result is 
+[Integer.MIN_VALUE, 2147483644]
+. It is a huge range, just shy
+of the full 
+int
+ range, and it gives the compiler almost nothing useful.
+
+But we know something very specific about 
+x << 2
+: No matter what 
+x
+ is the bottom two bits are
+always zero! A range can't express that. 
+[lo, hi]
+ can say
+"the value is small" but it can't say "the value is even," let alone "the value is a multiple of
+four." That knowledge lives in the 
+bits
+, and the range alone cannot express it.
+
+Enter known bits
+
+The fix: alongside the range, also track what we know about each individual bit. For a 32-bit integer, imagine two extra 32-bit masks travelling with the type:
+
+zeros
+: a 
+1
+ in position 
+i
+ means "bit 
+i
+ is definitely 0"
+
+ones
+: a 
+1
+ in position 
+i
+ means "bit 
+i
+ is definitely 1"
+
+A bit that's unknown is 
+0
+ in both masks. A bit can't be both, so the invariant 
+zeros & ones == 0
+
+must always hold. In C2 it's a dozen lines of 
+rangeinference.hpp
+:
+
+template <class U>
+class KnownBits {
+  static_assert(U(-1) > U(0), "bit info should be unsigned");
+public:
+  U _zeros;
+  U _ones;
+  bool is_satisfied_by(U v) const {
+    return (v & _zeros) == U(0) && (v & _ones) == _ones;
+  }
+};
+
+is_satisfied_by
+ just checks whether a given number 
+v
+ is allowed by the masks. The masks must never
+rule out a value that can actually occur, and C2's tests and internal checks use this to verify they
+don't.
+
+Every bit is now in one of three states: 
+known-0
+, 
+known-1
+, or 
+unknown
+. Here's the type of 
+x << 2
+, with 
+.
+ for unknown:
+
+bit:   31                                2 1 0
+x:      . . . . . . . . . . . . . . . .  . . .    (x is fully unknown)
+x << 2: . . . . . . . . . . . . . . . .  . 0 0    (low two bits: known zero!)
+
+So 
+x << 2
+ has 
+zeros = 0b11
+ and everything else unknown.
+The compiler now 
+knows
+ the number is a multiple of four.
+
+This data structure isn't unique to HotSpot. LLVM's
+
+KnownBits
+
+is the closest match to C2's representation (a 
+Zero
+ and a 
+One
+ bitmask with the same
+
+Zero & One == 0
+ invariant), and GCC tracks the same thing as the 
+mask
+ in its
+
+conditional constant-propagation pass
+
+(a value plus an uncertainty mask). It's the same idea: a cheap, non-relational, per-bit
+abstraction of an integer. HotSpot got the foundations
+(
+JDK-8315066
+, by Quan Anh Mai and Emanuel Peter) in
+JDK 26, and the pieces that actually delete 
+(x << 2) & -4
+ landed in JDK 27. Fun fact: Quan Anh Mai is 
+merykitty
+, whose 
+magic SWAR line
+parser
+ we took apart during 
+1BRC
+.
+
+INFO
+Non-relational
+: the abstraction tracks each bit on its own and never records relationships
+
+between
+ bits (no "bit 3 is always equal to bit 5"). That independence is what makes it cheap: constant
+per-bit bookkeeping.
+
+Two views that refine each other
+
+We now have two different descriptions of the same number side by side: a 
+range
+ and a set of
+
+known bits
+. Each one knows things the other doesn't, and they can 
+teach
+ each other:
+
+The bits know the low two bits are zero. The range uses that: if it currently says 
+[5, 41]
+, then
+5, 6, 7, and 41 all have nonzero low bits and can't occur, so the range tightens to 
+[8, 40]
+, the
+nearest multiples of four inside it.
+
+The range knows the value is in 
+[0, 200]
+. The bits use that: every number from 0 to 200 has its
+top 24 bits zero, so those aren't unknown bits at all; they're known-zero, and the bits record it.
+
+This "combine two abstractions and let them refine each other" pattern has a name in the compiler
+literature (a 
+reduced product
+), and the function that makes the range and the bits
+reconcile until they agree is called the 
+reduction operator
+. In C2 it's a function with the very
+down-to-earth name 
+canonicalize_constraints()
+, and it runs every time a new integer type
+is created. It's the heart of the whole feature.
+
+The canonicalization dance
+
+So how do you get the range and the bits to agree? You let them take turns refining each other
+until neither has anything new to add. One clarification first: C2's integer type actually carries
+
+three
+ constraints, and a value belongs to the type only if the same 32-bit pattern passes all of
+them. Straight from the
+
+definition in 
+type.hpp
+:
+
+v >= _lo && v <= _hi &&                  // the signed range
+juint(v) >= _ulo && juint(v) <= _uhi &&  // the same bits, compared unsigned
+_bits.is_satisfied_by(v)                 // the known bits
+
+Why an unsigned range too? Because C2 has to reason about unsigned comparisons. Remember the bounds
+check from the beginning of this post? HotSpot compiles it into a single unsigned comparison,
+
+index u< length
+, and deciding whether such a comparison is always true or always false is a
+question about unsigned ranges, not signed ones. Intersecting the signed and the
+unsigned range produces one or two disjoint pieces, each with bounds that are either both negative
+or both non-negative. For example, the signed 
+[-5, 5]
+ and the unsigned 
+[2, UINT_MAX]
+ intersect
+to 
+[-5, -1]
+ and 
+[2, 5]
+: the negative values pass the unsigned check because their bit patterns
+read as huge unsigned numbers just below 
+UINT_MAX
+, while 
+0
+ and 
+1
+ fail it. C2 calls each such
+piece a
+
+"simple interval"
+.
+Because its bounds share a sign, signed and unsigned comparisons agree on it: a simple interval is
+a valid signed range and a valid unsigned range at the same time, and it never straddles the sign
+boundary, so the shared-prefix trick in step 1 is always safe. The reduction works on one simple
+interval at a time; the outer
+
+canonicalize_constraints()
+
+does the splitting and merges the results back:
+
+// The 2 simple intervals can be tightened into 2 separate results
+auto neg_type = canonicalize_constraints_simple({U(srange._lo), urange._hi}, _bits);
+auto pos_type = canonicalize_constraints_simple({urange._lo, U(srange._hi)}, _bits);
+
+Note how each simple interval mixes bounds from both views: the negative piece runs from the
+
+signed
+ low bound to the 
+unsigned
+ high bound, and the non-negative piece from the 
+unsigned
+ low
+bound to the 
+signed
+ high bound. The loop:
+
+Bits learn from the interval.
+ Take the current simple interval 
+[ulo, uhi]
+. The high bits
+that are 
+identical
+ in both 
+ulo
+ and 
+uhi
+ are identical for every value in between (that's just
+how binary counting works: the leading digits don't change until you cross a power-of-two
+boundary). Those bits are now known.
+
+Interval learns from the bits.
+ Take the current 
+ulo
+. If it violates the known bits (say the
+bits demand the low two are zero but 
+ulo
+ is 
+0b...101
+), then 
+ulo
+ isn't actually a possible
+value, so bump it up to the 
+smallest
+ value ≥ 
+ulo
+ that satisfies the bits. Do the mirror thing
+to pull 
+uhi
+ down.
+
+Go back to step 1
+ and see if the tighter interval reveals more known bits. Repeat until a full
+pass changes nothing.
+
+That's the loop from 
+canonicalize_constraints_simple
+:
+
+adjust_unsigned_bounds_from_bits
+ is step 2, 
+adjust_bits_from_unsigned_bounds
+ is step 1, and the
+exit is 
+_progress
+ going false:
+
+while (true) {
+  canonicalized_bounds = adjust_unsigned_bounds_from_bits(canonicalized_bounds._result, canonicalized_bits._result);
+  if (!canonicalized_bounds._progress || canonicalized_bounds.empty()) {
+    return SimpleCanonicalResult<U>(canonicalized_bounds._present, canonicalized_bounds._result, canonicalized_bits._result);
+  }
+  canonicalized_bits = adjust_bits_from_unsigned_bounds(canonicalized_bits._result, canonicalized_bounds._result);
+  if (!canonicalized_bits._progress || canonicalized_bits.empty()) {
+    return SimpleCanonicalResult<U>(canonicalized_bits._present, canonicalized_bounds._result, canonicalized_bits._result);
+  }
+}
+
+Does this terminate? Yes. Each iteration that triggers another full round must turn at least one
+previously-unknown bit into a known bit, and a final bounds-only tightening may happen just before
+the loop exits. Given there are at most 
+64 bits
+, convergence is bounded by the word width.
+
+Teaching AND to disappear
+
+We also have to teach C2 to compute known bits 
+through
+ operations: every participating operation needs a rule for
+"given the known bits of my inputs, what are the known bits of my output?" These rules are simple
+and mechanical:
+
+AND:  out.ones  = a.ones  & b.ones   // a bit is 1 only if it's 1 in BOTH
+      out.zeros = a.zeros | b.zeros  // a bit is 0 if it's 0 in EITHER
+OR:   out.ones  = a.ones  | b.ones
+      out.zeros = a.zeros & b.zeros
+SHL by k: shift both masks left by k, and OR (1<<k)-1 into zeros
+          // the vacated low k bits are known-zero, exactly our x<<2 fact
+
+INFO
+Transfer function
+: the rule for a single operation that turns 
+what we know about the inputs
+
+into 
+what we know about the output
+. The 
+AND
+ and 
+SHL
+ rules just above are transfer functions:
+feed in the operands' known bits, get back the result's known bits.
+
+The real code barely differs. The AND rule
+(
+infer_and_impl
+):
+
+U<CTP> zeros = st1._bits._zeros | st2._bits._zeros;
+U<CTP> ones = st1._bits._ones & st2._bits._ones;
+
+and the left shift
+(
+infer_lshift
+),
+where 
+pattern = (1 << k) - 1
+ is literally the "vacated low bits are zero" fact:
+
+U<CTP> pattern = (U<CTP>(1) << masked_shift) - U<CTP>(1);
+U<CTP> known_one_bits = t1->_bits._ones << masked_shift;
+U<CTP> known_zero_bits = (t1->_bits._zeros << masked_shift) | pattern;
+
+I learned that other compilers use similar techniques. The AND and shift rules we just saw are in
+LLVM as 
+KnownBits::operator&
+
+and 
+KnownBits::shl
+,
+and GCC as 
+bit_value_binop
+.
+
+Quan Anh Mai brought this to the 
+Value
+ of C2's 
+AND
+, 
+OR
+, and 
+XOR
+ nodes in
+
+JDK-8367341
+; the same patch adds the
+
+OR
+
+and 
+XOR
+
+rules right beside the AND (the 
+XOR
+ dual rides along, even though the issue is titled just
+
+And / Or
+). Ashay Rane did the left-shift rule in the
+
+JDK-8278857
+ that started this whole post.
+
+With known bits flowing through the graph, the actual optimization, deleting the mask, becomes
+almost a one-liner. When is 
+x & y
+ just 
+y
+? When the AND can't possibly clear any bit that 
+y
+
+might have set. In known-bits terms: at every position where 
+y
+ 
+could
+ be 1, 
+x
+ must 
+definitely
+
+be 1. Here is the real code from C2,
+
+AndINode::Identity
+,
+the 
+JDK-8380475
+ change (by Ashay Rane) that finally
+deletes the mask.
+Two bits of C2 vocabulary first: 
+in(1)
+ and 
+in(2)
+ are the 
+AND
+ node's two operands, and 
+Identity
+
+is the hook every node has for answering "am I redundant?" Returning one of the inputs tells the
+compiler to delete this 
+AND
+ and rewire everything that used it to that input instead:
+
+Node* AndINode::Identity(PhaseGVN* phase) {
+  // x & x => x
+  if (in(1) == in(2)) {
+    return in(1);
+  }
+  const TypeInt* t1 = phase->type(in(1))->is_int();
+  const TypeInt* t2 = phase->type(in(2))->is_int();
+  if ((~t1->_bits._ones & ~t2->_bits._zeros) == 0) {
+    // All bits that might be 0 in in1 are known to be 0 in in2
+    return in(2);
+  }
+  if ((~t2->_bits._ones & ~t1->_bits._zeros) == 0) {
+    // All bits that might be 0 in in2 are known to be 0 in in1
+    return in(1);
+  }
+  return MulNode::Identity(phase);
+}
+
+The two known-bits 
+if
+s are mirror images: the first collapses 
+x & y
+ to 
+y
+, the second to 
+x
+.
+For 
+(x << 2) & -4
+ it's the second that fires: 
+x & y == x
+ exactly when every bit 
+y
+ might clear
+is already definitely zero in 
+x
+. In known-bits terms 
+~y.ones
+ is the set of bits 
+y
+ might clear (anything
+not known-1), and 
+~x.zeros
+ is the set of bits 
+x
+ might have set (anything not known-0), both
+taken within the 32-bit lane; the identity holds when those two don't overlap:
+
+x & y == x   <=>   (~y.ones & ~x.zeros) == 0
+
+Let's have a look at a concrete example: 
+(x << 2) & -4
+
+The 
+AndINode
+ has the first argument (
+in(1)
+) set to a node representing 
+x = x << 2
+ and the 2nd argument (
+in(2)
+) represents 
+-4
+.
+
+x = x << 2:  zeros = ...0011 -> ~zeros = ...1100   (bits x might have set: all but the low two)
+y = -4:      ones  = ...1100 -> ~ones  = ...0011   (bits y might clear: the low two)
+(~y.ones & ~x.zeros) == (...0011 & ...1100) == 0
+
+-4
+ can only clear the low two bits, and 
+x << 2
+ has those two definitely zero, so the AND changes
+nothing and C2 returns 
+in(1)
+, which is 
+x << 2
+. The 
+& -4
+ node is removed from the graph.
+The machine code contains only the shift and the 
+and
+ instruction is not emitted at all.
+
+Let's see the effects of this machinery in action. Here is a simple - almost naive - test program: two one-line methods and a
+loop that calls them often enough to trigger C2 compilation:
+
+public class ShiftMask {
+    // Redundant: (x << 2) already has its low two bits zero, and -4 == 0xFFFFFFFC
+    // clears exactly those two bits. C2 should delete the AND.
+    static int redundant(int x) { return (x << 2) & -4; }
+    // Not redundant: -8 == 0xFFFFFFF8 also clears bit 2, which C2 can't prove is zero.
+    static int kept(int x) { return (x << 2) & -8; }
+    public static void main(String[] args) {
+        long s = 0;
+        for (int i = 0; i < 400_000; i++) {
+            s += redundant(i);
+            s += kept(i);
+        }
+        System.out.println(s);
+    }
+}
+
+Compile it, then have C2 print the disassembly for just those two methods (this needs
+
+hsdis
+
+on the JDK's library path):
+
+javac ShiftMask.java
+java -XX:+UnlockDiagnosticVMOptions -XX:-TieredCompilation \
+     -XX:CompileCommand='compileonly,ShiftMask::redundant' \
+     -XX:CompileCommand='compileonly,ShiftMask::kept' \
+     -XX:CompileCommand='dontinline,ShiftMask::redundant' \
+     -XX:CompileCommand='dontinline,ShiftMask::kept' \
+     -XX:CompileCommand='print,ShiftMask::redundant' \
+     -XX:CompileCommand='print,ShiftMask::kept' \
+     -XX:PrintAssemblyOptions=intel ShiftMask
+
+Environment for the listings below: AMD Ryzen 9 9950X, Ubuntu 26.04, Linux 7.0.0. The
+JDK 24 output is stock Corretto 24.0.2. The JDK 27 output is a local build of 
+openjdk/jdk
+ at
+
+0c209afd
+.
+
+The 
+compileonly
+ filter also leaves the hot 
+main
+ loop interpreted, so it never becomes an OSR
+compile. What you read below is the plain, invocation-triggered method body. On JDK 24, before this work
+was merged, the redundant mask is emitted:
+
+; JDK 24:  static int redundant(int x) { return (x << 2) & -4; }
+  ...
+  shl    esi,0x2         ; esi = x << 2
+  mov    eax,esi
+  and    eax,0xfffffffc  ; & -4, a no-op, but the old C2 can't see through
+  ...
+  ret
+
+On a JDK 27 build the redundant 
+and
+ is gone, and on
+this x86-64 build C2 even folds the shift into a single 
+lea
+:
+
+; JDK 27:  static int redundant(int x) { return (x << 2) & -4; }
+  ...
+  lea    eax,[rsi*4+0x0]      ; eax = x << 2  (AND is gone)
+  ...
+  ret
+
+lea eax,[rsi*4+0x0]
+ computes 
+x * 4
+, i.e. 
+x << 2
+, in a single addressing operation, with no
+
+and
+ anywhere.
+
+Here is an experiment to validate our understanding: Change the mask from 
+-4
+ to 
+-8
+,
+so it also clears the bit 2, which C2 can't prove is zero, and on that same JDK 27 build the 
+and
+
+is part of the emitted code again:
+
+; JDK 27:  static int kept(int x) { return (x << 2) & -8; }
+  ...
+  shl    esi,0x2         ; esi = x << 2
+  mov    eax,esi
+  and    eax,0xfffffff8  ; the mask stays: -8 clears a bit that might be 1
+  ...
+  ret
+
+The 
+redundant
+ and 
+kept
+ methods start from the same bytecode (
+ishl
+, then 
+iand
+, then
+
+ireturn
+), differing only in the masking constant. The known-bits analysis is the reason that build
+drops the first 
+iand
+ and keeps the second.
+
+How do you even test this?
+
+How do you prove that 
+canonicalize_constraints
+ and all those
+bit rules are actually correct, across all 2^64 possible longs?
+
+The change ships with a little 
+intn_t<N>
+ type (an integer of arbitrary tiny width). Canonicalization is checked exhaustively through 4-bit types (at 4 bits
+that's 16 values, every combination of ranges and masks, by brute force). I read it as a useful trick: shrink the integer
+width until exhaustive testing becomes cheap then test every state in that universe. The operation transfer functions use a mix of exhaustive tiny-width tests and random wider ones.
+
+Here's the core
+(
+test_rangeinference.cpp
+):
+six nested loops over the whole tiny universe, feeding every possible
+
+(lo, hi, ulo, uhi, zeros, ones)
+ tuple through 
+canonicalize_constraints
+:
+
+for (int lo = S::min; lo <= S::max; lo++) {
+  for (int hi = lo; hi <= S::max; hi++) {
+    for (int ulo = U::min; ulo <= U::max; ulo++) {
+      for (int uhi = ulo; uhi <= U::max; uhi++) {
+        for (int zeros = U::min; zeros <= U::max; zeros++) {
+          for (int ones = U::min; ones <= U::max; ones++) {
+            TypeIntPrototype<S, U> t{{S(lo), S(hi)}, {U(ulo), U(uhi)}, {U(zeros), U(ones)}};
+            auto new_t = t.canonicalize_constraints();
+            // ...then assert new_t contains exactly the same values as t, for every v
+
+S
+ and 
+U
+ are
+
+intn_t<N>
+ / 
+uintn_t<N>
+,
+and the
+
+test
+
+runs the whole thing for 
+N
+ = 1, 2, 3, 4.
+
+Why I care, and maybe why you should
+
+I'm not a compiler engineer, and I won't pretend to be. I just enjoy learning how 
+compilers
+ computers work, and
+
+chasing
+ an 
+optimization
+ like this is fun. I also use LLMs to help me understand concepts that are new to me.
+During these explorations I use LLM as a personal tutor: I ask questions until I understand what is going on. If you are an actual
+compiler engineer and spot an error in my explanation, 
+please let me know
+! I will be happy to correct it.
+
+In fact, this already happened: an earlier version of this post described the simple interval as
+"the unsigned one", and Reddit user
+cal-cheese 
+corrected me
+: it is a piece of the
+intersection of the signed and unsigned ranges. The explanation above is the fixed one. Thank you!
+
+Thanks to 
+Quan Anh Mai
+, 
+Emanuel Peter
+, and 
+Ashay Rane
+, whose work sent me down this wonderful rabbit hole!
