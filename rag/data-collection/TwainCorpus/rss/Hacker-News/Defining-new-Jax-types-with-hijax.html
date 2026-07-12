@@ -1,0 +1,1422 @@
+<article class="bd-article">
+<section class="tex2jax_ignore mathjax_ignore" id="defining-new-jax-types-with-hijax">
+<h1>Defining new JAX types with hijax<a class="headerlink" href="#defining-new-jax-types-with-hijax" title="Link to this heading">#</a></h1>
+<p>JAX’s built-in currency is the array: functions you transform take arrays in
+and produce arrays out, and every intermediate the tracing machinery sees has
+an array type like <code class="docutils literal notranslate"><span class="pre">f32[3,4]</span></code>. When you want to work with aggregate data, the
+usual tool is a
+<a class="reference external" href="https://docs.jax.dev/en/latest/working-with-pytrees.html">pytree</a>: you
+bundle arrays into containers, and JAX transparently flattens the bundle
+into its array leaves at every boundary.</p>
+<p>But sometimes transparency is exactly what you don’t want. Some data is best
+modeled as a new <em>type</em>, with its own identity:</p>
+<ul class="simple">
+<li><p>it should appear in jaxprs as a single value of a single type, not as a
+spray of array leaves;</p></li>
+<li><p>it has internal invariants, so users should only produce and consume it
+through a fixed set of operations, rather than by freely constructing or
+pattern-matching its components;</p></li>
+<li><p>its <em>tangent type</em> may differ from its primal structure, so that
+derivatives with respect to it aren’t just “the same pytree, but for
+tangents”;</p></li>
+<li><p>it may have its own notion of batching under <code class="docutils literal notranslate"><span class="pre">vmap</span></code>;</p></li>
+<li><p>it can carry sharding information in the type, participating in JAX’s
+explicit sharding mode.</p></li>
+</ul>
+<p>Hijax types (or “hi types”) provide this. You subclass <code class="docutils literal notranslate"><span class="pre">HiType</span></code> to define
+the type, register a Python class as carrying values of that type, and write
+hijax primitives whose input and output types mention the new type. This
+document walks through the whole story with one running example: a
+quantized array type.</p>
+<p>We’ll assume some familiarity with hijax primitives; see
+<a class="reference internal" href="hijax_custom_derivatives.html#hijax-custom-derivatives"><span class="std std-ref">Custom derivative rules with hijax primitives</span></a> for an introduction to them. Like everything
+hijax, this is experimental: expect imports from <code class="docutils literal notranslate"><span class="pre">jax.experimental.hijax</span></code>,
+and expect the APIs to evolve.</p>
+<section id="tl-dr">
+<h2>TL;DR<a class="headerlink" href="#tl-dr" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p>Subclass <code class="docutils literal notranslate"><span class="pre">HiType</span></code> and implement <code class="docutils literal notranslate"><span class="pre">lo_ty</span></code>, <code class="docutils literal notranslate"><span class="pre">lower_val</span></code>, and <code class="docutils literal notranslate"><span class="pre">raise_val</span></code> to
+say how the type and its values lower to ordinary (“lojax”) arrays, then
+call <code class="docutils literal notranslate"><span class="pre">register_hitype</span></code> to associate your value class with your type.</p></li>
+<li><p>Write <code class="docutils literal notranslate"><span class="pre">VJPHiPrimitive</span></code> subclasses whose <code class="docutils literal notranslate"><span class="pre">in_avals</span></code>/<code class="docutils literal notranslate"><span class="pre">out_aval</span></code> mention the
+new type; these are the only way values of the type get produced and
+consumed.</p></li>
+<li><p>For autodiff, implement <code class="docutils literal notranslate"><span class="pre">to_tangent_aval</span></code> on the type, and VJP/JVP rules
+on the primitives.</p></li>
+<li><p>For <code class="docutils literal notranslate"><span class="pre">vmap</span></code>, implement <code class="docutils literal notranslate"><span class="pre">dec_rank</span></code> and <code class="docutils literal notranslate"><span class="pre">inc_rank</span></code> on the type along with a
+<code class="docutils literal notranslate"><span class="pre">MappingSpec</span></code> subclass of your own design, and <code class="docutils literal notranslate"><span class="pre">batch</span></code> rules on the
+primitives. Mapped-over hi type arguments require an explicit <code class="docutils literal notranslate"><span class="pre">axis_size</span></code>
+and spec-valued <code class="docutils literal notranslate"><span class="pre">in_axes</span></code>/<code class="docutils literal notranslate"><span class="pre">out_axes</span></code> entries.</p></li>
+<li><p>For sharding in types (explicit mode), record sharding data on your type
+(e.g. a <code class="docutils literal notranslate"><span class="pre">NamedSharding</span></code> field), consume it in <code class="docutils literal notranslate"><span class="pre">lo_ty</span></code>, and propagate it
+in your primitives’ typing rules.</p></li>
+</ul>
+</section>
+<section id="example-quantized-arrays">
+<h2>Example: quantized arrays<a class="headerlink" href="#example-quantized-arrays" title="Link to this heading">#</a></h2>
+<p>Say we want to work with arrays quantized to <code class="docutils literal notranslate"><span class="pre">int8</span></code>. A quantized array is
+really a pair of arrays: the <code class="docutils literal notranslate"><span class="pre">int8</span></code> values, and a floating point scale
+shared by each row (that is, we quantize along the last axis, one scale per
+row, as in common per-row/per-channel quantization schemes):</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="kn">import</span><span class="nn">os</span>
+<span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">"XLA_FLAGS"</span><span class="p">]</span> <span class="o">=</span> <span class="s1">'--xla_force_host_platform_device_count=8'</span>
+<span class="c1"># (8 CPU devices, for the sharding sections at the end)</span>
+
+<span class="kn">from</span><span class="nn">dataclasses</span><span class="kn">import</span> <span class="n">dataclass</span>
+
+<span class="kn">import</span><span class="nn">jax</span>
+<span class="kn">import</span><span class="nn">jax.numpy</span><span class="k">as</span><span class="nn">jnp</span>
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="nc">QArray</span><span class="p">:</span>
+  <span class="n">qvalue</span><span class="p">:</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span>   <span class="c1"># int8[*leading, n]</span>
+  <span class="n">scale</span><span class="p">:</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span>    <span class="c1"># f32[*leading]</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>We could register <code class="docutils literal notranslate"><span class="pre">QArray</span></code> as a pytree and be done. But consider what we’d
+give up:</p>
+<ul class="simple">
+<li><p><strong>Invariants.</strong> The two components are coupled: <code class="docutils literal notranslate"><span class="pre">scale</span></code> must have the
+shape of <code class="docutils literal notranslate"><span class="pre">qvalue</span></code> minus its last axis, and <code class="docutils literal notranslate"><span class="pre">qvalue</span></code> is only meaningful
+together with its <code class="docutils literal notranslate"><span class="pre">scale</span></code>. As a pytree, nothing stops code from crossing
+the streams; under transformations, JAX itself sees only independent
+leaves.</p></li>
+<li><p><strong>Types in jaxprs.</strong> As a pytree, a quantized array appears in traced
+code as two unrelated array values. We’d rather see one value, of one
+type, so jaxprs say what they mean.</p></li>
+<li><p><strong>Tangents.</strong> A quantized array’s values live on a discrete grid, so it
+makes no sense to perturb them along the grid. But a pytree’s tangent
+type is forced to be the pytree of its leaves’ tangent types — and the
+tangent type of an integer array like <code class="docutils literal notranslate"><span class="pre">qvalue</span></code> is a <code class="docutils literal notranslate"><span class="pre">float0</span></code> array,
+which can only carry a trivial payload. So as a pytree, a quantized
+array would admit no useful perturbations at all. What we want is to
+choose a tangent type for the quantized array as a whole, such as the
+<em>continuous</em> <code class="docutils literal notranslate"><span class="pre">f32</span></code> arrays that the quantized values approximate.</p></li>
+</ul>
+<p>So instead we’ll make <code class="docutils literal notranslate"><span class="pre">QArray</span></code> a hijax type.</p>
+</section>
+<section id="the-type">
+<h2>The type<a class="headerlink" href="#the-type" title="Link to this heading">#</a></h2>
+<p>A hijax type is a subclass of <code class="docutils literal notranslate"><span class="pre">HiType</span></code>. The required core is small:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">lo_ty</span></code> says which lojax (array) types make up the type;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">lower_val</span></code> and <code class="docutils literal notranslate"><span class="pre">raise_val</span></code> convert values to and from that list of
+arrays;</p></li>
+<li><p>the type must be hashable and comparable for equality (a frozen dataclass
+gives us both).</p></li>
+</ul>
+<p>This is like the pytree flatten/unflatten interface, but it lives at the
+level of <em>types</em>: given only the type, JAX can compute the lowered types,
+without needing a value in hand.</p>
+<p>We also give the type a <code class="docutils literal notranslate"><span class="pre">sharding</span></code> field, recording how values are
+partitioned across devices; it can be ignored until the sharding sections
+near the end of this document. We reuse JAX’s <code class="docutils literal notranslate"><span class="pre">NamedSharding</span></code> to describe
+the partitioning of the <code class="docutils literal notranslate"><span class="pre">qvalue</span></code> component, and derive <code class="docutils literal notranslate"><span class="pre">scale</span></code>’s
+partitioning from it by dropping the last axis. Nothing about the field is
+special to JAX, which never interprets it: only our own methods consume
+it, chiefly <code class="docutils literal notranslate"><span class="pre">lo_ty</span></code>, which stamps the component types with their
+shardings. You’re free to track sharding information on your type with an
+object of your own design instead, so long as you consume it the same
+way.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="kn">from</span><span class="nn">jax.experimental.hijax</span><span class="kn">import</span> <span class="n">HiType</span><span class="p">,</span> <span class="n">ShapedArray</span><span class="p">,</span> <span class="n">register_hitype</span>
+<span class="kn">from</span><span class="nn">jax.sharding</span><span class="kn">import</span> <span class="n">NamedSharding</span>
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="nc">QArrayTy</span><span class="p">(</span><span class="n">HiType</span><span class="p">):</span>
+  <span class="n">shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+  <span class="n">sharding</span><span class="p">:</span> <span class="n">NamedSharding</span>  <span class="c1"># qvalue's sharding; scale's is derived from it</span>
+
+  <span class="c1"># lowering: which array types make up this type, and how values convert</span>
+  <span class="k">def</span><span class="nf">lo_ty</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="n">scale_sharding</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">spec</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]))</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">ShapedArray</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'int8'</span><span class="p">),</span>
+                        <span class="n">sharding</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="p">),</span>
+            <span class="n">ShapedArray</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">),</span>
+                        <span class="n">sharding</span><span class="o">=</span><span class="n">scale_sharding</span><span class="p">)]</span>
+  <span class="k">def</span><span class="nf">lower_val</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">q</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">q</span><span class="o">.</span><span class="n">qvalue</span><span class="p">,</span> <span class="n">q</span><span class="o">.</span><span class="n">scale</span><span class="p">]</span>
+  <span class="k">def</span><span class="nf">raise_val</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">qvalue</span><span class="p">,</span> <span class="n">scale</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">QArray</span><span class="p">(</span><span class="n">qvalue</span><span class="p">,</span> <span class="n">scale</span><span class="p">)</span>
+
+  <span class="c1"># autodiff: tangents of quantized arrays are plain float arrays (see below)</span>
+  <span class="k">def</span><span class="nf">to_tangent_aval</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">ShapedArray</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">),</span>
+                       <span class="n">sharding</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="p">)</span>
+
+  <span class="c1"># printing, e.g. in jaxprs</span>
+  <span class="k">def</span><span class="nf">str_short</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">short_dtypes</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">mesh_axis_types</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="n">dims</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">d</span><span class="p">)</span> <span class="k">if</span> <span class="n">p</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">d</span><span class="si">}</span><span class="s1">@</span><span class="si">{</span><span class="n">p</span><span class="si">}</span><span class="s1">'</span>
+            <span class="k">for</span> <span class="n">d</span><span class="p">,</span> <span class="n">p</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">)]</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s1">'q8[</span><span class="si">{</span><span class="s2">","</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">dims</span><span class="p">)</span><span class="si">}</span><span class="s1">]'</span>
+  <span class="fm">__repr__</span> <span class="o">=</span> <span class="n">str_short</span>
+
+<span class="n">register_hitype</span><span class="p">(</span><span class="n">QArray</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">q</span><span class="p">:</span> <span class="n">QArrayTy</span><span class="p">(</span><span class="n">q</span><span class="o">.</span><span class="n">qvalue</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+                                           <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">q</span><span class="o">.</span><span class="n">qvalue</span><span class="p">)</span><span class="o">.</span><span class="n">sharding</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">register_hitype</span></code> call associates the value class with the type: its
+second argument computes the type of any given value, analogous to how
+<code class="docutils literal notranslate"><span class="pre">jax.typeof</span></code> maps an array to its <code class="docutils literal notranslate"><span class="pre">ShapedArray</span></code> type. (Ours reads both the
+shape and the sharding off the <code class="docutils literal notranslate"><span class="pre">qvalue</span></code> component — every array carries a
+sharding, trivial when no mesh is in play.) Indeed after registration,
+<code class="docutils literal notranslate"><span class="pre">jax.typeof</span></code> works on <code class="docutils literal notranslate"><span class="pre">QArray</span></code>s, and JAX transformations accept them
+anywhere a value is expected.</p>
+</section>
+<section id="the-primitives">
+<h2>The primitives<a class="headerlink" href="#the-primitives" title="Link to this heading">#</a></h2>
+<p>With a pytree, users construct and take apart values freely. With a hijax
+type, values are produced and consumed only by hijax primitives whose
+declared types mention the new type. That’s where invariants get enforced:
+if every primitive preserves them, they always hold.</p>
+<p>Our two primitives are <code class="docutils literal notranslate"><span class="pre">quantize</span></code> and <code class="docutils literal notranslate"><span class="pre">dequantize</span></code>, written with the
+<code class="docutils literal notranslate"><span class="pre">VJPHiPrimitive</span></code> API from <a class="reference internal" href="hijax_custom_derivatives.html#hijax-custom-derivatives"><span class="std std-ref">Custom derivative rules with hijax primitives</span></a>. Each declares
+its input and output types, gives its implementation in <code class="docutils literal notranslate"><span class="pre">expand</span></code>, and
+(looking ahead to autodiff) carries a straight-through-estimator VJP rule:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="kn">from</span><span class="nn">jax.experimental.hijax</span><span class="kn">import</span> <span class="n">VJPHiPrimitive</span>
+
+<span class="k">class</span><span class="nc">Quantize</span><span class="p">(</span><span class="n">VJPHiPrimitive</span><span class="p">):</span>
+  <span class="k">def</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x_aval</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">x_aval</span><span class="o">.</span><span class="n">dtype</span> <span class="o">!=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">):</span> <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="n">x_aval</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">in_avals</span> <span class="o">=</span> <span class="p">(</span><span class="n">x_aval</span><span class="p">,)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">out_aval</span> <span class="o">=</span> <span class="n">QArrayTy</span><span class="p">(</span><span class="n">x_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">x_aval</span><span class="o">.</span><span class="n">sharding</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+
+  <span class="k">def</span><span class="nf">expand</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+    <span class="n">scale</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span> <span class="o">/</span> <span class="mf">127.</span>
+    <span class="n">qvalue</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">x</span> <span class="o">/</span> <span class="n">scale</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">])</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">int8</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">QArray</span><span class="p">(</span><span class="n">qvalue</span><span class="p">,</span> <span class="n">scale</span><span class="p">)</span>
+
+  <span class="c1"># straight-through estimator: differentiate as if it's the identity</span>
+  <span class="k">def</span><span class="nf">vjp_fwd</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nzs_in</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="kc">None</span>
+
+  <span class="k">def</span><span class="nf">vjp_bwd_retval</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">_res</span><span class="p">,</span> <span class="n">g</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">g</span><span class="p">,)</span>
+
+<span class="k">class</span><span class="nc">Dequantize</span><span class="p">(</span><span class="n">VJPHiPrimitive</span><span class="p">):</span>
+  <span class="k">def</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">q_aval</span><span class="p">):</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">in_avals</span> <span class="o">=</span> <span class="p">(</span><span class="n">q_aval</span><span class="p">,)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">out_aval</span> <span class="o">=</span> <span class="n">ShapedArray</span><span class="p">(</span><span class="n">q_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">),</span>
+                                <span class="n">sharding</span><span class="o">=</span><span class="n">q_aval</span><span class="o">.</span><span class="n">sharding</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+
+  <span class="k">def</span><span class="nf">expand</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">qx</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">qx</span><span class="o">.</span><span class="n">qvalue</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">)</span> <span class="o">*</span> <span class="n">qx</span><span class="o">.</span><span class="n">scale</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
+
+  <span class="k">def</span><span class="nf">vjp_fwd</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nzs_in</span><span class="p">,</span> <span class="n">qx</span><span class="p">):</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="p">(</span><span class="n">qx</span><span class="p">),</span> <span class="kc">None</span>
+
+  <span class="k">def</span><span class="nf">vjp_bwd_retval</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">_res</span><span class="p">,</span> <span class="n">g</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">g</span><span class="p">,)</span>
+
+<span class="k">def</span><span class="nf">quantize</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">Quantize</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">x</span><span class="p">))(</span><span class="n">x</span><span class="p">)</span>
+
+<span class="k">def</span><span class="nf">dequantize</span><span class="p">(</span><span class="n">qx</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">Dequantize</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qx</span><span class="p">))(</span><span class="n">qx</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>Notice that <code class="docutils literal notranslate"><span class="pre">Quantize</span></code>’s <code class="docutils literal notranslate"><span class="pre">out_aval</span></code> and <code class="docutils literal notranslate"><span class="pre">Dequantize</span></code>’s <code class="docutils literal notranslate"><span class="pre">in_avals</span></code> are
+<code class="docutils literal notranslate"><span class="pre">QArrayTy</span></code>s: the new type appears in primitive type signatures just like
+array types do. Also notice <code class="docutils literal notranslate"><span class="pre">expand</span></code> freely constructs and inspects the
+<code class="docutils literal notranslate"><span class="pre">QArray</span></code> value class; primitive implementations are inside the abstraction
+boundary.</p>
+<p>Everything works eagerly:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([[</span><span class="mf">1.</span><span class="p">,</span> <span class="mf">2.</span><span class="p">,</span> <span class="mf">3.</span><span class="p">],</span>
+               <span class="p">[</span><span class="mf">4.</span><span class="p">,</span> <span class="o">-</span><span class="mf">5.</span><span class="p">,</span> <span class="mf">6.</span><span class="p">]])</span>
+
+<span class="n">qx</span> <span class="o">=</span> <span class="n">quantize</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">qx</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qx</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">dequantize</span><span class="p">(</span><span class="n">qx</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>QArray(qvalue=Array([[  42,   85,  127],
+       [  85, -106,  127]], dtype=int8), scale=Array([0.02362205, 0.04724409], dtype=float32))
+q8[2,3]
+[[ 0.992126  2.007874  3.      ]
+ [ 4.015748 -5.007874  6.      ]]
+</pre></div>
+</div>
+</div>
+</div>
+<section id="primitives-outside-container-inside">
+<h3>Primitives outside, container inside<a class="headerlink" href="#primitives-outside-container-inside" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">expand</span></code> methods above construct <code class="docutils literal notranslate"><span class="pre">QArray</span></code> values and read their
+attributes directly. It’s important that this kind of direct container
+manipulation happen <em>only</em> in <code class="docutils literal notranslate"><span class="pre">expand</span></code> (and in the type’s own methods,
+like <code class="docutils literal notranslate"><span class="pre">lower_val</span></code> and <code class="docutils literal notranslate"><span class="pre">raise_val</span></code>). Everywhere else — in particular, in
+any function you might <code class="docutils literal notranslate"><span class="pre">jit</span></code>, differentiate, or <code class="docutils literal notranslate"><span class="pre">vmap</span></code> — hi values should
+be produced and consumed only by applying primitives.</p>
+<p>The reason is what traced code actually sees. Under a trace, a quantized
+array is not a <code class="docutils literal notranslate"><span class="pre">QArray</span></code> instance: it’s a <code class="docutils literal notranslate"><span class="pre">Tracer</span></code> of type <code class="docutils literal notranslate"><span class="pre">q8[...]</span></code>. So
+reading an attribute in traced code fails —</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">try</span><span class="p">:</span>
+  <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="k">lambda</span> <span class="n">qx</span><span class="p">:</span> <span class="n">qx</span><span class="o">.</span><span class="n">qvalue</span><span class="p">)(</span><span class="n">qx</span><span class="p">)</span>
+<span class="k">except</span> <span class="ne">AttributeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+  <span class="nb">print</span><span class="p">(</span><span class="s1">'AttributeError:'</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>AttributeError: DynamicJaxprTracer has no attribute qvalue
+</pre></div>
+</div>
+</div>
+</div>
+<p>and, worse, calling the constructor on traced arrays doesn’t fail right
+away. It smuggles <code class="docutils literal notranslate"><span class="pre">Tracer</span></code>s inside a container that JAX treats as one
+opaque concrete value, and the mistake surfaces later, as a confusing
+error far from its cause (here a missing constant handler; under <code class="docutils literal notranslate"><span class="pre">grad</span></code>
+it’s a leaked-tracer error):</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">bad_quantize</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+  <span class="n">scale</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span> <span class="o">/</span> <span class="mf">127.</span>
+  <span class="k">return</span> <span class="n">QArray</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="n">x</span> <span class="o">/</span> <span class="n">scale</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="kc">None</span><span class="p">])</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s1">'int8'</span><span class="p">),</span> <span class="n">scale</span><span class="p">)</span>
+
+<span class="k">try</span><span class="p">:</span>
+  <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">bad_quantize</span><span class="p">)(</span><span class="n">x</span><span class="p">)</span>
+<span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+  <span class="nb">print</span><span class="p">(</span><span class="s1">'TypeError:'</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>TypeError: No constant handler for type: &lt;class 'jax._src.interpreters.partial_eval.DynamicJaxprTracer'&gt;
+</pre></div>
+</div>
+</div>
+</div>
+<p>In <code class="docutils literal notranslate"><span class="pre">expand</span></code> it’s a different story: by the time <code class="docutils literal notranslate"><span class="pre">expand</span></code> runs, JAX has
+committed to implementing the primitive in terms of the type’s lojax
+components, and its <code class="docutils literal notranslate"><span class="pre">QArray</span></code> arguments are genuine <code class="docutils literal notranslate"><span class="pre">QArray</span></code> instances
+(holding lojax values — possibly traced ones). There, manipulating the
+value as a plain container is exactly right.</p>
+<p>(The top-level peeks at attributes like <code class="docutils literal notranslate"><span class="pre">qx.qvalue</span></code> elsewhere in this
+document are fine for the same reason eager <code class="docutils literal notranslate"><span class="pre">expand</span></code> is fine: they run
+eagerly, on concrete values. But inside any function that might get
+traced, stick to primitives.)</p>
+</section>
+<section id="a-more-realistic-op-dense-quantized-matmul">
+<h3>A more realistic op: dense × quantized matmul<a class="headerlink" href="#a-more-realistic-op-dense-quantized-matmul" title="Link to this heading">#</a></h3>
+<p>Conversion ops alone make for a thin API: in practice, a quantized array
+type earns its keep in ops that consume the type directly. The classic
+example is an inference-style matmul, where the activations <code class="docutils literal notranslate"><span class="pre">x</span></code> are an
+ordinary dense <code class="docutils literal notranslate"><span class="pre">f32</span></code> array and the weights are quantized:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">class</span><span class="nc">MatmulQ</span><span class="p">(</span><span class="n">VJPHiPrimitive</span><span class="p">):</span>
+  <span class="k">def</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x_aval</span><span class="p">,</span> <span class="n">q_aval</span><span class="p">):</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">q_aval</span><span class="p">,</span> <span class="n">QArrayTy</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">x_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">q_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">x_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">q_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]):</span>
+      <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s1">'bad matmul_q operand types: </span><span class="si">{</span><span class="n">x_aval</span><span class="si">}</span><span class="s1"> @ </span><span class="si">{</span><span class="n">q_aval</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">in_avals</span> <span class="o">=</span> <span class="p">(</span><span class="n">x_aval</span><span class="p">,</span> <span class="n">q_aval</span><span class="p">)</span>
+    <span class="n">x_spec</span><span class="p">,</span> <span class="n">q_spec</span> <span class="o">=</span> <span class="n">x_aval</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">,</span> <span class="n">q_aval</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span>
+    <span class="k">if</span> <span class="n">x_spec</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">q_spec</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+      <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s1">'matmul_q requires unsharded contraction axes, got '</span>
+                      <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">x_aval</span><span class="si">}</span><span class="s1"> @ </span><span class="si">{</span><span class="n">q_aval</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span>
+    <span class="n">out_sharding</span> <span class="o">=</span> <span class="n">x_aval</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">spec</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="n">x_spec</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">q_spec</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">out_aval</span> <span class="o">=</span> <span class="n">ShapedArray</span><span class="p">((</span><span class="n">x_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">q_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span>
+                                <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">),</span> <span class="n">sharding</span><span class="o">=</span><span class="n">out_sharding</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+
+  <span class="k">def</span><span class="nf">expand</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">):</span>
+    <span class="c1"># fold the per-row scales into the dense operand, then apply one matmul</span>
+    <span class="c1"># directly against the int8 payload</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">x</span> <span class="o">*</span> <span class="n">qw</span><span class="o">.</span><span class="n">scale</span><span class="p">)</span> <span class="o">@</span> <span class="n">qw</span><span class="o">.</span><span class="n">qvalue</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+  <span class="k">def</span><span class="nf">vjp_fwd</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nzs_in</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">):</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">),</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">)</span>
+
+  <span class="k">def</span><span class="nf">vjp_bwd_retval</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">res</span><span class="p">,</span> <span class="n">g</span><span class="p">):</span>
+    <span class="n">x</span><span class="p">,</span> <span class="n">qw</span> <span class="o">=</span> <span class="n">res</span>
+    <span class="n">w</span> <span class="o">=</span> <span class="n">dequantize</span><span class="p">(</span><span class="n">qw</span><span class="p">)</span>   <span class="c1"># rules are traced code: use primitives here</span>
+    <span class="c1"># cotangents live where the primals live, so use the primal operands'</span>
+    <span class="c1"># shardings to disambiguate the (possibly sharded) contractions</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">g</span><span class="p">,</span> <span class="n">w</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">out_sharding</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">sharding</span><span class="p">),</span>
+            <span class="n">jnp</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">T</span><span class="p">,</span> <span class="n">g</span><span class="p">,</span> <span class="n">out_sharding</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">w</span><span class="p">)</span><span class="o">.</span><span class="n">sharding</span><span class="p">))</span>
+
+<span class="k">def</span><span class="nf">matmul_q</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">MatmulQ</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qw</span><span class="p">))(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>A few things to notice. The type signature mixes array types and hi types
+freely: <code class="docutils literal notranslate"><span class="pre">in_avals</span></code> is a <code class="docutils literal notranslate"><span class="pre">(ShapedArray,</span> <span class="pre">QArrayTy)</span></code> pair, checked at
+construction time so that a shape mismatch fails immediately, with both
+operand types pretty-printed. And <code class="docutils literal notranslate"><span class="pre">expand</span></code> exploits the representation:
+because the scales apply per-row along the contraction axis, they can be
+folded into the dense operand, so the heavy matmul runs directly against
+the <code class="docutils literal notranslate"><span class="pre">int8</span></code> payload rather than a dequantized copy. Owning the op as a
+single primitive lets us state that rewriting once, in one place.</p>
+<p>Also notice the discipline from the previous section in action: <code class="docutils literal notranslate"><span class="pre">expand</span></code>
+reads <code class="docutils literal notranslate"><span class="pre">qw.scale</span></code> and <code class="docutils literal notranslate"><span class="pre">qw.qvalue</span></code> as container attributes, while the VJP
+rules — which are ordinary traced code — go through the <code class="docutils literal notranslate"><span class="pre">dequantize</span></code>
+primitive instead.</p>
+<p>(The typing rule also computes an output <em>sharding</em> — output rows
+partitioned like <code class="docutils literal notranslate"><span class="pre">x</span></code>’s, output columns like <code class="docutils literal notranslate"><span class="pre">qw</span></code>’s, with the contracted
+axes required to be unsharded — and the backward rule passes
+<code class="docutils literal notranslate"><span class="pre">out_sharding</span></code> hints to its matmuls. Both are explained in the
+explicit-sharding section below; outside of explicit mode all these
+shardings are trivial and the extra code is inert.)</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">w</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mf">12.</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s1">'float32'</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span> <span class="o">/</span> <span class="mf">12.</span>
+<span class="n">qw</span> <span class="o">=</span> <span class="n">quantize</span><span class="p">(</span><span class="n">w</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">matmul_q</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">x</span> <span class="o">@</span> <span class="n">dequantize</span><span class="p">(</span><span class="n">qw</span><span class="p">))</span>  <span class="c1"># reference</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>[[2.6627297 3.1706038 3.6587927 4.166667 ]
+ [2.3077428 2.7447505 3.1463253 3.5833333]]
+[[2.6627297 3.1706038 3.6587927 4.166667 ]
+ [2.3077426 2.7447505 3.1463253 3.5833333]]
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+</section>
+<section id="hi-types-in-jaxprs">
+<h2>Hi types in jaxprs<a class="headerlink" href="#hi-types-in-jaxprs" title="Link to this heading">#</a></h2>
+<p>When we trace, the quantized array appears as a single value of type
+<code class="docutils literal notranslate"><span class="pre">q8[2,3]</span></code>, produced by one equation and consumed by another:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">dequantize</span><span class="p">(</span><span class="n">quantize</span><span class="p">(</span><span class="n">x</span><span class="p">)))</span><span class="o">.</span><span class="n">trace</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">jaxpr</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre>{ <span class="-Color -Color-Bold -Color-Bold-Blue">lambda </span>; a<span class="-Color -Color-Magenta">:f32[2,3]</span>. <span class="-Color -Color-Bold -Color-Bold-Blue">let</span>
+b<span class="-Color -Color-Magenta">:q8[2,3]</span> = call_hi_primitive[_prim=Quantize[{}]] a
+    c<span class="-Color -Color-Magenta">:f32[2,3]</span> = call_hi_primitive[_prim=Dequantize[{}]] b
+  <span class="-Color -Color-Bold -Color-Bold-Blue">in </span>(c,) }
+</pre></div>
+</div>
+</div>
+</div>
+<p>Compare to the pytree approach, where the same computation would show four
+array-typed intermediates with no indication that they pair up. The hi type
+only disappears at lowering time, when <code class="docutils literal notranslate"><span class="pre">expand</span></code> is traced and each
+<code class="docutils literal notranslate"><span class="pre">q8[...]</span></code>-typed value is expanded into the array components given by
+<code class="docutils literal notranslate"><span class="pre">lo_ty</span></code>.</p>
+<p>Ops with mixed operand kinds read just as directly — one equation with a
+<code class="docutils literal notranslate"><span class="pre">f32[2,3]</span> <span class="pre">@</span> <span class="pre">q8[3,4]</span> <span class="pre">-&gt;</span> <span class="pre">f32[2,4]</span></code> signature:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">matmul_q</span><span class="p">)</span><span class="o">.</span><span class="n">trace</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">)</span><span class="o">.</span><span class="n">jaxpr</span>
+<span class="c1">#</span>
+<span class="c1"># `jit` works, with quantized arrays as arguments, results, and</span>
+<span class="c1"># intermediates:</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre>{ <span class="-Color -Color-Bold -Color-Bold-Blue">lambda </span>; a<span class="-Color -Color-Magenta">:f32[2,3]</span> b<span class="-Color -Color-Magenta">:q8[3,4]</span>. <span class="-Color -Color-Bold -Color-Bold-Blue">let</span>
+c<span class="-Color -Color-Magenta">:f32[2,4]</span> = call_hi_primitive[_prim=MatmulQ[{}]] a b
+  <span class="-Color -Color-Bold -Color-Bold-Blue">in </span>(c,) }
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">dequantize</span><span class="p">(</span><span class="n">quantize</span><span class="p">(</span><span class="n">x</span><span class="p">)))(</span><span class="n">x</span><span class="p">))</span>   <span class="c1"># QArray internal</span>
+
+<span class="n">qx2</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">quantize</span><span class="p">)(</span><span class="n">x</span><span class="p">)</span>                             <span class="c1"># QArray result</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qx2</span><span class="p">))</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">dequantize</span><span class="p">)(</span><span class="n">qx2</span><span class="p">))</span>                        <span class="c1"># QArray argument</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>[[ 0.992126  2.007874  3.      ]
+ [ 4.015748 -5.007874  6.      ]]
+q8[2,3]
+[[ 0.992126  2.007874  3.      ]
+ [ 4.015748 -5.007874  6.      ]]
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="autodiff-and-tangent-types">
+<h2>Autodiff and tangent types<a class="headerlink" href="#autodiff-and-tangent-types" title="Link to this heading">#</a></h2>
+<p>Here’s where hi types earn their keep. On the type, we implemented</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre>  <span class="k">def</span><span class="nf">to_tangent_aval</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">ShapedArray</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">))</span>
+</pre></div>
+</div>
+<p>which says: the tangent type of a quantized array is a plain <code class="docutils literal notranslate"><span class="pre">f32</span></code> array.
+No pytree can express this: a pytree’s tangent type is always the pytree
+of its leaves’ tangent types, and for the <code class="docutils literal notranslate"><span class="pre">int8</span></code> leaf <code class="docutils literal notranslate"><span class="pre">qvalue</span></code> that means
+a trivial <code class="docutils literal notranslate"><span class="pre">float0</span></code> tangent.</p>
+<p>Together with the straight-through VJP rules on the primitives, gradients
+flow through quantization as if it were the identity:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">f</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dequantize</span><span class="p">(</span><span class="n">quantize</span><span class="p">(</span><span class="n">x</span><span class="p">)))</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">f</span><span class="p">)(</span><span class="n">x</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>[[1. 1. 1.]
+ [1. 1. 1.]]
+</pre></div>
+</div>
+</div>
+</div>
+<p>And differentiating with respect to a quantized array input produces a
+plain float array, as the tangent type dictates:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">g</span><span class="p">(</span><span class="n">qx</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dequantize</span><span class="p">(</span><span class="n">qx</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">g</span><span class="p">)(</span><span class="n">qx</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">g</span><span class="p">)(</span><span class="n">qx</span><span class="p">)))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>[[  1.984252   4.015748   6.      ]
+ [  8.031496 -10.015748  12.      ]]
+float32[2,3]
+</pre></div>
+</div>
+</div>
+</div>
+<p>The same goes for ops with mixed operand kinds, like the quantized
+matmul: differentiating a loss with respect to both operands gives an
+<code class="docutils literal notranslate"><span class="pre">f32</span></code> gradient for the dense activations <em>and</em> an <code class="docutils literal notranslate"><span class="pre">f32</span></code> gradient for the
+quantized weights:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">loss</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">matmul_q</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+
+<span class="n">grad_x</span><span class="p">,</span> <span class="n">grad_qw</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">loss</span><span class="p">,</span> <span class="n">argnums</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">))(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">grad_x</span><span class="p">),</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">grad_qw</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>float32[2,3] float32[3,4]
+</pre></div>
+</div>
+</div>
+</div>
+<p>Notice that making the tangent type an <code class="docutils literal notranslate"><span class="pre">f32</span></code> array was a <em>choice</em>, and
+there’s a real design space here. We could instead have made the tangent
+type of <code class="docutils literal notranslate"><span class="pre">QArrayTy</span></code> be <code class="docutils literal notranslate"><span class="pre">QArrayTy</span></code> itself, so that tangents and cotangents
+are quantized too — a different tradeoff, sensible for different
+applications. (For that choice, since the tangent type is then a hi type,
+we’d also implement <code class="docutils literal notranslate"><span class="pre">vspace_zero</span></code> and <code class="docutils literal notranslate"><span class="pre">vspace_add</span></code> on it so autodiff can
+instantiate and accumulate cotangents.) This flexibility is why hi types
+are a user extension point: for each piece of JAX — tracing, lowering,
+autodiff, and batching — you set up how your type participates, however
+your situation needs.</p>
+</section>
+<section id="vmap-and-mapping-specs">
+<h2><code class="docutils literal notranslate"><span class="pre">vmap</span></code> and mapping specs<a class="headerlink" href="#vmap-and-mapping-specs" title="Link to this heading">#</a></h2>
+<p>What does it mean to map over a quantized array? For arrays, <code class="docutils literal notranslate"><span class="pre">vmap</span></code>’s
+<code class="docutils literal notranslate"><span class="pre">in_axes</span></code> and <code class="docutils literal notranslate"><span class="pre">out_axes</span></code> are axis indices, and JAX can infer the mapped
+axis size from the argument’s shape. For a general hi type, JAX doesn’t
+guess: <em>you</em> define a “mapping spec” type that says how values of your type
+are mapped, users pass instances of it as <code class="docutils literal notranslate"><span class="pre">in_axes</span></code>/<code class="docutils literal notranslate"><span class="pre">out_axes</span></code> entries, and
+they pass <code class="docutils literal notranslate"><span class="pre">axis_size</span></code> explicitly when it can’t be inferred from an array
+argument.</p>
+<p>For our quantized arrays, thanks to the per-row scales, a batch of
+<code class="docutils literal notranslate"><span class="pre">QArray</span></code>s is just a bigger <code class="docutils literal notranslate"><span class="pre">QArray</span></code>: stacking <code class="docutils literal notranslate"><span class="pre">n</span></code> quantized arrays of type
+<code class="docutils literal notranslate"><span class="pre">q8[2,3]</span></code> along a new leading axis gives a <code class="docutils literal notranslate"><span class="pre">q8[n,2,3]</span></code>, with <code class="docutils literal notranslate"><span class="pre">qvalue</span></code> of
+shape <code class="docutils literal notranslate"><span class="pre">(n,</span> <span class="pre">2,</span> <span class="pre">3)</span></code> and <code class="docutils literal notranslate"><span class="pre">scale</span></code> of shape <code class="docutils literal notranslate"><span class="pre">(n,</span> <span class="pre">2)</span></code>. So the only mapping notion
+we need is “the leading axis,” and our spec type doesn’t need to carry any
+data at all:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="kn">from</span><span class="nn">jax.experimental.hijax</span><span class="kn">import</span> <span class="n">MappingSpec</span>
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="nc">QArraySpec</span><span class="p">(</span><span class="n">MappingSpec</span><span class="p">):</span>
+  <span class="k">pass</span>  <span class="c1"># QArrays are only mapped along their leading axis</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>(Specs can be as rich as your type demands. A tuple-like hi type might use
+a spec carrying one axis per component; see the tuple example at the end
+of this document.)</p>
+<p>On the type, we implement <code class="docutils literal notranslate"><span class="pre">dec_rank</span></code> and <code class="docutils literal notranslate"><span class="pre">inc_rank</span></code>, the hi type analogues
+of “remove the mapped axis” and “add the mapped axis.” They take the axis
+size and a spec, and return the element type and the batched type,
+respectively:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">qarray_dec_rank</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">spec</span><span class="p">):</span>
+  <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">spec</span><span class="p">,</span> <span class="n">QArraySpec</span><span class="p">)</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">size</span>
+  <span class="k">return</span> <span class="n">QArrayTy</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">:],</span>
+                  <span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">spec</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">[</span><span class="mi">1</span><span class="p">:])))</span>
+
+<span class="k">def</span><span class="nf">qarray_inc_rank</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">spec</span><span class="p">):</span>
+  <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">spec</span><span class="p">,</span> <span class="n">QArraySpec</span><span class="p">)</span>
+  <span class="k">return</span> <span class="n">QArrayTy</span><span class="p">((</span><span class="n">size</span><span class="p">,</span> <span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
+                  <span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">spec</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">)))</span>
+
+<span class="n">QArrayTy</span><span class="o">.</span><span class="n">dec_rank</span> <span class="o">=</span> <span class="n">qarray_dec_rank</span>
+<span class="n">QArrayTy</span><span class="o">.</span><span class="n">inc_rank</span> <span class="o">=</span> <span class="n">qarray_inc_rank</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>(We’re attaching methods to the class as we go, notebook-style; in real
+code these would just be more methods in the <code class="docutils literal notranslate"><span class="pre">class</span> <span class="pre">QArrayTy</span></code> definition.)</p>
+<p>On the primitives, we implement <code class="docutils literal notranslate"><span class="pre">batch</span></code> rules. A <code class="docutils literal notranslate"><span class="pre">batch</span></code> rule receives the
+batched arguments along with their mapping specs (<code class="docutils literal notranslate"><span class="pre">None</span></code> for unbatched
+arguments, an integer axis for batched array arguments, and a spec instance
+for batched hi type arguments), and returns the batched result along with
+its mapping spec. Note that a rule should be prepared for any combination
+of batched and unbatched arguments:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">quantize_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">axis_data</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">in_dims</span><span class="p">):</span>
+  <span class="n">x</span><span class="p">,</span> <span class="o">=</span> <span class="n">args</span>
+  <span class="n">d</span><span class="p">,</span> <span class="o">=</span> <span class="n">in_dims</span>
+  <span class="k">if</span> <span class="n">d</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">quantize</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="kc">None</span>
+  <span class="n">x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">moveaxis</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">d</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+  <span class="k">return</span> <span class="n">quantize</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">QArraySpec</span><span class="p">()</span>
+<span class="n">Quantize</span><span class="o">.</span><span class="n">batch</span> <span class="o">=</span> <span class="n">quantize_batch</span>
+
+<span class="k">def</span><span class="nf">dequantize_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">axis_data</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">in_dims</span><span class="p">):</span>
+  <span class="n">qx</span><span class="p">,</span> <span class="o">=</span> <span class="n">args</span>
+  <span class="n">d</span><span class="p">,</span> <span class="o">=</span> <span class="n">in_dims</span>
+  <span class="k">if</span> <span class="n">d</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">dequantize</span><span class="p">(</span><span class="n">qx</span><span class="p">),</span> <span class="kc">None</span>
+  <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">d</span><span class="p">,</span> <span class="n">QArraySpec</span><span class="p">)</span>
+  <span class="k">return</span> <span class="n">dequantize</span><span class="p">(</span><span class="n">qx</span><span class="p">),</span> <span class="mi">0</span>
+<span class="n">Dequantize</span><span class="o">.</span><span class="n">batch</span> <span class="o">=</span> <span class="n">dequantize_batch</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>Because per-row quantization applies at any rank, both rules can just apply
+the unbatched operation to the stacked value — the hallmark of a type whose
+batches are values of the same type family.</p>
+<p>Now we can <code class="docutils literal notranslate"><span class="pre">vmap</span></code>. Mapping <em>to</em> a quantized array output, the axis size is
+inferred from the array argument as usual, and we pass a spec for
+<code class="docutils literal notranslate"><span class="pre">out_axes</span></code>:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">xs</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mf">24.</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s1">'float32'</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+
+<span class="n">qxs</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">quantize</span><span class="p">,</span> <span class="n">out_axes</span><span class="o">=</span><span class="n">QArraySpec</span><span class="p">())(</span><span class="n">xs</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qxs</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">qxs</span><span class="o">.</span><span class="n">qvalue</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">qxs</span><span class="o">.</span><span class="n">scale</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>q8[4,2,3]
+(4, 2, 3) (4, 2)
+</pre></div>
+</div>
+</div>
+</div>
+<p>Mapping <em>over</em> a quantized array input, we pass a spec for <code class="docutils literal notranslate"><span class="pre">in_axes</span></code> — and
+since there’s no array argument to infer the axis size from, we must pass
+<code class="docutils literal notranslate"><span class="pre">axis_size</span></code> explicitly:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">xs_roundtrip</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">dequantize</span><span class="p">,</span> <span class="n">in_axes</span><span class="o">=</span><span class="n">QArraySpec</span><span class="p">(),</span> <span class="n">axis_size</span><span class="o">=</span><span class="mi">4</span><span class="p">)(</span><span class="n">qxs</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">xs_roundtrip</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>float32[4,2,3]
+</pre></div>
+</div>
+</div>
+</div>
+<p>All the usual compositions work — <code class="docutils literal notranslate"><span class="pre">vmap</span></code> of <code class="docutils literal notranslate"><span class="pre">jit</span></code>,</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">dequantize</span><span class="p">),</span> <span class="n">in_axes</span><span class="o">=</span><span class="n">QArraySpec</span><span class="p">(),</span>
+                          <span class="n">axis_size</span><span class="o">=</span><span class="mi">4</span><span class="p">)(</span><span class="n">qxs</span><span class="p">)))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>float32[4,2,3]
+</pre></div>
+</div>
+</div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">vmap</span></code> of <code class="docutils literal notranslate"><span class="pre">grad</span></code>, and so on:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">norm_quantized</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dequantize</span><span class="p">(</span><span class="n">quantize</span><span class="p">(</span><span class="n">x</span><span class="p">))</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">norm_quantized</span><span class="p">))(</span><span class="n">xs</span><span class="p">)</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>(4, 2, 3)
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="scan-and-the-leading-axis">
+<h2><code class="docutils literal notranslate"><span class="pre">scan</span></code> and the leading axis<a class="headerlink" href="#scan-and-the-leading-axis" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">jax.lax.scan</span></code> can loop over a stacked hi value, consuming one slice per
+step — and it can carry and produce hi values too. Where <code class="docutils literal notranslate"><span class="pre">vmap</span></code> asks the
+<em>user</em> for a mapping spec, <code class="docutils literal notranslate"><span class="pre">scan</span></code> always walks the leading axis, so it
+instead asks the <em>type</em>: the one extra method to implement is
+<code class="docutils literal notranslate"><span class="pre">leading_axis_spec</span></code>, which returns the mapping spec describing your type’s
+leading axis. The <code class="docutils literal notranslate"><span class="pre">dec_rank</span></code> and <code class="docutils literal notranslate"><span class="pre">inc_rank</span></code> methods from the <code class="docutils literal notranslate"><span class="pre">vmap</span></code>
+section do the rest of the work.</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">qarray_leading_axis_spec</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">QArraySpec</span><span class="p">()</span>
+
+<span class="n">QArrayTy</span><span class="o">.</span><span class="n">leading_axis_spec</span> <span class="o">=</span> <span class="n">qarray_leading_axis_spec</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>Scanning over the stack of quantized arrays from the previous section, the
+body sees one <code class="docutils literal notranslate"><span class="pre">q8[2,3]</span></code> per step. As with <code class="docutils literal notranslate"><span class="pre">vmap</span></code>’s <code class="docutils literal notranslate"><span class="pre">axis_size</span></code>, when all
+the scanned-over values are hi types there’s no leading-axis size to
+infer, so we pass <code class="docutils literal notranslate"><span class="pre">length</span></code> explicitly (if any scanned-over value is an
+array, <code class="docutils literal notranslate"><span class="pre">scan</span></code> infers the length from it and <code class="docutils literal notranslate"><span class="pre">length</span></code> can be omitted):</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">sum_dequantized</span><span class="p">(</span><span class="n">total</span><span class="p">,</span> <span class="n">qx</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">total</span> <span class="o">+</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dequantize</span><span class="p">(</span><span class="n">qx</span><span class="p">)),</span> <span class="p">()</span>
+
+<span class="n">total</span><span class="p">,</span> <span class="p">()</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">lax</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">sum_dequantized</span><span class="p">,</span> <span class="mf">0.</span><span class="p">,</span> <span class="n">qxs</span><span class="p">,</span> <span class="n">length</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">total</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>275.9685
+</pre></div>
+</div>
+</div>
+</div>
+<p>Hi values also work as stacked outputs and as the loop carry. Here the
+carry is a quantized array, re-quantized after each accumulation step, and
+the second output stacks one fresh <code class="docutils literal notranslate"><span class="pre">QArray</span></code> per step into a <code class="docutils literal notranslate"><span class="pre">q8[4,2,3]</span></code>:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">accum_quantized</span><span class="p">(</span><span class="n">qtotal</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">quantize</span><span class="p">(</span><span class="n">dequantize</span><span class="p">(</span><span class="n">qtotal</span><span class="p">)</span> <span class="o">+</span> <span class="n">x</span><span class="p">),</span> <span class="n">quantize</span><span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">x</span><span class="p">)</span>
+
+<span class="n">qzero</span> <span class="o">=</span> <span class="n">quantize</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s1">'float32'</span><span class="p">))</span>
+<span class="n">qtotal</span><span class="p">,</span> <span class="n">qys</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">lax</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">accum_quantized</span><span class="p">,</span> <span class="n">qzero</span><span class="p">,</span> <span class="n">xs</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qtotal</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qys</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>q8[2,3]
+q8[4,2,3]
+</pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="sharding-in-types-explicit-mode">
+<h2>Sharding in types: explicit mode<a class="headerlink" href="#sharding-in-types-explicit-mode" title="Link to this heading">#</a></h2>
+<p>Finally, sharding. In JAX’s explicit sharding mode (see <a class="reference external" href="https://docs.jax.dev/en/latest/parallel.html">the parallelism
+guide</a>), shardings are part
+of array <em>types</em>: <code class="docutils literal notranslate"><span class="pre">jax.typeof</span></code> reports how a value is partitioned across
+the mesh, sharding propagation happens while tracing, and mismatches
+surface as type errors. The <code class="docutils literal notranslate"><span class="pre">sharding</span></code> field on <code class="docutils literal notranslate"><span class="pre">QArrayTy</span></code>, and the typing
+rules on our primitives that propagate it, are exactly what let hi types
+participate. What does it mean to partition a quantized array across
+devices? The components move together: if we shard the rows, each device
+holds its rows’ quantized values <em>and</em> their scales. As usual there’s a
+design choice to make, and we made it back in <code class="docutils literal notranslate"><span class="pre">lo_ty</span></code>: <code class="docutils literal notranslate"><span class="pre">qvalue</span></code> carries
+the type’s sharding, and <code class="docutils literal notranslate"><span class="pre">scale</span></code> shards like it with the last axis
+dropped, so every row travels with its scale.</p>
+<p>Let’s see it work. We make a mesh (this is where we use the 8 CPU devices
+requested in this document’s first cell), shard some rows across it, and
+quantize — the shardings propagate through our typing rules into the
+result type, which <code class="docutils literal notranslate"><span class="pre">jax.typeof</span></code> displays with <code class="docutils literal notranslate"><span class="pre">@</span></code> markers:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">mesh</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">make_mesh</span><span class="p">((</span><span class="mi">4</span><span class="p">,),</span> <span class="p">(</span><span class="s1">'i'</span><span class="p">,))</span>
+<span class="n">jax</span><span class="o">.</span><span class="n">set_mesh</span><span class="p">(</span><span class="n">mesh</span><span class="p">)</span>
+
+<span class="n">rows</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">device_put</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mf">24.</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s1">'float32'</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+                      <span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="s1">'i'</span><span class="p">))</span>
+
+<span class="n">qrows</span> <span class="o">=</span> <span class="n">quantize</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qrows</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">qrows</span><span class="o">.</span><span class="n">qvalue</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">,</span> <span class="n">qrows</span><span class="o">.</span><span class="n">scale</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">dequantize</span><span class="p">(</span><span class="n">qrows</span><span class="p">)))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>q8[8@i,3]
+P('i', None) P('i',)
+float32[8@i,3]
+</pre></div>
+</div>
+</div>
+</div>
+<p>The same holds while tracing — hi types in jaxprs now display their
+shardings, computed by our <code class="docutils literal notranslate"><span class="pre">out_aval</span></code> rules:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">dequantize</span><span class="p">(</span><span class="n">quantize</span><span class="p">(</span><span class="n">x</span><span class="p">)))</span><span class="o">.</span><span class="n">trace</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span><span class="o">.</span><span class="n">jaxpr</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre>{ <span class="-Color -Color-Bold -Color-Bold-Blue">lambda </span>; a<span class="-Color -Color-Magenta">:f32[8@i,3]</span>. <span class="-Color -Color-Bold -Color-Bold-Blue">let</span>
+b<span class="-Color -Color-Magenta">:q8[8@i,3]</span> = call_hi_primitive[_prim=Quantize[{}]] a
+    c<span class="-Color -Color-Magenta">:f32[8@i,3]</span> = call_hi_primitive[_prim=Dequantize[{}]] b
+  <span class="-Color -Color-Bold -Color-Bold-Blue">in </span>(c,) }
+</pre></div>
+</div>
+</div>
+</div>
+<p>The quantized matmul propagates shardings too: its typing rule partitions
+output rows like <code class="docutils literal notranslate"><span class="pre">x</span></code>’s rows and output columns like <code class="docutils literal notranslate"><span class="pre">qw</span></code>’s columns
+(requiring the contracted axes to be unsharded, since neither operand can
+say how a sharded contraction should land):</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">w2</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mf">12.</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s1">'float32'</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span> <span class="o">/</span> <span class="mf">12.</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">matmul_q</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span> <span class="n">quantize</span><span class="p">(</span><span class="n">w2</span><span class="p">))))</span>                <span class="c1"># rows sharded</span>
+
+<span class="n">qw2</span> <span class="o">=</span> <span class="n">quantize</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">device_put</span><span class="p">(</span><span class="n">w2</span><span class="p">,</span> <span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="s1">'i'</span><span class="p">)))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qw2</span><span class="p">))</span>                                         <span class="c1"># cols sharded</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">matmul_q</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s1">'float32'</span><span class="p">),</span> <span class="n">qw2</span><span class="p">)))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>float32[8@i,4]
+q8[3,4@i]
+float32[2,4@i]
+</pre></div>
+</div>
+</div>
+</div>
+<p>And the contraction check fires as a type error, at trace time:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">xk</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">device_put</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="s1">'float32'</span><span class="p">),</span> <span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="s1">'i'</span><span class="p">))</span>
+<span class="n">qk</span> <span class="o">=</span> <span class="n">quantize</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">device_put</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="mi">8</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="s1">'float32'</span><span class="p">),</span> <span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="s1">'i'</span><span class="p">)))</span>
+
+<span class="k">try</span><span class="p">:</span>
+  <span class="n">matmul_q</span><span class="p">(</span><span class="n">xk</span><span class="p">,</span> <span class="n">qk</span><span class="p">)</span>
+<span class="k">except</span> <span class="ne">TypeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+  <span class="nb">print</span><span class="p">(</span><span class="s1">'TypeError:'</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>TypeError: matmul_q requires unsharded contraction axes, got float32[2,8@i] @ q8[8@i,3]
+</pre></div>
+</div>
+</div>
+</div>
+<p>Autodiff composes with all of this. Recall that <code class="docutils literal notranslate"><span class="pre">MatmulQ</span></code>’s backward rule
+passed <code class="docutils literal notranslate"><span class="pre">out_sharding</span></code> hints to its matmuls: that’s because the cotangent
+for <code class="docutils literal notranslate"><span class="pre">qw</span></code> contracts over the row axis, which may be sharded (as it is
+here), and explicit mode refuses to guess how an all-sharded contraction
+should land. The right answer is the primal operand’s sharding —
+cotangents live where their primals live:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">qloss</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">matmul_q</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">qw</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+
+<span class="n">grad_rows</span><span class="p">,</span> <span class="n">grad_qw2</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">qloss</span><span class="p">,</span> <span class="n">argnums</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">))(</span><span class="n">rows</span><span class="p">,</span> <span class="n">quantize</span><span class="p">(</span><span class="n">w2</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">grad_rows</span><span class="p">),</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">grad_qw2</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>float32[8@i,3] float32[3,4]
+</pre></div>
+</div>
+</div>
+</div>
+<p>One caution: JAX does not cross-check a hi primitive’s declared output
+sharding against what its <code class="docutils literal notranslate"><span class="pre">expand</span></code> actually produces. The declared
+<code class="docutils literal notranslate"><span class="pre">out_aval</span></code> is what downstream code sees while tracing; <code class="docutils literal notranslate"><span class="pre">expand</span></code> determines
+what happens at runtime. Keeping them consistent is part of the typing
+rule’s job.</p>
+</section>
+<section id="shard-map-and-partition-specs">
+<h2><code class="docutils literal notranslate"><span class="pre">shard_map</span></code> and partition specs<a class="headerlink" href="#shard-map-and-partition-specs" title="Link to this heading">#</a></h2>
+<p>Explicit mode partitions values while keeping one global view of the
+program. Its complement is <code class="docutils literal notranslate"><span class="pre">shard_map</span></code>, which gives a per-device view. To
+cross that boundary, a quantized array needs one more piece: a partition
+spec type of our own, saying how <code class="docutils literal notranslate"><span class="pre">shard_map</span></code>’s <code class="docutils literal notranslate"><span class="pre">in_specs</span></code>/<code class="docutils literal notranslate"><span class="pre">out_specs</span></code>
+apply to it. We keep the same design as above: a quantized array is
+sharded along its leading axes only.</p>
+<p>For <code class="docutils literal notranslate"><span class="pre">shard_map</span></code>, we express this with an <code class="docutils literal notranslate"><span class="pre">HiPspec</span></code> subclass — the
+partition spec analogue of the <code class="docutils literal notranslate"><span class="pre">MappingSpec</span></code> above. Users pass instances
+of it as <code class="docutils literal notranslate"><span class="pre">in_specs</span></code>/<code class="docutils literal notranslate"><span class="pre">out_specs</span></code> entries, and its <code class="docutils literal notranslate"><span class="pre">to_lo</span></code> method says how
+it translates to one <code class="docutils literal notranslate"><span class="pre">jax.P</span></code> partition spec per lowered component (in
+<code class="docutils literal notranslate"><span class="pre">lo_ty</span></code> order):</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="kn">from</span><span class="nn">jax.experimental.hijax</span><span class="kn">import</span> <span class="n">HiPspec</span>
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="nc">QArrayP</span><span class="p">(</span><span class="n">HiPspec</span><span class="p">):</span>
+  <span class="n">spec</span><span class="p">:</span> <span class="n">jax</span><span class="o">.</span><span class="n">P</span>  <span class="c1"># partitioning of the leading axes; the last axis stays whole</span>
+
+  <span class="k">def</span><span class="nf">to_lo</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">spec</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">spec</span><span class="p">)</span>  <span class="c1"># qvalue and scale shard together</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>(Since <code class="docutils literal notranslate"><span class="pre">scale</span></code> has one axis fewer than <code class="docutils literal notranslate"><span class="pre">qvalue</span></code>, handing both components
+the same partition spec says exactly that the leading axes shard together
+while the trailing axis of <code class="docutils literal notranslate"><span class="pre">qvalue</span></code> is untouched.)</p>
+<p>On the type, <code class="docutils literal notranslate"><span class="pre">shard</span></code> and <code class="docutils literal notranslate"><span class="pre">unshard</span></code> compute the per-device shard type from
+the global type and vice versa, delegating to the component types:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">qarray_shard</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mesh</span><span class="p">,</span> <span class="n">manual_axes</span><span class="p">,</span> <span class="n">check_vma</span><span class="p">,</span> <span class="n">spec</span><span class="p">):</span>
+  <span class="n">qvalue_ty</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">lo_ty</span><span class="p">()</span>
+  <span class="n">qspec</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">spec</span><span class="o">.</span><span class="n">to_lo</span><span class="p">()</span>
+  <span class="n">shard_ty</span> <span class="o">=</span> <span class="n">qvalue_ty</span><span class="o">.</span><span class="n">shard</span><span class="p">(</span><span class="n">mesh</span><span class="p">,</span> <span class="n">manual_axes</span><span class="p">,</span> <span class="n">check_vma</span><span class="p">,</span> <span class="n">qspec</span><span class="p">)</span>
+  <span class="k">return</span> <span class="n">QArrayTy</span><span class="p">(</span><span class="n">shard_ty</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">shard_ty</span><span class="o">.</span><span class="n">sharding</span><span class="p">)</span>
+
+<span class="k">def</span><span class="nf">qarray_unshard</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mesh</span><span class="p">,</span> <span class="n">check_vma</span><span class="p">,</span> <span class="n">spec</span><span class="p">):</span>
+  <span class="n">qvalue_ty</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">lo_ty</span><span class="p">()</span>
+  <span class="n">qspec</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">spec</span><span class="o">.</span><span class="n">to_lo</span><span class="p">()</span>
+  <span class="n">full_ty</span> <span class="o">=</span> <span class="n">qvalue_ty</span><span class="o">.</span><span class="n">unshard</span><span class="p">(</span><span class="n">mesh</span><span class="p">,</span> <span class="n">check_vma</span><span class="p">,</span> <span class="n">qspec</span><span class="p">)</span>
+  <span class="k">return</span> <span class="n">QArrayTy</span><span class="p">(</span><span class="n">full_ty</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">full_ty</span><span class="o">.</span><span class="n">sharding</span><span class="p">)</span>
+
+<span class="n">QArrayTy</span><span class="o">.</span><span class="n">shard</span> <span class="o">=</span> <span class="n">qarray_shard</span>
+<span class="n">QArrayTy</span><span class="o">.</span><span class="n">unshard</span> <span class="o">=</span> <span class="n">qarray_unshard</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>Now quantized arrays can cross <code class="docutils literal notranslate"><span class="pre">shard_map</span></code> boundaries in either
+direction, continuing with the mesh and <code class="docutils literal notranslate"><span class="pre">rows</span></code> from the previous section.
+Producing a sharded quantized array:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
+<span class="nd">@jax</span><span class="o">.</span><span class="n">shard_map</span><span class="p">(</span><span class="n">in_specs</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="s1">'i'</span><span class="p">),</span> <span class="n">out_specs</span><span class="o">=</span><span class="n">QArrayP</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="s1">'i'</span><span class="p">)))</span>
+<span class="k">def</span><span class="nf">quantize_shards</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+  <span class="k">assert</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>   <span class="c1"># each device sees two rows</span>
+  <span class="k">return</span> <span class="n">quantize</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+<span class="n">qrows</span> <span class="o">=</span> <span class="n">quantize_shards</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qrows</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">qrows</span><span class="o">.</span><span class="n">qvalue</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">,</span> <span class="n">qrows</span><span class="o">.</span><span class="n">scale</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>q8[8@i,3]
+P('i', None) P('i',)
+</pre></div>
+</div>
+</div>
+</div>
+<p>And consuming one, where each device sees a per-shard <code class="docutils literal notranslate"><span class="pre">QArray</span></code> of its own
+rows:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
+<span class="nd">@jax</span><span class="o">.</span><span class="n">shard_map</span><span class="p">(</span><span class="n">in_specs</span><span class="o">=</span><span class="n">QArrayP</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="s1">'i'</span><span class="p">)),</span> <span class="n">out_specs</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="s1">'i'</span><span class="p">))</span>
+<span class="k">def</span><span class="nf">dequantize_shards</span><span class="p">(</span><span class="n">qx</span><span class="p">):</span>
+  <span class="k">assert</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">qx</span><span class="p">)</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>  <span class="c1"># a per-device QArray shard</span>
+  <span class="k">return</span> <span class="n">dequantize</span><span class="p">(</span><span class="n">qx</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">dequantize_shards</span><span class="p">(</span><span class="n">qrows</span><span class="p">)</span> <span class="o">-</span> <span class="n">rows</span><span class="p">)))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>0.08661461
+</pre></div>
+</div>
+</div>
+</div>
+<p>Because scales are per-row, quantizing shard-by-shard agrees exactly with
+quantizing globally — the same property that made batching pleasant:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">qrows_global</span> <span class="o">=</span> <span class="n">quantize</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span>
+<span class="k">assert</span> <span class="p">(</span><span class="n">qrows</span><span class="o">.</span><span class="n">qvalue</span> <span class="o">==</span> <span class="n">qrows_global</span><span class="o">.</span><span class="n">qvalue</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+<span class="k">assert</span> <span class="p">(</span><span class="n">qrows</span><span class="o">.</span><span class="n">scale</span> <span class="o">==</span> <span class="n">qrows_global</span><span class="o">.</span><span class="n">scale</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>(For autodiff <em>through</em> a <code class="docutils literal notranslate"><span class="pre">shard_map</span></code>, there’s a bit more to implement:
+<code class="docutils literal notranslate"><span class="pre">to_tangent_spec</span></code> and <code class="docutils literal notranslate"><span class="pre">to_ct_spec</span></code> on the spec type, and <code class="docutils literal notranslate"><span class="pre">nospec</span></code> on the
+hi type, which is used to shard autodiff residuals.)</p>
+</section>
+<section id="additional-examples">
+<h2>Additional examples<a class="headerlink" href="#additional-examples" title="Link to this heading">#</a></h2>
+<p>The recipe is always the same — a value class, a <code class="docutils literal notranslate"><span class="pre">HiType</span></code> with the
+<code class="docutils literal notranslate"><span class="pre">lo_ty</span></code>/<code class="docutils literal notranslate"><span class="pre">lower_val</span></code>/<code class="docutils literal notranslate"><span class="pre">raise_val</span></code> lowering triple, and primitives whose type
+signatures mention the new type — so further examples can be read quickly.</p>
+<section id="rank-1-arrays">
+<h3>Rank-1 arrays<a class="headerlink" href="#rank-1-arrays" title="Link to this heading">#</a></h3>
+<p>A rank-1 array represents an <code class="docutils literal notranslate"><span class="pre">m</span> <span class="pre">×</span> <span class="pre">n</span></code> matrix as an outer product of two
+vectors, <code class="docutils literal notranslate"><span class="pre">col</span> <span class="pre">:</span> <span class="pre">f32[m]</span></code> and <code class="docutils literal notranslate"><span class="pre">row</span> <span class="pre">:</span> <span class="pre">f32[n]</span></code>. The point of the
+representation is to never materialize the <code class="docutils literal notranslate"><span class="pre">m</span> <span class="pre">×</span> <span class="pre">n</span></code> product: ops consume
+the factors directly. (A general low-rank type, with <code class="docutils literal notranslate"><span class="pre">f32[m,</span> <span class="pre">r]</span></code> and
+<code class="docutils literal notranslate"><span class="pre">f32[r,</span> <span class="pre">n]</span></code> factors, is more of the same.)</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="nc">Rank1</span><span class="p">:</span>
+  <span class="n">col</span><span class="p">:</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span>   <span class="c1"># f32[m]</span>
+  <span class="n">row</span><span class="p">:</span> <span class="n">jax</span><span class="o">.</span><span class="n">Array</span>   <span class="c1"># f32[n]</span>
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="nc">Rank1Ty</span><span class="p">(</span><span class="n">HiType</span><span class="p">):</span>
+  <span class="n">shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>   <span class="c1"># (m, n), the dense shape represented</span>
+  <span class="n">sharding</span><span class="p">:</span> <span class="n">NamedSharding</span>  <span class="c1"># sharding of the dense shape; the factors' derive</span>
+
+  <span class="k">def</span><span class="nf">lo_ty</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">n</span><span class="p">),</span> <span class="n">spec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">ShapedArray</span><span class="p">((</span><span class="n">m</span><span class="p">,),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">),</span>
+                        <span class="n">sharding</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">spec</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="n">spec</span><span class="p">[</span><span class="mi">0</span><span class="p">]))),</span>
+            <span class="n">ShapedArray</span><span class="p">((</span><span class="n">n</span><span class="p">,),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">),</span>
+                        <span class="n">sharding</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">spec</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="n">spec</span><span class="p">[</span><span class="mi">1</span><span class="p">])))]</span>
+  <span class="k">def</span><span class="nf">lower_val</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">r1</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">r1</span><span class="o">.</span><span class="n">col</span><span class="p">,</span> <span class="n">r1</span><span class="o">.</span><span class="n">row</span><span class="p">]</span>
+  <span class="k">def</span><span class="nf">raise_val</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">Rank1</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">)</span>
+
+  <span class="c1"># rank-1 matrices aren't closed under addition, so tangents are dense</span>
+  <span class="k">def</span><span class="nf">to_tangent_aval</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">ShapedArray</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">),</span>
+                       <span class="n">sharding</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="p">)</span>
+
+  <span class="k">def</span><span class="nf">str_short</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">short_dtypes</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">mesh_axis_types</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="n">dims</span> <span class="o">=</span> <span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">d</span><span class="p">)</span> <span class="k">if</span> <span class="n">p</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">d</span><span class="si">}</span><span class="s1">@</span><span class="si">{</span><span class="n">p</span><span class="si">}</span><span class="s1">'</span>
+            <span class="k">for</span> <span class="n">d</span><span class="p">,</span> <span class="n">p</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">)]</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s1">'r1[</span><span class="si">{</span><span class="s2">","</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">dims</span><span class="p">)</span><span class="si">}</span><span class="s1">]'</span>
+  <span class="fm">__repr__</span> <span class="o">=</span> <span class="n">str_short</span>
+
+<span class="k">def</span><span class="nf">typeof_rank1</span><span class="p">(</span><span class="n">r1</span><span class="p">):</span>
+  <span class="n">col_s</span><span class="p">,</span> <span class="n">row_s</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">r1</span><span class="o">.</span><span class="n">col</span><span class="p">)</span><span class="o">.</span><span class="n">sharding</span><span class="p">,</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">r1</span><span class="o">.</span><span class="n">row</span><span class="p">)</span><span class="o">.</span><span class="n">sharding</span>
+  <span class="n">sharding</span> <span class="o">=</span> <span class="n">col_s</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">spec</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="n">col_s</span><span class="o">.</span><span class="n">spec</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">row_s</span><span class="o">.</span><span class="n">spec</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+  <span class="k">return</span> <span class="n">Rank1Ty</span><span class="p">((</span><span class="n">r1</span><span class="o">.</span><span class="n">col</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">r1</span><span class="o">.</span><span class="n">row</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">sharding</span><span class="p">)</span>
+
+<span class="n">register_hitype</span><span class="p">(</span><span class="n">Rank1</span><span class="p">,</span> <span class="n">typeof_rank1</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>The type records the dense shape it represents and prints as e.g.
+<code class="docutils literal notranslate"><span class="pre">r1[6,5]</span></code>. Note the tangent-type choice, which differs from <code class="docutils literal notranslate"><span class="pre">QArrayTy</span></code>’s
+for a different reason: the sum of two rank-1 matrices is in general
+rank 2, so rank-1 matrices aren’t closed under addition and can’t serve
+as their own tangent space. Perturbations leave the manifold, and
+tangents and cotangents are dense. The sharding story is the same as
+before, with the field consumed in <code class="docutils literal notranslate"><span class="pre">lo_ty</span></code>: the dense row axis is carried
+by <code class="docutils literal notranslate"><span class="pre">col</span></code> and the dense column axis by <code class="docutils literal notranslate"><span class="pre">row</span></code>.</p>
+<p>Unlike <code class="docutils literal notranslate"><span class="pre">QArray</span></code>, whose values were only ever created inside <code class="docutils literal notranslate"><span class="pre">quantize</span></code>,
+here construction from factors is itself a primitive — and there’s an
+accessor primitive too, so that <em>rules</em> (which are ordinary traced code)
+can get at the factors without touching container attributes:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">class</span><span class="nc">Outer</span><span class="p">(</span><span class="n">VJPHiPrimitive</span><span class="p">):</span>
+  <span class="k">def</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">col_aval</span><span class="p">,</span> <span class="n">row_aval</span><span class="p">):</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">col_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">row_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">):</span>
+      <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s1">'bad outer factor types: </span><span class="si">{</span><span class="n">col_aval</span><span class="si">}</span><span class="s1">, </span><span class="si">{</span><span class="n">row_aval</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span>
+    <span class="n">sharding</span> <span class="o">=</span> <span class="n">col_aval</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+        <span class="n">spec</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="n">col_aval</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">row_aval</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">in_avals</span> <span class="o">=</span> <span class="p">(</span><span class="n">col_aval</span><span class="p">,</span> <span class="n">row_aval</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">out_aval</span> <span class="o">=</span> <span class="n">Rank1Ty</span><span class="p">((</span><span class="n">col_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">row_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">sharding</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+
+  <span class="k">def</span><span class="nf">expand</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">Rank1</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">)</span>
+
+  <span class="k">def</span><span class="nf">vjp_fwd</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nzs_in</span><span class="p">,</span> <span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">):</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">),</span> <span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">)</span>
+
+  <span class="k">def</span><span class="nf">vjp_bwd_retval</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">res</span><span class="p">,</span> <span class="n">g</span><span class="p">):</span>   <span class="c1"># g is dense, f32[m, n]</span>
+    <span class="n">col</span><span class="p">,</span> <span class="n">row</span> <span class="o">=</span> <span class="n">res</span>
+    <span class="k">return</span> <span class="n">g</span> <span class="o">@</span> <span class="n">row</span><span class="p">,</span> <span class="n">col</span> <span class="o">@</span> <span class="n">g</span>
+
+<span class="k">class</span><span class="nc">Factors</span><span class="p">(</span><span class="n">VJPHiPrimitive</span><span class="p">):</span>
+  <span class="k">def</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">r1_aval</span><span class="p">):</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">in_avals</span> <span class="o">=</span> <span class="p">(</span><span class="n">r1_aval</span><span class="p">,)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">out_aval</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">r1_aval</span><span class="o">.</span><span class="n">lo_ty</span><span class="p">())</span>  <span class="c1"># the factor types are the lo types</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+
+  <span class="k">def</span><span class="nf">expand</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">r1</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">r1</span><span class="o">.</span><span class="n">col</span><span class="p">,</span> <span class="n">r1</span><span class="o">.</span><span class="n">row</span><span class="p">)</span>
+
+<span class="k">class</span><span class="nc">MatmulR1</span><span class="p">(</span><span class="n">VJPHiPrimitive</span><span class="p">):</span>
+  <span class="k">def</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x_aval</span><span class="p">,</span> <span class="n">r1_aval</span><span class="p">):</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">r1_aval</span><span class="p">,</span> <span class="n">Rank1Ty</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">x_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span>
+            <span class="n">x_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">r1_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]):</span>
+      <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s1">'bad matmul_r1 operand types: </span><span class="si">{</span><span class="n">x_aval</span><span class="si">}</span><span class="s1"> @ </span><span class="si">{</span><span class="n">r1_aval</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">in_avals</span> <span class="o">=</span> <span class="p">(</span><span class="n">x_aval</span><span class="p">,</span> <span class="n">r1_aval</span><span class="p">)</span>
+    <span class="n">out_sharding</span> <span class="o">=</span> <span class="n">x_aval</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+        <span class="n">spec</span><span class="o">=</span><span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="n">x_aval</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">r1_aval</span><span class="o">.</span><span class="n">sharding</span><span class="o">.</span><span class="n">spec</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">out_aval</span> <span class="o">=</span> <span class="n">ShapedArray</span><span class="p">((</span><span class="n">x_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">r1_aval</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span>
+                                <span class="n">jnp</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="s1">'float32'</span><span class="p">),</span> <span class="n">sharding</span><span class="o">=</span><span class="n">out_sharding</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+
+  <span class="k">def</span><span class="nf">expand</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">r1</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">outer</span><span class="p">(</span><span class="n">x</span> <span class="o">@</span> <span class="n">r1</span><span class="o">.</span><span class="n">col</span><span class="p">,</span> <span class="n">r1</span><span class="o">.</span><span class="n">row</span><span class="p">)</span>   <span class="c1"># never materialize col ⊗ row</span>
+
+  <span class="k">def</span><span class="nf">vjp_fwd</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">nzs_in</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">r1</span><span class="p">):</span>
+    <span class="n">col</span><span class="p">,</span> <span class="n">row</span> <span class="o">=</span> <span class="n">factors</span><span class="p">(</span><span class="n">r1</span><span class="p">)</span>  <span class="c1"># rules are traced code: primitives, not attributes</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">r1</span><span class="p">),</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">)</span>
+
+  <span class="k">def</span><span class="nf">vjp_bwd_retval</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">res</span><span class="p">,</span> <span class="n">g</span><span class="p">):</span>
+    <span class="n">x</span><span class="p">,</span> <span class="n">col</span><span class="p">,</span> <span class="n">row</span> <span class="o">=</span> <span class="n">res</span>
+    <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">outer</span><span class="p">(</span><span class="n">g</span> <span class="o">@</span> <span class="n">row</span><span class="p">,</span> <span class="n">col</span><span class="p">),</span> <span class="n">x</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">g</span>
+
+<span class="k">def</span><span class="nf">outer</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">Outer</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">col</span><span class="p">),</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">row</span><span class="p">))(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">)</span>
+
+<span class="k">def</span><span class="nf">factors</span><span class="p">(</span><span class="n">r1</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">Factors</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">r1</span><span class="p">))(</span><span class="n">r1</span><span class="p">)</span>
+
+<span class="k">def</span><span class="nf">matmul_r1</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">r1</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">MatmulR1</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">r1</span><span class="p">))(</span><span class="n">x</span><span class="p">,</span> <span class="n">r1</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>(Note <code class="docutils literal notranslate"><span class="pre">Factors</span></code> declares its output type as a <em>tuple</em> of types —
+<code class="docutils literal notranslate"><span class="pre">in_avals</span></code> entries and <code class="docutils literal notranslate"><span class="pre">out_aval</span></code> can be pytrees of types — and that it
+carries no autodiff rules at all, since we only apply it in forward
+passes; rules are only needed for the transformations you actually use.
+Note also <code class="docutils literal notranslate"><span class="pre">MatmulR1</span></code>’s backward rule computes the dense operand’s
+cotangent as an outer product, exploiting the representation the same way
+<code class="docutils literal notranslate"><span class="pre">expand</span></code> does.)</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">col</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mf">6.</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s1">'float32'</span><span class="p">)</span> <span class="o">/</span> <span class="mf">6.</span>
+<span class="n">row</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mf">5.</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s1">'float32'</span><span class="p">)</span> <span class="o">/</span> <span class="mf">5.</span>
+<span class="n">r1</span> <span class="o">=</span> <span class="n">outer</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">r1</span><span class="p">))</span>
+
+<span class="n">acts</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">6</span><span class="p">),</span> <span class="s1">'float32'</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">matmul_r1</span><span class="p">(</span><span class="n">acts</span><span class="p">,</span> <span class="n">r1</span><span class="p">)</span> <span class="o">-</span> <span class="n">acts</span> <span class="o">@</span> <span class="n">jnp</span><span class="o">.</span><span class="n">outer</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">))))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>r1[6,5]
+1.1920929e-07
+</pre></div>
+</div>
+</div>
+</div>
+<p>Jaxprs, <code class="docutils literal notranslate"><span class="pre">jit</span></code>, and autodiff all work as before. The gradient with respect
+to a rank-1 operand is dense, as the tangent type dictates, while
+gradients chained through the constructor land back on the factors:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">matmul_r1</span><span class="p">)</span><span class="o">.</span><span class="n">trace</span><span class="p">(</span><span class="n">acts</span><span class="p">,</span> <span class="n">r1</span><span class="p">)</span><span class="o">.</span><span class="n">jaxpr</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output text_plain highlight-myst-ansi notranslate"><div class="highlight"><pre>{ <span class="-Color -Color-Bold -Color-Bold-Blue">lambda </span>; a<span class="-Color -Color-Magenta">:f32[3,6]</span> b<span class="-Color -Color-Magenta">:r1[6,5]</span>. <span class="-Color -Color-Bold -Color-Bold-Blue">let</span>
+c<span class="-Color -Color-Magenta">:f32[3,5]</span> = call_hi_primitive[_prim=MatmulR1[{}]] a b
+  <span class="-Color -Color-Bold -Color-Bold-Blue">in </span>(c,) }
+</pre></div>
+</div>
+</div>
+</div>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">r1_loss</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">r1</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">matmul_r1</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">r1</span><span class="p">)</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">r1_loss</span><span class="p">,</span> <span class="n">argnums</span><span class="o">=</span><span class="mi">1</span><span class="p">)(</span><span class="n">acts</span><span class="p">,</span> <span class="n">r1</span><span class="p">)))</span>
+
+<span class="k">def</span><span class="nf">factor_loss</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">matmul_r1</span><span class="p">(</span><span class="n">acts</span><span class="p">,</span> <span class="n">outer</span><span class="p">(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">))</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+
+<span class="n">g_col</span><span class="p">,</span> <span class="n">g_row</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">factor_loss</span><span class="p">,</span> <span class="n">argnums</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">))(</span><span class="n">col</span><span class="p">,</span> <span class="n">row</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">g_col</span><span class="p">),</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">g_row</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>float32[6,5]
+float32[6] float32[5]
+</pre></div>
+</div>
+</div>
+</div>
+<p>And the typing rules propagate shardings, just like <code class="docutils literal notranslate"><span class="pre">QArrayTy</span></code>’s:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">outer</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">device_put</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="s1">'float32'</span><span class="p">),</span> <span class="n">jax</span><span class="o">.</span><span class="n">P</span><span class="p">(</span><span class="s1">'i'</span><span class="p">)),</span>
+                       <span class="n">row</span><span class="p">)))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>r1[8@i,5]
+</pre></div>
+</div>
+</div>
+</div>
+<p>We stopped here, but <code class="docutils literal notranslate"><span class="pre">vmap</span></code>, <code class="docutils literal notranslate"><span class="pre">scan</span></code>, and <code class="docutils literal notranslate"><span class="pre">shard_map</span></code> support would follow
+the same recipes as in the sections above: <code class="docutils literal notranslate"><span class="pre">dec_rank</span></code>/<code class="docutils literal notranslate"><span class="pre">inc_rank</span></code> and a
+mapping spec, <code class="docutils literal notranslate"><span class="pre">leading_axis_spec</span></code>, and <code class="docutils literal notranslate"><span class="pre">shard</span></code>/<code class="docutils literal notranslate"><span class="pre">unshard</span></code> with an <code class="docutils literal notranslate"><span class="pre">HiPspec</span></code>
+partition spec type.</p>
+</section>
+<section id="tuples">
+<h3>Tuples<a class="headerlink" href="#tuples" title="Link to this heading">#</a></h3>
+<p>Our last example is a generic container: a tuple whose elements are any
+JAX values. Where <code class="docutils literal notranslate"><span class="pre">QArrayTy</span></code> and <code class="docutils literal notranslate"><span class="pre">Rank1Ty</span></code> had a fixed component
+structure, <code class="docutils literal notranslate"><span class="pre">TupTy</span></code> is parameterized by its component <em>types</em> — and every
+method delegates to them:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="kn">import</span><span class="nn">itertools</span>
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="nc">HiTup</span><span class="p">:</span>
+  <span class="n">elts</span><span class="p">:</span> <span class="nb">tuple</span>
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="nc">TupTy</span><span class="p">(</span><span class="n">HiType</span><span class="p">):</span>
+  <span class="n">tys</span><span class="p">:</span> <span class="nb">tuple</span>  <span class="c1"># component types: array types, or other hi types</span>
+
+  <span class="c1"># lowering delegates to the component types</span>
+  <span class="k">def</span><span class="nf">lo_ty</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">lo</span> <span class="k">for</span> <span class="n">ty</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">tys</span> <span class="k">for</span> <span class="n">lo</span> <span class="ow">in</span> <span class="n">ty</span><span class="o">.</span><span class="n">lo_ty</span><span class="p">()]</span>
+  <span class="k">def</span><span class="nf">lower_val</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tup</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">lo</span> <span class="k">for</span> <span class="n">ty</span><span class="p">,</span> <span class="n">elt</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tys</span><span class="p">,</span> <span class="n">tup</span><span class="o">.</span><span class="n">elts</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">lo</span> <span class="ow">in</span> <span class="n">ty</span><span class="o">.</span><span class="n">lower_val</span><span class="p">(</span><span class="n">elt</span><span class="p">)]</span>
+  <span class="k">def</span><span class="nf">raise_val</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">los</span><span class="p">):</span>
+    <span class="n">los</span> <span class="o">=</span> <span class="nb">iter</span><span class="p">(</span><span class="n">los</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">HiTup</span><span class="p">(</span><span class="nb">tuple</span><span class="p">(</span><span class="n">ty</span><span class="o">.</span><span class="n">raise_val</span><span class="p">(</span><span class="o">*</span><span class="n">itertools</span><span class="o">.</span><span class="n">islice</span><span class="p">(</span><span class="n">los</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">ty</span><span class="o">.</span><span class="n">lo_ty</span><span class="p">())))</span>
+                       <span class="k">for</span> <span class="n">ty</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">tys</span><span class="p">))</span>
+
+  <span class="c1"># so does the tangent type</span>
+  <span class="k">def</span><span class="nf">to_tangent_aval</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">TupTy</span><span class="p">(</span><span class="nb">tuple</span><span class="p">(</span><span class="n">ty</span><span class="o">.</span><span class="n">to_tangent_aval</span><span class="p">()</span> <span class="k">for</span> <span class="n">ty</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">tys</span><span class="p">))</span>
+
+  <span class="k">def</span><span class="nf">str_short</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">short_dtypes</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">mesh_axis_types</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">(</span><span class="s1">'Tup{'</span> <span class="o">+</span>
+            <span class="s1">','</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">str_short</span><span class="p">(</span><span class="n">short_dtypes</span><span class="p">,</span> <span class="n">mesh_axis_types</span><span class="p">)</span>
+                     <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">tys</span><span class="p">)</span> <span class="o">+</span> <span class="s1">'}'</span><span class="p">)</span>
+  <span class="fm">__repr__</span> <span class="o">=</span> <span class="n">str_short</span>
+
+<span class="n">register_hitype</span><span class="p">(</span><span class="n">HiTup</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">t</span><span class="p">:</span> <span class="n">TupTy</span><span class="p">(</span><span class="nb">tuple</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">,</span> <span class="n">t</span><span class="o">.</span><span class="n">elts</span><span class="p">))))</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>Two things fall out of the delegation for free. First, elements can
+themselves be hi types — tuples of tuples, or a tuple holding a <code class="docutils literal notranslate"><span class="pre">QArray</span></code> —
+since <code class="docutils literal notranslate"><span class="pre">lo_ty</span></code> and friends just recurse. Second, there’s no <code class="docutils literal notranslate"><span class="pre">sharding</span></code>
+field this time: the stored component types carry their own shardings, a
+third way of handling sharding-in-types alongside <code class="docutils literal notranslate"><span class="pre">QArrayTy</span></code>’s single
+field and <code class="docutils literal notranslate"><span class="pre">Rank1Ty</span></code>’s dense-shape spec.</p>
+<p>The constructor and accessor primitives are familiar from the rank-1
+example. One new ingredient: the element index is a <em>static parameter</em>,
+passed via <code class="docutils literal notranslate"><span class="pre">params</span></code> and available as <code class="docutils literal notranslate"><span class="pre">self.idx</span></code>. And since each element
+can be batched along its own axis (or not at all), the mapping spec
+carries one entry per component:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="nc">TupSpec</span><span class="p">(</span><span class="n">MappingSpec</span><span class="p">):</span>
+  <span class="n">val</span><span class="p">:</span> <span class="nb">tuple</span>  <span class="c1"># one axis entry per component</span>
+
+<span class="k">def</span><span class="nf">tup_dec_rank</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">spec</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">TupTy</span><span class="p">(</span><span class="nb">tuple</span><span class="p">(</span><span class="n">ty</span><span class="o">.</span><span class="n">dec_rank</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">s</span><span class="p">)</span>
+                     <span class="k">for</span> <span class="n">ty</span><span class="p">,</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tys</span><span class="p">,</span> <span class="n">spec</span><span class="o">.</span><span class="n">val</span><span class="p">)))</span>
+
+<span class="k">def</span><span class="nf">tup_inc_rank</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">spec</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">TupTy</span><span class="p">(</span><span class="nb">tuple</span><span class="p">(</span><span class="n">ty</span><span class="o">.</span><span class="n">inc_rank</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">s</span><span class="p">)</span>
+                     <span class="k">for</span> <span class="n">ty</span><span class="p">,</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tys</span><span class="p">,</span> <span class="n">spec</span><span class="o">.</span><span class="n">val</span><span class="p">)))</span>
+
+<span class="n">TupTy</span><span class="o">.</span><span class="n">dec_rank</span> <span class="o">=</span> <span class="n">tup_dec_rank</span>
+<span class="n">TupTy</span><span class="o">.</span><span class="n">inc_rank</span> <span class="o">=</span> <span class="n">tup_inc_rank</span>
+
+<span class="k">class</span><span class="nc">MakeTup</span><span class="p">(</span><span class="n">VJPHiPrimitive</span><span class="p">):</span>
+  <span class="k">def</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">elt_avals</span><span class="p">):</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">in_avals</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">elt_avals</span><span class="p">)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">out_aval</span> <span class="o">=</span> <span class="n">TupTy</span><span class="p">(</span><span class="nb">tuple</span><span class="p">(</span><span class="n">elt_avals</span><span class="p">))</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+
+  <span class="k">def</span><span class="nf">expand</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">elts</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">HiTup</span><span class="p">(</span><span class="n">elts</span><span class="p">)</span>
+
+  <span class="k">def</span><span class="nf">batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">axis_data</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">in_dims</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">make_tup</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">),</span> <span class="n">TupSpec</span><span class="p">(</span><span class="nb">tuple</span><span class="p">(</span><span class="n">in_dims</span><span class="p">))</span>
+
+<span class="k">class</span><span class="nc">GetTupElt</span><span class="p">(</span><span class="n">VJPHiPrimitive</span><span class="p">):</span>
+  <span class="k">def</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tup_aval</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">in_avals</span> <span class="o">=</span> <span class="p">(</span><span class="n">tup_aval</span><span class="p">,)</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">out_aval</span> <span class="o">=</span> <span class="n">tup_aval</span><span class="o">.</span><span class="n">tys</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">idx</span><span class="o">=</span><span class="n">idx</span><span class="p">)</span>
+    <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+
+  <span class="k">def</span><span class="nf">expand</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tup</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">tup</span><span class="o">.</span><span class="n">elts</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">idx</span><span class="p">]</span>
+
+  <span class="k">def</span><span class="nf">batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">axis_data</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">in_dims</span><span class="p">):</span>
+    <span class="n">tup</span><span class="p">,</span> <span class="o">=</span> <span class="n">args</span>
+    <span class="n">spec</span><span class="p">,</span> <span class="o">=</span> <span class="n">in_dims</span>
+    <span class="k">if</span> <span class="n">spec</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+      <span class="k">return</span> <span class="n">get_tuple_element</span><span class="p">(</span><span class="n">tup</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">idx</span><span class="p">),</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">get_tuple_element</span><span class="p">(</span><span class="n">tup</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">idx</span><span class="p">),</span> <span class="n">spec</span><span class="o">.</span><span class="n">val</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">idx</span><span class="p">]</span>
+
+<span class="k">def</span><span class="nf">make_tup</span><span class="p">(</span><span class="o">*</span><span class="n">elts</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">MakeTup</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">,</span> <span class="n">elts</span><span class="p">))(</span><span class="o">*</span><span class="n">elts</span><span class="p">)</span>
+
+<span class="k">def</span><span class="nf">get_tuple_element</span><span class="p">(</span><span class="n">tup</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
+  <span class="k">return</span> <span class="n">GetTupElt</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">tup</span><span class="p">),</span> <span class="n">idx</span><span class="p">)(</span><span class="n">tup</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p>(Note <code class="docutils literal notranslate"><span class="pre">GetTupElt</span></code>’s batch rule handles unbatched inputs — hi primitive
+batch rules are invoked even when no argument is batched, so <code class="docutils literal notranslate"><span class="pre">in_dims</span></code>
+entries can be <code class="docutils literal notranslate"><span class="pre">None</span></code>.)</p>
+<p>Tuples work, they nest, and they hold other hi types:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="n">tup</span> <span class="o">=</span> <span class="n">make_tup</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mf">3.</span><span class="p">),</span> <span class="mf">5.</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">tup</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">get_tuple_element</span><span class="p">(</span><span class="n">tup</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+
+<span class="n">nested</span> <span class="o">=</span> <span class="n">make_tup</span><span class="p">(</span><span class="n">make_tup</span><span class="p">(</span><span class="mf">1.</span><span class="p">,</span> <span class="mf">2.</span><span class="p">),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mf">2.</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">nested</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="k">lambda</span> <span class="n">t</span><span class="p">:</span> <span class="n">get_tuple_element</span><span class="p">(</span><span class="n">get_tuple_element</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="mi">1</span><span class="p">))(</span><span class="n">nested</span><span class="p">))</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">make_tup</span><span class="p">(</span><span class="n">qx</span><span class="p">,</span> <span class="mf">3.</span><span class="p">)))</span>  <span class="c1"># a quantized array element</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>Tup{float32[3],float32[]}
+5.0
+Tup{Tup{float32[],float32[]},float32[2]}
+2.0
+Tup{q8[2,3],float32[]}
+</pre></div>
+</div>
+</div>
+</div>
+<p>The per-component mapping spec is the payoff under <code class="docutils literal notranslate"><span class="pre">vmap</span></code>: each element
+gets its own <code class="docutils literal notranslate"><span class="pre">in_axes</span></code>/<code class="docutils literal notranslate"><span class="pre">out_axes</span></code> entry, visible in the types. Here the
+first element is mapped on the way in, and only the second on the way
+out:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="k">def</span><span class="nf">swap</span><span class="p">(</span><span class="n">t</span><span class="p">):</span>
+  <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">get_tuple_element</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">get_tuple_element</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+  <span class="k">return</span> <span class="n">make_tup</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">a</span><span class="p">)</span>
+
+<span class="n">out</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">swap</span><span class="p">,</span> <span class="n">in_axes</span><span class="o">=</span><span class="n">TupSpec</span><span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">)),</span> <span class="n">out_axes</span><span class="o">=</span><span class="n">TupSpec</span><span class="p">((</span><span class="kc">None</span><span class="p">,</span> <span class="mi">0</span><span class="p">)),</span>
+               <span class="n">axis_size</span><span class="o">=</span><span class="mi">3</span><span class="p">)(</span><span class="n">tup</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">tup</span><span class="p">),</span> <span class="s1">'-&gt;'</span><span class="p">,</span> <span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">out</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>Tup{float32[3],float32[]} -&gt; Tup{float32[],float32[3]}
+</pre></div>
+</div>
+</div>
+</div>
+<p>And since the component types carry their own shardings, sharding-in-types
+needs nothing extra at all:</p>
+<div class="cell docutils container">
+<div class="cell_input docutils container">
+<div class="highlight-ipython3 notranslate"><div class="highlight"><pre><span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">typeof</span><span class="p">(</span><span class="n">make_tup</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">float32</span><span class="p">(</span><span class="mf">1.</span><span class="p">))))</span>
+</pre></div>
+</div>
+</div>
+<div class="cell_output docutils container">
+<div class="output stream highlight-myst-ansi notranslate"><div class="highlight"><pre>Tup{float32[8@i,3],float32[]}
+</pre></div>
+</div>
+</div>
+</div>
+<p>For autodiff rules on these primitives, and <code class="docutils literal notranslate"><span class="pre">scan</span></code> and <code class="docutils literal notranslate"><span class="pre">shard_map</span></code>
+support (via a per-component <code class="docutils literal notranslate"><span class="pre">HiPspec</span></code>), see the <code class="docutils literal notranslate"><span class="pre">TupTy</span></code> example in
+<code class="docutils literal notranslate"><span class="pre">tests/hijax_test.py</span></code>.</p>
+</section>
+</section>
+<section id="what-we-haven-t-covered">
+<h2>What we haven’t covered<a class="headerlink" href="#what-we-haven-t-covered" title="Link to this heading">#</a></h2>
+<p>On the primitive side, there are also hooks for customizing
+rematerialization and dead code elimination.</p>
+<p>As ever with hijax, <code class="docutils literal notranslate"><span class="pre">tests/hijax_test.py</span></code> is a good source of worked
+examples, and <a class="reference internal" href="hijax_custom_derivatives.html#hijax-custom-derivatives"><span class="std std-ref">Custom derivative rules with hijax primitives</span></a> covers the primitive-side
+API — including JVP rules, symbolic zeros, and custom linearization — in
+more depth.</p>
+</section>
+</section>
+</article>
