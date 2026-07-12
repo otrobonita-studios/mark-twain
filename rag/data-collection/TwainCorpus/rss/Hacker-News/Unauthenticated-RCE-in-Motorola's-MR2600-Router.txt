@@ -1,0 +1,230 @@
+Unauthenticated RCE in Motorola’s MR2600 Router
+
+I’m currently on a quest to find at least one Remote Code Execution vulnerability per router vendor. This is the story of how I found an unauthenticated RCE in Motorola’s MR2600 router.
+
+The first problem I had to solve was acquiring the firmware. For the majority of their routers, Motorola doesn’t distribute the firmware publicly; instead, it is only ever distributed via over-the-air updates.
+
+The first exception to this rule that I could find was the Motorola MR2600. It was a Wi-Fi 5 router, with the last firmware update (v1.0.22) released in mid-2024.
+
+https://help.motorolanetwork.com/kb/mr2600/mr2600-software-updates
+
+With the firmware downloaded, I extracted the filesystem and started digging through the router’s CGI scripts and SOAP handlers to see how a legitimate manual update actually worked.
+
+It turned out to be a two-step process: upload the image, then trigger a validation-and-flash routine. As I’d soon discover, both steps were supposed to require authentication but didn’t.
+
+Uploading the Malicious Firmware
+
+In the router firmware, you can find a reference to a 
+fwupload
+ endpoint:
+
+POST /WEBCGI1/prog.fcgi?method=/cgi-bin/fwupload.cgi
+
+In particular, the 
+UpdateFirmware_Moto.html
+ firmware update page contains:
+
+<
+form
+ 
+id
+=
+"fwupload"
+
+action
+=
+"/WEBCGI1/prog.fcgi?method=/cgi-bin/fwupload.cgi"
+
+method
+=
+"post"
+
+enctype
+=
+"multipart/form-data"
+>
+
+This allows the administrator to manually upgrade the Motorola firmware. An internal handler validates that the uploaded file is a valid SEAMA image by checking that the first four bytes of the file are 
+0x27 0x05 0x19 0x56
+.
+
+Unfortunately, the developers made a crucial mistake when parsing the SEAMA image from the multipart form. They try to validate that the raw multipart data is prefixed with the magic numbers instead of first extracting the relevant field from the form.
+
+------WebKitFormBoundaryXXXXXXXX\r\n
+
+Content-Disposition: form-data; name="file"; filename="firmware.img"\r\n
+
+Content-Type: application/octet-stream\r\n
+
+\r\n
+
+[actual SEAMA bytes start here]
+
+------WebKitFormBoundaryXXXXXXXX--\r\n
+
+This results in any legitimate use of the API failing because the first four characters will always be “
+----
+”, which does not equal 
+0x27 0x05 0x19 0x56
+.
+
+As an attacker, we can bypass this requirement by claiming we are sending a multipart form, but instead sending the raw firmware image without any multipart boundary at all.
+
+The developers likely anticipated that this API endpoint could be abused if it were called by an unauthenticated attacker on the LAN, so they added a check to reject the request if the user was not authenticated.
+
+However, the authentication check only triggers after the firmware has been uploaded and written to 
+/tmp/firmware.img
+ on the router, and it does nothing to delete the file if the check fails.
+
+Flashing the Firmware
+
+To flash the firmware, we need to make the following network request:
+
+POST /WEBCGI1/ HTTP/1.1
+
+Content-Type: text/xml; charset=utf-8
+
+SOAPAction: "http://purenetworks.com/WEBCGI1/LoadFirmwareValidation"
+
+<?xml version="1.0"?>
+
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+
+  <soap:Body>
+
+    <LoadFirmwareValidation xmlns="http://purenetworks.com/WEBCGI1/" />
+
+  </soap:Body>
+
+</soap:Envelope>
+
+In layman’s terms, this just triggers an internal function within the router called 
+LoadFirmwareValidation
+. It tries to validate that the file in 
+/tmp/firmware.img
+ is a valid SEAMA image and checks a CRC32 checksum to ensure that there is no risk of corruption in the file.
+
+Anyone can generate a valid firmware image, since doing so doesn’t require any cryptographic signing to prove it was created by Motorola.
+
+Once the firmware has been validated, the internal function calls a command called 
+mtd_write
+:
+
+mtd_write -r -w write /tmp/firmware.img Kernel &
+
+This flashes the new firmware and then reboots the router (signified by the -r flag).
+
+This API endpoint also requires authentication; however, it too can be bypassed.
+
+The code for checking if a given endpoint should require authentication is implemented incorrectly.
+
+It first checks if the URI contains any of the allowlisted or denylisted paths. In the dictionary shown below, only the last value, 
+/WEBCGI1/
+, is considered denylisted.
+
+Once a match is found, the function explicitly checks if the URI is exactly equal to 
+/WEBCGI1/
+. As long as the URI doesn’t perfectly match 
+/WEBCGI1/
+, the system assumes the requested endpoint is allowed and lets the traffic through.
+
+The core vulnerability stems from the application using inconsistent comparison operators.
+
+It checks for allowlisted endpoints using a basic substring match but checks for the denylisted endpoint (
+/WEBCGI1/
+) by checking the entire URI for an exact match.
+
+Because of this flaw, an attacker can call the API and simply append an allowlisted string as an HTTP parameter, tricking the system into bypassing authentication completely.
+
+e.g., POST /WEBCGI1/?Login.html
+
+/WEBCGI1/?Login.html contains "Login.html" --> YES (Allowlist check passes)
+
+/WEBCGI1/?Login.html equals "/WEBCGI1/" --> NO (Denylist check fails, so no block is applied)
+
+This makes the completed request look like the following:
+
+POST /WEBCGI1/?Login.html HTTP/1.1
+
+Content-Type: text/xml; charset=utf-8
+
+SOAPAction: "http://purenetworks.com/WEBCGI1/LoadFirmwareValidation"
+
+<?xml version="1.0"?>
+
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+
+  <soap:Body>
+
+    <LoadFirmwareValidation xmlns="http://purenetworks.com/WEBCGI1/" />
+
+  </soap:Body>
+
+</soap:Envelope>
+
+The completed exploit
+
+Call 
+fwupload.cgi
+ to upload a malicious firmware image.
+
+Call 
+LoadFirmwareValidation
+ with the authentication bypass.
+
+The SEAMA validation and CRC32 checks pass, and the firmware is flashed.
+
+The router automatically reboots, running the new, infected firmware.
+
+Exploitability
+
+At a minimum, this exploit can be triggered by any malicious actor situated on the LAN without requiring any authentication.
+
+However, after checking both the lighttpd and firewall configurations, I found that this exploit can also be triggered remotely if remote management is enabled.
+
+As of writing, Shodan shows 41 MR2600 routers on the internet with remote management enabled, meaning at least that many devices are currently exposed to this exploit from the public internet.
+
+Exodus Intelligence
+
+While researching this router, I found that a company named Exodus had previously found two vulnerabilities for the exact same model of router.
+
+Specifically, they found a Command Injection vulnerability and an authentication bypass, which would presumably be used alongside the command injection bug.
+
+https://blog.exodusintel.com/2024/01/25/motorola-mr2600-authentication-bypass-vulnerability/
+
+https://blog.exodusintel.com/2024/01/25/motorola-mr2600-savestaticrouteipv4params-command-injection-vulnerability/
+
+Unfortunately, Exodus chooses to hide the details of their vulnerabilities behind a paywall, so I am unable to verify if the authentication bypass is the same as the one I found myself.
+
+Reporting
+
+When researching this router, I found that not only was it considered end-of-life, but the primary method of automatically updating the router was dead.
+
+http://wrpd.zoom.com/router/firmware/query.aspx?model=MR2600_1x_Default
+
+Normally, it would poll this endpoint to get the latest firmware version; however, zoom.com seems to now be owned by a telecommunications SaaS company, not one that manufactures and maintains routers.
+
+Because of this, I was only planning to reach out to Motorola as a kind of courtesy call, so they were at least aware of my discovery and could issue an advisory if they so desired.
+
+I first tried to send an email to Motorola Mobility, but they claimed that they only managed security incidents relating to their mobile phones and requested I reach out to Motorola Solutions instead.
+
+So, I forwarded my email to Motorola Solutions, and they responded by saying that the Motorola MR2600 router was actually a Motorola Mobility product and closed my submission.
+
+Since neither of Motorola’s divisions wants to claim this product, and given that the router is considered end-of-life, I have decided to proceed with public disclosure.
+
+Donations
+
+So far, for the vulnerabilities I have personally reported to AMD, ASUS, Google, Motorola, MSI, Netgear, TP-Link (and more), I have been paid a total of $0 in bug bounties.
+
+If you found this article interesting or useful, you can buy me a coffee via my Ko-fi: 
+https://ko-fi.com/mrbruhh
+
+Timeline (DD/MM/YYYY)
+
+07/06/2026 - Vulnerability discovered
+
+16/06/2026 - Emailed Motorola Mobility
+
+19/06/2026 - Emailed Motorola Solutions
+
+13/07/2026 - Blog published
