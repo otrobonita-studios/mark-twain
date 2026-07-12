@@ -1,0 +1,444 @@
+Today we’re announcing 
+protobuf-py
+, a 
+Protocol Buffers
+ library for Python written completely from scratch. It passes every binary and JSON case in the 
+Protobuf conformance suite
+ across proto2, proto3, and editions, and it supports extensions, custom options, unknown fields, dynamic messages, and well-known types. It generates readable, typed Python, has no runtime dependencies, and runs on pure Python 3.10+. With its Rust accelerator installed, it’s just as fast for production workloads as 
+upb
+, the C engine 
+Google’s Python package
+ runs on.
+
+For Python developers, the choice has historically been between a complete Protobuf implementation and a library that feels like Python. Google’s package is complete, but it carries an API shaped by C++ and Java. 
+betterproto
+ is pleasant, but it gives up too much of the spec. 
+protobuf-py
+ gives Python developers both.
+
+Why build another Protobuf runtime?
+
+Python is too important for Protobuf to feel like an afterthought. It sits in data pipelines, ML systems, AI agents, infrastructure scripts, RPC services, and developer tooling. Still, the experience of using protobuf in Python does not match what developers expect from such a popular language. Google’s package is complete and battle-tested, but the API and generated code still feel like a binding around someone else’s runtime. 
+betterproto
+ proved that Python developers wanted something nicer, but it never implemented the whole spec. 
+grpcio
+ brought the same problem into RPC. It’s powerful and widely used, but painful to build around.
+
+We originally set out to fix the RPC layer with 
+connect-py
+, a 
+ConnectRPC
+ implementation that speaks both Connect and gRPC. But the transport layer was not enough. A good RPC stack still depends on the messages underneath it, and Python did not have the Protobuf runtime we wanted as the foundation. We wanted something complete enough for real schemas, readable enough for everyday Python, and fast enough that nobody has to apologize for choosing it.
+
+protobuf-py
+ is the result of asking whether those constraints could all be true at once. A complete implementation built for Python, it provides the spec coverage, generated code, and performance profile we wanted 
+connect-py
+ to stand on, without wrapping Google’s runtime or trimming the spec.
+
+Why Google’s package feels the way it does
+
+Install 
+protobuf
+ from PyPI and the engine you normally get is 
+upb
+, written in C. Your message lives in a C arena, while the Python object is a handle into that arena. Reading a field crosses into C, finds the value, and materializes a Python object on the way back.
+
+It is a good way to share an engine among multiple languages, but it leaves fingerprints everywhere:
+
+Generated 
+_pb2.py
+ files are hard to read because there is not much Python to read. Classes are assembled at import time to configure the C engine, so go-to-definition lands on a wall of serialized descriptor bytes.
+
+SerializeToString
+, 
+HasField
+, 
+WhichOneof
+, and 
+CopyFrom
+ make up a Python API designed for C++ ergonomics. 
+HasField
+ raises if you call it on a proto3 scalar. 
+WhichOneof
+ returns a string you hand back to 
+getattr
+ to retrieve a value it already located.
+
+Generated imports are absolute and break the moment you nest them in a package. There is a separate tool called 
+fix-protobuf-imports
+ that exists on PyPI only to rewrite Google’s output.
+
+Types register in one process-wide pool, so importing two builds of the same 
+.proto
+ raises at runtime.
+
+None of these are random defects in the binding. They are what happens when a Python API is designed for consistency in a primarily C++/Java codebase, rather than as an idiomatic Python package. The clumsy API and the speed shipped together, and for years you took both or neither.
+
+What we built instead
+
+protobuf-py
+ keeps your message in Python. It is a plain object with 
+__slots__
+, and its fields are ordinary Python values: ints, strings, lists, submessages. A Rust accelerator speeds up the operations that need it, mostly parsing and serializing, and writes the results straight into the object. Once parsing finishes, reading a field is just accessing a Python attribute.
+
+Because the data is Python, the generated code is real code. 
+protoc-gen-py
+ emits a class you can read:
+
+class
+ User
+(Message[_UserFields]):
+
+    __slots__
+ =
+ (
+"first_name"
+, 
+"last_name"
+, 
+"active"
+, 
+"manager"
+, 
+"locations"
+, 
+"projects"
+, 
+"contact"
+)
+
+    if
+ TYPE_CHECKING
+:
+
+        def
+ __init__
+(
+
+            self,
+
+            *
+,
+
+            first_name: 
+str
+ =
+ ""
+,
+
+            last_name: 
+str
+ =
+ ""
+,
+
+            active: 
+bool
+ =
+ False
+,
+
+            manager: User 
+|
+ None
+ =
+ None
+,
+
+            locations: list[
+str
+] 
+|
+ None
+ =
+ None
+,
+
+            projects: dict[
+str
+, 
+str
+] 
+|
+ None
+ =
+ None
+,
+
+            contact: Oneof[Literal[
+"email"
+], 
+str
+] 
+|
+ Oneof[Literal[
+"phone"
+], 
+str
+] 
+|
+ None
+ =
+ None
+,
+
+        ) -> 
+None
+: 
+...
+
+        first_name: 
+str
+
+        last_name: 
+str
+
+        active: 
+bool
+
+        manager: User 
+|
+ None
+
+        locations: list[
+str
+]
+
+        projects: dict[
+str
+, 
+str
+]
+
+        contact: Oneof[Literal[
+"email"
+], 
+str
+] 
+|
+ Oneof[Literal[
+"phone"
+], 
+str
+] 
+|
+ None
+
+Working with it looks like working with anything else in the language:
+
+import
+ copy
+
+from
+ gen.user_pb 
+import
+ User
+
+from
+ protobuf 
+import
+ Oneof
+
+user 
+=
+ User(
+first_name
+=
+"Alice"
+, 
+active
+=
+True
+, 
+locations
+=
+[
+"NYC"
+, 
+"LDN"
+])
+
+user.last_name 
+=
+ "Smith"
+
+wire 
+=
+ user.to_binary()
+
+parsed 
+=
+ User.from_binary(wire)
+
+match
+ parsed.contact:
+
+    case
+ Oneof(
+field
+=
+"email"
+, 
+value
+=
+email):
+
+        send(email)
+
+    case
+ Oneof(
+field
+=
+"phone"
+, 
+value
+=
+phone):
+
+        call(phone)
+
+inactive 
+=
+ copy.replace(parsed, 
+active
+=
+False
+)   
+# Python 3.13+
+
+Oneofs become values you can pattern-match, and the type checker narrows each branch. Enums are real 
+IntEnum
+ members. pyright, mypy, and ty read the generated output without a stubs package. Generated files use relative imports and go wherever you keep them. Types resolve through an explicit 
+Registry
+ rather than a global pool. Every one of these follows from keeping message data in Python.
+
+It is complete, not a friendly subset
+
+Other Protobuf libraries are nicer to use than Google’s, but usually drop half the spec to get there. 
+betterproto
+ is the most pleasant option today and it is proto3-only, with no proto2, editions, extensions, or custom options.
+
+protobuf-py
+ covers the whole spec. It handles proto2, proto3, editions, extensions, custom options, groups, unknown-field preservation across round trips, packed and expanded repeated fields, and the full ProtoJSON encoding of the well-known types. It passes the conformance suite Google uses to qualify its own runtimes, with no failures across binary and JSON. An empty failure list is checked into the repository, and CI fails if it stops being empty.
+
+Fast where it counts
+
+A benchmark that parses a message and throws it away makes 
+upb
+ look untouchable, because it defers work until you read. Production code parses a message once, branches on fields, pulls out a few values, copies the message, and serializes a modified version back.
+
+upb
+ pays the Python translation cost on every one of those reads. 
+protobuf-py
+ pays it zero times after the first read, because parsing already produced a normal Python object. The cost runs the other way at the boundary. Keeping data in Python means 
+protobuf-py
+ does more work up front. That pays off when code does enough with a message to earn the time back.
+
+Here we put both packages against a real-world example of building the response for a user’s home page on a social media site, alongside the raw marshaling steps on their own. Numbers are throughput (operations per second) relative to 
+upb
+, so higher is faster.
+
+Workload
+upb
+protobuf-py
+Build home page response (end-to-end)
+1.0x
+1.06x
+└ parse (in isolation)
+1.0x
+0.22x
+└ serialize (in isolation)
+1.0x
+0.60x
+
+In isolation, 
+upb
+ wins marshaling, exactly as expected. End-to-end, on the code a service would actually run in production, 
+protobuf-py
+ comes out ahead. Every field read that 
+upb
+ has to translate back into Python is one 
+protobuf-py
+ already has, and across a full request that adds up to a runtime that can beat the C one.
+
+The payload here is text-heavy (full Reddit post bodies, multi-sentence bios and notifications), which is the realistic shape of social, document, and LLM/agent traffic. This is the case where keeping strings as Python objects pays off most. You can run the harness yourself at 
+test_bench.py
+.
+
+The Rust accelerator is optional and automatic. You do not need a Rust toolchain to use 
+protobuf-py
+, and neither do contributors. Prebuilt wheels load it when it is there, and a pure-Python path behaves identically when it is not. It runs on the free-threaded 3.14 build, and the package has no runtime dependencies.
+
+We have done this before
+
+Buf
+ has spent years fixing the parts of Protobuf that make teams build scripts around their tools: the 
+Buf CLI
+, the 
+Buf Schema Registry
+, 
+ConnectRPC
+, 
+Protovalidate
+, and 
+protobuf-es
+ for TypeScript. Buf engineers also worked on Protobuf editions, so 
+protobuf-py
+ is written by people who helped write the spec. It belongs to the same tradition.
+
+Try it
+
+# In your existing UV project
+
+uv
+ add
+ protobuf-py
+
+uv
+ add
+ --dev
+ protoc-gen-py
+ buf-bin
+
+Point a 
+buf.gen.yaml
+ at your 
+.proto
+ files:
+
+version
+: 
+v2
+
+inputs
+:
+
+  - 
+directory
+: 
+proto
+
+plugins
+:
+
+  - 
+local
+: 
+protoc-gen-py
+
+    out
+: 
+gen
+
+Then generate:
+
+uv
+ run
+ buf
+ generate
+
+You get a typed 
+_pb.py
+ you can open and read. 
+Docs
+ are live, the source and benchmark harness are on GitHub, and the issues are open. Let us know how it goes for you!
