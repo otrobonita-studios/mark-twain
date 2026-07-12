@@ -1,0 +1,359 @@
+<article class="article__content" data-progress-indicator="">
+
+<p>One of the most valuable things about partitioned tables is pruning - the database's ability to eliminate entire partitions based on a query predicate. Under conventional wisdom, pruning can only be achieved when querying by the partition key - this makes choosing the <em>right</em> key extremely difficult. However, if your data follows certain patterns, using some clever tricks you can achieve pruning even when filtering by non-partition key columns.</p>
+<p><strong>In this article, I demonstrate how to achieve partition pruning when filtering by non-partition key columns.</strong></p>
+<div class="dark--invert">
+<figure><figcaption>image by abstrakt design</figcaption>
+</figure>
+</div>
+<p><details class="toc-container" open="">
+<summary>Table of Contents</summary></details></p>
+<div class="toc">
+<ul>
+<li><a href="#table-partition">Table Partition</a><ul>
+<li><a href="#partition-pruning-for-key-columns">Partition Pruning for Key Columns</a></li>
+<li><a href="#local-indexes">Local Indexes</a></li>
+<li><a href="#global-indexes">Global Indexes</a></li>
+</ul>
+</li>
+<li><a href="#pruning-on-non-partition-key-columns">Pruning on Non-Partition Key Columns</a><ul>
+<li><a href="#talking-to-the-optimizer">Talking to the Optimizer</a></li>
+<li><a href="#the-constraint_exclusion-parameter">The constraint_exclusion Parameter</a></li>
+<li><a href="#introducing-outliers">Introducing Outliers</a></li>
+<li><a href="#handling-outliers">Handling Outliers</a></li>
+<li><a href="#gaps-and-islands">Gaps and Islands</a></li>
+</ul>
+</li>
+<li><a href="#the-backstory">The Backstory</a></li>
+<li><a href="#final-thoughts">Final Thoughts</a></li>
+</ul>
+</div>
+
+
+<h2 id="table-partition"><a class="toclink" href="#table-partition">Table Partition</a></h2>
+<p>Imagine you run a popular website with many users. Your product team wants to gain some insight into how the system is used, so you start logging events. To give events context, you group them into sessions and keep the time, the type, and some data in a database table:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">CREATE</span><span class="k">TABLE</span><span class="n">event</span><span class="p">(</span>
+<span class="n">id</span><span class="nb">BIGINT</span><span class="k">GENERATED</span><span class="n">ALWAYS</span><span class="k">AS</span><span class="k">IDENTITY</span><span class="p">,</span>
+<span class="k">timestamp</span><span class="n">TIMESTAMPTZ</span><span class="k">NOT</span><span class="k">NULL</span><span class="p">,</span>
+<span class="n">session_id</span><span class="nb">BIGINT</span><span class="k">NOT</span><span class="k">NULL</span><span class="p">,</span>
+<span class="k">type</span><span class="nb">TEXT</span><span class="k">NOT</span><span class="k">NULL</span><span class="p">,</span>
+<span class="k">data</span><span class="n">JSONB</span>
+<span class="p">)</span><span class="n">PARTITION</span><span class="k">BY</span><span class="n">RANGE</span><span class="p">(</span><span class="k">timestamp</span><span class="p">);</span>
+
+<span class="k">CREATE</span><span class="k">TABLE</span><span class="p">;</span>
+</pre></div>
+<p>You have many users so you expect many events. Most queries use only a subset of the data, usually a specific date range, so you create a partition for each year based on the timestamp:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">CREATE</span><span class="k">TABLE</span><span class="n">event_y2025</span><span class="n">PARTITION</span><span class="k">OF</span><span class="n">event</span>
+<span class="k">FOR</span><span class="k">VALUES</span><span class="k">FROM</span><span class="p">(</span><span class="s1">'2025-01-01 UTC'</span><span class="p">)</span><span class="k">TO</span><span class="p">(</span><span class="s1">'2026-01-01 UTC'</span><span class="p">);</span>
+
+<span class="k">CREATE</span><span class="k">TABLE</span>
+
+<span class="n">db</span><span class="o">=#</span><span class="k">CREATE</span><span class="k">TABLE</span><span class="n">event_y2026</span><span class="n">PARTITION</span><span class="k">OF</span><span class="n">event</span>
+<span class="k">FOR</span><span class="k">VALUES</span><span class="k">FROM</span><span class="p">(</span><span class="s1">'2026-01-01 UTC'</span><span class="p">)</span><span class="k">TO</span><span class="p">(</span><span class="s1">'2027-01-01 UTC'</span><span class="p">);</span>
+
+<span class="k">CREATE</span><span class="k">TABLE</span>
+</pre></div>
+<p>You now have two partitions - one for events from 2025 and another for 2026. A session can look like this:</p>
+<div class="highlight"><pre><span class="k">INSERT</span><span class="k">INTO</span><span class="n">event</span><span class="p">(</span><span class="n">session_id</span><span class="p">,</span><span class="k">timestamp</span><span class="p">,</span><span class="k">type</span><span class="p">,</span><span class="k">data</span><span class="p">)</span><span class="k">VALUES</span>
+<span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s1">'2025-12-28 15:00:00 UTC'</span><span class="p">,</span><span class="s1">'view'</span><span class="p">,</span><span class="s1">'{"page": "/login"}'</span><span class="p">),</span>
+<span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s1">'2025-12-28 15:00:06 UTC'</span><span class="p">,</span><span class="s1">'click'</span><span class="p">,</span><span class="s1">'{"selector": "#login"}'</span><span class="p">),</span>
+<span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s1">'2025-12-28 15:00:07 UTC'</span><span class="p">,</span><span class="s1">'login_failed'</span><span class="p">,</span><span class="s1">'{"attempt": 1}'</span><span class="p">),</span>
+<span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s1">'2025-12-28 15:00:10 UTC'</span><span class="p">,</span><span class="s1">'click'</span><span class="p">,</span><span class="s1">'{"selector": "#forgot-password"}'</span><span class="p">),</span>
+<span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s1">'2025-12-28 15:00:17 UTC'</span><span class="p">,</span><span class="s1">'view'</span><span class="p">,</span><span class="s1">'{"page": "/reset-password"}'</span><span class="p">),</span>
+<span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s1">'2025-12-28 15:00:23 UTC'</span><span class="p">,</span><span class="s1">'click'</span><span class="p">,</span><span class="s1">'{"selector": "#reset-password"}'</span><span class="p">);</span>
+</pre></div>
+<p>In this session the user tried to log into the system, failed and asked to reset their password.</p>
+<p></p>
+<p><summary>Generating more data</summary></p>
+<p>To make the examples more realistic we need more data, so let's create some:</p>
+<div class="highlight"><pre><span class="k">WITH</span>
+<span class="n">sessions</span><span class="k">AS</span><span class="p">(</span>
+<span class="k">SELECT</span>
+<span class="n">n</span><span class="k">AS</span><span class="n">session_id</span><span class="p">,</span>
+<span class="s1">'2025-12-28 23:59:56 UTC'</span><span class="p">::</span><span class="n">timestamptz</span><span class="o">+</span><span class="nb">interval</span><span class="s1">'1 minute'</span><span class="o">*</span><span class="n">n</span><span class="k">as</span><span class="n">started_at</span>
+<span class="k">FROM</span>
+<span class="n">generate_series</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="mi">10</span><span class="n">_000</span><span class="p">)</span><span class="k">AS</span><span class="n">t</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="k">INSERT</span><span class="k">INTO</span><span class="n">event</span><span class="p">(</span><span class="n">session_id</span><span class="p">,</span><span class="k">timestamp</span><span class="p">,</span><span class="k">type</span><span class="p">,</span><span class="k">data</span><span class="p">)</span>
+<span class="k">SELECT</span>
+<span class="n">session_id</span><span class="p">,</span>
+<span class="n">started_at</span><span class="o">+</span><span class="nb">interval</span><span class="s1">'1 second'</span><span class="o">*</span><span class="n">n</span><span class="p">,</span>
+<span class="p">(</span><span class="nb">array</span><span class="p">[</span><span class="s1">'view'</span><span class="p">,</span><span class="s1">'click'</span><span class="p">,</span><span class="s1">'login_failed'</span><span class="p">,</span><span class="s1">'logged_in'</span><span class="p">])[</span><span class="n">ceil</span><span class="p">(</span><span class="n">random</span><span class="p">()</span><span class="o">*</span><span class="mi">3</span><span class="p">)]</span><span class="k">as</span><span class="k">type</span><span class="p">,</span>
+<span class="s1">'{}'</span><span class="p">::</span><span class="n">jsonb</span><span class="k">as</span><span class="k">data</span>
+<span class="k">FROM</span>
+<span class="n">sessions</span><span class="p">,</span>
+<span class="n">generate_series</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">5</span><span class="p">)</span><span class="k">as</span><span class="n">n</span>
+<span class="k">ORDER</span><span class="k">BY</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">;</span>
+
+<span class="k">INSERT</span><span class="mi">0</span><span class="mi">49995</span>
+</pre></div>
+<p>You now have ~50K events in the table across both partitions.</p>
+
+<h3 id="partition-pruning-for-key-columns"><a class="toclink" href="#partition-pruning-for-key-columns">Partition Pruning for Key Columns</a></h3>
+<p>The partition key of the table is <code>timestamp</code>, so queries that filter by <code>timestamp</code> can benefit from partition pruning. For example, query events in December 2025:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">EXPLAIN</span><span class="k">SELECT</span><span class="o">*</span><span class="k">FROM</span><span class="n">event</span>
+<span class="k">WHERE</span><span class="k">timestamp</span><span class="o">&gt;=</span><span class="s1">'2025-12-01 UTC'</span><span class="k">AND</span><span class="k">timestamp</span><span class="o">&lt;</span><span class="s1">'2026-01-01 UTC'</span><span class="p">;</span>
+<span class="n">QUERY</span><span class="n">PLAN</span>
+<span class="err">────────────────────────────────────────────────────────────────────────────────────────────────</span>
+<span class="hll"><span class="n">Seq</span><span class="n">Scan</span><span class="k">on</span><span class="n">event_y2025</span><span class="n">event</span>
+</span><span class="n">Filter</span><span class="p">:</span><span class="p">((</span><span class="ss">"timestamp"</span><span class="o">&gt;=</span><span class="s1">'2025-12-01 00:00:00+00'</span><span class="p">::</span><span class="k">timestamp</span><span class="k">with</span><span class="k">time</span><span class="k">zone</span><span class="p">)</span>
+<span class="k">AND</span><span class="p">(</span><span class="ss">"timestamp"</span><span class="o">&lt;</span><span class="s1">'2026-01-01 00:00:00+00'</span><span class="p">::</span><span class="k">timestamp</span><span class="k">with</span><span class="k">time</span><span class="k">zone</span><span class="p">))</span>
+</pre></div>
+<p>Notice that the database was smart enough to figure out it only needs to scan the partition for 2025. The partition for 2026 was not even accessed. <strong>This is partition pruning.</strong></p>
+<p>Another common query is to find all events for a given session:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">EXPLAIN</span><span class="k">SELECT</span><span class="o">*</span><span class="k">FROM</span><span class="n">event</span><span class="k">WHERE</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span>
+<span class="n">QUERY</span><span class="n">PLAN</span>
+<span class="err">──────────────────────────────────────────────────────</span>
+<span class="n">Append</span><span class="p">(</span><span class="n">cost</span><span class="o">=</span><span class="mi">0</span><span class="p">.</span><span class="mi">00</span><span class="p">..</span><span class="mi">1060</span><span class="p">.</span><span class="mi">07</span><span class="k">rows</span><span class="o">=</span><span class="mi">11</span><span class="n">width</span><span class="o">=</span><span class="mi">37</span><span class="p">)</span>
+<span class="hll"><span class="o">-&gt;</span><span class="n">Seq</span><span class="n">Scan</span><span class="k">on</span><span class="n">event_y2025</span><span class="n">event_1</span>
+</span><span class="n">Filter</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="hll"><span class="o">-&gt;</span><span class="n">Seq</span><span class="n">Scan</span><span class="k">on</span><span class="n">event_y2026</span><span class="n">event_2</span>
+</span><span class="n">Filter</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+<p>This time, the database accessed all partitions - partition pruning was not used. In this query, the database has no way of eliminating partitions, so it had no other choice but to scan all partitions to look for matching events.</p>
+<p><strong>This is where partitions get a bit hairy.</strong> On one hand, you want to achieve pruning, but then you have to make painful compromises in other, potentially very common queries.</p>
+<h3 id="local-indexes"><a class="toclink" href="#local-indexes">Local Indexes</a></h3>
+<p>Getting events for a specific session is fairly common, so it needs to be fast. To make things fast in databases you should just create an index, right?</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">CREATE</span><span class="k">INDEX</span><span class="n">event_session_ix</span><span class="k">ON</span><span class="n">event</span><span class="p">(</span><span class="n">session_id</span><span class="p">);</span>
+<span class="k">CREATE</span><span class="k">INDEX</span>
+</pre></div>
+<p>This creates an index on the session ID. With the index in place, get events for session 1:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">EXPLAIN</span><span class="k">SELECT</span><span class="o">*</span><span class="k">FROM</span><span class="n">event</span><span class="k">WHERE</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span>
+<span class="n">QUERY</span><span class="n">PLAN</span>
+<span class="err">─────────────────────────────────────────────────────────────────────────</span>
+<span class="n">Append</span><span class="p">(</span><span class="n">cost</span><span class="o">=</span><span class="mi">0</span><span class="p">.</span><span class="mi">29</span><span class="p">..</span><span class="mi">16</span><span class="p">.</span><span class="mi">82</span><span class="k">rows</span><span class="o">=</span><span class="mi">11</span><span class="n">width</span><span class="o">=</span><span class="mi">37</span><span class="p">)</span>
+<span class="hll"><span class="o">-&gt;</span><span class="k">Index</span><span class="n">Scan</span><span class="k">using</span><span class="n">event_y2025_session_id_idx</span><span class="k">on</span><span class="n">event_y2025</span><span class="n">event_1</span>
+</span><span class="k">Index</span><span class="n">Cond</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="hll"><span class="o">-&gt;</span><span class="k">Index</span><span class="n">Scan</span><span class="k">using</span><span class="n">event_y2026_session_id_idx</span><span class="k">on</span><span class="n">event_y2026</span><span class="n">event_2</span>
+</span><span class="k">Index</span><span class="n">Cond</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+<p>The database once again had to visit all partitions. The only difference is that this time, it used the index on each partition.</p>
+<p>Using an index is faster than scanning the entire partition, but the database is still forced to scan through all of the partitions. Right now there are only two partitions, but if the table had a hundred partitions, this query would be like querying a hundred tables!</p>
+<p>This type of index is called a local index because it creates a separate index on every partition:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="err">\</span><span class="n">di</span><span class="n">event_</span><span class="o">*</span>
+<span class="n">List</span><span class="k">of</span><span class="n">indexes</span>
+<span class="k">Schema</span><span class="err">│</span><span class="n">Name</span><span class="err">│</span><span class="k">Type</span><span class="err">│</span><span class="k">Owner</span><span class="err">│</span><span class="k">Table</span>
+<span class="err">────────┼────────────────────────────┼───────────────────┼───────┼─────────────</span>
+<span class="k">public</span><span class="err">│</span><span class="n">event_session_ix</span><span class="err">│</span><span class="n">partitioned</span><span class="k">index</span><span class="err">│</span><span class="n">haki</span><span class="err">│</span><span class="n">event</span>
+<span class="k">public</span><span class="err">│</span><span class="n">event_y2025_session_id_idx</span><span class="err">│</span><span class="k">index</span><span class="err">│</span><span class="n">haki</span><span class="err">│</span><span class="n">event_y2025</span>
+<span class="k">public</span><span class="err">│</span><span class="n">event_y2026_session_id_idx</span><span class="err">│</span><span class="k">index</span><span class="err">│</span><span class="n">haki</span><span class="err">│</span><span class="n">event_y2026</span>
+</pre></div>
+<p>Local indexes are useful when you frequently filter by columns not part of the partition key.</p>
+<h3 id="global-indexes"><a class="toclink" href="#global-indexes">Global Indexes</a></h3>
+<p>Another approach to indexing partitioned tables is to create a single index that spans multiple partitions. This is called a global index.</p>
+<p>Unfortunately, as of version 19, PostgreSQL does not support global indexes on partitioned tables. You can keep an eye on the pgsql-hackers mailing list for updates, there are discussions going all the way back to 2009 on this subject.</p>
+<div class="admonition info">
+<p class="admonition-title">Global Index</p>
+<p>Another pain point of not having global indexes is that it makes it difficult to enforce uniqueness on anything other than the partition key. This is outside the scope of this article.</p>
+</div>
+<h2 id="pruning-on-non-partition-key-columns"><a class="toclink" href="#pruning-on-non-partition-key-columns">Pruning on Non-Partition Key Columns</a></h2>
+<p>The events table is partitioned by timestamp, so queries by timestamp can benefit from partition pruning. However, there are still many situations where you want to query by session ID. Events from a single session can potentially span multiple partitions and the database currently has no way of eliminating irrelevant ones. Local indexes alleviate some of the pain, but the database still has to visit all partitions, which may not scale very well.</p>
+<p>At this point you reached the limit of what the database can just do out of the box, and you need to tap into your domain expertise and knowledge of the data - how it's being used and how it's being stored:</p>
+<ul>
+<li><strong>The events table is append only</strong>: no updates to the table, events are immutable.</li>
+<li><strong>Session IDs are generated sequentially</strong>: session IDs increment over time.</li>
+<li><strong>Sessions are short lived</strong>: a normal session is usually no longer than a couple of minutes or hours.</li>
+</ul>
+<p>This pattern can be useful!</p>
+<p>To visualize the pattern, plot the timestamp against the session ID:</p>
+<div class="dark--invert">
+<figure><figcaption>Plot timestamp against session ID</figcaption>
+</figure>
+</div>
+<p><strong>Session ID is strongly correlated with the timestamp.</strong> This means it should be possible to identify a distinct range of session IDs for each partition.</p>
+<p>Get the first and last session ID in each partition:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">SELECT</span><span class="n">tableoid</span><span class="p">::</span><span class="n">regclass</span><span class="p">,</span><span class="k">MIN</span><span class="p">(</span><span class="n">session_id</span><span class="p">),</span><span class="k">MAX</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span>
+<span class="k">FROM</span><span class="n">event</span><span class="k">GROUP</span><span class="k">BY</span><span class="mi">1</span><span class="k">ORDER</span><span class="k">BY</span><span class="mi">1</span><span class="p">;</span>
+<span class="n">tableoid</span><span class="err">│</span><span class="k">min</span><span class="err">│</span><span class="k">max</span>
+<span class="err">─────────────┼──────┼───────</span>
+<span class="n">event_y2025</span><span class="err">│</span><span class="mi">1</span><span class="err">│</span><span class="mi">4320</span>
+<span class="n">event_y2026</span><span class="err">│</span><span class="mi">4320</span><span class="err">│</span><span class="mi">10000</span>
+</pre></div>
+<p>Thanks to the strong correlation between the session ID and the timestamp, you can identify a clear and distinct range of session IDs for each partition. Just by looking at the results, it's clear that sessions with IDs between 1 and 4319 only exist in the 2025 partition, and sessions with IDs between 4321 and 10000 only exist in the 2026 partition.</p>
+<div class="dark--invert">
+<figure><figcaption>Session ID range by partition</figcaption>
+</figure>
+</div>
+<p>Knowing this pattern, the database can potentially eliminate entire partitions when querying by the session ID, but how can you communicate this information to the database?</p>
+<h3 id="talking-to-the-optimizer"><a class="toclink" href="#talking-to-the-optimizer">Talking to the Optimizer</a></h3>
+<p>The database optimizer is truly a marvelous piece of engineering. It takes a query and figures out on its own how to execute it without looking at the actual data. The only thing the database can use, are statistics it maintains on tables and columns.</p>
+<p>Statistics are used to produce row estimates. Row estimates help the optimizer decide which tables to scan first, which indexes to use and what filters or joins to apply and in what order. However, as the name suggests, statistics are just statistics - there is no guarantee they are correct, so the optimizer can consult them, but never blindly rely on them.</p>
+<p>The only information the optimizer can rely on, is information that is guaranteed to always be correct. In databases, to guarantee that something is always correct, you use a constraint.</p>
+<p>Check constraints are used to enforce custom validation rules. Using a check constraint, you provide an expression and the database guarantees that the expression is true for all the rows in the table. But here's the secret, the thing nobody tells you about - <strong>check constraints can be used to communicate information <em>about</em> your data to the optimizer.</strong></p>
+<p>For example, if you have a check constraint to make sure event ID is always greater than zero, if you query for events with ID less than zero, the database doesn't really have to scan the table to figure out no rows can match this condition, right?</p>
+<p>To check if you can influence the optimizer, add a simple check constraint on each partition to enforce a specific range of session IDs:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">ALTER</span><span class="k">TABLE</span><span class="n">event_y2025</span><span class="k">ADD</span><span class="k">CONSTRAINT</span><span class="n">event_y2025_session_id_range</span>
+<span class="hll"><span class="k">CHECK</span><span class="p">(</span><span class="n">session_id</span><span class="k">between</span><span class="mi">1</span><span class="k">and</span><span class="mi">4320</span><span class="p">);</span>
+</span><span class="k">ALTER</span><span class="k">TABLE</span>
+
+<span class="n">db</span><span class="o">=#</span><span class="k">ALTER</span><span class="k">TABLE</span><span class="n">event_y2026</span><span class="k">ADD</span><span class="k">CONSTRAINT</span><span class="n">event_y2026_session_id_range</span>
+<span class="hll"><span class="k">CHECK</span><span class="p">(</span><span class="n">session_id</span><span class="k">between</span><span class="mi">4320</span><span class="k">and</span><span class="mi">10000</span><span class="p">);</span>
+</span><span class="k">ALTER</span><span class="k">TABLE</span>
+</pre></div>
+<p>The first check constraint sets the range for the 2025 partition to session IDs between 1 and 4320. The second check constraint sets the range for the 2026 partition to session IDs between 4320 and 10000.</p>
+<p>Now to see if the database can actually use the check constraint to eliminate entire partitions, query events for session with ID 1000:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">EXPLAIN</span><span class="k">SELECT</span><span class="o">*</span><span class="k">FROM</span><span class="n">event</span><span class="k">WHERE</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1000</span><span class="p">;</span>
+<span class="n">QUERY</span><span class="n">PLAN</span>
+<span class="err">──────────────────────────────────────────────────────────────────</span>
+<span class="hll"><span class="k">Index</span><span class="n">Scan</span><span class="k">using</span><span class="n">event_y2025_session_id_idx</span><span class="k">on</span><span class="n">event_y2025</span><span class="n">event</span>
+</span><span class="k">Index</span><span class="n">Cond</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1000</span><span class="p">)</span>
+</pre></div>
+<p>Amazing! With the check constraint in place, the database was able to eliminate the partition for 2026. According to the constraint, this partition can only contain session IDs between 4320 and 10000 and the query looks for session ID 1000. The database ended up scanning only one partition.</p>
+<p>Check another session ID:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">EXPLAIN</span><span class="k">SELECT</span><span class="o">*</span><span class="k">FROM</span><span class="n">event</span><span class="k">WHERE</span><span class="n">session_id</span><span class="o">=</span><span class="mi">6000</span><span class="p">;</span>
+<span class="n">QUERY</span><span class="n">PLAN</span>
+<span class="err">──────────────────────────────────────────────────────────────────</span>
+<span class="hll"><span class="k">Index</span><span class="n">Scan</span><span class="k">using</span><span class="n">event_y2026_session_id_idx</span><span class="k">on</span><span class="n">event_y2026</span><span class="n">event</span>
+</span><span class="k">Index</span><span class="n">Cond</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">6000</span><span class="p">)</span>
+</pre></div>
+<p>Once again, the database scanned only a single partition. This time, according to the check constraint, events for session ID 6000 can only be in the partition for year 2026, so the database only scanned that partition.</p>
+<p>What if you query for a session that may have events in more than one partition?</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">EXPLAIN</span><span class="k">SELECT</span><span class="o">*</span><span class="k">FROM</span><span class="n">event</span><span class="k">WHERE</span><span class="n">session_id</span><span class="o">=</span><span class="mi">4320</span><span class="p">;</span>
+<span class="n">QUERY</span><span class="n">PLAN</span>
+<span class="err">─────────────────────────────────────────────────────────────────────────</span>
+<span class="n">Append</span><span class="p">(</span><span class="n">cost</span><span class="o">=</span><span class="mi">0</span><span class="p">.</span><span class="mi">29</span><span class="p">..</span><span class="mi">16</span><span class="p">.</span><span class="mi">80</span><span class="k">rows</span><span class="o">=</span><span class="mi">10</span><span class="n">width</span><span class="o">=</span><span class="mi">37</span><span class="p">)</span>
+<span class="hll"><span class="o">-&gt;</span><span class="k">Index</span><span class="n">Scan</span><span class="k">using</span><span class="n">event_y2025_session_id_idx</span><span class="k">on</span><span class="n">event_y2025</span><span class="n">event_1</span>
+</span><span class="k">Index</span><span class="n">Cond</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">4320</span><span class="p">)</span>
+<span class="hll"><span class="o">-&gt;</span><span class="k">Index</span><span class="n">Scan</span><span class="k">using</span><span class="n">event_y2026_session_id_idx</span><span class="k">on</span><span class="n">event_y2026</span><span class="n">event_2</span>
+</span><span class="k">Index</span><span class="n">Cond</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">4320</span><span class="p">)</span>
+</pre></div>
+<p>The database scanned two partitions and that's OK! Based on the check constraints, both of these partitions may have events for session ID 4320.</p>
+<p>This demonstrates that using carefully crafted check constraints you can communicate information about your data to the database, and the database can use that information to eliminate entire partitions and effectively achieve partition pruning.</p>
+<h3 id="the-constraint_exclusion-parameter"><a class="toclink" href="#the-constraint_exclusion-parameter">The <code>constraint_exclusion</code> Parameter</a></h3>
+<p>This pruning mechanism is controlled by the parameter <a href="https://www.postgresql.org/docs/17/runtime-config-query.html#GUC-CONSTRAINT-EXCLUSION" rel="noopener"><code>constraint_exclusion</code></a>:</p>
+<blockquote>
+<p>Controls the query planner's use of table constraints to optimize queries. [...] When this parameter allows it for a particular table, the planner compares query conditions with the table's CHECK constraints, and omits scanning tables for which the conditions contradict the constraints.</p>
+</blockquote>
+<p>Constraint exclusion is on by default for partitioned tables. The database will use any check constraint you have on a partitioned table to achieve pruning, and you don't even have to change any parameters for it.</p>
+<p><a href="https://hakibenita.com/postgresql-unconventional-optimizations#eliminate-full-table-scans-based-on-check-constraints" rel="noopener">I wrote about using <code>constraint_exclusion</code></a> on a non-partitioned table to eliminate entire table scans in queries that contain impossible predicates.</p>
+<h3 id="introducing-outliers"><a class="toclink" href="#introducing-outliers">Introducing Outliers</a></h3>
+<p>To achieve pruning for queries by session ID you relied on the predictable nature of the data and the strong correlation between the session ID and the timestamp. In this case, the table is append only and sessions are short lived. This means there's not a lot of overlapping session IDs between partitions, and it's possible to identify distinct ranges for each partition.</p>
+<p>Unfortunately, reality is usually not that tidy! What if some sessions become days or weeks long? This can introduce outliers into the ranges.</p>
+<p>First, drop the check constraints so you can introduce outliers:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">ALTER</span><span class="k">TABLE</span><span class="n">event_y2025</span><span class="k">DROP</span><span class="k">CONSTRAINT</span><span class="n">event_y2025_session_id_range</span><span class="p">;</span>
+<span class="k">ALTER</span><span class="k">TABLE</span>
+
+<span class="n">db</span><span class="o">=#</span><span class="k">ALTER</span><span class="k">TABLE</span><span class="n">event_y2026</span><span class="k">DROP</span><span class="k">CONSTRAINT</span><span class="n">event_y2026_session_id_range</span><span class="p">;</span>
+<span class="k">ALTER</span><span class="k">TABLE</span>
+</pre></div>
+<p>Now, consider this session:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">SELECT</span><span class="o">*</span><span class="k">FROM</span><span class="n">event</span><span class="k">WHERE</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1</span><span class="k">ORDER</span><span class="k">BY</span><span class="k">timestamp</span><span class="p">;</span>
+<span class="n">id</span><span class="err">│</span><span class="k">timestamp</span><span class="err">│</span><span class="n">session_id</span><span class="err">│</span><span class="k">type</span><span class="err">│</span><span class="k">data</span>
+<span class="err">─────┼────────────────────────┼────────────┼──────────────┼──────────────────────────────────</span>
+<span class="mi">1</span><span class="err">│</span><span class="mi">2025</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">29</span><span class="mi">15</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="o">+</span><span class="mi">00</span><span class="err">│</span><span class="mi">1</span><span class="err">│</span><span class="k">view</span><span class="err">│</span><span class="err">{</span><span class="ss">"page"</span><span class="p">:</span><span class="ss">"/login"</span><span class="err">}</span>
+<span class="mi">2</span><span class="err">│</span><span class="mi">2025</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">29</span><span class="mi">15</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">06</span><span class="o">+</span><span class="mi">00</span><span class="err">│</span><span class="mi">1</span><span class="err">│</span><span class="n">click</span><span class="err">│</span><span class="err">{</span><span class="ss">"selector"</span><span class="p">:</span><span class="ss">"#login"</span><span class="err">}</span>
+<span class="mi">3</span><span class="err">│</span><span class="mi">2025</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">29</span><span class="mi">15</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">07</span><span class="o">+</span><span class="mi">00</span><span class="err">│</span><span class="mi">1</span><span class="err">│</span><span class="n">login_failed</span><span class="err">│</span><span class="err">{</span><span class="ss">"attempt"</span><span class="p">:</span><span class="mi">1</span><span class="err">}</span>
+<span class="mi">4</span><span class="err">│</span><span class="mi">2025</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">29</span><span class="mi">15</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">10</span><span class="o">+</span><span class="mi">00</span><span class="err">│</span><span class="mi">1</span><span class="err">│</span><span class="n">click</span><span class="err">│</span><span class="err">{</span><span class="ss">"selector"</span><span class="p">:</span><span class="ss">"#forgot-password"</span><span class="err">}</span>
+<span class="mi">5</span><span class="err">│</span><span class="mi">2025</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">29</span><span class="mi">15</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">17</span><span class="o">+</span><span class="mi">00</span><span class="err">│</span><span class="mi">1</span><span class="err">│</span><span class="k">view</span><span class="err">│</span><span class="err">{</span><span class="ss">"page"</span><span class="p">:</span><span class="ss">"/reset-password"</span><span class="err">}</span>
+<span class="mi">6</span><span class="err">│</span><span class="mi">2025</span><span class="o">-</span><span class="mi">12</span><span class="o">-</span><span class="mi">29</span><span class="mi">15</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">23</span><span class="o">+</span><span class="mi">00</span><span class="err">│</span><span class="mi">1</span><span class="err">│</span><span class="n">click</span><span class="err">│</span><span class="err">{</span><span class="ss">"selector"</span><span class="p">:</span><span class="ss">"#reset-password"</span><span class="err">}</span>
+</pre></div>
+<p>The user started their session on December 29, 2025. They attempted to log in, failed, and asked to reset the password. Imagine this user left their tab open, came back a few days later and decided to finish the process:</p>
+<div class="highlight"><pre><span class="k">INSERT</span><span class="k">INTO</span><span class="n">event</span><span class="p">(</span><span class="n">session_id</span><span class="p">,</span><span class="k">timestamp</span><span class="p">,</span><span class="k">type</span><span class="p">,</span><span class="k">data</span><span class="p">)</span>
+<span class="k">values</span>
+<span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s1">'2026-01-01 12:01:14 UTC'</span><span class="p">,</span><span class="s1">'click'</span><span class="p">,</span><span class="s1">'{"selector": "#reset-password"}'</span><span class="p">),</span>
+<span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="s1">'2026-01-01 12:01:15 UTC'</span><span class="p">,</span><span class="s1">'view'</span><span class="p">,</span><span class="s1">'{"page": "/login"}'</span><span class="p">);</span>
+
+<span class="k">INSERT</span><span class="mi">0</span><span class="mi">2</span>
+</pre></div>
+<p>These events caused a session with a very low ID to be added to a recent partition. This partition currently contains session IDs with much higher values. This affects the session ID range in the first partition:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">SELECT</span><span class="n">tableoid</span><span class="p">::</span><span class="n">regclass</span><span class="p">,</span><span class="k">MIN</span><span class="p">(</span><span class="n">session_id</span><span class="p">),</span><span class="k">MAX</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span>
+<span class="k">FROM</span><span class="n">event</span><span class="k">GROUP</span><span class="k">BY</span><span class="mi">1</span><span class="k">ORDER</span><span class="k">BY</span><span class="mi">1</span><span class="p">;</span>
+
+<span class="n">tableoid</span><span class="err">│</span><span class="k">min</span><span class="err">│</span><span class="k">max</span>
+<span class="err">─────────────┼─────┼───────</span>
+<span class="n">event_y2025</span><span class="err">│</span><span class="mi">1</span><span class="err">│</span><span class="mi">4320</span>
+<span class="hll"><span class="n">event_y2026</span><span class="err">│</span><span class="mi">1</span><span class="err">│</span><span class="mi">10000</span>
+</span></pre></div>
+<p>The range for the first partition just became useless! If you create check constraints based on these ranges, any session ID between 1 and 4320 will hit both the 2025 and the 2026 partitions.</p>
+<div class="dark--invert">
+<figure><figcaption>New event distorts session id range for partition</figcaption>
+</figure>
+</div>
+<p>To tackle this problem, we can draw some inspiration from PostgreSQL itself!</p>
+<h3 id="handling-outliers"><a class="toclink" href="#handling-outliers">Handling Outliers</a></h3>
+<p>PostgreSQL includes a <a href="https://www.postgresql.org/docs/current/brin.html" rel="noopener">Block Range Index (BRIN)</a> that works on a range of adjacent pages on disk. The default operator for indexing a range of adjacent pages is <a href="https://www.postgresql.org/docs/current/brin.html#BRIN-BUILTIN-OPCLASSES" rel="noopener"><code>minmax</code></a>. This operator works by keeping the minimum and the maximum value for each range - very similar to what we did for each partition. The <code>minmax</code> operator also relies on good correlation and suffers when the data contains outliers.</p>
+<p>To address the challenge of outliers in BRIN indexes, in PostgreSQL 14 a new operator was introduced - the <a href="https://hakibenita.com/postgresql-correlation-brin-multi-minmax#how-multi-minmax-brin-index-works" rel="noopener"><code>multi-minmax</code> operator</a>. This operator keeps <em>multiple</em> min-max ranges instead of just one! This means outliers are contained and don't compromise the effectiveness of the entire index.</p>
+<p>Inspired by the <code>multi-minmax</code> BRIN index operator, adjust the check constraint to use <em>multiple</em> ranges:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">ALTER</span><span class="k">TABLE</span><span class="n">event_y2025</span><span class="k">ADD</span><span class="k">CONSTRAINT</span><span class="n">event_y2025_session_id_range</span>
+<span class="k">CHECK</span><span class="p">(</span><span class="n">session_id</span><span class="k">BETWEEN</span><span class="mi">1</span><span class="k">AND</span><span class="mi">4320</span><span class="p">);</span>
+<span class="k">ALTER</span><span class="k">TABLE</span>
+
+<span class="n">db</span><span class="o">=#</span><span class="k">ALTER</span><span class="k">TABLE</span><span class="n">event_y2026</span><span class="k">ADD</span><span class="k">CONSTRAINT</span><span class="n">event_y2026_session_id_range</span>
+<span class="hll"><span class="k">CHECK</span><span class="p">(</span><span class="n">session_id</span><span class="k">BETWEEN</span><span class="mi">1</span><span class="k">AND</span><span class="mi">1</span><span class="k">OR</span><span class="n">session_id</span><span class="k">BETWEEN</span><span class="mi">4320</span><span class="k">AND</span><span class="mi">10000</span><span class="p">);</span>
+</span><span class="k">ALTER</span><span class="k">TABLE</span>
+</pre></div>
+<p>Notice the check constraint for 2026 now includes two ranges - one for [1, 1], and another for [4320, 10000]. This means values between 2 and 4320 will no longer have to query the second partition.</p>
+<p>Let's see if PostgreSQL is smart enough to use this condition for pruning:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">EXPLAIN</span><span class="k">SELECT</span><span class="o">*</span><span class="k">FROM</span><span class="n">event</span><span class="k">WHERE</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1000</span><span class="p">;</span>
+<span class="n">QUERY</span><span class="n">PLAN</span>
+<span class="err">───────────────────────────────────────────────────────────────────</span>
+<span class="hll"><span class="k">Index</span><span class="n">Scan</span><span class="k">using</span><span class="n">event_y2025_session_id_idx</span><span class="k">on</span><span class="n">event_y2025</span><span class="n">event</span>
+</span><span class="k">Index</span><span class="n">Cond</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1000</span><span class="p">)</span>
+
+<span class="n">db</span><span class="o">=#</span><span class="k">EXPLAIN</span><span class="k">SELECT</span><span class="o">*</span><span class="k">FROM</span><span class="n">event</span><span class="k">WHERE</span><span class="n">session_id</span><span class="o">=</span><span class="mi">6000</span><span class="p">;</span>
+<span class="n">QUERY</span><span class="n">PLAN</span>
+<span class="err">───────────────────────────────────────────────────────────────────</span>
+<span class="hll"><span class="k">Index</span><span class="n">Scan</span><span class="k">using</span><span class="n">event_y2026_session_id_idx</span><span class="k">on</span><span class="n">event_y2026</span><span class="n">event</span>
+</span><span class="k">Index</span><span class="n">Cond</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">6000</span><span class="p">)</span>
+</pre></div>
+<p>It is! In both cases the database scanned just one partition.</p>
+<p>What about the outlier session ID?</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">EXPLAIN</span><span class="k">SELECT</span><span class="o">*</span><span class="k">FROM</span><span class="n">event</span><span class="k">WHERE</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span>
+<span class="n">QUERY</span><span class="n">PLAN</span>
+<span class="err">─────────────────────────────────────────────────────────────────────────</span>
+<span class="n">Append</span><span class="p">(</span><span class="n">cost</span><span class="o">=</span><span class="mi">0</span><span class="p">.</span><span class="mi">29</span><span class="p">..</span><span class="mi">16</span><span class="p">.</span><span class="mi">80</span><span class="k">rows</span><span class="o">=</span><span class="mi">10</span><span class="n">width</span><span class="o">=</span><span class="mi">37</span><span class="p">)</span>
+<span class="hll"><span class="o">-&gt;</span><span class="k">Index</span><span class="n">Scan</span><span class="k">using</span><span class="n">event_y2025_session_id_idx</span><span class="k">on</span><span class="n">event_y2025</span><span class="n">event_1</span>
+</span><span class="k">Index</span><span class="n">Cond</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="hll"><span class="o">-&gt;</span><span class="k">Index</span><span class="n">Scan</span><span class="k">using</span><span class="n">event_y2026_session_id_idx</span><span class="k">on</span><span class="n">event_y2026</span><span class="n">event_2</span>
+</span><span class="k">Index</span><span class="n">Cond</span><span class="p">:</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+<p>As expected, PostgreSQL correctly identified based on the constraint that session 1 can be in two partitions, and scanned both of them.</p>
+<p>The logic to prove logical implications between predicate expressions is implemented in <a href="https://github.com/postgres/postgres/blob/master/src/backend/optimizer/util/predtest.c" rel="noopener">master/src/backend/optimizer/util/predtest.c</a>.</p>
+<h3 id="gaps-and-islands"><a class="toclink" href="#gaps-and-islands">Gaps and Islands</a></h3>
+<p>So far you achieved pruning on non-partition key columns <em>and</em> created a mechanism to handle potential outliers. The only thing left is to identify the ranges, a classic <a href="https://stackoverflow.com/questions/tagged/gaps-and-islands" rel="noopener">"gaps and islands"</a> problem.</p>
+<p>Finding ranges of consecutive session IDs not exceeding 1 in the 2026 partition:</p>
+<div class="highlight"><pre><span class="n">db</span><span class="o">=#</span><span class="k">WITH</span>
+<span class="n">detection</span><span class="k">AS</span><span class="p">(</span>
+<span class="k">SELECT</span><span class="n">session_id</span><span class="p">,</span><span class="n">session_id</span><span class="o">-</span><span class="n">lag</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span><span class="n">OVER</span><span class="p">(</span><span class="k">ORDER</span><span class="k">BY</span><span class="n">session_id</span><span class="p">)</span><span class="o">&gt;</span><span class="mi">1</span><span class="k">AS</span><span class="n">is_gap</span><span class="k">FROM</span><span class="n">event_y2026</span>
+<span class="p">),</span><span class="n">gaps</span><span class="k">AS</span><span class="p">(</span>
+<span class="k">SELECT</span><span class="n">session_id</span><span class="p">,</span><span class="k">sum</span><span class="p">(</span><span class="n">is_gap</span><span class="p">::</span><span class="nb">int</span><span class="p">)</span><span class="n">OVER</span><span class="p">(</span><span class="k">ORDER</span><span class="k">BY</span><span class="n">session_id</span><span class="p">)</span><span class="k">AS</span><span class="n">gap</span><span class="k">FROM</span><span class="n">detection</span>
+<span class="p">)</span>
+<span class="k">SELECT</span><span class="k">MIN</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span><span class="n">mn</span><span class="p">,</span><span class="k">MAX</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span><span class="n">mx</span><span class="k">FROM</span><span class="n">gaps</span><span class="k">GROUP</span><span class="k">BY</span><span class="n">gap</span><span class="p">;</span>
+
+<span class="n">mn</span><span class="err">│</span><span class="n">mx</span>
+<span class="err">──────┼───────</span>
+<span class="mi">1</span><span class="err">│</span><span class="mi">1</span>
+<span class="mi">4320</span><span class="err">│</span><span class="mi">10000</span>
+</pre></div>
+<p>These are the ranges to use in the check constraint.</p>
+<p>To take it further, parameterize the query and have it generate the command to create the check constraint:</p>
+<div class="highlight"><pre><span class="err">\</span><span class="k">set</span><span class="n">gap</span><span class="mi">1</span>
+<span class="err">\</span><span class="k">set</span><span class="n">partition_name</span><span class="n">event_y2026</span>
+
+<span class="k">WITH</span>
+<span class="n">detection</span><span class="k">AS</span><span class="p">(</span>
+<span class="k">SELECT</span><span class="n">session_id</span><span class="p">,</span><span class="n">session_id</span><span class="o">-</span><span class="n">lag</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span><span class="n">OVER</span><span class="p">(</span><span class="k">ORDER</span><span class="k">BY</span><span class="n">session_id</span><span class="p">)</span><span class="o">&gt;</span><span class="p">:</span><span class="n">gap</span><span class="k">AS</span><span class="n">is_gap</span><span class="k">FROM</span><span class="p">:</span><span class="n">partition_name</span>
+<span class="p">),</span><span class="n">gaps</span><span class="k">AS</span><span class="p">(</span>
+<span class="k">SELECT</span><span class="n">session_id</span><span class="p">,</span><span class="k">sum</span><span class="p">(</span><span class="n">is_gap</span><span class="p">::</span><span class="nb">int</span><span class="p">)</span><span class="n">OVER</span><span class="p">(</span><span class="k">ORDER</span><span class="k">BY</span><span class="n">session_id</span><span class="p">)</span><span class="k">AS</span><span class="n">gap</span><span class="k">FROM</span><span class="n">detection</span>
+<span class="p">),</span><span class="n">ranges</span><span class="k">AS</span><span class="p">(</span>
+<span class="k">SELECT</span><span class="k">MIN</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span><span class="n">mn</span><span class="p">,</span><span class="k">MAX</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span><span class="n">mx</span><span class="k">FROM</span><span class="n">gaps</span><span class="k">GROUP</span><span class="k">BY</span><span class="n">gap</span>
+<span class="p">)</span>
+<span class="k">SELECT</span>
+<span class="s1">'ALTER TABLE '</span><span class="o">||</span><span class="p">:</span><span class="s1">'partition_name'</span><span class="o">||</span><span class="s1">' ADD CONSTRAINT '</span><span class="o">||</span><span class="p">:</span><span class="s1">'partition_name'</span><span class="o">||</span><span class="s1">'_session_id_ranges CHECK ('</span>
+<span class="o">||</span><span class="n">array_to_string</span><span class="p">(</span><span class="n">array_agg</span><span class="p">(</span><span class="s1">'session_id BETWEEN '</span><span class="o">||</span><span class="n">mn</span><span class="o">||</span><span class="s1">' AND '</span><span class="o">||</span><span class="n">mx</span><span class="p">),</span><span class="s1">' OR '</span><span class="p">)</span>
+<span class="o">||</span><span class="s1">');'</span><span class="k">AS</span><span class="n">command</span>
+<span class="k">FROM</span><span class="n">ranges</span><span class="p">;</span>
+<span class="n">command</span>
+<span class="err">───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+<span class="k">ALTER</span><span class="k">TABLE</span><span class="n">event_y2026</span><span class="k">ADD</span><span class="k">CONSTRAINT</span><span class="n">event_y2026_session_id_ranges</span><span class="k">CHECK</span><span class="p">(</span><span class="n">session_id</span><span class="k">BETWEEN</span><span class="mi">1</span><span class="k">AND</span><span class="mi">1</span><span class="k">OR</span><span class="n">session_id</span><span class="k">BETWEEN</span><span class="mi">4320</span><span class="k">AND</span><span class="mi">10000</span><span class="p">);</span>
+</pre></div>
+<p>Awesome! If you're feeling confident, go ahead and add <a href="https://www.postgresql.org/docs/current/app-psql.html#APP-PSQL-META-COMMAND-GEXEC" rel="noopener"><code>\gexec</code></a> in the end there...</p>
+<h2 id="the-backstory"><a class="toclink" href="#the-backstory">The Backstory</a></h2>
+<p>Earlier this year I attended <a href="https://2026.djangocon.eu/" rel="noopener">Django Con EU</a> in Athens to give a talk about <a href="https://2026.djangocon.eu/speakers/8QRVC3/" rel="noopener">Reliable Signals in Django</a>. In one of the other talks, the speaker presented their approach to <a href="https://2026.djangocon.eu/speakers/SKMQND/" rel="noopener">partitioning large tables with Django and PostgreSQL</a>. The talk was overall very good, but what I found most interesting was how they used check constraints to achieve pruning when querying a big partitioned workflows tables by non-partition key columns.</p>
+<p>I knew the speaker from a previous <a href="https://2025.djangocon.eu/" rel="noopener">Django Con in Dublin</a> when he challenged me on stage during the Q&amp;A for <a href="https://youtu.be/l1xi_yKnhbE?si=QiacSPy-RmY0xgIe" rel="noopener">my talk about foreign keys</a>. I also published an article about constraint exclusion just a few months prior to the talk, so I went to talk to him.</p>
+<p>The speaker mentioned reading <a href="postgresql-unconventional-optimizations#eliminate-full-table-scans-based-on-check-constraints">my article on constraint exclusion</a> and we started discussing their approach. I was mostly interested in how they handle outliers. At the time, they haven't solidified their approach to outliers yet, so inspired by the multi-minmax brin operation, I suggested using a check constraint on a <a href="https://www.postgresql.org/docs/current/rangetypes.html#RANGETYPES-BUILTIN" rel="noopener">multirange type</a>.</p>
+<p>When I came back from the conference I started experimenting. I quickly found that <code>multirange</code> types don't work for pruning. I wasn't ready to give up, so exploring a bit further led me to try multiple simple conditions joined with an <code>OR</code>, and this article was born.</p>
+<h2 id="final-thoughts"><a class="toclink" href="#final-thoughts">Final Thoughts</a></h2>
+<p>Choosing the right partition key is very challenging. One of the reasons it is so difficult is that the partition key is used for pruning, and unless all queries are using it, you need to make a compromise.</p>
+<p>Using constraint exclusion on non-partition key columns opens up a whole new way to gain pruning. If your data follows a predictable pattern and there's a certain point after which the data dosen't change any more, the compromise isn't so bad and deciding on a partition key becomes a bit easier.</p>
+</article>

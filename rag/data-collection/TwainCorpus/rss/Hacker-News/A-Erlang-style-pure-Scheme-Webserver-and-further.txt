@@ -1,0 +1,548 @@
+01 · Fault tolerance
+
+Let It Crash
+
+Every request runs in a supervised worker pool.
+       Handlers don't defend — they crash, and the system recovers.
+
+Crashes heal themselves
+
+A crashed worker is 
+replaced instantly
+; the task is
+              retried on a fresh worker, up to 3 times, before the client
+              sees an error.
+
+A worker stuck longer than 30 s — even a CPU-spinning
+              loop — is 
+killed and replaced
+: preemptive scheduling
+              means nothing can freeze the server.
+
+A half-sent request parks only 
+its own reader process
+
+              and is reaped by timeout. Other connections never notice.
+
+Write the happy path. The supervisor owns the sad one.
+
+(
+app-get
+ app 
+"/crash"
+
+  (
+lambda
+ (req res)
+    
+;; the worker dies; the supervisor retries on a
+
+;; fresh worker -- the pool refills itself
+
+    (
+raise
+ 
+'handler-crashed
+)))
+
+(
+app-get
+ app 
+"/stuck"
+
+  (
+lambda
+ (req res)
+    
+;; a hot loop cannot freeze the system: preemption
+
+;; keeps serving, the ticker kills this worker
+
+    (
+let
+ loop ((n 
+0
+)) (loop (+ n 
+1
+)))))
+
+02 · Live systems
+
+Hot code swapping
+
+Replace the handler — or a single route — on a running
+       server. The listener, open connections and the worker pool stay up;
+       in-flight requests finish on the old code.
+
+Deploy without a restart
+
+Routes live in a mutable registry behind the pool. Re-registering
+           a path 
+replaces it atomically
+ for the next request;
+           
+http-swap!
+ replaces the whole handler the same way.
+
+Combined with graceful shutdown (
+http-shutdown!
+
+           drains in-flight work) and 
+SO_REUSEPORT
+ multi-process
+           listening, zero-downtime operation is the default, not a project.
+
+(
+app-get
+ app 
+"/version"
+
+  (
+lambda
+ (req res) (
+send-text!
+ res 
+"v1"
+)))
+
+;; hit /upgrade on the LIVE server:
+
+(
+app-get
+ app 
+"/upgrade"
+
+  (
+lambda
+ (req res)
+    (
+app-get
+ app 
+"/version"
+          
+; re-register =
+
+      (
+lambda
+ (req res)                
+; hot replace
+
+        (
+send-text!
+ res 
+"v2 (hot swapped)"
+)))
+    (
+send-text!
+ res 
+"upgraded"
+)))
+
+03 · The remote retry ring
+
+Faults speak a protocol
+
+When retries are exhausted or a stuck worker is killed,
+       Igropyr doesn't just throw a 500 — it can tell the client exactly
+       what happened, on a connection that stays open.
+
+Killed first, told after
+
+The 
+on-failure
+ hook answers a structured fault
+           
+after
+ the stuck worker is dead — so when the client hears
+           
+stuck
+, there is 
+no execution left in flight
+.
+           The state is definite.
+
+crash
+ — retries exhausted; resubmit with changed
+              parameters, or compensate.
+
+stuck
+ — killed mid-flight; resubmit carrying state,
+              or roll back.
+
+Keep-alive survives the fault, so the client resubmits on the
+           
+same connection
+ and gets a fresh retry round. Shorten
+           
+stuck-ms
+ and a user who once stared at a spinner
+           for 30 s now rings through several informed retries in the
+           same time — failures become invisible at the UI.
+
+(
+app-listen
+ app 
+8080
+
+  `((stuck-ms . 
+3000
+)          
+; fail fast
+
+    (check-ms . 
+1000
+)
+    (on-failure . ,(
+make-fault-handler
+))))
+
+;; the client receives, connection kept alive:
+
+;;   {"fault":"crash","attempts":4,"retryable":true}
+
+;;   {"fault":"stuck","elapsed-ms":3012,...}
+
+;; unset? the plain 500 remains. zero breakage.
+
+04 · Web programming with continuations
+
+Dialogues are processes
+
+A multi-request dialogue — a wizard, a booking, a
+       transfer — runs as 
+one green process
+. Its local bindings are
+       the conversation state, including things a session store can never
+       hold: an 
+open database transaction
+, spanning rounds.
+
+Control flow is program text
+
+"The user is at the confirm step" means the process is parked
+           
+at that line
+. A step order the code cannot express cannot
+           happen — no state machine to get wrong, no replay to defend
+           against.
+
+The 
+gone
+ guarantee:
+ death for any reason —
+           crash, TTL, completion — unregisters the process, and a later
+           resume answers 
+gone
+. Dead process = dropped
+           connection = the database itself rolled back:
+           
+gone
+ 
+proves
+ nothing committed. Together with
+           the fault codes above, the client always knows the definite
+           server state — a complete remote transaction ring.
+
+(
+conversation-start!
+
+  (
+lambda
+ (req suspend!)
+    (
+let
+ ((tx (begin-tx!)))       
+; live, across requests
+
+      (
+guard
+ (e (#t (rollback! tx) (
+raise
+ e)))
+        (
+let
+ ((req2 (suspend! confirm-page)))
+          (commit! tx)
+          done))))
+  req)
+
+(
+conversation-resume!
+ id req)   
+; => reply | 'gone
+
+;; 'gone means: rolled back. guaranteed.
+
+Foundations
+
+What it stands on
+
+λ
+
+Pure Chez Scheme
+
+Every line is Scheme — R6RS libraries in 
+.sc
+, no C
+           shim. libuv, zlib and the crypto for MySQL auth are reached
+           through Chez's FFI directly. Whole-program compilation folds the
+           framework and your app into one optimized binary.
+
+✉
+
+Erlang-style actors
+
+Green processes with 
+spawn / send / receive
+,
+           
+link
+ and 
+monitor
+, a process registry,
+           
+gen-server
+ and PubSub. One OS thread, preemptive
+           scheduling, pure message passing — no shared state, no locks.
+
+⚡
+
+Async on libuv
+
+One event loop feeds thousands of parked processes. DNS, file
+           reads and database round-trips park 
+the calling process
+,
+           never the thread. Non-blocking HTTP/WebSocket clients and
+           Redis/MySQL drivers included.
+
+120k+
+req/s, keep-alive, laptop
+
+0
+failed requests under ab -c 500
+
+≤35s
+full recovery from a stuck pool
+
+1
+OS thread
+
+Everything included
+
+Core / framework split, like Node and Express
+
+the core exposes one entry point, 
+(http-listen port (lambda (req res) ...))
+; the bundled 
+(igropyr express)
+ layer (
+create-app
+, 
+app-get
+, 
+send-json!
+, ...) is optional, and alternative frameworks can be built on the same core
+
+Green processes
+
+thousands of lightweight processes scheduled over one OS thread; continuation-based context switching with preemption, so even a CPU-spinning handler cannot freeze the system
+
+Pure message passing
+
+spawn
+ / 
+send
+ / 
+receive
+ / 
+link
+ / 
+monitor
+; no shared state between processes
+
+Fault tolerant by default
+
+a fixed worker pool behind a supervisor: crashed workers are replaced and the task retried (at most 3 times, then the client gets a 500); workers stuck for more than 30 s are killed and replaced; a slow or half-sent request only ever blocks its own reader process
+
+Failure hook (remote retry ring)
+
+when retries are exhausted or a stuck worker is killed (killed first, so no execution is in flight), an optional 
+on-failure
+ handler answers a structured JSON fault instead of the plain 500, on the same keep-alive connection — the client resubmits (changed parameters, carried state) and gets a fresh retry round; unset, the plain 500 remains
+
+Conversations (process-per-dialogue)
+
+a multi-request dialogue runs as one green process holding live state — even an open database transaction — across rounds; 
+suspend!
+ answers and parks, 
+conversation-resume!
+ continues, and death for any reason (crash, TTL) means guaranteed rollback: a later resume gets 
+gone
+
+Hot code swapping
+
+replace the handler (or individual routes) on a live server: the listener, open connections and worker pool stay up, in-flight requests finish on the old code
+
+WebSocket
+
+RFC 6455 upgrade on the same port; each socket is its own green process, so server push is just a message send
+
+Streaming responses & SSE
+
+chunked response body via 
+res-begin!
+/
+res-write!
+/
+res-end!
+; Server-Sent Events helpers on top
+
+OTP building blocks
+
+gen-server
+ (call/cast/info), a process registry (
+register
+/
+whereis
+), and topic PubSub with automatic cleanup of dead subscribers
+
+JSON
+
+a safe recursive-descent parser (no 
+read
+; full escape and surrogate handling) and writer
+
+S-expression RPC
+
+when the peer is also Scheme there is no codec: 
+(igropyr sexpr)
+ is a safe whitelisted parser (no 
+read
+, depth-limited), and 
+app-rpc
+ / 
+send-sexpr!
+ / 
+ws-send-sexpr!
+ / 
+sse-send-sexpr!
+ carry one datum per message — exact ratios and bignums cross intact. The browser end is 
+Goeteia
+'s 
+(web rpc/ws/sse)
+
+Forms & cookies
+
+req-form
+ parses urlencoded and multipart bodies (file uploads included); 
+req-cookie
+ / 
+set-cookie!
+
+Middleware suite
+
+cookie sessions (gen-server store, CSPRNG sids), CORS with preflight, security headers, and an access logger
+
+Chunked transfer-encoding
+
+Transfer-Encoding: chunked
+ request bodies are decoded transparently
+
+Non-blocking Redis and MySQL clients
+
+pure Scheme, same event loop; callers park their green process while the OS thread keeps serving; MySQL comes with a self-healing connection pool
+
+Non-blocking HTTP & WebSocket clients
+
+outbound 
+http-get
+ / 
+http-post
+ and 
+ws-connect
+, both with async DNS (libuv thread pool) and the same park-the-caller model
+
+Async file reads
+
+static files are read on libuv's thread pool, so a large or cold read never blocks the scheduler
+
+gzip compression
+
+responses negotiated via 
+Accept-Encoding
+; static files cache their compressed form
+
+Ops-ready
+
+rate limiting, a global error handler, and a Prometheus 
+/metrics
+ endpoint
+
+Runtime introspection & graceful shutdown
+
+http-stats
+ (live connection/request/pool counters), 
+http-shutdown!
+ (drain in-flight requests, refuse new connections)
+
+Multi-process scaling
+
+SO_REUSEPORT
+ bind option for kernel-balanced multi-process listening on Linux (pair with pm2 or systemd)
+
+HTTP/1.1 keep-alive & pipelining
+
+persistent connections by default on 1.1; each connection's reader process loops over successive requests
+
+Fast
+
+~35 k req/s at 500 concurrent connections on an Apple Silicon laptop (
+ab -n 50000 -c 500
+, zero failed requests)
+
+Acknowledgements
+
+Built on the shoulders of others
+
+Igropyr is built on 
+Chez Scheme
+ — the fastest
+       Scheme compiler, with a first-class FFI that reaches libuv directly.
+       With deep gratitude for 
+Kent
+       Dybvig
+'s life work, and to 
+Cisco
+ for open-sourcing
+       it.
+
+       The primary inspirations: 
+Node.js
+ is the event-loop server on
+       libuv, and the lean core / optional-framework split that Node and
+       Express made the norm. The actor model, the supervisor, and
+       Let It Crash come from 
+Erlang/OTP
+; 
+Swish
+ — a
+       Chez Scheme system built on those ideas — was the concrete
+       blueprint for the scheduler, the 
+receive
+ macro, and the
+       supervisor. The conversation model is the actor-native take on
+       
+web programming with continuations
+ — a great idea from the
+       Scheme and functional-programming community.
+
+Chez Scheme
+
+Cisco
+
+Node.js
+
+Erlang
+
+Swish

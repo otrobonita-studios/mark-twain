@@ -1,0 +1,1785 @@
+One of the most valuable things about partitioned tables is pruning - the database's ability to eliminate entire partitions based on a query predicate. Under conventional wisdom, pruning can only be achieved when querying by the partition key - this makes choosing the 
+right
+ key extremely difficult. However, if your data follows certain patterns, using some clever tricks you can achieve pruning even when filtering by non-partition key columns.
+
+In this article, I demonstrate how to achieve partition pruning when filtering by non-partition key columns.
+
+image by abstrakt design
+
+Table of Contents
+
+Table Partition
+
+Partition Pruning for Key Columns
+
+Local Indexes
+
+Global Indexes
+
+Pruning on Non-Partition Key Columns
+
+Talking to the Optimizer
+
+The constraint_exclusion Parameter
+
+Introducing Outliers
+
+Handling Outliers
+
+Gaps and Islands
+
+The Backstory
+
+Final Thoughts
+
+Table Partition
+
+Imagine you run a popular website with many users. Your product team wants to gain some insight into how the system is used, so you start logging events. To give events context, you group them into sessions and keep the time, the type, and some data in a database table:
+
+db
+=#
+CREATE
+TABLE
+event
+(
+
+id
+BIGINT
+GENERATED
+ALWAYS
+AS
+IDENTITY
+,
+
+timestamp
+TIMESTAMPTZ
+NOT
+NULL
+,
+
+session_id
+BIGINT
+NOT
+NULL
+,
+
+type
+TEXT
+NOT
+NULL
+,
+
+data
+JSONB
+
+)
+PARTITION
+BY
+RANGE
+(
+timestamp
+);
+
+CREATE
+TABLE
+;
+
+You have many users so you expect many events. Most queries use only a subset of the data, usually a specific date range, so you create a partition for each year based on the timestamp:
+
+db
+=#
+CREATE
+TABLE
+event_y2025
+PARTITION
+OF
+event
+
+FOR
+VALUES
+FROM
+(
+'2025-01-01 UTC'
+)
+TO
+(
+'2026-01-01 UTC'
+);
+
+CREATE
+TABLE
+
+db
+=#
+CREATE
+TABLE
+event_y2026
+PARTITION
+OF
+event
+
+FOR
+VALUES
+FROM
+(
+'2026-01-01 UTC'
+)
+TO
+(
+'2027-01-01 UTC'
+);
+
+CREATE
+TABLE
+
+You now have two partitions - one for events from 2025 and another for 2026. A session can look like this:
+
+INSERT
+INTO
+event
+(
+session_id
+,
+timestamp
+,
+type
+,
+data
+)
+VALUES
+
+(
+1
+,
+'2025-12-28 15:00:00 UTC'
+,
+'view'
+,
+'{"page": "/login"}'
+),
+
+(
+1
+,
+'2025-12-28 15:00:06 UTC'
+,
+'click'
+,
+'{"selector": "#login"}'
+),
+
+(
+1
+,
+'2025-12-28 15:00:07 UTC'
+,
+'login_failed'
+,
+'{"attempt": 1}'
+),
+
+(
+1
+,
+'2025-12-28 15:00:10 UTC'
+,
+'click'
+,
+'{"selector": "#forgot-password"}'
+),
+
+(
+1
+,
+'2025-12-28 15:00:17 UTC'
+,
+'view'
+,
+'{"page": "/reset-password"}'
+),
+
+(
+1
+,
+'2025-12-28 15:00:23 UTC'
+,
+'click'
+,
+'{"selector": "#reset-password"}'
+);
+
+In this session the user tried to log into the system, failed and asked to reset their password.
+
+Generating more data
+
+To make the examples more realistic we need more data, so let's create some:
+
+WITH
+
+sessions
+AS
+(
+
+SELECT
+
+n
+AS
+session_id
+,
+
+'2025-12-28 23:59:56 UTC'
+::
+timestamptz
++
+interval
+'1 minute'
+*
+n
+as
+started_at
+
+FROM
+
+generate_series
+(
+2
+,
+10
+_000
+)
+AS
+t
+(
+n
+)
+
+)
+
+INSERT
+INTO
+event
+(
+session_id
+,
+timestamp
+,
+type
+,
+data
+)
+
+SELECT
+
+session_id
+,
+
+started_at
++
+interval
+'1 second'
+*
+n
+,
+
+(
+array
+[
+'view'
+,
+'click'
+,
+'login_failed'
+,
+'logged_in'
+])[
+ceil
+(
+random
+()
+*
+3
+)]
+as
+type
+,
+
+'{}'
+::
+jsonb
+as
+data
+
+FROM
+
+sessions
+,
+
+generate_series
+(
+1
+,
+5
+)
+as
+n
+
+ORDER
+BY
+1
+,
+2
+;
+
+INSERT
+0
+49995
+
+You now have ~50K events in the table across both partitions.
+
+Partition Pruning for Key Columns
+
+The partition key of the table is 
+timestamp
+, so queries that filter by 
+timestamp
+ can benefit from partition pruning. For example, query events in December 2025:
+
+db
+=#
+EXPLAIN
+SELECT
+*
+FROM
+event
+
+WHERE
+timestamp
+>=
+'2025-12-01 UTC'
+AND
+timestamp
+<
+'2026-01-01 UTC'
+;
+
+QUERY
+PLAN
+
+────────────────────────────────────────────────────────────────────────────────────────────────
+
+Seq
+Scan
+on
+event_y2025
+event
+
+Filter
+:
+((
+"timestamp"
+>=
+'2025-12-01 00:00:00+00'
+::
+timestamp
+with
+time
+zone
+)
+
+AND
+(
+"timestamp"
+<
+'2026-01-01 00:00:00+00'
+::
+timestamp
+with
+time
+zone
+))
+
+Notice that the database was smart enough to figure out it only needs to scan the partition for 2025. The partition for 2026 was not even accessed. 
+This is partition pruning.
+
+Another common query is to find all events for a given session:
+
+db
+=#
+EXPLAIN
+SELECT
+*
+FROM
+event
+WHERE
+session_id
+=
+1
+;
+
+QUERY
+PLAN
+
+──────────────────────────────────────────────────────
+
+Append
+(
+cost
+=
+0
+.
+00
+..
+1060
+.
+07
+rows
+=
+11
+width
+=
+37
+)
+
+->
+Seq
+Scan
+on
+event_y2025
+event_1
+
+Filter
+:
+(
+session_id
+=
+1
+)
+
+->
+Seq
+Scan
+on
+event_y2026
+event_2
+
+Filter
+:
+(
+session_id
+=
+1
+)
+
+This time, the database accessed all partitions - partition pruning was not used. In this query, the database has no way of eliminating partitions, so it had no other choice but to scan all partitions to look for matching events.
+
+This is where partitions get a bit hairy.
+ On one hand, you want to achieve pruning, but then you have to make painful compromises in other, potentially very common queries.
+
+Local Indexes
+
+Getting events for a specific session is fairly common, so it needs to be fast. To make things fast in databases you should just create an index, right?
+
+db
+=#
+CREATE
+INDEX
+event_session_ix
+ON
+event
+(
+session_id
+);
+
+CREATE
+INDEX
+
+This creates an index on the session ID. With the index in place, get events for session 1:
+
+db
+=#
+EXPLAIN
+SELECT
+*
+FROM
+event
+WHERE
+session_id
+=
+1
+;
+
+QUERY
+PLAN
+
+─────────────────────────────────────────────────────────────────────────
+
+Append
+(
+cost
+=
+0
+.
+29
+..
+16
+.
+82
+rows
+=
+11
+width
+=
+37
+)
+
+->
+Index
+Scan
+using
+event_y2025_session_id_idx
+on
+event_y2025
+event_1
+
+Index
+Cond
+:
+(
+session_id
+=
+1
+)
+
+->
+Index
+Scan
+using
+event_y2026_session_id_idx
+on
+event_y2026
+event_2
+
+Index
+Cond
+:
+(
+session_id
+=
+1
+)
+
+The database once again had to visit all partitions. The only difference is that this time, it used the index on each partition.
+
+Using an index is faster than scanning the entire partition, but the database is still forced to scan through all of the partitions. Right now there are only two partitions, but if the table had a hundred partitions, this query would be like querying a hundred tables!
+
+This type of index is called a local index because it creates a separate index on every partition:
+
+db
+=#
+\
+di
+event_
+*
+
+List
+of
+indexes
+
+Schema
+│
+Name
+│
+Type
+│
+Owner
+│
+Table
+
+────────┼────────────────────────────┼───────────────────┼───────┼─────────────
+
+public
+│
+event_session_ix
+│
+partitioned
+index
+│
+haki
+│
+event
+
+public
+│
+event_y2025_session_id_idx
+│
+index
+│
+haki
+│
+event_y2025
+
+public
+│
+event_y2026_session_id_idx
+│
+index
+│
+haki
+│
+event_y2026
+
+Local indexes are useful when you frequently filter by columns not part of the partition key.
+
+Global Indexes
+
+Another approach to indexing partitioned tables is to create a single index that spans multiple partitions. This is called a global index.
+
+Unfortunately, as of version 19, PostgreSQL does not support global indexes on partitioned tables. You can keep an eye on the pgsql-hackers mailing list for updates, there are discussions going all the way back to 2009 on this subject.
+
+Global Index
+
+Another pain point of not having global indexes is that it makes it difficult to enforce uniqueness on anything other than the partition key. This is outside the scope of this article.
+
+Pruning on Non-Partition Key Columns
+
+The events table is partitioned by timestamp, so queries by timestamp can benefit from partition pruning. However, there are still many situations where you want to query by session ID. Events from a single session can potentially span multiple partitions and the database currently has no way of eliminating irrelevant ones. Local indexes alleviate some of the pain, but the database still has to visit all partitions, which may not scale very well.
+
+At this point you reached the limit of what the database can just do out of the box, and you need to tap into your domain expertise and knowledge of the data - how it's being used and how it's being stored:
+
+The events table is append only
+: no updates to the table, events are immutable.
+
+Session IDs are generated sequentially
+: session IDs increment over time.
+
+Sessions are short lived
+: a normal session is usually no longer than a couple of minutes or hours.
+
+This pattern can be useful!
+
+To visualize the pattern, plot the timestamp against the session ID:
+
+Plot timestamp against session ID
+
+Session ID is strongly correlated with the timestamp.
+ This means it should be possible to identify a distinct range of session IDs for each partition.
+
+Get the first and last session ID in each partition:
+
+db
+=#
+SELECT
+tableoid
+::
+regclass
+,
+MIN
+(
+session_id
+),
+MAX
+(
+session_id
+)
+
+FROM
+event
+GROUP
+BY
+1
+ORDER
+BY
+1
+;
+
+tableoid
+│
+min
+│
+max
+
+─────────────┼──────┼───────
+
+event_y2025
+│
+1
+│
+4320
+
+event_y2026
+│
+4320
+│
+10000
+
+Thanks to the strong correlation between the session ID and the timestamp, you can identify a clear and distinct range of session IDs for each partition. Just by looking at the results, it's clear that sessions with IDs between 1 and 4319 only exist in the 2025 partition, and sessions with IDs between 4321 and 10000 only exist in the 2026 partition.
+
+Session ID range by partition
+
+Knowing this pattern, the database can potentially eliminate entire partitions when querying by the session ID, but how can you communicate this information to the database?
+
+Talking to the Optimizer
+
+The database optimizer is truly a marvelous piece of engineering. It takes a query and figures out on its own how to execute it without looking at the actual data. The only thing the database can use, are statistics it maintains on tables and columns.
+
+Statistics are used to produce row estimates. Row estimates help the optimizer decide which tables to scan first, which indexes to use and what filters or joins to apply and in what order. However, as the name suggests, statistics are just statistics - there is no guarantee they are correct, so the optimizer can consult them, but never blindly rely on them.
+
+The only information the optimizer can rely on, is information that is guaranteed to always be correct. In databases, to guarantee that something is always correct, you use a constraint.
+
+Check constraints are used to enforce custom validation rules. Using a check constraint, you provide an expression and the database guarantees that the expression is true for all the rows in the table. But here's the secret, the thing nobody tells you about - 
+check constraints can be used to communicate information 
+about
+ your data to the optimizer.
+
+For example, if you have a check constraint to make sure event ID is always greater than zero, if you query for events with ID less than zero, the database doesn't really have to scan the table to figure out no rows can match this condition, right?
+
+To check if you can influence the optimizer, add a simple check constraint on each partition to enforce a specific range of session IDs:
+
+db
+=#
+ALTER
+TABLE
+event_y2025
+ADD
+CONSTRAINT
+event_y2025_session_id_range
+
+CHECK
+(
+session_id
+between
+1
+and
+4320
+);
+
+ALTER
+TABLE
+
+db
+=#
+ALTER
+TABLE
+event_y2026
+ADD
+CONSTRAINT
+event_y2026_session_id_range
+
+CHECK
+(
+session_id
+between
+4320
+and
+10000
+);
+
+ALTER
+TABLE
+
+The first check constraint sets the range for the 2025 partition to session IDs between 1 and 4320. The second check constraint sets the range for the 2026 partition to session IDs between 4320 and 10000.
+
+Now to see if the database can actually use the check constraint to eliminate entire partitions, query events for session with ID 1000:
+
+db
+=#
+EXPLAIN
+SELECT
+*
+FROM
+event
+WHERE
+session_id
+=
+1000
+;
+
+QUERY
+PLAN
+
+──────────────────────────────────────────────────────────────────
+
+Index
+Scan
+using
+event_y2025_session_id_idx
+on
+event_y2025
+event
+
+Index
+Cond
+:
+(
+session_id
+=
+1000
+)
+
+Amazing! With the check constraint in place, the database was able to eliminate the partition for 2026. According to the constraint, this partition can only contain session IDs between 4320 and 10000 and the query looks for session ID 1000. The database ended up scanning only one partition.
+
+Check another session ID:
+
+db
+=#
+EXPLAIN
+SELECT
+*
+FROM
+event
+WHERE
+session_id
+=
+6000
+;
+
+QUERY
+PLAN
+
+──────────────────────────────────────────────────────────────────
+
+Index
+Scan
+using
+event_y2026_session_id_idx
+on
+event_y2026
+event
+
+Index
+Cond
+:
+(
+session_id
+=
+6000
+)
+
+Once again, the database scanned only a single partition. This time, according to the check constraint, events for session ID 6000 can only be in the partition for year 2026, so the database only scanned that partition.
+
+What if you query for a session that may have events in more than one partition?
+
+db
+=#
+EXPLAIN
+SELECT
+*
+FROM
+event
+WHERE
+session_id
+=
+4320
+;
+
+QUERY
+PLAN
+
+─────────────────────────────────────────────────────────────────────────
+
+Append
+(
+cost
+=
+0
+.
+29
+..
+16
+.
+80
+rows
+=
+10
+width
+=
+37
+)
+
+->
+Index
+Scan
+using
+event_y2025_session_id_idx
+on
+event_y2025
+event_1
+
+Index
+Cond
+:
+(
+session_id
+=
+4320
+)
+
+->
+Index
+Scan
+using
+event_y2026_session_id_idx
+on
+event_y2026
+event_2
+
+Index
+Cond
+:
+(
+session_id
+=
+4320
+)
+
+The database scanned two partitions and that's OK! Based on the check constraints, both of these partitions may have events for session ID 4320.
+
+This demonstrates that using carefully crafted check constraints you can communicate information about your data to the database, and the database can use that information to eliminate entire partitions and effectively achieve partition pruning.
+
+The 
+constraint_exclusion
+ Parameter
+
+This pruning mechanism is controlled by the parameter 
+constraint_exclusion
+:
+
+Controls the query planner's use of table constraints to optimize queries. [...] When this parameter allows it for a particular table, the planner compares query conditions with the table's CHECK constraints, and omits scanning tables for which the conditions contradict the constraints.
+
+Constraint exclusion is on by default for partitioned tables. The database will use any check constraint you have on a partitioned table to achieve pruning, and you don't even have to change any parameters for it.
+
+I wrote about using 
+constraint_exclusion
+ on a non-partitioned table to eliminate entire table scans in queries that contain impossible predicates.
+
+Introducing Outliers
+
+To achieve pruning for queries by session ID you relied on the predictable nature of the data and the strong correlation between the session ID and the timestamp. In this case, the table is append only and sessions are short lived. This means there's not a lot of overlapping session IDs between partitions, and it's possible to identify distinct ranges for each partition.
+
+Unfortunately, reality is usually not that tidy! What if some sessions become days or weeks long? This can introduce outliers into the ranges.
+
+First, drop the check constraints so you can introduce outliers:
+
+db
+=#
+ALTER
+TABLE
+event_y2025
+DROP
+CONSTRAINT
+event_y2025_session_id_range
+;
+
+ALTER
+TABLE
+
+db
+=#
+ALTER
+TABLE
+event_y2026
+DROP
+CONSTRAINT
+event_y2026_session_id_range
+;
+
+ALTER
+TABLE
+
+Now, consider this session:
+
+db
+=#
+SELECT
+*
+FROM
+event
+WHERE
+session_id
+=
+1
+ORDER
+BY
+timestamp
+;
+
+id
+│
+timestamp
+│
+session_id
+│
+type
+│
+data
+
+─────┼────────────────────────┼────────────┼──────────────┼──────────────────────────────────
+
+1
+│
+2025
+-
+12
+-
+29
+15
+:
+00
+:
+00
++
+00
+│
+1
+│
+view
+│
+{
+"page"
+:
+"/login"
+}
+
+2
+│
+2025
+-
+12
+-
+29
+15
+:
+00
+:
+06
++
+00
+│
+1
+│
+click
+│
+{
+"selector"
+:
+"#login"
+}
+
+3
+│
+2025
+-
+12
+-
+29
+15
+:
+00
+:
+07
++
+00
+│
+1
+│
+login_failed
+│
+{
+"attempt"
+:
+1
+}
+
+4
+│
+2025
+-
+12
+-
+29
+15
+:
+00
+:
+10
++
+00
+│
+1
+│
+click
+│
+{
+"selector"
+:
+"#forgot-password"
+}
+
+5
+│
+2025
+-
+12
+-
+29
+15
+:
+00
+:
+17
++
+00
+│
+1
+│
+view
+│
+{
+"page"
+:
+"/reset-password"
+}
+
+6
+│
+2025
+-
+12
+-
+29
+15
+:
+00
+:
+23
++
+00
+│
+1
+│
+click
+│
+{
+"selector"
+:
+"#reset-password"
+}
+
+The user started their session on December 29, 2025. They attempted to log in, failed, and asked to reset the password. Imagine this user left their tab open, came back a few days later and decided to finish the process:
+
+INSERT
+INTO
+event
+(
+session_id
+,
+timestamp
+,
+type
+,
+data
+)
+
+values
+
+(
+1
+,
+'2026-01-01 12:01:14 UTC'
+,
+'click'
+,
+'{"selector": "#reset-password"}'
+),
+
+(
+1
+,
+'2026-01-01 12:01:15 UTC'
+,
+'view'
+,
+'{"page": "/login"}'
+);
+
+INSERT
+0
+2
+
+These events caused a session with a very low ID to be added to a recent partition. This partition currently contains session IDs with much higher values. This affects the session ID range in the first partition:
+
+db
+=#
+SELECT
+tableoid
+::
+regclass
+,
+MIN
+(
+session_id
+),
+MAX
+(
+session_id
+)
+
+FROM
+event
+GROUP
+BY
+1
+ORDER
+BY
+1
+;
+
+tableoid
+│
+min
+│
+max
+
+─────────────┼─────┼───────
+
+event_y2025
+│
+1
+│
+4320
+
+event_y2026
+│
+1
+│
+10000
+
+The range for the first partition just became useless! If you create check constraints based on these ranges, any session ID between 1 and 4320 will hit both the 2025 and the 2026 partitions.
+
+New event distorts session id range for partition
+
+To tackle this problem, we can draw some inspiration from PostgreSQL itself!
+
+Handling Outliers
+
+PostgreSQL includes a 
+Block Range Index (BRIN)
+ that works on a range of adjacent pages on disk. The default operator for indexing a range of adjacent pages is 
+minmax
+. This operator works by keeping the minimum and the maximum value for each range - very similar to what we did for each partition. The 
+minmax
+ operator also relies on good correlation and suffers when the data contains outliers.
+
+To address the challenge of outliers in BRIN indexes, in PostgreSQL 14 a new operator was introduced - the 
+multi-minmax
+ operator
+. This operator keeps 
+multiple
+ min-max ranges instead of just one! This means outliers are contained and don't compromise the effectiveness of the entire index.
+
+Inspired by the 
+multi-minmax
+ BRIN index operator, adjust the check constraint to use 
+multiple
+ ranges:
+
+db
+=#
+ALTER
+TABLE
+event_y2025
+ADD
+CONSTRAINT
+event_y2025_session_id_range
+
+CHECK
+(
+session_id
+BETWEEN
+1
+AND
+4320
+);
+
+ALTER
+TABLE
+
+db
+=#
+ALTER
+TABLE
+event_y2026
+ADD
+CONSTRAINT
+event_y2026_session_id_range
+
+CHECK
+(
+session_id
+BETWEEN
+1
+AND
+1
+OR
+session_id
+BETWEEN
+4320
+AND
+10000
+);
+
+ALTER
+TABLE
+
+Notice the check constraint for 2026 now includes two ranges - one for [1, 1], and another for [4320, 10000]. This means values between 2 and 4320 will no longer have to query the second partition.
+
+Let's see if PostgreSQL is smart enough to use this condition for pruning:
+
+db
+=#
+EXPLAIN
+SELECT
+*
+FROM
+event
+WHERE
+session_id
+=
+1000
+;
+
+QUERY
+PLAN
+
+───────────────────────────────────────────────────────────────────
+
+Index
+Scan
+using
+event_y2025_session_id_idx
+on
+event_y2025
+event
+
+Index
+Cond
+:
+(
+session_id
+=
+1000
+)
+
+db
+=#
+EXPLAIN
+SELECT
+*
+FROM
+event
+WHERE
+session_id
+=
+6000
+;
+
+QUERY
+PLAN
+
+───────────────────────────────────────────────────────────────────
+
+Index
+Scan
+using
+event_y2026_session_id_idx
+on
+event_y2026
+event
+
+Index
+Cond
+:
+(
+session_id
+=
+6000
+)
+
+It is! In both cases the database scanned just one partition.
+
+What about the outlier session ID?
+
+db
+=#
+EXPLAIN
+SELECT
+*
+FROM
+event
+WHERE
+session_id
+=
+1
+;
+
+QUERY
+PLAN
+
+─────────────────────────────────────────────────────────────────────────
+
+Append
+(
+cost
+=
+0
+.
+29
+..
+16
+.
+80
+rows
+=
+10
+width
+=
+37
+)
+
+->
+Index
+Scan
+using
+event_y2025_session_id_idx
+on
+event_y2025
+event_1
+
+Index
+Cond
+:
+(
+session_id
+=
+1
+)
+
+->
+Index
+Scan
+using
+event_y2026_session_id_idx
+on
+event_y2026
+event_2
+
+Index
+Cond
+:
+(
+session_id
+=
+1
+)
+
+As expected, PostgreSQL correctly identified based on the constraint that session 1 can be in two partitions, and scanned both of them.
+
+The logic to prove logical implications between predicate expressions is implemented in 
+master/src/backend/optimizer/util/predtest.c
+.
+
+Gaps and Islands
+
+So far you achieved pruning on non-partition key columns 
+and
+ created a mechanism to handle potential outliers. The only thing left is to identify the ranges, a classic 
+"gaps and islands"
+ problem.
+
+Finding ranges of consecutive session IDs not exceeding 1 in the 2026 partition:
+
+db
+=#
+WITH
+
+detection
+AS
+(
+
+SELECT
+session_id
+,
+session_id
+-
+lag
+(
+session_id
+)
+OVER
+(
+ORDER
+BY
+session_id
+)
+>
+1
+AS
+is_gap
+FROM
+event_y2026
+
+),
+gaps
+AS
+(
+
+SELECT
+session_id
+,
+sum
+(
+is_gap
+::
+int
+)
+OVER
+(
+ORDER
+BY
+session_id
+)
+AS
+gap
+FROM
+detection
+
+)
+
+SELECT
+MIN
+(
+session_id
+)
+mn
+,
+MAX
+(
+session_id
+)
+mx
+FROM
+gaps
+GROUP
+BY
+gap
+;
+
+mn
+│
+mx
+
+──────┼───────
+
+1
+│
+1
+
+4320
+│
+10000
+
+These are the ranges to use in the check constraint.
+
+To take it further, parameterize the query and have it generate the command to create the check constraint:
+
+\
+set
+gap
+1
+
+\
+set
+partition_name
+event_y2026
+
+WITH
+
+detection
+AS
+(
+
+SELECT
+session_id
+,
+session_id
+-
+lag
+(
+session_id
+)
+OVER
+(
+ORDER
+BY
+session_id
+)
+>
+:
+gap
+AS
+is_gap
+FROM
+:
+partition_name
+
+),
+gaps
+AS
+(
+
+SELECT
+session_id
+,
+sum
+(
+is_gap
+::
+int
+)
+OVER
+(
+ORDER
+BY
+session_id
+)
+AS
+gap
+FROM
+detection
+
+),
+ranges
+AS
+(
+
+SELECT
+MIN
+(
+session_id
+)
+mn
+,
+MAX
+(
+session_id
+)
+mx
+FROM
+gaps
+GROUP
+BY
+gap
+
+)
+
+SELECT
+
+'ALTER TABLE '
+||
+:
+'partition_name'
+||
+' ADD CONSTRAINT '
+||
+:
+'partition_name'
+||
+'_session_id_ranges CHECK ('
+
+||
+array_to_string
+(
+array_agg
+(
+'session_id BETWEEN '
+||
+mn
+||
+' AND '
+||
+mx
+),
+' OR '
+)
+
+||
+');'
+AS
+command
+
+FROM
+ranges
+;
+
+command
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ALTER
+TABLE
+event_y2026
+ADD
+CONSTRAINT
+event_y2026_session_id_ranges
+CHECK
+(
+session_id
+BETWEEN
+1
+AND
+1
+OR
+session_id
+BETWEEN
+4320
+AND
+10000
+);
+
+Awesome! If you're feeling confident, go ahead and add 
+\gexec
+ in the end there...
+
+The Backstory
+
+Earlier this year I attended 
+Django Con EU
+ in Athens to give a talk about 
+Reliable Signals in Django
+. In one of the other talks, the speaker presented their approach to 
+partitioning large tables with Django and PostgreSQL
+. The talk was overall very good, but what I found most interesting was how they used check constraints to achieve pruning when querying a big partitioned workflows tables by non-partition key columns.
+
+I knew the speaker from a previous 
+Django Con in Dublin
+ when he challenged me on stage during the Q&A for 
+my talk about foreign keys
+. I also published an article about constraint exclusion just a few months prior to the talk, so I went to talk to him.
+
+The speaker mentioned reading 
+my article on constraint exclusion
+ and we started discussing their approach. I was mostly interested in how they handle outliers. At the time, they haven't solidified their approach to outliers yet, so inspired by the multi-minmax brin operation, I suggested using a check constraint on a 
+multirange type
+.
+
+When I came back from the conference I started experimenting. I quickly found that 
+multirange
+ types don't work for pruning. I wasn't ready to give up, so exploring a bit further led me to try multiple simple conditions joined with an 
+OR
+, and this article was born.
+
+Final Thoughts
+
+Choosing the right partition key is very challenging. One of the reasons it is so difficult is that the partition key is used for pruning, and unless all queries are using it, you need to make a compromise.
+
+Using constraint exclusion on non-partition key columns opens up a whole new way to gain pruning. If your data follows a predictable pattern and there's a certain point after which the data dosen't change any more, the compromise isn't so bad and deciding on a partition key becomes a bit easier.
