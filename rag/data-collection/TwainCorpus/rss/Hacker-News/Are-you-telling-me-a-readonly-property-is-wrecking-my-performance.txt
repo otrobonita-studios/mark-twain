@@ -1,0 +1,196 @@
+Are you telling me a readonly property is wrecking my performance?
+
+                Posted on
+
+July 9, 2026
+
+                    • 93 views
+
+I was deep into investigating a performance issue with Letta Desktop lately; the story was same old same old, the greater the use, the slower the product. This seemed pretty obvious to me probably just some long running for loop, or unoptimized code.
+
+What came to my realization was that actually the issue has nothing to do with my code (well, it did still, but, it was based on a bad assumption). The issue had to do with how I was forcing the UI to scroll down on new messages.
+
+You see, I was using a simple script:
+
+el
+.
+scrollTop 
+=
+ el
+.
+scrollHeight
+;
+
+Seems reasonable, seems performant right.
+
+If you look at the specification of scrollHeight, it seems like this property is static, and only updated on paint itself, not when accessing it.
+
+I was wrong, of course, this is not performant, why would we set a property every time an element is modified, it makes more sense to calculate it when the user requests it.
+
+There then lies the problem, the scrollHeight will always change when new messages come in, and if we get a ton of messages streaming in and constant need to scroll to the bottom, its gonna slow us down.
+
+int
+ Element
+::
+scrollHeight
+(
+)
+ 
+{
+
+if
+ 
+(
+!
+InActiveDocument
+(
+)
+)
+
+return
+ 
+0
+;
+
+GetDocument
+(
+)
+.
+UpdateStyleAndLayoutForNode
+(
+this
+)
+;
+
+if
+ 
+(
+GetDocument
+(
+)
+.
+ScrollingElementNoLayout
+(
+)
+ 
+==
+ this
+)
+ 
+{
+
+if
+ 
+(
+GetDocument
+(
+)
+.
+View
+(
+)
+)
+ 
+{
+
+return
+ AdjustForAbsoluteZoom
+::
+AdjustInt
+(
+
+GetDocument
+(
+)
+.
+View
+(
+)
+->
+LayoutViewport
+(
+)
+->
+ContentsSize
+(
+)
+.
+Height
+(
+)
+,
+
+GetDocument
+(
+)
+.
+GetFrame
+(
+)
+->
+PageZoomFactor
+(
+)
+)
+;
+
+}
+
+return
+ 
+0
+;
+
+}
+
+if
+ 
+(
+LayoutBox
+*
+ box 
+=
+ 
+GetLayoutBox
+(
+)
+)
+ 
+{
+
+return
+ AdjustForAbsoluteZoom
+::
+AdjustInt
+(
+box
+->
+PixelSnappedScrollHeight
+(
+)
+,
+
+                                            box
+)
+;
+
+}
+
+return
+ 
+0
+;
+
+}
+
+(The chromium implementation of scrollHeight 
+here
+)
+
+Now, I guess if it was implmented the otherway around, it would still have the same issue I guess, but I think for me, I just assumed that readonly properties will always be pretty performant in general.
+
+The word of advice is really this:
+
+Properties can be dynamic, especailly when it's kinda obvious that they are like one that changes when something happens.
+
+My solution for the scroll thing though was just put a really large number instead of trying to calculate a precise scrollheight; it will bound anyway.

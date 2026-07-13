@@ -1,0 +1,43 @@
+<article>
+<div>
+<h1>Are you telling me a readonly property is wrecking my performance?</h1>
+<div class="post-timestamp">
+                Posted on
+                
+                    <time datetime="Thu Jul 09 2026 00:00:00 GMT+0000 (Coordinated Universal Time)">July 9, 2026</time>
+                
+                    • 93 views
+            </div>
+</div>
+<p>I was deep into investigating a performance issue with Letta Desktop lately; the story was same old same old, the greater the use, the slower the product. This seemed pretty obvious to me probably just some long running for loop, or unoptimized code.</p>
+<p>What came to my realization was that actually the issue has nothing to do with my code (well, it did still, but, it was based on a bad assumption). The issue had to do with how I was forcing the UI to scroll down on new messages.</p>
+<p>You see, I was using a simple script:</p>
+<pre class="language-javascript"><code class="language-javascript">el<span class="token punctuation">.</span>scrollTop <span class="token operator">=</span> el<span class="token punctuation">.</span>scrollHeight<span class="token punctuation">;</span></code></pre>
+<p>Seems reasonable, seems performant right.</p>
+<p>If you look at the specification of scrollHeight, it seems like this property is static, and only updated on paint itself, not when accessing it.</p>
+<p>I was wrong, of course, this is not performant, why would we set a property every time an element is modified, it makes more sense to calculate it when the user requests it.</p>
+<p>There then lies the problem, the scrollHeight will always change when new messages come in, and if we get a ton of messages streaming in and constant need to scroll to the bottom, its gonna slow us down.</p>
+<pre class="language-c"><code class="language-c"><span class="token keyword">int</span> Element<span class="token operator">::</span><span class="token function">scrollHeight</span><span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+  <span class="token keyword">if</span> <span class="token punctuation">(</span><span class="token operator">!</span><span class="token function">InActiveDocument</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">)</span>
+    <span class="token keyword">return</span> <span class="token number">0</span><span class="token punctuation">;</span>
+  <span class="token function">GetDocument</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">UpdateStyleAndLayoutForNode</span><span class="token punctuation">(</span>this<span class="token punctuation">)</span><span class="token punctuation">;</span>
+  <span class="token keyword">if</span> <span class="token punctuation">(</span><span class="token function">GetDocument</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">ScrollingElementNoLayout</span><span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token operator">==</span> this<span class="token punctuation">)</span> <span class="token punctuation">{</span>
+    <span class="token keyword">if</span> <span class="token punctuation">(</span><span class="token function">GetDocument</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">View</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+      <span class="token keyword">return</span> AdjustForAbsoluteZoom<span class="token operator">::</span><span class="token function">AdjustInt</span><span class="token punctuation">(</span>
+          <span class="token function">GetDocument</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">View</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token operator">-&gt;</span><span class="token function">LayoutViewport</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token operator">-&gt;</span><span class="token function">ContentsSize</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">Height</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">,</span>
+          <span class="token function">GetDocument</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">.</span><span class="token function">GetFrame</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token operator">-&gt;</span><span class="token function">PageZoomFactor</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+    <span class="token punctuation">}</span>
+    <span class="token keyword">return</span> <span class="token number">0</span><span class="token punctuation">;</span>
+  <span class="token punctuation">}</span>
+  <span class="token keyword">if</span> <span class="token punctuation">(</span>LayoutBox<span class="token operator">*</span> box <span class="token operator">=</span> <span class="token function">GetLayoutBox</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+    <span class="token keyword">return</span> AdjustForAbsoluteZoom<span class="token operator">::</span><span class="token function">AdjustInt</span><span class="token punctuation">(</span>box<span class="token operator">-&gt;</span><span class="token function">PixelSnappedScrollHeight</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">,</span>
+                                            box<span class="token punctuation">)</span><span class="token punctuation">;</span>
+  <span class="token punctuation">}</span>
+  <span class="token keyword">return</span> <span class="token number">0</span><span class="token punctuation">;</span>
+<span class="token punctuation">}</span></code></pre>
+<p>(The chromium implementation of scrollHeight <a href="https://chromium.googlesource.com/chromium/src/+/0d4083da3bbd88b97fd0df58d5c4ab5732a2f08c/third_party/blink/renderer/core/dom/element.cc">here</a>)</p>
+<p>Now, I guess if it was implmented the otherway around, it would still have the same issue I guess, but I think for me, I just assumed that readonly properties will always be pretty performant in general.</p>
+<p>The word of advice is really this:</p>
+<p>Properties can be dynamic, especailly when it's kinda obvious that they are like one that changes when something happens.</p>
+<p>My solution for the scroll thing though was just put a really large number instead of trying to calculate a precise scrollheight; it will bound anyway.</p>
+</article>
