@@ -1,0 +1,168 @@
+July 6, 2026
+9
+ min read
+An L7 Firewall in the Kernel
+By: 
+Jason Evans
+"This is some Jane Street sh*t." That was the reaction from a Director of Engineering at a Fortune 500 company.
+
+Firewalls that decide on application data, like an HTTP header rather than only an IP address and a port, almost always run that decision in a userspace proxy. The packet gets copied out of the kernel, the TCP stream gets rebuilt, the inspection engine runs, and the result gets copied back down. It works, and it costs milliseconds per request.
+
+We thought that layer could be faster and easier to run. So we built a firewall that makes its decision in the kernel with eBPF, and lets you write the policy as a JavaScript app. Sounds fun, right?
+
+It was. The decision lands in the nanoseconds, and since the policy is just a JavaScript app, changing it takes no rebuild, redeploy, or restart. It's already running in front of real enterprise traffic. Here's how it works and why we built it this way.
+
+Why the kernel can do this now
+
+Deciding on HTTP in the kernel used to be impractical, and not by accident. The eBPF verifier rejects any program whose loops it can't prove will terminate, which kills most of the parsing you'd reach for on instinct. Earlier work got part of the way there but stayed narrow: one 2024 study of L7 header parsing in eBPF could match about 48 bytes of payload, nowhere near enough to decide on a real HTTP/2 header block.
+
+That ceiling has moved. Recent kernel work pushed in-kernel L7 matching from tens of bytes into the kilobytes, and we aren't the only ones building on it. In May 2026 a team from ETH Zürich, NYU, Nvidia, and Politecnico di Milano published 
+Offloading L7 Policies to the Kernel
+ (L7FP), which synthesizes eBPF data planes that enforce most real service-mesh L7 policies in the kernel. The paper is useful to us for two findings, neither of them ours. They surveyed 2,417 open-source projects and found 89% of deployed L7 policies run in eBPF with no kernel changes, which puts in-kernel L7 at most of the workload rather than some edge case. And to parse inside the verifier's limits, they landed on Aho-Corasick DFAs. Coincidentally our CEO and architect, Julian Goldstein, had landed on this approach before we discovered the published paper, for the exact same reason.
+
+What it decides on
+
+A normal packet filter matches on the 5-tuple: source IP, destination IP, source port, destination port, protocol. That is layer 3 and 4.
+
+Ours matches on values inside HTTP/2: the 
+:authority
+ (host), the 
+User-Agent
+, and the source address, with 
+X-Forwarded-For
+ and PROXY protocol resolution when it sits behind a trusted load balancer. Rules combine those with boolean logic, for example:
+
+host == "api.example.com" && src in 127.0.0.0/8 && ua ~ "Diffbot"
+
+A common use today is blocking crawlers and agents by 
+User-Agent
+ (GPTBot, ClaudeBot, PerplexityBot, 
+curl/
+, and so on) on specific hosts, with a source constraint so a rule only applies where you expect that traffic to come from.
+
+Where the decision runs, and why there
+
+The match runs at XDP, the eBPF hook in the NIC driver, before the kernel allocates a socket buffer and before the packet touches the network stack. The verdict, pass or drop, is produced right there.
+
+We hook at XDP on purpose, and it's the biggest thing separating us from the academic work above. L7FP hooks at the socket layer, after the kernel has reassembled the TCP stream and decrypted TLS. That hands you a clean byte stream, which is nice. Hooking earlier means we reassemble the stream ourselves (more on that in the fragmentation section), and we pay that cost because XDP earns it back.
+
+A packet that dies at XDP never becomes a socket buffer and never enters the stack. It's the cheapest drop Linux has: the kernel spends nothing on traffic we were going to reject anyway.
+
+Enforcement also sits below userspace. You write and submit rules from JS, and the runtime compiles them into the structures the kernel program reads. All the expressive work, writing rules, managing config, streaming logs, lives in a normal JS app. The verdict itself runs in the kernel, where it's cheap and where a compromised userspace process can't quietly switch it off.
+
+Updating rules is a git push. No rebuild, no redeploy, no restart. Nifty.
+
+The matching, and why Aho-Corasick
+
+Checking a 
+User-Agent
+ against a list of banned substrings one at a time means scanning the header once per pattern. Instead we compile every UA substring across every rule into one Aho-Corasick automaton: a DFA that reads the header a byte at a time and reports every pattern that hit in a single pass.
+
+The scan is linear in the length of the header and doesn't slow down as you add patterns. Ten patterns or ten thousand, the header is still a couple hundred bytes and you make one pass over it. More rules cost table size, not scan time.
+
+It's also the only shape that gets you into the kernel. The verifier only loads a program if it can prove every loop terminates, and a single bounded loop with one table lookup per byte, capped by header length, is trivial for it to bound. Match one pattern at a time and you've got a nested loop, which is much harder to get past the verifier. That constraint is what kept in-kernel L7 hard for years, and it's why both we and the L7FP team ended up on DFAs.
+
+Basically we compile one enormous chutes-and-ladders board. Every packet the firewall sees plays the game: win and you're blocked, lose and you're allowed.
+
+Capacity, and how rules update
+
+The automaton uses 16-bit state IDs, so it holds up to 32,767 states. In practice that is about 4,000 
+User-Agent
+ patterns today, with headroom, since real blocklists share prefixes and pack tighter than the worst case. We have a path to roughly 16,000 patterns; it costs more memory at compile time, so it is planned rather than on by default (modeled, not yet shipped).
+
+Rule changes happen out of band. When you edit the rule set, the automaton is recompiled and swapped in, typically in a few seconds, off the packet path. Packets keep being matched against the current rules until the new set is ready, then the swap is atomic. Rebuilding the whole automaton on each change is a property of the data structure, since its fallback links are global, so we treat updates as a background compile plus a swap rather than an in-place edit.
+
+What the decision costs
+
+A single core makes roughly 
+5 million HTTP/2 header decisions per second
+, and that number holds as you add rules. Each decision is cheaper than a system call. Here's the arithmetic.
+
+We export per-packet processing time as a Prometheus histogram, straight out of the kernel program. It measures the time the eBPF program spends deciding, per packet.
+
+Most decisions land in the nanoseconds. In one capture the p50 sat well under 200 nanoseconds and the p95 was about 775 nanoseconds. The p99 usually stays under a microsecond and rises into the low microseconds under heavier traffic. At the far tail we see occasional spikes toward 3 milliseconds.
+
+To put 200 nanoseconds in context, here is roughly where it sits on the latency ladder every systems engineer carries around:
+
+Operation
+Approximate cost
+L1 cache reference
+~1 ns
+Main memory reference
+~100 ns
+This firewall's p50 decision
+<200 ns
+System call (getpid, round trip)
+~1–2 µs
+Context switch
+~3–5 µs
+Userspace proxy hop (copy up, reassemble, inspect, copy down)
+~1+ ms
+
+The p50 decision costs about the same as two reads from DRAM, and less than a single syscall. The packet is filtered before the kernel would have spent more time just asking userspace a question than we spend answering it.
+
+Two things we won't hide about that number.
+
+It's a kernel decision time, not an end-to-end appliance latency.
+ A userspace inspection layer pays for the syscall, the copies, the TCP reassembly, and the scheduler, per request; that is where the milliseconds go. Our number doesn't include a full round trip through a box, so it isn't directly comparable to a vendor's published end-to-end latency, and we won't pretend it is. Most inspection products don't report this metric at all: they publish throughput and connection rates, not per-decision execution time. We report it because it's the thing the design actually optimizes, and because we can measure it directly.
+
+These figures are early, taken at low to moderate load.
+ What our current production rollout is meant to answer is whether the tail stays flat as we push traffic toward line rate. The constant-work-per-byte design is the reason we expect it to: the scan does the same work per header byte no matter how loaded the box is. That's a prediction until we've measured it at scale, so treat sustained-load behavior as an open question we're closing, not a settled result.
+
+The other way to read the number is throughput. At 200 nanoseconds per decision, a single core has budget for roughly 5 million decisions per second before the matcher itself is the bottleneck, and because the automaton does constant work per header byte, that budget doesn't shrink as the rule set grows. Ten patterns or ten thousand, same scan.
+
+HPACK, and the corner we didn't cut
+
+HTTP/2 compresses headers with HPACK, which keeps a dynamic table. A client can send its 
+User-Agent
+ in full once and then reference it by index on every later request. A matcher that only looks at literal strings would see the header on the first request and then miss it on every one after. That is a real correctness concern for anything deciding on header values.
+
+This is exactly where the "run it in the kernel" story usually cuts a corner. L7FP handles HTTP/2 by requiring every pod behind it to 
+disable HPACK dynamic-table caching.
+ That's a fine trade inside a service mesh, where you own every service and can flip that setting. We don't get it. A firewall at the edge faces arbitrary clients on the open internet, and you can't ask a scraper to please turn off header compression.
+
+So we track the dynamic table live instead, and we instrument it directly: the dashboard shows dynamic-table activity, header hits caught, and health signals such as desyncs and mid-stream joins. Showing the failure mode is the point. A matcher that silently stops seeing a header is worse than one that tells you when it might. Handling the case everyone else configures away is most of what makes this safe to point at traffic you don't own.
+
+Operating it
+
+Everything the firewall does is visible in real time. It exports metrics on a Prometheus endpoint and ships with Grafana dashboards, so you can watch:
+
+verdicts per second, allowed against blocked, and blocks broken down by rule and by host
+
+the XDP funnel: packets hooked, passed, and dropped, plus TCP segments inspected, HTTP/2 frames, and headers decoded
+
+the Aho-Corasick automaton: states used against capacity, accept states, and how many patterns are loaded
+
+BPF map usage, whether the XDP program is attached, and an at-a-glance UP / ENFORCING status
+
+time since the last rule reload and the count of reload failures
+
+source resolution: how many decisions used a trusted 
+X-Forwarded-For
+, how many used PROXY protocol, and how many were ignored as untrusted
+
+The dashboard header carries the two signals you check first: is it up, and is it enforcing.
+
+The threat model
+
+The academic fast paths for in-kernel L7 assume a cooperative world: your own microservices talking to each other, nobody trying to slip past the parser on purpose. A firewall doesn't get that luxury. Anyone who knows the box is there will try to get around it, so we'd rather show where that pressure lands than bury it. For us it's mostly fragmentation, which the next section covers, and it's why every counter above is exposed from day one. You should be able to watch the evasion attempts, not just take our word that there aren't any.
+
+Fragmentation
+
+Because we hook at XDP, we see individual TCP segments before the kernel reassembles them into a stream. Most HTTP/2 HEADERS frames fit inside a single TCP segment in practice, but not all of them, and an attacker who knows about the firewall could deliberately fragment headers across segments to try to evade XDP-only inspection.
+
+An attacker cannot evade detection this way; they can only force traffic onto a slower path. Multi-segment HEADERS frames are reassembled and inspected in the JavaScript surface rather than dropped uninspected. The fragmented case is slower than the XDP fast path, but it is still inspected, and fragmented-frame counts are exposed as a metric so you have hard numbers on how often that path runs on your traffic mix.
+
+Packaging
+
+The firewall is a Docker container. Deployment is running the container and attaching it to an interface. Metrics come up on the Prometheus endpoint, the dashboards read from there, and the JS app is where you manage rules.
+
+What's next
+
+This firewall is being tested in production today, sitting in front of real enterprise traffic and making these decisions on live packets. The staged rollout is the honest way to ship something that runs at XDP: each stage widens the traffic it sees, and each stage generates the numbers for the next one.
+
+The measurement we care most about right now is the sustained sweep toward line rate, tracking the p99 of the per-packet decision time as we go. The constant-work-per-byte design says the tail holds its shape; production is where we prove it. We'll publish what we measure, including anything that surprises us.
+
+Our roadmap is to grow what the matcher can decide on, keep the decision in the kernel, and keep the policy in JavaScript. The larger-capacity automaton is modeled and ready when a customer's blocklist needs it. And because every decision already exports through Prometheus, each optimization ships with its own before-and-after chart. When we say something got faster, you'll see the histogram move.
+
+If you're running traffic you'd like to put behind this, reach out.
