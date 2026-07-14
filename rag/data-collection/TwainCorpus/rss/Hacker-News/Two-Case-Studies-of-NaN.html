@@ -1,0 +1,76 @@
+<main>
+<div class="heading">
+<h1>two case studies of NaN</h1>
+<time datetime="2026-07-09">2026-07-09</time>
+</div>
+<div class="content">
+<p>IEEE-754 NaN is weird. and because of that, it's often accidentally left unaccounted for. i found two instances of this leaking into programming language design. that is, the semantics of these languages hold implicit assumptions which break with NaN.
+
+        <h2>case study 1: python</h2>
+<pre><code>&gt;&gt;&gt; from math import nan
+&gt;&gt;&gt; nan == nan
+False
+&gt;&gt;&gt; [nan] == [nan]
+True</code></pre>
+<p>as an optimization, when comparing lists for equality, elements are first compared by identity. they're only checked for equality if their identities are unequal.
+
+        <p>in general, it's assumed that an object will always compare equal to itself. this is explicitly noted in the <a href="https://docs.python.org/3/reference/expressions.html">python 3 reference manual</a>:
+
+        <blockquote>
+<p>User-defined classes that customize their comparison behavior should follow some consistency rules, if possible:
+          <ul>
+<li>
+              Equality comparison should be reflexive. In other words, identical objects should compare equal:
+              <blockquote><code>x is y</code> implies <code>x == y</code></blockquote>
+</li>
+</ul>
+</p></blockquote>
+<p>this isn't true for NaN. and that's fine, but because the assumption <em>does</em> hold for pretty much everything else, design choices are made which leave NaN unaccounted for (or at least, give NaN very weird behavior).
+
+        <p>to be clear, i'm not necessarily saying that python's behavior here is <em>wrong</em>, or that this optimization is bad because NaN behaves weirdly. but i think it's at least worth pointing out.
+
+        <h2>case study 2: lua</h2>
+<p>numerical for-loops in lua look like this:
+
+        <pre><code>for i = 1, 10 do
+    stuff()
+end</code></pre>
+<p>the way this is supposed to work is that <code>i</code> starts with the initial value (here that's 1), and each iteration it increments by the step (optional third operand; defaults to 1), until the new value is greater than the limit (10), at which point the loop terminates. so this loop iterates 10 times, from 1 to 10 (inclusive).
+
+        <p>so what happens when NaN (<code>0/0</code>) is thrown into the mix? here's the behavior in the reference implementation (puc-rio lua):
+
+        <pre><code>-- executes once
+for i = 0/0, 10 do
+    print(i) -- nan
+end
+
+-- executes once
+for i = 0/0, 0/0 do
+    print(i) -- nan
+end
+
+-- never executes
+for i = 1, 10, 0/0 do
+    print(i)
+end
+
+-- executes once
+for i = 10, 1, 0/0 do
+    print(i) -- 10.0
+end</code></pre>
+<p>read through that code and try to figure out what's going on. every single one of those results is extremely unintuitive.
+
+        <p>here's what's happening: the first two only execute once because the for-loop check is implemented as <code>limit &lt; init</code>, but subsequent iterations check <code>idx &lt;= limit</code>. so NaN passes the first test, but not the second test.
+
+        <p>the latter two examples show that NaN is always treated as negative when used as the step, even if you do <code>math.abs(0/0)</code>. this is because the check for whether the step is positive is <code>0 &lt; step</code>, which is of course always false for NaN.
+
+        <p>none of this is documented btw, so this is likely a genuine oversight. but that's really interesting: using NaN causes the specific comparison operator used by the implementation to leak into the interpreter's behavior.
+
+        <p>the simple solution here is to just check for and disallow NaN in numerical for-loops. lua already raises an error when 0 is used as the step, so it's interesting that there's no such check for NaN.
+
+        <h2>conclusion i guess</h2>
+<p>Chris Siebenmann also previously wrote about the <a href="https://utcc.utoronto.ca/~cks/space/blog/programming/GoNaNsAsMapKeys">weird behavior of NaNs as map keys in go</a>, so i guess that makes 3 case studies of NaN's weirdness.
+
+        <p>NaN is weird. and that means other things behave weirdly with it.
+      </p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></div>
+</main>
