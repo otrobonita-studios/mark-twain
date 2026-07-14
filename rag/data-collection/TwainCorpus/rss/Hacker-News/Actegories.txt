@@ -1,0 +1,179 @@
+Previously: 
+Kan Extensions in Double Categories
+.
+
+In programming, actegories play a central role in optics: lenses, prisms, traversals, etc. To understand actegories, let’s start with the definition of a monoidal category.
+
+Monoidal Category
+
+A monoidal category 
+ is a category equipped with a tensor product. A tensor product is a functor 
+. We assume that this product is associative and unital– up to isomorphism. It means that there is an invertible associator:
+
+natural in all three arguments. We also have a unit object 
+ and two (invertible, natural) unitors:
+
+To get a better feel for it, we can try to model a monoidal category in Haskell. We parameterize it by the type of the tensor product, 
+ten
+, which we want to be a 
+Bifunctor
+:
+
+class (Bifunctor ten) => MonoidalCategory ten where ...
+
+The standard way to define a subcategory of Hask is to restrict the types of objects by imposing a constraint. Such a restriction has a special kind, 
+Constraint
+:
+
+class Bifunctor ten
+  => MonoidalCategory (obj :: Type -> Constraint) ten where ...
+
+A common example of such a constraint is a typeclass. For instance 
+Monoid
+ will restrict the objects of the category to be monoids. (In principle, we should also restrict the type of arrows, here to monoid morphisms.)
+
+We can specify the unit of a monoidal category as an associated type (parameterized by 
+ten
+):
+
+    type Unit ten :: Type
+
+The unit should be an object of the category, so it should satisfy the constraint. We can encode this in our definition as a precondition: 
+obj (Unit ten)
+. This leads to a circularity, which we can overcome using the language pragma 
+UndecidableSuperClasses
+:
+
+class (Bifunctor ten , obj (Unit ten))
+  => MonoidalCategory (obj :: Type -> Constraint) ten where
+    type Unit ten :: Type
+    ...
+
+Finally, we can add the associator and the unitors (and their inverses):
+
+class (Bifunctor ten , obj (Unit ten))
+  => MonoidalCategory (obj :: Type -> Constraint) ten where
+    type Unit ten :: Type
+    alpha  :: (obj a, obj b, obj c) =>  (a `ten` b) `ten` c -> a `ten` (b `ten` c)
+    lambda :: (obj a) => (Unit ten) `ten` a -> a
+    ...
+
+Notice the 
+obj
+ constraints in the type of these functions and the infix notation for the tensor.
+
+Let’s work out a few examples. The simplest is the category of all types with a cartesian product as tensor. 
+
+instance MonoidalCategory Hask (,) where
+    type Unit (,) = ()
+    alpha ((a, b), c) = (a, (b, c))
+    lambda ((), a) = a
+    ...
+
+We define 
+Hask
+ using an empty class, and we make all objects its instances:
+
+class Hask a
+instance Hask a 
+
+Similarly, we can define a monoidal category with 
+Either
+ as the tensor product, or with 
+Monoid
+ as the object constraint.
+
+Actegory
+
+An actegory is a category that supports the action of a monoidal category. You may think of it as “multiplying” or “scaling” the objects of this category by objects of the monoidal category. The (left) action can be defined as a functor from the product category to 
+:
+
+or, after currying, as a functor from 
+ to the endofunctor category:
+
+The coherency conditions are the invertible natural transformations that relate the action 
+ to the tensor product 
+ and its unit 
+:
+
+The action is functorial in both arguments, so our Haskell translation pegs it, for simplicity, as a 
+Bifunctor
+. (A 
+Profunctor
+ action is also possible. Categorically, it would correspond to using 
+ as the monoidal category.)
+
+class (MonoidalCategory obj ten, Bifunctor act) 
+  => Actegory obj ten act | act -> ten where
+    assoc  :: (obj m, obj n) 
+           => (m `ten` n) `act` a -> m `act` (n `act` a)
+    assoc' :: (obj m, obj n)
+           => m `act` (n `act` a) -> (m `ten` n) `act` a
+    unit   :: Unit ten `act` a -> a
+    unit'  :: a -> Unit ten `act` a
+
+Another simplifying assumption is that the action uniquely identifies the tensor product, encoded here as the functional dependency 
+act -> ten
+. 
+
+The simplest example of an actegory is the self action of the cartesian product. Here, the monoidal category acts on itself:
+
+instance Actegory Hask (,) (,) where
+    assoc ((m, n), a) = (m, (n, a))
+    assoc' (m, (n, a)) = ((m, n), a)
+    unit ((), a) = a
+    unit' a = ((), a)
+
+Monoidal Functors
+
+Actegories that use the same monoidal category for their actions form a category. The morphisms in this category are (strict) monoidal functors. These are functors that map one action to another:
+
+In Haskell, we can model them as:
+
+class (Actegory obj ten act1, Actegory obj ten act2, Functor f) =>
+  MonFunctor obj ten act1 act2 f where
+    as  :: obj m => m `act2` f a   -> f (m `act1` a)
+    as' :: obj m => f (m `act1` a) -> m `act2` f a
+
+In fact, actegories form a bicategory, with action-preserving natural transformations acting between monoidal functors.
+
+Here’s an interesting example of a monoidal functor between non-trivial actegories:
+
+instance (Traversable f) => MonFunctor Monoid (,) (,) (,) f where
+    as (m, fa) = fmap (m, ) fa
+    as' = sequenceA
+
+Haskell code is available 
+here
+.
+
+Share this:
+
+Share on Reddit (Opens in new window)
+
+Reddit
+
+More
+
+Share on X (Opens in new window)
+
+X
+
+Share on LinkedIn (Opens in new window)
+
+LinkedIn
+
+Share on Facebook (Opens in new window)
+
+Facebook
+
+Email a link to a friend (Opens in new window)
+
+Email
+
+Like this:
+Like
+ 
+Loading…
+
+Related
