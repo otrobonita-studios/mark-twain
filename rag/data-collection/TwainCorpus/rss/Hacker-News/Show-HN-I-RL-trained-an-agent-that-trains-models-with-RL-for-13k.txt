@@ -1,0 +1,491 @@
+🤓 AI Trains AI: Using RL to train an AI agent that trains AI using RL
+
+🔓 
+Everything is open sourced
+ including: the trained agent's weights (
+LoRA adapter on 🤗 HF
+), agent harness, task families, reward code, GPU orchestration, tinker RL training scripts, and retro write-ups of every pilot (including the failures). 
+Jump to Getting started ↓
+
+TL;DR:
+
+I built a pipeline where an AI agent:
+
+Is handed a training task ("teach a model to do X")
+
+Writes a complete 
+prime-rl
+ training job, including: environment, reward, dataset, hyperparameters.
+
+Submits it to real 
+Runpod
+ GPUs for training.
+
+Leveraging 
+Tinker
+, I then RL-trained the agent itself, rewarding it when it trained better models.
+
+Reward climbed from ~0.0 to a ~0.63 peak over 54 training steps. 
+Transferring to a held-out task family it never trained on
+.
+
+An AI in an RL loop, whose action is training AI in an RL loop. (Source: 
+assets/hero.svg
+.)
+
+📚 Table of Contents
+
+🔁 How it works
+
+The episode
+
+⚖️ Reward design
+
+🧩 Task families
+
+📈 Results
+
+The reward climbed in two distinct rungs
+
+The skill transfers to a held-out task family
+
+The agent learned to pick the better base model
+
+🖥️ Infrastructure
+
+💰 Costs
+
+🤗 Model weights
+
+🚀 Getting started
+
+🔮 Future improvements
+
+Acknowledgements
+
+🔁 How it works
+
+Two RL loops with two entirely separate training stacks.
+
+who is being trained
+
+what training looks like
+
+stack
+
+Outer loop
+
+the trainer agent (
+Qwen3.6-35B-A3B
+, LoRA)
+
+episodes of writing training jobs; episode reward is the policy-gradient signal
+
+Tinker
+ + tinker-cookbook (importance-sampling GRPO)
+
+Inner loop
+
+a small base model (
+Qwen3-0.6B
+ / 
+1.7B
+)
+
+the job the agent wrote: a 
+verifiers
+ environment + rubric, with a 
+[prime_rl]
+ config table
+
+prime-rl
+ (GRPO) on Runpod GPUs
+
+Tinker trains the agent. The agent writes verifiers envs, rubrics, and prime-rl configs. prime-rl trains the small model. The inner model's hidden-eval score flows back up as the outer loop's reward.
+
+The episode
+
+One episode, end to end. (Source: 
+assets/episode.svg
+.)
+
+One episode = one attempt by the trainer agent to produce a valid, high-quality training job for a given task:
+
+Task spec
+ — a description of what to train ("teach a small model to resolve multi-hop persona queries"), hard constraint bounds, the eval tool interface, and a handful of dev examples.
+
+The agent works
+ — it edits a sandboxed workspace through 
+read_file
+ / 
+write_file
+ / 
+edit_file
+ / 
+list_files
+, and can call 
+get_baseline_scores
+ to see the untrained base models' scores on the hidden eval.
+
+submit_job
+ — triggers a validation probe. Any failures are returned and the agent gets capped retries.
+
+Dispatch
+ — a validated job is queued and picked up by a warm pool of Runpod GPU pods, which run GRPO training with prime-rl and score the checkpoint pre/post on the hidden eval.
+
+Reward
+ — combines validation efficiency with the trained model's uplift over the best untrained baseline.
+
+The 
+outer loop
+ then RL-trains the agent itself on episode reward, using 
+Tinker
+. Every outer-loop batch spawns 40 real inner training jobs across up to 16 GPU pods.
+
+⚖️ Reward design
+
+Episode reward is a weighted sum (live weights 0.35 / 0.60 / 0.05):
+
+Validation
+ — 1.0 for a first-try valid submission, decaying per extra attempt; 0 if the episode never validates. (Separately, the outer loop scores an episode −0.1 when the agent never produces a parseable submission at all. The −1.0 values you'll see in the CSVs are a "no post score" logging sentinel, not a reward.)
+
+Job quality
+ — a hybrid of the trained model's absolute post-training score and its signed uplift over 
+best_pre
+, the best 
+untrained
+ model's frozen baseline: 
+0.25·post + 0.75·uplift_term
+. A job that dies on the GPU scores 0 here (the episode keeps its validation term).
+
+Train speed
+ — a small tie-breaker for faster jobs, gated on job success.
+
+Note for close readers: the agent-facing prompt (
+template/INSTRUCTIONS.md
+) gives the agent a simplified view — the 75/25 uplift/absolute split inside job quality, plus a fewer-attempts nudge — not the full 0.35/0.60/0.05 decomposition. The published adapter was trained against that prompt; the reward actually computed is the one above.
+
+🧩 Task families
+
+Six families of tasks, deliberately built so that the untrained models struggled without training, and all require multi-step tool use and reasoning:
+
+family
+
+shape
+
+untrained best_pre (n=200)
+
+calc_chain
+
+chained arithmetic where each step feeds the next
+
+0.742
+
+multi_hop
+
+persona-world queries needing multiple dependent lookups
+
+0.654
+
+string_pipeline
+
+composed string transformations
+
+0.545
+
+ledger
+
+stateful account bookkeeping via tools
+
+0.242
+
+dispatch
+
+conditional routing decisions
+
+0.323
+
+triage
+ (held out)
+
+on-call incident triage: correlating services, incidents and deploys across tools
+
+0.352
+
+Five families train the agent; 
+triage is never trained on
+ and serves as the generalisation probe.
+
+📈 Results
+
+Setup: Qwen3.6-35B-A3B trainer agent, LoRA rank 8, lr 4e-5, GRPO with group size 8, up to 16 concurrent GPU pods, ~40 real training jobs per batch. Runs: pilot-7 (10 steps) → 7b (24 steps, warm-started) → 7c (20 steps, warm-started) — 54 steps total.
+
+1. The reward climbed in two distinct rungs
+
+Decomposing the reward shows 
+what
+ was learned, and in what order:
+
+Rung 1 — process reliability (pilot-7).
+ The entire early gain came from converting validation failures and dead-on-GPU jobs into completed episodes. Job quality stayed flat while total reward rose to ~0.26. Showing GRPO taking the steepest gradient first.
+
+Rung 2 — making better models (pilot-7b onward).
+ With reliability saturating (~0.75–0.80 validation), job grade rose 0.30 → 0.41 and the hidden-eval post-training score went from ~0.04 noise to a sustained 0.22–0.48. 
+The agent started making 
+better
+ models, not just working ones.
+
+2. The skill transfers to a held-out task family
+
+A task family which the agent never trained on showed performance rises with outer-loop training, then plateaus:
+
+checkpoint
+
+outer steps
+
+mean reward
+
+validated
+
+inner jobs succeeded
+
+worst episode
+
+base model
+
+0
+
+0.399
+
+9/10
+
+5/9
+
+0.000
+
+pilot-7 final
+
+10
+
+0.438
+
+8/10
+
+8/8
+
+0.000
+
+pilot-7b final
+
+34
+
+0.545
+
+10/10
+
+9/10
+
+0.290
+
+pilot-7c final
+
+54
+
+0.492
+
+10/10
+
+8/10
+
+0.175
+
+3. The agent learned to pick the better base model & better hyperparams
+
+Early training runs were model-selection blind: 77/79 episodes chose the weaker 0.6B model. After introducing the 
+get_baseline_scores
+ tool and uplift grading, the policy flipped and remained so during training, deepening across the arc: 1.7B share of job-writing episodes went 
+42% → 95%
+. It also adopted the exposed 
+[prime_rl]
+ config surface (21% → ~78% of episodes within one warm-start boundary), with a sensible key mix: sampling temperature, optimizer choice, algorithm variant, scheduler, loss.
+
+🖥️ Infrastructure
+
+16x warm GPU pods training at any one time:
+
+Inner loop (the jobs the agent writes):
+
+Runpod warm-pod fleet
+ — a capped pool (up to 16) of pods, bootstrap-pinned to exact prime-rl + verifiers revisions so every node is a replica; ~2 min from provision to serving. Idle pods are reaped; the queue is file-backed (
+queued/ → running/ → done/
+).
+
+GPU selection is data-driven
+ — a benchmark matrix over GPU × base-model found 2× RTX A5000 wins cost at 
+£0.10/job (~$0.13)
+; preference ladders are walked at provision time to take whatever's in stock.
+
+What the fleet actually ran on
+ (headline arc, ~1,750 jobs — below the nominal 54 steps × 40 because episodes that fail validation never dispatch a job): 
+A40 64%
+ (340 GPU-train-hours) · 
+RTX 4090 32%
+ (151h) · RTX A6000 3% · RTX A5000 1%. The benchmark cost-winner was rarely in stock, so the ladder spent most of the arc on A40s.
+
+prime-rl (GRPO)
+ trains the small model; checkpoints are scored pre/post on the hidden eval with vLLM.
+
+Outer loop (training the agent):
+
+Tinker
+ (Thinking Machines' managed RL API) trains Qwen3.6-35B-A3B with LoRA via tinker-cookbook's importance-sampling GRPO. A control-inversion bridge runs each episode as a background task behind a queue-backed policy, so the cookbook loop drives episodes turn-by-turn while all harness logic (validation retries, nudges, grading) stays unchanged.
+
+Async off-policy
+ (
+max_steps_off_policy=2
+) defeats the straggler barrier — one slow episode no longer gates a whole batch. Zero stale discards across the headline arc.
+
+Everything is metered.
+ Every LLM call logs tokens and USD; 
+runs/costs.jsonl
+ is a global spend ledger enforced against per-episode budgets.
+
+The whole orchestration runs on a CPU box, rented via 
+Nebius
+.
+
+💰 Costs
+
+item
+
+(loosely) measured cost
+
+one inner training job (train + pre/post eval)
+
+~£0.10–0.15 (~$0.13–0.20) benchmarked on short tasks; ~£0.15–0.22 (~$0.20–0.30) for the long persona-family jobs
+
+one outer-loop episode (agent tokens, Tinker)
+
+~£0.11–0.19 (~$0.15–0.25)
+
+one outer-loop batch (40 real GPU jobs + agent tokens)
+
+~£11–17 (~$15–23) all-in
+
+holdout eval arm (n=10)
+
+~£4–6 (~$5–8)
+
+Runpod, billed across the arc window
+
+~£605 (~$810) — includes some concurrent baseline-seeding and GPU-benchmark pods
+
+Tinker across the arc (invoiced — all agent sampling & training, incl. the holdout-eval episodes)
+
+~£345 (~$465)
+
+whole headline arc
+
+~£950 (~$1,275) all-in
+ (~£605 Runpod, ~£345 Tinker)
+
+Honesty footnote: ~£950 is the headline arc, not the project — the pilots, GPU benchmarking, baseline seeding, and blind alleys that got here (written up in the 
+docs/
+ retros) cost a few hundred more on top. Benchmark-matrix rows on cold pods ran as high as ~$0.37/job (see 
+benchmarks/REPORT.md
+); the per-job range above is warm-pool arc jobs. GBP figures at £0.745/$1 (10 Jul 2026).
+
+🤗 Model weights
+
+The trained trainer agent is on Hugging Face: 
+Danau5tin/ai-trains-ai-trainer
+.
+
+It's the LoRA adapter (rank 8, ~560MB) from the 
+step-34 checkpoint
+ — the held-out transfer peak in the table above — derived from 
+Qwen/Qwen3.6-35B-A3B
+ and released under Apache-2.0 to match the base model. Load it with PEFT or serve it with vLLM's LoRA support; to run full episodes, drive it through this harness. The model card has usage snippets and honesty notes.
+
+🚀 Getting started
+
+If you'd like to reproduce, or extend. The below will get you there!
+
+#
+ .env at repo root with OPENROUTER_API_KEY=... (and TINKER_API_KEY for outer RL)
+
+uv sync
+uv run pytest                                        
+#
+ fully offline: no network, no keys
+
+uv run at-episode --task examples/tasks/calc_chain_v1_fast.json --model qwen3.6-27b   
+#
+ run one episode with a frontier agent
+
+Each episode prints reward, token usage, and dollar cost, and writes full artifacts (trajectory, manifest, the agent's workspace) to 
+runs/<run_id>/
+.
+
+With Runpod + Tinker keys:
+
+uv run at-worker --max-pods 2 --once                 
+#
+ drain the job queue on real GPUs
+
+uv run python scripts/seed_baselines.py              
+#
+ freeze eval baselines (required before RL)
+
+uv run python scripts/train_trainer.py smoke=True    
+#
+ outer RL smoke test
+
+Deeper guides: 
+docs/architecture.md
+ (components and contracts), 
+docs/outer-rl-tinker.md
+ (full RL runbook), 
+docs/gpu-runner-spec.md
+ (compute-provider contract), and the retro series in 
+docs/
+ — every pilot, including the failures, is written up (pilots 4–5 live inside 
+the eval-integrity retro
+ rather than standalone files).
+
+⚠️
+ 
+Trust model:
+ agent-written code executes in a timeout-guarded subprocess on the host, not a container. Fine for frontier APIs and your own checkpoints on a template contract; containerise the probe before running untrusted or heavily-RL'd policies.
+
+🔮 Future improvements
+
+🔄 Iterative experimentation
+ — today the agent submits one job per episode; the natural next rung is letting it read results and submit follow-up experiments, and / or allowing multiple experiments to be dispatched at the same time, i.e. grading multi-job 
+research taste
+ rather than one-shot job quality.
+
+🧠 Richer tasks
+ — only stateless tool-calling envs are exposed today; opening verifiers' other env types would let the trainer agent train stateful coding agents.
+
+Acknowledgements
+
+Prime-RL
+: A truly excellent framework for GRPO training. I've used it many times, and the team is great and very helpful!
+
+Verifiers
+: A great framework for envs and rubrics.
+
+Thinking Machines' Tinker
+: The first time I used it, and it was a great lifestyle choice to not have to manage training infra. Highly recommend.
+
+Runpod
+ for cheap, scriptable GPU pods.
+
+The Qwen team for base models small enough to train for pennies and big enough to be worth training.
+
+The Anthropic team for their incredible coding models (Fable-5 wrote every line of code in this project), and the Claude Code harness.
+
+This project was brilliant fun! An RL loop with an RL loop inside it is confusing, exciting, scary, and points towards a wild future ahead. Thanks for reading!
+
+Dan Austin
