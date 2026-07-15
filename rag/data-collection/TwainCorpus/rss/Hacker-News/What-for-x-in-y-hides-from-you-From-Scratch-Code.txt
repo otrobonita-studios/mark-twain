@@ -1,0 +1,520 @@
+What `for x in y` hides from you
+What a Python `for` loop is really doing once you stop hand-waving.
+Jul 08, 2026
+7 min read
+There are certain Python features that are so straightforward to use, you forget they are doing anything at all.
+
+Consider 
+for x in y
+.
+
+You write a list, or a string, or a range, and Python politely hands you back one item at a time. No index variable and no bounds checks. Compared to 
+i++
+ from C/C++ or 
+forEach
+ from JavaScript, Python's version 
+just works
+.
+
+For a long time, I treated 
+for x in y
+ as just a syntax that meant “loop over this thing,” and that was enough. Then I started building 
+Memphis
+, my Python interpreter in Rust, and eventually I had to stop hand-waving and answer an extremely rude question:
+
+What is a 
+for
+ loop actually doing?
+
+It turns out the answer is both simpler and more involved than I expected.
+
+The illusion
+
+Let’s start with a tiny example.
+
+Run
+9
+1
+2
+for
+ x 
+in
+ [
+10
+, 
+20
+, 
+30
+]:
+    print(x)
+Open in Memphis Playground
+
+Run it and you get the familiar behavior: one value at a time, in order.
+
+So far, no real surprises.
+
+If you’re starting out with Python, it’s easy to come away with a mental model like this:
+
+Python peers into the list
+
+it walks through the elements one at a time
+
+it assigns each one to 
+x
+
+then it runs the body of the loop
+
+That’s not behaviorally wrong, but it hides the most important part:
+
+Python is not looping over the collection directly. It is looping over an iterator.
+
+That distinction matters because it explains why 
+for
+ works on so many different kinds of objects, and why iteration in Python feels so flexible.
+
+The hidden step
+
+When Python sees this:
+
+Run
+9
+1
+2
+for
+ x 
+in
+ [
+10
+, 
+20
+, 
+30
+]:
+    print(x)
+Open in Memphis Playground
+
+The real story is closer to something like this:
+
+Run
+9
+1
+2
+3
+4
+5
+6
+7
+8
+it = iter([
+10
+, 
+20
+, 
+30
+])
+while
+ 
+True
+:
+ 
+try
+:
+        x = next(it)
+        print(x)
+ 
+except
+ StopIteration:
+ 
+break
+Open in Memphis Playground
+
+This is the crux of it.
+
+A 
+for
+ loop is really:
+
+ask for an iterator by calling 
+iter(...)
+
+repeatedly ask for the next value by calling 
+next(...)
+
+stop when 
+next(...)
+ raises 
+StopIteration
+
+The 
+for x in y
+ syntax is just a pretty wrapper.
+
+Once this clicked for me, a bunch of Python behavior stopped feeling mysterious.
+
+You can see it directly
+
+We can prove this to ourselves without even touching interpreter internals yet.
+
+Run
+9
+1
+2
+3
+4
+5
+6
+nums = [
+10
+, 
+20
+, 
+30
+]
+it = iter(nums)
+print(next(it))
+print(next(it))
+print(next(it))
+Open in Memphis Playground
+
+This prints the list elements one at a time.
+
+But if we push one step too far:
+
+Run
+9
+1
+2
+3
+4
+5
+6
+7
+nums = [
+10
+, 
+20
+, 
+30
+]
+it = iter(nums)
+print(next(it))
+print(next(it))
+print(next(it))
+print(next(it))
+Open in Memphis Playground
+
+Run that second snippet too. The last 
+next(it)
+ raises 
+StopIteration
+, which is exactly how the loop knows it is done.
+
+So the loop is not “reading from the list” in some special one-off way. It is using the same iterator protocol you can use yourself.
+
+Why this matters
+
+At first glance, this may seem like one of those facts that is technically true but not especially useful.
+
+I don’t think that’s the case.
+
+This one idea explains why all of these work:
+
+Run
+9
+1
+2
+3
+4
+5
+6
+7
+8
+for
+ x 
+in
+ [
+1
+, 
+2
+, 
+3
+]:
+    print(x)
+for
+ ch 
+in
+ 
+"cat"
+:
+    print(ch)
+for
+ n 
+in
+ range(
+3
+):
+    print(n)
+Open in Memphis Playground
+
+These are completely different kinds of objects. A list is not a string is not a range. Yet Python can loop over all of them because each one can produce an iterator.
+
+It also explains why generators work so naturally with 
+for
+. A generator is just another Python type that participates in this same protocol. We'll see an example of that in a minute.
+
+Once you see that, Python’s iteration model starts to feel unified instead of magical.
+
+The part I had to implement
+
+In Memphis, I couldn’t get away with “loop over this thing somehow.” I had to decide what the runtime would actually do.
+
+At a high level, my treewalk interpreter handles a 
+for
+ loop by:
+
+evaluating the expression on the right-hand side
+
+calling 
+iter(...)
+ on the result
+
+repeatedly calling 
+next(...)
+
+binding each returned value to the loop variable
+
+stopping when 
+StopIteration
+ is raised
+
+That sounds almost boring when written out, which I mean as a credit to the Python specification. Good abstractions often become boring once you can name them clearly.
+
+The surprise for me was not that 
+for
+ uses iteration. It was how little the loop itself knows.
+
+The 
+for
+ loop does not need special logic for lists, tuples, ranges, strings, generators, or anything else. It just needs the iterator protocol. The specific object handles the details.
+
+In full Python, this goes one step farther: custom objects can participate too by implementing 
+__iter__()
+ and 
+__next__()
+. I’m still working on that part in Memphis, but it’s one of the coolest consequences of this design.
+
+That’s a very Pythonic design.
+
+Another example which may help this click
+
+Consider this:
+
+Run
+9
+1
+2
+3
+4
+5
+6
+7
+8
+items = [
+1
+, 
+2
+, 
+3
+]
+it = iter(items)
+for
+ x 
+in
+ it:
+    print(x)
+for
+ x 
+in
+ it:
+    print(
+"again:"
+, x)
+Open in Memphis Playground
+
+Try running it yourself. The second loop prints nothing.
+
+That’s because the iterator was already exhausted by the first loop. The 
+for
+ loop didn’t “rewind” anything. It just kept calling 
+next(...)
+ until there was nothing left.
+
+If you want to make the distinction more concrete, inspect the types too:
+
+Run
+9
+1
+2
+3
+4
+5
+items = [
+1
+, 
+2
+, 
+3
+]
+it = iter(items)
+print(type(items))
+print(type(it))
+Open in Memphis Playground
+
+This is a subtle but important distinction:
+
+an 
+iterable
+ can usually give you a fresh iterator (
+list
+, 
+str
+, 
+range
+, etc)
+
+an 
+iterator
+ is usually a one-way trip
+
+A generator function can create a fresh generator each time you call it, but a generator object itself is already an iterator.
+
+That difference hides behind the word 
+in
+: it initializes a new iterator for you, unless you already gave it one.
+
+There’s another useful variation here too:
+
+Run
+9
+1
+2
+3
+4
+pairs = [(
+1
+, 
+10
+), (
+2
+, 
+20
+), (
+3
+, 
+30
+)]
+for
+ x, y 
+in
+ pairs:
+    print(x, y)
+Open in Memphis Playground
+
+This can look like a different kind of loop, but it really isn’t. The iteration part is the same: Python still asks for an iterator and pulls one value at a time. It’s just that each value happens to be a two-item tuple, and Python then unpacks that tuple into 
+x
+ and 
+y
+.
+
+So 
+for x, y in z
+ isn't a special flavor, it's ordinary iteration plus unpacking.
+
+An example to break your brain
+
+If you want to make this stick, it helps to play with a generator.
+
+Run
+9
+1
+2
+3
+4
+5
+6
+7
+8
+9
+def
+ 
+countdown
+():
+    print(
+"Starting"
+)
+ 
+yield
+ 
+3
+ 
+yield
+ 
+2
+ 
+yield
+ 
+1
+    print(
+"Done"
+)
+for
+ x 
+in
+ countdown():
+    print(
+"Got"
+, x)
+Open in Memphis Playground
+
+Run it and watch the order carefully. What the 
+for
+ loop is hiding here is more than just repetition.
+
+Each call to 
+next(...)
+ resumes the generator, runs it until the next 
+yield
+, hands that value back to the loop, and pauses again.
+
+Once I started thinking of iteration this way, 
+for
+ loops stopped feeling flat. They became a protocol between the loop and some other object that knows how to produce values over time.
+
+That is a much more accurate mental model.
+
+And that, more and more, is what I enjoy about building Memphis. Python has all these smooth surfaces that make it pleasant to use. But when I reimplement one of them from scratch, I get to see the levers underneath.
+
+In this case, it was just this surprisingly small mechanism:
+
+iter(...)
+
+next(...)
+
+StopIteration
+
+The end
+
+The nicest part of Python’s loop syntax is that it lets beginners be productive before they understand any of this. That’s impressive language design.
+
+But once you hit generators, custom iterables, or bugs involving exhausted iterators, the nicer syntax can become a liability if you never learned what it was hiding.
+
+The phrase I keep coming back to is this:
+
+for x in y
+ does not mean “loop over y.” It means “ask y how to be iterated.”
+
+That may not sound like much, but it was a real shift for me.
+
+And if you’ve mostly been using 
+for x in y
+ as a black box, maybe it’ll shift something for you too.

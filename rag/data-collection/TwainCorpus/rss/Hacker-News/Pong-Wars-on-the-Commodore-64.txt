@@ -1,0 +1,3077 @@
+Back to Articles
+
+15th Jul 2026
+
+This post was first promised in early 2024
+[0]
+Pongwars on the C64
+, @Two9A, Feb 22nd 2024
+, but it got so long, I added a table of contents. That might be a first...
+
+Introduction
+
+Before we get started
+
+Digression
+: Building a C64 disk image
+
+The game loop: Movement calculations
+
+Digression the second
+: Representing negative numbers
+
+After movement comes positioning
+
+An element of chance
+
+The playing field
+
+Keeping score
+
+Digression the third
+: Binary long division
+
+Rendering the score
+
+Future considerations
+
+Footnotes and citations
+
+One day early in 2024, I was idly flipping through Mastodon when I came across this toot by Koen van Gilst
+[1]
+Pongwars recreated in JavaScript
+, @vnglst, Jan 2024
+:
+
+Figure 1: The toot by @vnglst that sparked the descent into madness currently under discussion
+
+This is a depiction of an eternal battle between the "day" ball and the "night" ball, to reverse the colour of the opposite ball's field. Many were transfixed, judging by the thousands of faves; I was one of them, and the thought arose unbidden:
+
+If van Gilst saw this online and had to recreate it in JavaScript, and now I've seen it online, I have to recreate it on the Commodore 64, right?
+
+Is such a thing even possible?
+
+"Yes it is!"
+ Well, it seems like it should be. This is a relatively simple animation, with a random element thrown in at the point the balls contact a surface that makes them bounce; defining "a surface that makes them bounce" seems like the tricky part.
+
+So we need to do some planning. And as the first step, there's some defining:
+
+We have the 
+ball
+ (two of them) which moves smoothly in straight lines;
+
+There's a 
+blockfield
+: the 20x20 block area over which the balls travel;
+
+The blockfield has a 
+boundary
+ outside of which the balls can't travel, and they bounce off the boundary;
+
+And there are two 
+sides
+ whose edges also cause the ball to bounce, but the block that gets hit reverses sides.
+
+This is all complicated by the fact that, despite a lifelong interest in hacking at the C64, I'd never to this point written anything substantial in assembly for the machine. Looks like we'll be learning as we go.
+
+On most machines of the era video was output to a CRT, as explained in my megathread on the 1541 disk drive from a couple of years back
+[2]
+"Why Was the Commodore 64 Disk Drive So Slow?"
+, Imran Nazar, Dec 2024
+. After each frame of video output comes a short vertical blanking period, during which the video chip is not making any demands on memory; we'll be looking to try to limit any calculations needed for this animation, so they're completed within the blanking period and we're not unduly affecting other things that may be happening on the machine during the frame rendering period.
+
+On the Commodore 64, the BASIC interpreter is the main thing that might be running during that period, and it provides some helpful things for this effect. One of those is a hook that gets triggered at the bottom of every frame
+[3]
+"Raster interrupt"
+, C64 Wiki, updated Mar 2024
+, allowing custom code to be called every frame while keeping BASIC running. So we can plan out something like this for the code:
+
+Figure 2: Flow chart for the main loop
+
+Before we get started
+
+So let's look at the initialisation portion: we'll be keeping an internal representation of the state of the blockfield, but there's also the on-screen blockfield to set up. The C64 has a 40x25 area of characters in its default text mode (each character being an 8x8 pixel square), and there are two areas of memory of interest here:
+
+The 
+screen RAM
+ sits at 
+$0400
+ by default, and is a thousand-byte area where the character values are stored;
+
+The 
+color RAM
+ at 
+$D800
+ is a thousand nybbles
+[A]
+A nybble is four bits, as opposed to an 8-bit byte.
+ where each location can represent one of the C64's 16 colours.
+
+Immediately after screen RAM sit the pointers to sprite data, but we're not setting up any sprites (yet), so a little shortcut is to write 1024 bytes to screen. This writes past the end of the screen, but makes the code much simpler:
+
+SCRRAM = 
+$0400
+
+BLOCKPTR = 
+$03
+   
+; A block of two bytes not used by BASIC
+
+init
+:
+    
+subroutine
+
+; Set up a pointer to screen RAM, starting at the top left
+
+; The 65xx CPUs are little-endian, so low byte first
+
+lda
+ #<SCRRAM
+    
+sta
+ BLOCKPTR
+    
+lda
+ #>SCRRAM
+    
+sta
+ BLOCKPTR + 
+1
+
+; We'll be writing SPACE (character 32), not char 0 which is @
+
+lda
+ #
+32
+
+; Four lots of 256, for 1024 writes
+
+ldx
+ #
+4
+
+ldy
+ #
+0
+
+.blank
+:
+    
+; The inner loop: runs from Y=0 through 255, 254, ...0 again
+
+sta
+ (BLOCKPTR), y
+    
+dey
+
+bne
+ 
+.blank
+
+; The outer loop: punt the pointer along by 256 each go-around
+
+inc
+ 
+BLOCKPTR
+ + 
+1
+
+dex
+
+bne
+ 
+.blank
+
+(As an aside, 
+BLOCKPTR
+ is set to a value which is "not used by BASIC", but how do we know that? It turns out there's a detailed map of memory used by the C64, by Joe Forster of the STA demo group
+[4]
+Commodore 64 memory map
+, STA, last updated probably a while ago as the page is HTML 4.01
+, which states locations that the BASIC and Kernal ROMs don't touch in their standard operation, and which are free for programs to use.)
+
+With the screen a uniformly blank Commodore blue, we can draw out the blockfield as a 20x20 area. The display of the C64 allows each character to have a foreground colour in text mode, but the background colour is shared across the whole screen; if we want to use colour RAM to indicate which blocks are white and which are black (and we do), we'll want a character that's all foreground colour with no holes.
+
+Figure 3: C64 Character set 1, in two sets of 128
+Source: Jodigi, admin of the C64 Wiki
+[5]
+"Character set"
+, C64 Wiki, updated Aug 2025
+
+As the second half of the character set contains reverse-video copies of the first half, we can use the reverse-video version of SPACE (character 160) as our fully-foreground block. Our loop is a little more complicated: to write rows of 20 characters on a screen that's 40 wide, we need to write 20 and skip 20; additionally, we'll want to put this block centrally on the screen, so we need to start one row down and 10 characters in.
+
+Our resultant pointer is actually one row and 
+nine
+ characters after the start of screen RAM, because we can achieve the effect of writing 20 bytes in a row either by starting at 0 and going up to 19 (aborting at 20), or starting at 20 and coming down to 1 (aborting at 0). The latter saves us a compare, so is both quicker and smaller in code size.
+
+lda
+ #<(SCRRAM + 
+40
+ + 
+9
+)
+    
+sta
+ BLOCKPTR
+    
+lda
+ #>(SCRRAM + 
+40
+ + 
+9
+)
+    
+sta
+ BLOCKPTR + 
+1
+
+; This time we're writing 20 rows of 20, char 160
+
+; We'd normally think of this as X being along the line, and Y down
+
+; but the 65xx only offers indirect addressing with Y as the index
+
+ldx
+ #
+20
+
+.field
+:
+    
+lda
+ #
+160
+
+ldy
+ #
+20
+
+.row
+:
+    
+sta
+ (BLOCKPTR), y
+    
+dey
+
+bne
+ 
+.row
+
+; Add 40 to the BLOCKPTR (16-bit add)
+
+; Clobbers A, will need reloading at the top of the .field loop
+
+lda
+ BLOCKPTR
+    
+adc
+ #
+40
+
+sta
+ BLOCKPTR
+    
+lda
+ BLOCKPTR + 
+1
+
+adc
+ #
+0
+
+sta
+ BLOCKPTR + 
+1
+
+dex
+
+bne
+ 
+.field
+
+With the screen RAM fully set up, next comes the colour RAM. As it turns out (peeking ahead) we'll be using a double-buffering technique to simplify the bounce calculations: that means an internal buffer of 400 contiguous black-or-white values for the blockfield, which is rendered to colour RAM each frame. So our initialisation becomes setup of the internal blockfield buffer:
+
+BLOCKBUF = 
+$CE00
+   
+; 512 bytes unused RAM, which is ample
+
+lda
+ #<BLOCKBUF
+    
+sta
+ BLOCKPTR
+    
+lda
+ #>BLOCKBUF
+    
+sta
+ BLOCKPTR + 
+1
+
+; The initial blockfield is half black (colour 0), half white (1)
+
+; In other words, 20 rows of 10 black and 10 white
+
+; In other other words, 40 areas of alternating black and white
+
+lda
+ #
+0
+
+ldx
+ #
+40
+
+.fill
+:
+
+; The inner loop, writing the area of 10 (either black or white)
+
+; This time, write from 9 to 0 inclusive, and stop at -1
+
+ldy
+ #
+9
+
+.fill_row
+:
+    
+sta
+ (BLOCKPTR), y
+    
+dey
+
+bpl
+ 
+.fill_row
+
+; Add 10 to BLOCKPTR (16-bit add)
+
+; Clobbers A, but this time we can't just write a fixed value afresh
+
+; So push A to the stack
+
+pha
+
+lda
+ BLOCKPTR
+    
+adc
+ #
+10
+
+sta
+ BLOCKPTR
+    
+lda
+ BLOCKPTR + 
+1
+
+adc
+ #
+0
+
+sta
+ BLOCKPTR + 
+1
+
+; Pull A back off the stack, and XOR 1 to swap between 0 and 1
+
+pla
+
+eor
+ #
+1
+
+dex
+
+bne
+ 
+.fill
+
+And we're almost done with the initialisation steps. There are two things left to do: set up the sprites for our smoothly-moving balls, and connect the hook for our main routine. So we'll need to design an 8x8-pixel representation of a ball; it turns out that the Minecraft scene has a plethora of pixelated shape generators online, so we can use a circle generator
+[6]
+"Pixel Circle Generator"
+, Donat Studios, updated Jul 2025
+ set to 8x8:
+
+Figure 4: Pixel Circle Generator set to filled circles of width 8
+
+Just like the text characters on a C64, sprites can have a foreground colour for any pixels that are set in the sprite, and a background that shines through for pixels that aren't set. That means sprites can be defined in binary; the text characters are 8x8 pixels, but sprites are 24x21, and the video chip expects binary data corresponding to that size when setting up the sprite. Our ball itself is only 8x8 pixels, so the rest will need to be padded out with 0's.
+
+24x21 bits of data is 63 contiguous bytes, so the C64's video chip expects a pointer to the sprite data to be aligned to a 64-byte boundary; as a result, it actually expects the pointer 
+divided by 64
+ as a sort of "data block index" during setup of the sprite. As we mentioned earlier, the pointers to the sprite are, by default, immediately after the screen text in RAM:
+
+SPRPTR = SCRRAM + (
+40
+ * 
+25
+)
+
+lda
+ #(ballmap / 
+64
+)
+    
+sta
+ SPRPTR       
+; Sprite 0
+
+sta
+ SPRPTR + 
+1
+   
+; Sprite 1
+
+; This will end up at the bottom of our source code,
+    ; in a "data section". For now it's presented alongside
+
+align
+ 
+64
+
+ballmap
+:
+    
+byte
+ %
+00111100
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+01111110
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+11111111
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+11111111
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+11111111
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+11111111
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+01111110
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00111100
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+byte
+ %
+00000000
+, %
+00000000
+, %
+00000000
+
+With the sprite data set up, we can inform the video chip of the colours we'd like for each sprite's foreground, and then turn the sprites on. We're not setting the onscreen location of the sprites here, that'll be done by the rendering code; their default position of 0x0 is off the screen to the top left, which is usefully out of the way.
+
+On the C64, talking to the hardware is done in the same way as talking to memory: writing to and/or reading from special addresses. In the documentation, these are referred to as "registers" for the various chips; the video interface chip (VIC) has over 40 of these, but for our purposes we're interested in those that control sprites 0 and 1.
+
+Sprite
+Location
+Name
+Detail
+
+0
+$D000
+SPR0X
+X-position
+
+$D001
+SPR0Y
+Y-position
+
+$D027
+SPR0COL
+Colour
+
+1
+$D002
+SPR1X
+X-position
+
+$D003
+SPR1Y
+Y-position
+
+$D028
+SPR1COL
+Colour
+
+All
+$D010
+SPRXHI
+X-position, 9th bit
+One bit for each sprite
+
+$D015
+SPREN
+Sprite enable
+One bit for each sprite
+
+Table 1: VIC sprite control registers for sprites 0 and 1
+
+There's an interesting wrinkle here that we'll look at in more detail when it comes to rendering the sprites, because the screen is more than 256 pixels across, which means the X-coordinate doesn't fit in one byte; instead, there's a bit in 
+SPRXHI
+ for each sprite that one needs to set when it's over on the right side of the screen. For now, we'll put that aside:
+
+    ; Sprite 0 starts on the black side, and is white
+
+lda
+ #
+1
+
+sta
+ SPR0COL
+
+; Sprite 1 starts on the white side, and is black
+
+lda
+ #
+0
+
+sta
+ SPR1COL
+
+lda
+ #%
+00000011
+
+sta
+ SPREN
+
+And we're done setting things up: the blockfield is in place, the sprites are enabled, and the only thing left is to tell the C64 where to look for the rendering code that runs every frame.
+
+IRQ = 
+$0314
+
+; Disable interrupts, so we don't
+    ; get ...interrupted during setup
+
+sei
+
+lda
+ #<isr
+    
+sta
+ IRQ
+    
+lda
+ #>isr
+    
+sta
+ IRQ + 
+1
+
+cli
+
+; Interrupt service routine: main renderer
+
+isr
+:
+    
+subroutine
+
+; ISRs need to run transparently, without clobbering
+    ; any registers, so we save the full state to stack
+
+pha
+    txa
+    pha
+    tya
+    pha
+
+; TODO: The rendering here
+
+jsr
+ advance_white
+    
+jsr
+ collide_white
+    
+jsr
+ advance_black
+    
+jsr
+ collide_black
+    
+jsr
+ render_field
+    
+jsr
+ render_score
+
+; And pull the state back off the stack, in reverse order
+
+pla
+    tay
+    pla
+    tax
+    pla
+
+; Return to where the C64 would normally
+    ; go during service of this interrupt
+
+jmp
+ $
+EA31
+
+We have ourselves a full program here, though it doesn't do a great deal yet. If we assemble this and build a disk image to load into an emulator
+[B]
+I'm using 
+VICE
+ here, which is perhaps the most accurate emulator of anything ever built.
+ we might get something like this.
+
+Figure 5: Our Pongwars implementation after initialisation
+
+Digression: Building a C64 disk image
+
+While hacking on this, I realised that emulators don't generally take a binary image and allow you to drop it into the C64's memory to be run. The standard user-friendly way of loading a program would be to load it from a disk (or disk image, in this case), so we'll want to take our program as written in assembly, and get it into a disk image.
+
+It turns out VICE provides tools to work on disk images, as it needs to emulate the 1541 disk drive as well as the C64 in order to provide disk connectivity, and you get those tools essentially for free as part of the implementation. In this case, a command-line emulation of the disk drive is available as 
+c1541
+, and it can be instructed to perform all the steps necessary to create a disk image:
+
+Format
+ a disk to lay down the pattern of tracks into an image;
+
+Attach
+ the image to the emulator;
+
+Write
+ our program to disk, and put its name in the directory listing.
+
+Makefile
+: Assembly and image generation
+
+# Change VICE_ROOT to point to your VICE binaries
+# I'm on an M1 Mac, so this is the arm64/osx copy
+
+VICE_ROOT = 
+/Applications/vice-arm64-gtk3-3.7.1/bin
+
+NAME = 
+pongwars
+
+all
+: $(
+NAME
+).d64
+
+$(
+NAME
+).d64
+: $(
+NAME
+).prg
+    $(
+VICE_ROOT
+)/
+c1541
+ \
+        -
+format
+ $(
+NAME
+),
+8
+ 
+d64
+ $(
+NAME
+).d64 \
+        -
+attach
+ $(
+NAME
+).d64 \
+        -
+write
+ $(
+NAME
+).prg $(
+NAME
+)
+
+$(
+NAME
+).prg
+: $(
+NAME
+).asm
+    
+dasm
+ $(
+NAME
+).asm -
+o
+$(
+NAME
+).prg
+
+(It also bears mentioning that I'm using dASM
+[7]
+dASM assembler
+, GitHub, last release 2020
+ to assemble the 6502 code written here into a binary image, that can then be pushed to the disk image by 
+c1541
+.)
+
+The game loop: Movement calculations
+
+So we come back to the program under consideration, having set up our initialisation steps; we now have a empty game loop that needs to be filled in. From Figure 2, we know that our main steps are to advance the two balls, check for collisions, and render the updated block field and score.
+
+What does it mean to "advance the ball"? Well, if we check back to Figure 1, we see that the balls start off in the middle of their fields, and they move at a fixed speed per frame, but their direction can change. If our fixed speed is one pixel per frame, trigonometry tells us that the ball needs to be moved by a 
+fractional
+ number of pixels in the horizontal and vertical directions:
+
+Figure 6: Components of a unit vector
+
+We can't actually move the sprites by a fractional number of pixels, but we can keep track of the fractions and move the sprites if the calculation bumps their position across to the next whole number. If, for example, θ was 35 degrees our ball position might look like this for consecutive frames:
+
+Frame
+X-position
+Y-position
+Screen coords
+
+0
+0
+0
+0, 0
+
+1
+0.819
+0.574
+0, 0
+
+2
+1.638
+1.147
+1, 1
+
+3
+2.457
+1.720
+2, 1
+
+4
+3.277
+2.294
+3, 2
+
+Table 2: Consecutive positions for a ball at speed 1, direction 35°
+
+When I talk about fractions in computing, it's probable that your mind immediately goes to floating-point numbers, which can represent most fractions you're likely to run into. The Commodore 64 does support floating-point operations, but they're astoundingly slow: without dedicated hardware to handle them, the BASIC interpreter handles floating-point numbers in text form, performing calculations internally using its own binary format and translating back to text for storage.
+
+For our purposes, there is another way: 
+fixed-point
+ numbers, where the fractional and integer parts of the number are always a given length and don't change between numbers. This works for us for multiple reasons:
+
+We know the field is 20x20 blocks, which is 160x160 pixels, so the whole-number part of the ball's coordinate (horizontal or vertical) can fit into a byte and can be taken directly from that byte to plot the ball on-screen;
+
+As per Figure 6, the direction of the ball is a unit vector, so 
+cos θ
+ and 
+sin θ
+ are always less than 1. In fact, they can be directly lifted from a lookup table for the sine function.
+
+We can further simplify things by ranging θ through 256 "degrees" instead of the traditional 360, allowing the direction of the ball to fit into one byte. Putting this all together, our internal representation of the ball's state would be a structure of five bytes, laid out something like this:
+
+Figure 7: Data structure of the ball state
+
+With our data structure comes an initialisation step, which we'll want to add to the init code from earlier. This allows us to set up the balls' initial position and direction on the block field, which we can then use in the renderer:
+
+; Ball data spans five bytes
+
+BALL0 = 
+$D9
+
+BALL1 = 
+$DE
+
+init:
+
+; ...
+
+; Copy initial position data into zero-page
+
+; We can do both sets of 5 bytes consecutively
+
+ldx
+ #
+10
+
+.spr_init
+:
+    
+lda
+ posdata, x
+    
+sta
+ BALL0, x
+    
+dex
+
+bpl
+ 
+.spr_init
+
+posdata
+:
+    
+; White ball: Theta 32 (south-east), X 40.0, Y 40.0
+
+byte
+ 
+32
+, 
+40
+, 
+0
+, 
+60
+, 
+0
+
+; Black ball: Theta 160 (north-west), X 120.0, Y 120.0
+
+byte
+ 
+160
+, 
+120
+, 
+0
+, 
+120
+, 
+0
+
+And we can finally start adding pieces to our game loop. From Figure 2, we'll want to advance the balls' positions and render their new locations, as the first visible step. That'll involve adding the horizontal and vertical components of the unit vector, for which we'll want a sine/cosine lookup table
+
+One thing to note about the 6510 processor in the C64 is that it has a bug in the indexed addressing mode: if you have a table of 256 values that's not aligned to a 256-byte boundary, adding the index register can cause your final location to wrap around the boundary instead of continuing through to the rest of the table. In other words, a percentage of your lookup table becomes inaccessible, because the index never reaches that portion before looping back.
+
+We have to take care to align our lookup table to a page boundary, using the assembler's 
+align
+ keyword, to avoid this bug. However, we can also use this to our advantage: the cosine function is the same as the sine function with an offset of a quarter of the waveform, so we can retrieve a sine value for a particular angle by indexing into the table, and adding 64 to the index to obtain the cosine for that same angle. If adding 64 would take us off the end of the table, no problem: that wrap-around means we land back near the start, on the index we were looking for.
+
+Putting all that together, we get a pair of subroutines to advance the balls' position, that look a little like the below (I'm including the routine for the black ball only here, the white ball will look substantially similar):
+
+advance_black
+:
+    
+subroutine
+
+; x += cos(theta)
+
+lda
+ BALL0
+    
+clc
+
+adc
+ #
+64
+
+tax
+
+lda
+ sindata, x   
+; LUT wrap-around
+
+ldy
+ #(BALL0 + 
+1
+)
+    
+jsr
+ add_u16_s8
+
+; y += sin(theta)
+
+lda
+ BALL0
+    
+tay
+
+lda
+ sindata, y
+    
+ldy
+ #(BALL0 + 
+3
+)
+    
+jsr
+ add_u16_s8
+
+; TODO: Position on-screen
+
+rts
+
+;--------------------------------
+
+align
+ 
+256
+
+sindata
+:
+    
+hex
+ 
+00 03 06 09 0C 10 13 16 19 1C 
+
+hex
+ 
+1F 22 25 28 2B 2E 31 33 36 39 
+
+hex
+ 
+3C 3F 41 44 47 49 4C 4E 51 53 
+
+hex
+ 
+55 58 5A 5C 5E 60 62 64 66 68 
+
+hex
+ 
+6A 6B 6D 6F 70 71 73 74 75 76 
+
+hex
+ 
+78 79 7A 7A 7B 7C 7D 7D 7E 7E 
+
+hex
+ 
+7E 7F 7F 7F 7F 7F 7F 7F 7E 7E 
+
+hex
+ 
+7E 7D 7D 7C 7B 7A 7A 79 78 76 
+
+hex
+ 
+75 74 73 71 70 6F 6D 6B 6A 68 
+
+hex
+ 
+66 64 62 60 5E 5C 5A 58 55 53 
+
+hex
+ 
+51 4E 4C 49 47 44 41 3F 3C 39 
+
+hex
+ 
+36 33 31 2E 2B 28 25 22 1F 1C 
+
+hex
+ 
+19 16 13 10 0C 09 06 03 00 FD 
+
+hex
+ 
+FA F7 F4 F0 ED EA E7 E4 E1 DE 
+
+hex
+ 
+DB D8 D5 D2 CF CD CA C7 C4 C1 
+
+hex
+ 
+BF BC B9 B7 B4 B2 AF AD AB A8 
+
+hex
+ 
+A6 A4 A2 A0 9E 9C 9A 98 96 95 
+
+hex
+ 
+93 91 90 8F 8D 8C 8B 8A 88 87 
+
+hex
+ 
+86 86 85 84 83 83 82 82 82 81 
+
+hex
+ 
+81 81 81 81 81 81 82 82 82 83 
+
+hex
+ 
+83 84 85 86 86 87 88 8A 8B 8C 
+
+hex
+ 
+8D 8F 90 91 93 95 96 98 9A 9C 
+
+hex
+ 
+9E A0 A2 A4 A6 A8 AB AD AF B2 
+
+hex
+ 
+B4 B7 B9 BC BF C1 C4 C7 CA CD 
+
+hex
+ 
+CF D2 D5 D8 DB DE E1 E4 E7 EA 
+
+hex
+ 
+ED F0 F4 F7 FA FD
+
+But wait, what's this 
+add_u16_s8
+? Well, you'll recall that each component of the ball's position is a fixed-point number, with 8 bits either side of the point; this is equivalent to an unsigned 16-bit number. Adding a value from the sine table to this fixed-point number is thus the same as adding a signed 8-bit number (a number that can range from -128 to +127) to our 16-bit number.
+
+The processor doesn't have native handling of 16-bit numbers, so we'll have to build a routine for that. Fortunately, such a routine is fairly straightforward: we add our 8-bit value to the low end (our fractional component in this case), and if the value overflows the 8-bit range it'll set the processor's 
+CARRY
+ flag. We then either add or subtract the 
+CARRY
+ from the high end (our whole component) depending on whether our 8-bit value was positive or negative.
+
+The processor can help us with the "whether a number is negative" part too: one of the other flags available is 
+NEGATIVE
+, which is the same as the top bit of an 8-bit value after calculation (the top bit being how one traditionally denotes a negative number). Alongside that come the 
+bpl
+ and 
+bmi
+ instructions, which stand for "branch if plus" and "branch if minus".
+
+We can use 
+bpl
+ with an instruction that doesn't 
+change
+ the value, but does set 
+NEGATIVE
+ to allow us to take those two branches:
+
+; add_u16_s8: Add 8-bit signed to 16-bit unsigned
+; @param A The 8-bit signed
+; @param Y Zero-page pointer to the 16-bit unsigned
+; @return Changed value in zero-page
+; @clobbers A
+; @preserves Y
+
+add_u16_s8
+:
+    
+subroutine
+
+and
+ #
+255
+      
+; Set N
+
+bpl
+ .positive
+
+.negative
+:
+    
+clc
+
+adc
+ 
+1
+, y      
+; Add fraction
+
+sta
+ 
+1
+, y
+    
+lda
+ 
+0
+, y
+    
+sbc
+ #
+0
+        
+; Subtract C from whole
+
+sta
+ 
+0
+, y
+    
+jmp
+ .end
+
+.positive
+:
+    
+clc
+
+adc
+ 
+1
+, y      
+; Add fraction
+
+sta
+ 
+1
+, y
+    
+lda
+ 
+0
+, y
+    
+adc
+ #
+0
+        
+; Add C to whole
+
+sta
+ 
+0
+, y
+
+.end
+:
+    
+rts
+
+Digression the second: Representing negative numbers
+
+The keen-eyed reader will have seen something weird in the above explanation of how 
+add_u16_s8
+ works:
+
+We add our 8-bit value to the low end (our fractional component in this case)... then either add or subtract the CARRY from the high end (our whole component)
+
+Surely if the number is negative we'd want to subtract both times? To look at why we don't, it's worth a quick note on the history of representing negative numbers in computing.
+
+Computers were, to begin with, exclusively the domain of mathematicians and people who would be familiar with the esoteric field of binary numbers, so the number handling was built around being able to read those numbers off from the "blinkenlights" directly in binary. The simplest way to handle both positive and negative numbers was simply to mark one bit in the number as "the negative bit", and the rest of the number would represent the value; this was called "sign and magnitude" representation. For example:
+
+Twenty-three and negative twenty-three:
+0 0010111
+1 0010111
+
+To perform a subtraction (or to add a negative number, which is functionally equivalent) while only having adding circuitry, the computer needs to perform some precalculation otherwise it'll end up with the wrong answer:
+
+  [63 - 23]      [63 + -23]
+  00111111   =   00111111
+- 00010111     + 10010111
+                 --------
+                 11001100
+                 negative eighty six
+
+The sign-and-magnitude negative number needs to be inverted (or 
+one's-complemented
+ in the mathematical jargon) when performing a subtraction, so that adding it has the intended effect of reducing the value instead of piling on top:
+
+  [63 - 23]      [63 + -23]
+  00111111   =   00111111
+- 00010111     + 
+11101000
+
+                 --------
+              [1]00100111
+                 thirty nine (and a carry)
+
+Except complementing doesn't quite fix it: because sign-and-magnitude numbers can have zero (
+00000000
+) 
+and
+ negative zero (
+10000000
+), we need to add one after inverting to step over the negative zero value:
+
+  [63 - 23]      [63 + -23]
+  00111111   =   00111111
+- 00010111     + 
+1110100
+1
+
+                 --------
+              [1]00101000
+                 forty (and a carry)
+
+To summarise: negative numbers were represented as a negative sign bit and the value as the magnitude, for easier reading off from binary displays, but the computer would need to first invert the number and then add one in order to perform the addition of a negative number.
+
+As binary read-off displays went away with the growing ubiquity of computing, it began to make sense to simplify the representation of negative numbers not for the human mathematician using the computer, but for the computer's internal operation. The best thing for the computer, of course, would be to remove this whole pipeline of needing to complement the number and add one, before being able to add a negative number.
+
+And that's how we landed at 
+two's-complement
+ (two's because we add one to the one's-complement) representation as the standard for binary negative numbers: if the sign bit is set to negative in the number, the rest of the value is 
+already
+ inverted and has one added, so the computer just needs to add the whole value as normal.
+
+This does increase the cognitive load on a programmer working at a low level, because your binary numbers no longer read "normally":
+
+00000000 =    0
+00000001 =    1
+00000010 =    2
+...
+01111110 =  126
+01111111 =  127
+10000000 = -128 (not -0)
+10000001 = -127 (not -1)
+10000010 = -126 (not -2)
+...
+11111110 =   -2
+11111111 =   -1
+
+But when are we going to be working at a sufficiently low level that we have to remember about two's-complement representation in the microcomputer age of the '80s, with high-level languages such as BASIC widely available? When we need to eke out more performance than BASIC can give us, which is what we need here.
+
+That's why 
+add_u16_s8
+ performs an addition on both branches, whether the 
+s8
+ is positive or negative.
+
+After movement comes positioning
+
+Back to our regularly scheduled programming, we're now able to advance the internal representation of the balls' positions, but we're not yet able to see the balls moving on-screen. For that to happen, we need to set the positions of the sprites in the video chip's registers, except we can't naively copy the calculated values over: the top-left of our playing field isn't at sprite coordinate 0,0. Heck, the top-left of the screen isn't at 0,0.
+
+Figure 8: Sprite positioning coordinates on the C64. I believe this is lifted from the Programmer's Reference, by way of Mike Dailly
+[8]
+"Raster's, Sprites and Multiplexing"
+, Mark Dailly, Jul 2024
+
+From some time earlier, you'll recall that our blockfield is one row and ten characters in from the top-left of the screen, which (given that each character is 8x8 pixels) is eight pixels down and 80 across. As a result, to plot the ball sprite where we want it on-screen we need to add 104 to the X coordinate, and 58 to the Y.
+
+And now that wrinkle we mentioned earlier comes back around: 
+SPRXHI
+, the video chip control register that contains the 9th bit of each sprite's X-coordinate. The VIC combines this with the lower eight bits to generate the final position, which means we need to update 
+SPRXHI
+ appropriately each time we set the balls' positions.
+
+As an aside, the furthest right our ball can go in the playing field is 19 blocks before bouncing off the right edge, which is 152 pixels; adding our offset of 104 leaves a final position of 256. If our playing field were even one pixel left of centre, we wouldn't have to worry about 
+SPRXHI
+ during our game loop.
+
+So let's translate this into code by filling out the rest of 
+advance_black
+. You'll recall from Figure 7 that each ball has a data structure in memory that holds the coordinates in fixed-point number format, so we only need the whole-number portion of each coordinate when translating to on-screen position. We left a 
+TODO
+ in the code previously, so bringing that down from above:
+
+advance_black
+:
+    
+subroutine
+
+; x += cos(theta)
+
+lda
+ BALL0
+    
+clc
+
+adc
+ #
+64
+
+tax
+
+lda
+ sindata, x   
+; LUT wrap-around
+
+ldy
+ #(BALL0 + 
+1
+)
+    
+jsr
+ add_u16_s8
+
+; y += sin(theta)
+
+lda
+ BALL0
+    
+tay
+
+lda
+ sindata, y
+    
+ldy
+ #(BALL0 + 
+3
+)
+    
+jsr
+ add_u16_s8
+
+; Position the sprite
+
+; The lower byte of the X-coordinate first
+
+lda
+ BALL0 + 
+2
+
+adc
+ #
+104
+
+sta
+ SPR0X
+
+; Then the high 9th bit: if the result of the add
+    ; was over 255, the Carry flag will be set
+
+lda
+ SPRXHI
+    
+and
+ #%
+11111110
+
+bcc
+ .xlow
+    
+eor
+ #
+1
+
+.xlow
+:
+    
+sta
+ SPRXHI
+
+; And the Y-coordinate, which is always one byte
+
+; (Taking care to clear the Carry from earlier)
+
+lda
+ BALL0 + 
+4
+
+clc
+
+adc
+ #
+58
+
+sta
+ SPR0Y
+
+rts
+
+If we do this for both the white and black balls, filling out 
+advance_white
+ as well as 
+advance_black
+, each time around the game loop will move them by one step on-screen, which will look something like this:
+
+Figure 8: The above code running in VICE (at 3x speed)
+
+So that's progress: the two balls can be seen moving, but they escape the playing field and wrap off the edge of the screen before returning, travelling forever in the same direction. This is, of course, because we have no code yet to detect the edge of the playing field and make a ball bounce when that's hit, so this is what we need next.
+
+There are four possible conditions where a ball can hit an edge of the field and need to bounce, and they fall into two groups:
+
+If a ball has hit the 
+top
+, it was travelling up and needs to bounce down; conversely, if a ball has hit the 
+bottom
+, it was travelling down and needs to bounce up.
+
+If a ball has hit the 
+left
+ edge, it was travelling to the left and needs to bounce off to the right; in the same fashion, a ball travelling right will hit the 
+right
+ edge and need to bounce back to the left.
+
+We know the coordinates of the ball (to be more precise, we know the coordinates of the top-left of the ball sprite) and we know the size of the field, so this becomes a relatively simple set of comparisons. The only caveat is that when we're checking for hits on the bottom or right edges, we're not comparing the top-left of the ball sprite, but the bottom-right, which is eight pixels further across in either direction.
+
+So if the field is 20 blocks both ways, that's 160 pixels; if a ball's coordinate in either direction has reached 152, it's just hit the edge. In summary, we have the following four conditions in which a ball needs to bounce:
+
+If a ball's 
+Y-coordinate is 0
+ it's hit the top;
+
+If a ball's 
+Y-coordinate is 152
+ it's hit the bottom;
+
+If a ball's 
+X-coordinate is 0
+ it's hit the left;
+
+If a ball's 
+X-coordinate is 152
+ it's hit the right.
+
+So what does it mean for the ball to bounce? You'll recall from Figure 6 that our ball's velocity is described by a unit vector: it's always moving at the same unit speed, but we keep track of its angle. So bounces are changes in angle: specifically, they're changes in angle caused by reflection.
+
+Figure 9: Reflections and their resultant angles
+From Michael Corral, via OpenCurriculum
+[9]
+Michael Corral, "Rotations and Reflections of Angles"
+, Sept 2020
+
+In Figure 9, we see a reflection in the X-axis (hitting a horizontal line) causes the angle to negate, and reflection in the Y-axis (hitting a vertical) causes our angle θ to change to 
+180° - θ
+. For our purposes, you'll recall that θ ranges through 256 "degrees", so we can start to fill out code to perform these flips in angle, remembering that θ is stored in the first part of our ball's information block in memory:
+
+flipx_black
+:
+    
+subroutine
+
+lda
+ #
+0
+       
+; I have a reason for not using
+
+sec
+          
+; NEG here, we'll come to it
+
+sbc
+ BALL0
+    
+sta
+ BALL0
+    
+rts
+
+flipy_black
+:
+    
+subroutine
+
+lda
+ #
+128
+
+sec
+
+sbc
+ BALL0
+    
+sta
+ BALL0
+    
+rts
+
+And then we need to detect those collisions with the edge of the field, as described above, by filling out 
+collide_black
+:
+
+collide_black
+:
+    
+subroutine
+
+; Check the X-coord
+
+lda
+ BALL0 + 
+2
+
+; Skip if we haven't reached the left edge
+
+cmp
+ #
+0
+
+bpl
+ .nobounce_x
+
+; And if we haven't reached the right
+
+clc
+
+cmp
+ #
+152
+
+bcc
+ .nobounce_x
+
+; If we made it here, we need to flip
+
+; We've hit a vertical, flip in Y
+
+jsr
+ flipy_black
+
+.nobounce_x
+:
+    
+; Check the Y-coord
+
+lda
+ BALL0 + 
+4
+
+; Skip if we haven't reached the top edge
+
+cmp
+ #
+0
+
+bpl
+ .nobounce_y
+
+; And if we haven't reached the bottom
+
+clc
+
+cmp
+ #
+152
+
+bcc
+ .nobounce_y
+
+; If we made it here, we need to flip
+
+; This time it's a horizontal
+
+jsr
+ flipx_black
+
+.nobounce_y
+:
+    
+; TODO: Detect collisions with the other side
+
+rts
+
+If we build the corresponding 
+collide_white
+ routine and its flip helpers, those will run with each frame, and we'll get something like this:
+
+Figure 10: Balls bouncing around the playing field, in VICE (at 3x speed)
+
+Now we're getting somewhere: a playing field, balls that bounce around it. What we don't have is any sense of unpredictability: the bounces are always perfect, the balls travel in well-worn paths forever, even if they're now constrained to the bounds of the field.
+
+What we need is...
+
+An element of chance
+
+The original Pong Wars from Figure 1 has a sprinkle of randomness: each bounce (whether off the edge of the field or from an opposite-coloured block) is a reflection with a small offset to the angle, and it's this random offset that introduces the compelling infinite complexity.
+
+To get the same effect on the Commodore 64, we could use BASIC's 
+RND
+ function to generate a pseudo-random number (as one might expect, this is referred to as Pseudo-Random Number Generation). There are two problems with this approach: being pseudo-random, the sequence is predictable so every run of this code would turn out the same; but more importantly for our purposes, 
+RND
+ is astonishingly slow at generating numbers, as it uses a relatively complex PRNG function.
+
+On the C64, we have an alternative that's both fast and relatively simple to operate: hardware. The sound chip has three voices, and each of the voices can be set to one of four waveforms at an adjustable frequency: triangle, sawtooth, pulse or noise.
+
+Figure 11: The four waveforms of the C64 SID
+Philip Nelson, Compute! magazine, Feb 1985
+[10]
+"Advanced Sound Effects on the 64"
+, Atari Magazines archive
+
+For our purposes, we can set up one of the SID's voices to generate noise, but disable 
+output of the voice
+ so we're not actually making the machine screech; we can then use the SID's internal representation of what's being generated as our source for random numbers.
+
+Setup of the SID will need to be done as part of our general initialisation routine, so once again we're diving back into the 
+init
+ subroutine to set the SID's registers appropriately
+[11]
+"Getting random number from 6502 assember", 'Mike' at StackOverflow
+, Jul 2017
+:
+
+SID_3_FREQ = 
+$D40E
+
+SID_3_CTRL = 
+$D412
+
+SID_3_OUT = 
+$D41B
+
+init
+:
+    
+; ...
+    ; After sprite data init, set up
+    ; SID voice 3 for noise generation
+
+; Maximum frequency (65535)
+
+lda
+ #
+255
+
+sta
+ SID_3_FREQ
+    
+sta
+ SID_3_FREQ + 
+1
+
+; Noise waveform, output disabled
+
+lda
+ #%
+10000000
+
+sta
+ SID_3_CTRL
+
+Now we can poll 
+SID_3_OUT
+ for hardware-generated real random numbers at any time, but they'll be a value that spans a full byte, anywhere from 0 to 255. We'd like to limit that range to our previously mentioned "small offset", which we can achieve fairly efficiently by lopping bits off the top end; more importantly, we'd like it to be a small offset either side of zero, which we can do by subtracting half the new range.
+
+I've settled on cutting the value down from a 0-255 range to 0-15, which means we'll need to then subtract 8 to get a small random offset that's centred on zero. With that hived off into its own subroutine, we can adjust our reflection functions to use this random offset as the base instead of the fixed values 0 and 128:
+
+rand
+:
+    
+; Generates a random number
+    ; from -8 to +7, in A
+
+subroutine
+
+lda
+ SID_3_OUT
+    
+and
+ #%
+00001111
+
+sec
+
+sbc
+ #
+8
+
+rts
+
+flipx_black
+:
+    
+subroutine
+
+jsr
+ rand
+    
+sec
+
+sbc
+ BALL0
+    
+sta
+ BALL0
+    
+rts
+
+flipy_black
+:
+    
+subroutine
+
+jsr
+ rand
+    
+clc
+
+adc
+ #
+128
+
+sec
+
+sbc
+ BALL0
+    
+sta
+ BALL0
+    
+rts
+
+With this adjustment in place, our eternal bouncing around the playing field looks a lot more interesting:
+
+Figure 12: Balls bouncing in slightly offset directions, in VICE (at 3x speed)
+
+The playing field
+
+So after (apparently) seven thousand words, we come to the point: these balls which we can now bounce around the playing field need to detect that they're about to hit a block of their colour, bounce off it, and flip the colour. We also need to render the blocks in the field, which we've deferred doing thus far in favour of showing the classic Commodore blue through the field.
+
+Let's look at the second point first, and get the block data from our internal representation onto the screen. We actually have precedent for how to do that, since we set up the on-screen characters in rows of 20 during initialisation. We just need to do that again each time around the rendering loop, but with the colours this time (either black or white).
+
+We get lucky here, because the C64's colour palette has black as colour 0 and white as 1: there's no work to do in translating the content of our internal representation to on-screen colours, except to copy the rows across. There is work, however, in the copying of data across: the C64 doesn't have a Direct Memory Access controller which could perform this copying in hardware, so the CPU has to do the work by picking up each value from the 
+source
+ and dropping it at the 
+destination
+.
+
+During initialisation we set up a pointer called 
+BLOCKPTR
+ which would advance as we came down the screen to render the character data in the rows. For rendering the blockfield's colours we can reuse this pointer as our 
+source
+, and set up a new 
+COLORPTR
+ to act as our 
+destination
+.
+
+COLORBUF = 
+$D800
+ + 
+40
+ + 
+10
+
+COLORPTR = 
+$05
+    
+; Two more unused bytes in zero-page
+
+render_field
+:
+    
+subroutine
+
+; First set up the pointers, src and dest
+
+lda
+ #<BLOCKBUF
+    
+sta
+ BLOCKPTR
+    
+lda
+ #>BLOCKBUF
+    
+sta
+ BLOCKPTR + 1
+
+lda
+ #<COLORBUF
+    
+sta
+ COLORPTR
+    
+lda
+ #>COLORBUF
+    
+sta
+ COLORPTR + 1
+
+; Copying 20 rows of 20
+    ; On the 6502 this gets a little confusing, because
+    ; we want to use indirect indexed mode w/ pointers
+    ; but that's only offered with the Y index
+
+ldx
+ #
+20
+       
+; So X is the Y-coord
+
+.copy_row
+:
+    
+ldy
+ #
+19
+       
+; And Y is the X-coord
+
+.copy_blk
+:
+    
+lda
+ (BLOCKPTR), y
+    
+sta
+ (COLORPTR), y
+
+; We use the previous trick of counting down
+    ; until Y goes negative, to save a comparison
+
+dey
+
+bpl
+ .copy_blk
+
+; Advance to the next row in the blockfield
+    ; Which is a 16-bit addition
+
+clc
+
+lda
+ BLOCKPTR
+    
+adc
+ #
+20
+
+sta
+ BLOCKPTR
+    
+lda
+ BLOCKPTR + 
+1
+
+adc
+ #
+0
+
+sta
+ BLOCKPTR + 
+1
+
+; And advance in colour RAM, which importantly
+    ; is 40 bytes down on-screen
+
+clc
+
+lda
+ COLORPTR
+    
+adc
+ #
+40
+
+sta
+ COLORPTR
+    
+lda
+ COLORPTR + 
+1
+
+adc
+ #
+0
+
+sta
+ COLORPTR + 
+1
+
+dex
+
+bne
+ .copy_row
+
+rts
+
+How does that look? Well, a little strange since the balls pass through their respective fields without affecting them, but that's to be expected: we've yet to write the code that detects collision there, the 
+TODO
+ from earlier is yet to be filled in.
+
+Figure 13: Balls bouncing over a field that's half black and half white
+
+Another way of saying that we need to detect collisions with the field is to find out which block resides at the location in the playing field the ball's about to reach. So for the black ball which should bounce off a black area of the field, the location the ball will reach after this next step would need to be in an area that's currently black. So we need a function to look up what's stored at the ball's location in the blockfield.
+
+The ball's location is stored as pixel coordinates, so there are a few steps to get to where we need to go:
+
+First, knock the pixel coordinates down to block coordinates in the field: divide by eight in both directions;
+
+Second, calculate 
+Y * 20 + X
+ to retrieve an entry from the blockfield storage.
+
+This is complicated by the CPU not having a native "multiply" instruction, so we need to perform some binary shifts and additions; for a primer on binary shifts, feel free to look over my introduction to those operators
+[12]
+"An Introduction to Bitwise Operators"
+, Imran Nazar, Sep 2006
+ from 20 years ago. Essentially, because we can't natively multiply by 20, we need to generate the result through multiplying by binary powers and adding those results together; similarly, we can't natively divide by 8, so we do the same by shifting down. To take an example:
+
+       X = 58   |        Y = 133
+       01101010 |        10000111
+>> 1 = 00110101 | >> 1 = 01000011
+>> 2 = 00011010 | >> 2 = 00100001
+>> 3 = 00001101 | >> 3 = 00010000
+
+With our coordinates in block-level values (in this case, BX=13 and BY=16), we can proceed to multiply and add; our formula here is 
+BY * 16 + BY * 4 + BX
+, which in binary shifts is 
+BY << 4 + BY << 2 + BX
+.
+
+       X = 58   |        Y = 133
+       01101010 |        10000111
+>> 1 = 00110101 | >> 1 = 01000011
+>> 2 = 00011010 | >> 2 = 00100001
+>> 3 = 00001101 | >> 3 = 00010000
+
+                | << 1 = 00100000
+                | << 2 = 01000000
+                | << 3 = 10000000  
+; We should look at this
+
+                | << 4 = 00000000
+
+There are two things to take note of here. Firstly, our shift-left of 4 (to multiply by 16) has pushed a bit into the Carry flag because the value has gone over 255, so we need to treat this in much the same way we did wide additions earlier, by taking care to bring the Carry flag over to the high byte of the result. The CPU offers a 
+rotate
+ instruction which works much like a shift, but also brings in the Carry flag to one side of the accumulator and pushes a new value for Carry out the other side; we can use this to bring the Carry flag into the high byte of our resultant value.
+
+The other thing to note is that by shifting right 3, and then shifting left 3, we're left with the value we started with except the bottom three bits are zeroed out. As the CPU only offers shift operations of one bit at a time, we can save a bunch of time by zeroing out those bits with an 
+AND
+ rather than perform the six shifts in question.
+
+This makes our final calculation 
+((Y & $F8) << 1) + ((Y & $F8) >> 1) + (X >> 3)
+. Translating that over to 6502, we might get something like this.
+
+SCRATCH = 
+$92
+   
+; Temp storage
+
+; get_blk_val: Get the blockfield value at coordinates
+; @param X Horizontal coordinate
+; @param Y Vertical coordinate
+; @return A The value of the block at this coordinate
+; @clobbers A
+; @preserves X, Y
+
+get_blk_val
+:
+    
+subroutine
+
+lda
+ #
+0
+
+sta
+ BLOCKPTR
+    
+sta
+ BLOCKPTR + 
+1
+
+; ((Y & $F8) << 1)
+
+tya
+
+and
+ #$
+F8
+
+asl
+
+sta
+ BLOCKPTR
+    
+rol
+ BLOCKPTR + 
+1
+
+; + ((Y & $F8) >> 1)
+
+tya
+
+and
+ #$
+F8
+
+lsr
+
+; 16-bit add to what's already in BLOCKPTR
+
+clc
+
+adc
+ BLOCKPTR
+    
+sta
+ BLOCKPTR
+    
+lda
+ BLOCKPTR + 
+1
+
+adc
+ #
+0
+
+sta
+ BLOCKPTR + 
+1
+
+; + (X >> 3)
+
+txa
+
+lsr
+
+lsr
+
+lsr
+
+clc
+
+adc
+ BLOCKPTR
+    
+sta
+ BLOCKPTR
+    
+lda
+ BLOCKPTR + 
+1
+
+adc
+ #
+0
+
+sta
+ BLOCKPTR + 
+1
+
+; We need this as an index into BLOCKBUF
+
+clc
+
+lda
+ #<BLOCKBUF
+    
+adc
+ BLOCKPTR
+    
+sta
+ BLOCKPTR
+    
+lda
+ #>BLOCKBUF
+    
+adc
+ BLOCKPTR + 
+1
+
+sta
+ BLOCKPTR + 
+1
+
+; Finally, read from there
+    ; We can only do this as a Y-indexed indirect,
+    ; so we need to put Y into scratch memory
+
+sty
+ SCRATCH
+    
+ldy
+ #
+0
+
+lda
+ (BLOCKPTR), y
+    
+ldy
+ SCRATCH
+
+; Set Negative and Zero flags
+
+and
+ #$
+FF
+
+rts
+
+Having a way to check the value stored in the blockfield at a given coordinate, we now need to consider which points on the ball will need checking. As per Figure 4, the (0,0) coordinate of the ball sprite is actually empty space and wouldn't be a good point to detect a bounce; what's needed is to check a centre point on each of the edges, and those are:
+
+(0,4) for the left edge;
+
+(7,4) for the right edge;
+
+(4,0) for the top;
+
+(4,7) for the bottom.
+
+For the purposes of this article, I'll show one of the more complicated options (collision of the right edge of the ball), as that involves addition on both axes; the other detections are left as an exercise for the reader. We pick up at the bottom of 
+collide_black
+ to check for collisions between the black ball and the black field:
+
+.nobounce_y
+:
+    
+; Collision with the other side: right edge
+
+; First set up X and Y
+
+clc
+
+lda
+ BALL0 + 
+2
+
+adc
+ #
+7
+
+tax
+
+clc
+
+lda
+ BALL0 + 
+4
+
+adc
+ #
+4
+
+tay
+
+; Then check what block is here
+    ; If it's 1 (white) we're still travelling
+    ; For white/white collisions, we'd 'beq' here
+
+jsr
+ get_blk_val
+    
+bne
+ .nohit_r
+
+; If we fell through to here, we've hit
+    ; the black field; bounce off to the left
+    ; (reflection in the Y-axis)
+
+jsr
+ flipy_black
+    
+; TODO: Change state of the struck block
+
+jsr
+ flipblk
+
+.nohit_r
+:
+    
+; Other edge detections
+
+That 
+almost
+ gets us what we need: we can detect that the field has been hit, we can bounce off, but the block that's been hit doesn't change colour. That's the last 
+TODO
+ left for ourselves at the bottom of 
+collide_black
+; fortunately, it's fairly simple. We already know which block is involved (we calculated 
+BLOCKPTR
+ earlier as part of 
+get_blk_val
+'s processing), and we know that the colour always flips (either white to black or black to white), so this is always an XOR operation.
+
+; flipblk: Flip the block pointed to by BLOCKPTR
+; @clobbers A, Y
+
+flipblk
+:
+    
+ldy
+ #
+0
+
+lda
+ (BLOCKPTR), y
+    
+eor
+ #%
+00000001
+
+sta
+ (BLOCKPTR), y
+    
+rts
+
+Filling out the other edge detection cases, and copying the whole set over to processing for the white ball, we arrive at a final effect, with only the rendering of the scores for each side left to consider.
+
+Figure 14: Balls bouncing, hitting the other field, and flipping blocks (at 4x speed)
+
+Keeping score
+
+The last piece of the puzzle is calculating the scores for each side, and getting those on-screen below the playing field. The first of these points is relatively simple: as we're already copying the block field over from our internal storage to the video chip's colour RAM to get it rendered, we can take that opportunity to count the blocks as they come through. The only complication is that it's possible for one side to have more than 255 blocks, so these are 16-bit counters and need to be treated appopriately (with 16-bit additions).
+
+Picking up in the middle of 
+render_field
+, in the tightest level of the copying loop:
+
+CNTBLK = 
+$FB
+
+CNTWHT = 
+$FD
+
+render_field
+:
+    
+...
+
+.copy_blk
+:
+    
+lda
+ (BLOCKPTR), y
+
+; We're about to clobber A, hold onto it
+
+pha
+
+; If we loaded a 1, this is a white field
+    ; The Z flag will be cleared, so BNE will jump over
+
+bne
+ .copy_cntwht
+
+; If we end up here, the block is 0 (black)
+
+.copy_cntblk
+:
+    
+inc
+ CNTBLK
+    
+lda
+ CNTBLK + 
+1
+
+adc
+ #
+0
+
+sta
+ CNTBLK + 
+1
+
+jmp
+ .copy_write
+
+; If we land here, we had a 1 (white)
+
+.copy_cntwht
+:
+    
+inc
+ CNTWHT
+    
+lda
+ CNTWHT + 
+1
+
+adc
+ #
+0
+
+sta
+ CNTWHT + 
+1
+
+.copy_write
+:
+    
+; Back to writing to the color RAM
+
+pla
+
+sta
+ (COLORPTR), y
+
+This gives us a way to count up the scores each side, whenever the blockfield is rendered; what's needed next is a way to get those counts on screen. As with a few other things we've come across in our journey, Commodore BASIC has routines which would allow us to print out a number, but there are caveats around performance. While we're working at this low level, let's have a look at what it would take to print out a number using a routine in assembly.
+
+Let's say one of our scores to print is 
+279
+: this needs to be taken from a 16-bit value in memory to three distinct characters on screen (
+"2" "7" "9"
+). The mathematical principle is fairly simple, and is one we all come across in elementary school: repeated division, which provides us our digits in reverse order.
+
+279 ÷ 10 = 27 remainder 9
+ 27 ÷ 10 =  2 remainder 7
+  2 ÷ 10 =  0 remainder 2
+
+There are two complicating factors here. First, we can't simply send the value 
+2
+ to the screen; as per Figure 3, this character code represents the letter B, as the Commodore 64's character ROM doesn't start with the numeric digits. We need to add 48 to each digit as it comes out of the division, in order to get a character string that can go on-screen.
+
+The second complication is that the processor doesn't offer division natively (we already saw earlier that native multiplication is not a thing either), so a software routine is needed to perform 16-bit division on our behalf. Fortunately, the basic algorithm for division is eminently possible to wrap one's head around, and is essentially a binary version of the classic "long division" we all suffered through in math class.
+
+Digression the third: Binary long division
+
+Just as a multiplication is repeated addition, a division can be thought of as repeated subtraction. Let's break down that first division in more detail, the way one might be taught to do division in school:
+
+279 ÷ 10:
+Does  2 go into 10? No
+Does 27 go into 10? Yes, 2x
+
+27 - (2 x 10) = 7
+
+Tack on the rest of the number, continue with: 79
+
+Does  7 go into 10? No [but we know that, it was left over]
+Does 79 go into 10? Yes, 7x
+
+79 - (7 x 10) = 9
+
+Tack on the rest of the number, continue with:  9
+
+Does 9 go into 10? No [but we know that, it was left over]
+No further digits, abort
+
+This eventually yields our intended result: combining the individual "does it go into" questions gives 27, while 9 was left over. When it comes to doing this on a computer, we have to knock these operations down into binary, so the pulling in of each digit looks slightly different. The fact that we're working in binary, though, means that our "does it go into" question can only ever yield two results: "No" or "Yes, 1x". That means our question becomes "is greater than or equal to":
+
+100010111 ÷ 1010:
+    1 ≥ 1010? No
+   10 ≥ 1010? No
+  100 ≥ 1010? No
+ 1000 ≥ 1010? No
+10001 ≥ 1010? Yes
+
+10001 - (1 x 1010) = 111
+
+Tack on the rest of the number, continue with: 1110111
+
+  111 ≥ 1010? No [we know it won't]
+ 1110 ≥ 1010? Yes
+
+ 1110 - (1 x 1010) = 100
+
+Tack on the rest of the number, continue with: 100111
+
+  100 ≥ 1010? No [we know it won't]
+ 1001 ≥ 1010? No
+10011 ≥ 1010? Yes
+
+10011 - (1 x 1010) = 1001
+
+Tack on the rest of the number, continue with: 10011
+
+ 1001 ≥ 1010? No [we know it won't]
+10011 ≥ 1010? Yes
+
+10011 - (1 x 1010) = 1001
+
+Tack on the rest of the number, continue with: 1001
+
+ 1001 ≥ 1010? No [we know it won't]
+No further digits, abort
+
+Now, this looks like a longer operation, but that's only because it's happening in a lower base: that means each step down is a step by two, rather than 10. If we now count up the "No" and "Yes" answers, ignoring the "No" answers where we know the answer was left over from the previous step, we get a result of: 
+000011011
+ remainder 
+1001
+. Coming back up to decimal, that's 27 remainder 9.
+
+Before we can implement this on the C64, there are two things we need to work out: first, how do we "shift" each digit over to incrementally perform the "greater than or equal to" check? It turns out there's an instruction to do exactly that, "arithmetic shift left" (
+asl
+) which will push the top bit out into the Carry flag. Except we don't want the top bit to land in the Carry flag, we'd like it in the accumulator where we can work on the value; we can thus combine 
+asl
+ with "rotate left" (
+rol
+) which pulls the Carry flag into the bottom of a value, and pushes a corresponding bit out the top.
+
+Thus, to work on a 16-bit value, we want to perform a 
+24-bit left shift
+ to get the value passing through both bytes and the accumulator:
+
+DIVIDEND = 
+$1B
+
+DIVISOR  = 
+$19
+
+; Divide a 16-bit value by an 8-bit divisor
+; @clobbers A, X
+
+div16_8
+:
+    
+subroutine
+
+ldx
+ #
+16
+
+lda
+ #
+0
+
+.loop
+:
+    
+asl
+ DIVIDEND
+    
+rol
+ DIVIDEND + 
+1
+
+rol
+ a
+
+; ...What do we do here?
+
+dex
+
+bne
+ .loop
+    
+rts
+
+The other issue is our ≥ check, which documentation for the processor
+[13]
+"Compare Instructions", from "6502 Software Design" by Leo Scanlon
+, updated Dec 2022
+ tells us can be achieved by using 
+cmp
+ ("compare", which performs a subtraction and throws the result away), and 
+bcs
+ ("branch if carry set"). In this instance, we actually want to skip 
+over
+ the subtraction if not required, so we'll use 
+bcc
+ instead:
+
+cmp
+ DIVISOR
+    
+bcc
+ .no_sub
+    
+sbc
+ DIVISOR
+    
+; ...And where do we put the Yes result?
+
+As we shift our dividend through, we leave zeroes behind: when this loop is finished, 
+DIVIDEND
+ will be left zeroed out entirely. Conversely, we need to store our result somewhere, incrementally shifting bits of that over to match our progress through the dividend. We can combine these two steps, and store the result at the bottom of the dividend 
+at the same time
+ that the top is shifting through.
+
+All we need to do that is to either set or not set the bottom bit of the dividend:
+
+cmp
+ DIVISOR
+    
+bcc
+ .no_sub
+    
+sbc
+ DIVISOR
+    
+inc
+ DIVIDEND
+
+.no_sub
+:
+    
+; ...And the go-around for the loop
+
+This has the additional subtle advantage that our result is in the same place in memory that our dividend started, meaning it can be used immediately for another division without having to be copied over from somewhere. That's exactly what we were looking for, as we want to perform repeated division to work out the digits for our score display.
+
+Putting these disparate snippets together, we get a final division subroutine which looks like this
+[C]
+I take no credit for this implementation, only for the above dissection of how it works; this comes from 
+a post on the NESDev forums
+ by "tepples" from Jan 2005.
+:
+
+DIVIDEND = 
+$1B
+
+DIVISOR  = 
+$19
+
+; Divide a 16-bit value by an 8-bit divisor
+; @param Memory (DIVIDEND, DIVISOR)
+; @return Memory (DIVIDEND): The result
+; @return A The remainder
+; @clobbers A, X
+
+div16_8
+:
+    
+subroutine
+
+ldx
+ #
+16
+
+lda
+ #
+0
+
+.loop
+:
+    
+asl
+ DIVIDEND
+    
+rol
+ DIVIDEND + 
+1
+
+rol
+ a
+    
+cmp
+ DIVISOR
+    
+bcc
+ .no_sub
+    
+sbc
+ DIVISOR
+    
+inc
+ DIVIDEND
+
+.no_sub
+:
+    
+dex
+
+bne
+ .loop
+    
+rts
+
+Rendering the score
+
+Now we have a routine for division, we can perform our repeated dividing-by-10 in order to build a score string to display on-screen. We'll need a little helper subroutine to build the string by adding 48 to each digit, as mentioned beforehand: we know that, these being 16-bit numbers, they can never go past 
+65535
+ decimal, which means we need to allocate a block of five bytes in memory to hold the resultant string.
+
+Of course, this brings up more questions for us: how do we know how long the string is once it's generated, and what happens if the score for one side changes from, say, 100 down to 99? If we only print the 
+99
+, one character from the previous score will be left on-screen and we'll wne up with (depending on the side) 
+990
+ or 
+199
+ as the visible score.
+
+The first of these issues can be resolved by always using a fixed length of five bytes for the string, and pre-filling the string with spaces so that when we print it out, the "blank" characters don't otherwise affect the display. Similarly, the second issue can be resolved by always printing spaces over the screen area for the scores before we write out the scores themselves, so the display is always fresh.
+
+The first thing we'll need, then, is a subroutine to convert the score to a string, by repeated division:
+
+STROUT = 
+$22
+
+; int2str: Convert 16-bit integer to string
+; @param A Zero-page location of the number
+; @clobbers A, X, Y
+
+int2str
+:
+    
+subroutine
+
+; Firstly, setup the division routine
+
+tax
+
+lda
+ 
+0
+, x
+    
+sta
+ DIVIDEND
+    
+lda
+ 
+1
+, x
+    
+sta
+ DIVIDEND + 
+1
+
+lda
+ #
+10
+
+sta
+ DIVISOR
+
+; Then blank out the string storage
+    ; Five bytes, from STROUT + 4 to STROUT + 0
+
+ldx
+ #
+4
+
+lda
+ #
+32
+   
+; Space
+
+.buflp
+:
+    
+sta
+ STROUT, x
+    
+dex
+
+bpl
+ .buflp
+
+; And begin dividing
+    ; We use the Y index here, as div clobbers X
+
+ldy
+ #
+4
+
+.divlp
+:
+    
+jsr
+ div16_8
+
+; Our remainder is the digit to print, we need
+    ; to offset this into the PETSCII numerals
+
+clc
+
+adc
+ #
+48
+
+sta
+ STROUT, y
+    
+dey
+
+; We don't want to go the full 5 characters
+    ; Abort if the dividend is zero
+
+lda
+ DIVIDEND
+    
+ora
+ DIVIDEND + 
+1
+
+bne
+ .divlp
+
+rts
+
+And now all that remains is to get these strings on-screen. We'll want to perform the blanking operation mentioned earlier, to overwrite the previous score with spaces, and then there's one final wrinkle to consider: these strings are space-padded to the left (which means, for example, a score of 274 is held in memory as 
+  274
+), but if we want to print the score lined up with the edge of the blockfield that means the left-hand side will be indented from the left edge.
+
+All we need to do for this case is to ignore spaces as they come through, and only print non-space values. On the right-hand side, we 
+do
+ want to print those spaces as they go through (otherwise we'll have the opposite problem, an indent on the right), so there are two related but different sections of code in 
+render_score
+:
+
+render_score
+:
+    
+; Firstly, blank out the scores
+    ; Screen row 22, positions 10-14 and 25-29
+
+ldx
+ #
+4
+
+lda
+ #
+32
+
+.blank
+:
+    
+sta
+ SCRRAM + 
+22
+ * 
+40
+ + 
+14
+, x
+    
+sta
+ SCRRAM + 
+22
+ * 
+40
+ + 
+25
+, x
+    
+dex
+
+bpl
+ .blank
+
+; Then print the black score, ignoring spaces
+    ; Note: We want the 
+address
+ of
+    ; the score, not its value, in A
+
+lda
+ #CNTBLK
+    
+jsr
+ int2str
+
+; We can't use our trick of looping backwards
+    ; as the score will then print out backwards
+    ; so X runs from 0 to 4, and aborts at 5
+
+ldx
+ #
+0
+
+ldy
+ #
+0
+
+.black_print
+:
+    
+lda
+ STROUT, x
+    
+cmp
+ #
+32
+
+beq
+ .black_skip
+    
+sta
+ SCRRAM + 
+22
+ * 
+40
+ + 
+10
+, y
+    
+iny
+
+.black_skip
+:
+    
+inx
+
+cpx
+ #
+5
+
+bne
+ .black_print
+
+; The same again for white
+    ; Simpler this time, we can print spaces
+
+lda
+ #CNTWHT
+    
+jsr
+ int2str
+    
+ldy
+ #
+0
+
+.white_print
+:
+    
+lda
+ STROUT, y
+    
+sta
+ SCRRAM + 
+22
+ * 
+40
+ + 
+25
+, y
+    
+iny
+
+cpy
+ #
+5
+
+bne
+ .white_print
+
+rts
+
+With that final piece of the rendering routine in place, we get the full mesmerising effect of Pong Wars, which we can leave to run at the highest speed VICE can attain on my machine (somewhere around 10x realtime):
+
+Figure 15: The final Pong Wars effect with printed scores (at 4x speed, then at VICE's Warp setting)
+
+Future considerations, or "why so slow?"
+
+The astute reader will have noted throughout this post that the video output has come from a copy of VICE running at 3x (or 4x, in some cases) speed. Right at the top of this post, I stated:
+
+...we'll be looking to try to limit any calculations needed for this animation, so they're completed within the blanking period.
+
+So where's the disconnect? Why is this effect so slow in its current implementation, that it takes VICE running at multiple times native speed to get it looking half-decent?
+
+As it turns out, the calculations being made to detect bounces are relatively efficient, and complete within the period we need; the problem is that we then copy the blockfield across to screen memory to get it rendered, and calculate the current score by counting up the number of black and white blocks that are copied across. This takes an astonishing amount of time: more or less an entire frame is taken up by this copy-and-count process and the divisions required to print the score afterwards.
+
+That means rather than running at the C64's native 60 frames per second, this effect runs at 30. On top of this slowdown, the balls move by 1 pixel per go-around, which is a slow speed in itself when travelling the distance of the blockfield: the initial directions of the balls are such that it'll be at least five seconds before they hit the first block and the Pong War begins.
+
+There are a bunch of improvements we could make to the effect, which won't be performed here, but can be briefly discussed:
+
+Direct rendering
+: Rather than copy the blockfield over to colour RAM with each render, colour RAM itself can be used as the blockfield storage as it allows for both read and write from the CPU without performance penalty. The only caveat here is that 
+get_blk_val
+ (the routine which retrieves the colour at a given coordinate) will need to multiply by 40 instead of 20, to account for the rows not being consecutive in memory.
+
+Score-keeping at collision time
+: In this implementation we've been using the naive method of counting the black and white blocks at the time they're being copied into colour RAM. We can instead keep track of the scores for each side as we know they start at 200 each, and only ever change when flipped by collision with a ball; this would be a change in 
+flipblk
+ to perform a 16-bit addition of 1 for one side, and subtraction of 1 for the other, whenever a block flips.
+
+Score-rendering at collision time
+: The divisions involved in taking the counted-up scores and printing them out digit by digit are also significant in terms of CPU time, and don't need to run every frame; as that area of the screen only changes when a collision happens, it's possible to perform that work alongside the change in score-keeping, breaking up our rendering routine so some of it doesn't happen every frame.
+
+Longer ball vector
+: With these speedups in place, the effect is likely to run at the native 60fps, and the balls can then be made to move further with each frame by lengthening their stride. For a vector of length 2, this would simply mean running 
+advance_black
+ and 
+collide_black
+ (and their corresponding white functions) twice before rendering each time.
+
+But for my first for-real Commodore 64 program, I think we did okay.
+
+Footnotes and citations
+
+The below notes are also presented inline in the main body of this post, but are replicated here for those who prefer their citations as endnotes.
+
+[0]
+: 
+Pongwars on the C64
+, @Two9A, Feb 22nd 2024
+
+[1]
+: 
+Pongwars recreated in JavaScript
+, @vnglst, Jan 2024
+
+[2]
+: 
+"Why Was the Commodore 64 Disk Drive So Slow?"
+, Imran Nazar, Dec 2024
+
+[3]
+: 
+"Raster interrupt"
+, C64 Wiki, updated Mar 2024
+
+[4]
+: 
+Commodore 64 memory map
+, STA, last updated probably a while ago as the page is HTML 4.01
+
+[5]
+: 
+"Character set"
+, C64 Wiki, updated Aug 2025
+
+[6]
+: 
+"Pixel Circle Generator"
+, Donat Studios, updated Jul 2025
+
+[7]
+: 
+dASM assembler
+, GitHub, last release 2020
+
+[8]
+: 
+"Raster's, Sprites and Multiplexing"
+, Mark Dailly, Jul 2024
+
+[9]
+: 
+Michael Corral, "Rotations and Reflections of Angles"
+, Sept 2020
+
+[10]
+: 
+"Advanced Sound Effects on the 64"
+, Atari Magazines archive
+
+[11]
+: 
+"Getting random number from 6502 assember", 'Mike' at StackOverflow
+, Jul 2017
+
+[12]
+: 
+"An Introduction to Bitwise Operators"
+, Imran Nazar, Sep 2006
+
+[13]
+: 
+"Compare Instructions", from "6502 Software Design" by Leo Scanlon
+, updated Dec 2022
+
+[A]
+: A nybble is four bits, as opposed to an 8-bit byte.
+
+[B]
+: I'm using 
+VICE
+ [to emulate the C64] here, which is perhaps the most accurate emulator of anything ever built.
+
+[C]
+: I take no credit for this implementation [of binary division], only for the above dissection of how it works; this comes from 
+a post on the NESDev forums
+ by "tepples" from Jan 2005.

@@ -1,0 +1,1306 @@
+<article>
+<p><a href="https://imrannazar.com/articles" id="parent">Back to Articles</a></p>
+<time datetime="2026-07-15 12:58:35" pubdate="">15th Jul 2026</time>
+<p><em>This post was first promised in early 2024<cite><sup>[0]</sup><mark><a href="https://hachyderm.io/@Two9A/111974181833797753" rel="nofollower" target="_blank">Pongwars on the C64</a>, @Two9A, Feb 22nd 2024</mark></cite>, but it got so long, I added a table of contents. That might be a first...</em></p>
+<p>
+<ul>
+<li>
+<a href="#_top">Introduction</a>
+<ul>
+<li><a href="#_init">Before we get started</a></li>
+<li><a href="#_d64"><em>Digression</em>: Building a C64 disk image</a></li>
+</ul>
+</li>
+<li>
+<a href="#_movement">The game loop: Movement calculations</a>
+<ul>
+<li><a href="#_compl"><em>Digression the second</em>: Representing negative numbers</a></li>
+<li><a href="#_sprpos">After movement comes positioning</a></li>
+<li><a href="#_rand">An element of chance</a></li>
+</ul>
+</li>
+<li><a href="#_field">The playing field</a></li>
+<li>
+<a href="#_score">Keeping score</a>
+<ul>
+<li><a href="#_div"><em>Digression the third</em>: Binary long division</a></li>
+<li><a href="#_rscore">Rendering the score</a></li>
+</ul>
+</li>
+<li><a href="#_future">Future considerations</a></li>
+<li><a href="#_cites">Footnotes and citations</a></li>
+</ul>
+</p>
+<p id="_top">One day early in 2024, I was idly flipping through Mastodon when I came across this toot by Koen van Gilst<cite><sup>[1]</sup><mark><a href="https://hachyderm.io/@vnglst/111828811496422610" rel="nofollower" target="_blank">Pongwars recreated in JavaScript</a>, @vnglst, Jan 2024</mark></cite>:</p>
+<figure>
+<video aria-label="@vnglst@hachyderm.io, 27th Jan 2024: I saw this online somewhere and I just had to recreate it. This is my coding happy place." controls="" loop="" muted="" preload="auto">
+
+</video>
+<figcaption>Figure 1: The toot by @vnglst that sparked the descent into madness currently under discussion</figcaption>
+</figure>
+<p>This is a depiction of an eternal battle between the "day" ball and the "night" ball, to reverse the colour of the opposite ball's field. Many were transfixed, judging by the thousands of faves; I was one of them, and the thought arose unbidden:</p>
+<blockquote>If van Gilst saw this online and had to recreate it in JavaScript, and now I've seen it online, I have to recreate it on the Commodore 64, right?</blockquote>
+<h2>Is such a thing even possible?</h2>
+<p><em>"Yes it is!"</em> Well, it seems like it should be. This is a relatively simple animation, with a random element thrown in at the point the balls contact a surface that makes them bounce; defining "a surface that makes them bounce" seems like the tricky part.</p>
+<p>So we need to do some planning. And as the first step, there's some defining:</p>
+<ul>
+<li>We have the <strong>ball</strong> (two of them) which moves smoothly in straight lines;</li>
+<li>There's a <strong>blockfield</strong>: the 20x20 block area over which the balls travel;</li>
+<li>The blockfield has a <strong>boundary</strong> outside of which the balls can't travel, and they bounce off the boundary;</li>
+<li>And there are two <strong>sides</strong> whose edges also cause the ball to bounce, but the block that gets hit reverses sides.</li>
+</ul>
+<p>This is all complicated by the fact that, despite a lifelong interest in hacking at the C64, I'd never to this point written anything substantial in assembly for the machine. Looks like we'll be learning as we go.</p>
+<p>On most machines of the era video was output to a CRT, as explained in my megathread on the 1541 disk drive from a couple of years back<cite><sup>[2]</sup><mark><a href="https://imrannazar.com/articles/commodore-1541" rel="nofollower" target="_blank">"Why Was the Commodore 64 Disk Drive So Slow?"</a>, Imran Nazar, Dec 2024</mark></cite>. After each frame of video output comes a short vertical blanking period, during which the video chip is not making any demands on memory; we'll be looking to try to limit any calculations needed for this animation, so they're completed within the blanking period and we're not unduly affecting other things that may be happening on the machine during the frame rendering period.</p>
+<p>On the Commodore 64, the BASIC interpreter is the main thing that might be running during that period, and it provides some helpful things for this effect. One of those is a hook that gets triggered at the bottom of every frame<cite><sup>[3]</sup><mark><a href="https://www.c64-wiki.com/wiki/Raster_interrupt" rel="nofollower" target="_blank">"Raster interrupt"</a>, C64 Wiki, updated Mar 2024</mark></cite>, allowing custom code to be called every frame while keeping BASIC running. So we can plan out something like this for the code:</p>
+<figure class="invertable">
+
+<figcaption>Figure 2: Flow chart for the main loop</figcaption>
+</figure>
+<h2 id="_init">Before we get started</h2>
+<p>So let's look at the initialisation portion: we'll be keeping an internal representation of the state of the blockfield, but there's also the on-screen blockfield to set up. The C64 has a 40x25 area of characters in its default text mode (each character being an 8x8 pixel square), and there are two areas of memory of interest here:</p>
+<ul>
+<li>The <strong>screen RAM</strong> sits at <code>$0400</code> by default, and is a thousand-byte area where the character values are stored;</li>
+<li>The <strong>color RAM</strong> at <code>$D800</code> is a thousand nybbles<cite><sup>[A]</sup><mark>A nybble is four bits, as opposed to an 8-bit byte.</mark></cite> where each location can represent one of the C64's 16 colours.</li>
+</ul>
+<p>Immediately after screen RAM sit the pointers to sprite data, but we're not setting up any sprites (yet), so a little shortcut is to write 1024 bytes to screen. This writes past the end of the screen, but makes the code much simpler:</p>
+<samp>
+<pre>SCRRAM = <var>$0400</var>
+BLOCKPTR = <var>$03</var>   <s>; A block of two bytes not used by BASIC</s>
+
+<var>init</var>:
+    <kbd>subroutine</kbd>
+
+    <s>; Set up a pointer to screen RAM, starting at the top left</s>
+    <s>; The 65xx CPUs are little-endian, so low byte first</s>
+    <kbd>lda</kbd> #&lt;SCRRAM
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>lda</kbd> #&gt;SCRRAM
+    <kbd>sta</kbd> BLOCKPTR + <var>1</var>
+
+    <s>; We'll be writing SPACE (character 32), not char 0 which is @</s>
+    <kbd>lda</kbd> #<var>32</var>
+
+    <s>; Four lots of 256, for 1024 writes</s>
+    <kbd>ldx</kbd> #<var>4</var>
+    <kbd>ldy</kbd> #<var>0</var>
+
+<var>.blank</var>:
+    <s>; The inner loop: runs from Y=0 through 255, 254, ...0 again</s>
+    <kbd>sta</kbd> (BLOCKPTR), y
+    <kbd>dey</kbd>
+    <kbd>bne</kbd> <var>.blank</var>
+
+    <s>; The outer loop: punt the pointer along by 256 each go-around</s>
+    <kbd>inc</kbd> <var>BLOCKPTR</var> + <var>1</var>
+    <kbd>dex</kbd>
+    <kbd>bne</kbd> <var>.blank</var></pre>
+</samp>
+<p>(As an aside, <code>BLOCKPTR</code> is set to a value which is "not used by BASIC", but how do we know that? It turns out there's a detailed map of memory used by the C64, by Joe Forster of the STA demo group<cite><sup>[4]</sup><mark><a href="https://sta.c64.org/cbm64mem.html" rel="nofollower" target="_blank">Commodore 64 memory map</a>, STA, last updated probably a while ago as the page is HTML 4.01</mark></cite>, which states locations that the BASIC and Kernal ROMs don't touch in their standard operation, and which are free for programs to use.)</p>
+<p>With the screen a uniformly blank Commodore blue, we can draw out the blockfield as a 20x20 area. The display of the C64 allows each character to have a foreground colour in text mode, but the background colour is shared across the whole screen; if we want to use colour RAM to indicate which blocks are white and which are black (and we do), we'll want a character that's all foreground colour with no holes.</p>
+<figure>
+
+<figcaption>Figure 3: C64 Character set 1, in two sets of 128Source: Jodigi, admin of the C64 Wiki<cite><sup>[5]</sup><mark><a href="https://www.c64-wiki.com/wiki/Character_set" rel="nofollower" target="_blank">"Character set"</a>, C64 Wiki, updated Aug 2025</mark></cite></figcaption>
+</figure>
+<p>As the second half of the character set contains reverse-video copies of the first half, we can use the reverse-video version of SPACE (character 160) as our fully-foreground block. Our loop is a little more complicated: to write rows of 20 characters on a screen that's 40 wide, we need to write 20 and skip 20; additionally, we'll want to put this block centrally on the screen, so we need to start one row down and 10 characters in.</p>
+<p>Our resultant pointer is actually one row and <em>nine</em> characters after the start of screen RAM, because we can achieve the effect of writing 20 bytes in a row either by starting at 0 and going up to 19 (aborting at 20), or starting at 20 and coming down to 1 (aborting at 0). The latter saves us a compare, so is both quicker and smaller in code size.</p>
+<samp>
+<pre>    <kbd>lda</kbd> #&lt;(SCRRAM + <var>40</var> + <var>9</var>)
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>lda</kbd> #&gt;(SCRRAM + <var>40</var> + <var>9</var>)
+    <kbd>sta</kbd> BLOCKPTR + <var>1</var>
+
+    <s>; This time we're writing 20 rows of 20, char 160</s>
+    <s>; We'd normally think of this as X being along the line, and Y down</s>
+    <s>; but the 65xx only offers indirect addressing with Y as the index</s>
+    <kbd>ldx</kbd> #<var>20</var>
+
+<var>.field</var>:
+    <kbd>lda</kbd> #<var>160</var>
+    <kbd>ldy</kbd> #<var>20</var>
+<var>.row</var>:
+    <kbd>sta</kbd> (BLOCKPTR), y
+    <kbd>dey</kbd>
+    <kbd>bne</kbd> <var>.row</var>
+
+    <s>; Add 40 to the BLOCKPTR (16-bit add)</s>
+    <s>; Clobbers A, will need reloading at the top of the .field loop</s>
+    <kbd>lda</kbd> BLOCKPTR
+    <kbd>adc</kbd> #<var>40</var>
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>lda</kbd> BLOCKPTR + <var>1</var>
+    <kbd>adc</kbd> #<var>0</var>
+    <kbd>sta</kbd> BLOCKPTR + <var>1</var>
+
+    <kbd>dex</kbd>
+    <kbd>bne</kbd> <var>.field</var></pre>
+</samp>
+<p>With the screen RAM fully set up, next comes the colour RAM. As it turns out (peeking ahead) we'll be using a double-buffering technique to simplify the bounce calculations: that means an internal buffer of 400 contiguous black-or-white values for the blockfield, which is rendered to colour RAM each frame. So our initialisation becomes setup of the internal blockfield buffer:</p>
+<samp>
+<pre>BLOCKBUF = <var>$CE00</var>   <s>; 512 bytes unused RAM, which is ample</s>
+
+    <kbd>lda</kbd> #&lt;BLOCKBUF
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>lda</kbd> #&gt;BLOCKBUF
+    <kbd>sta</kbd> BLOCKPTR + <var>1</var>
+
+    <s>; The initial blockfield is half black (colour 0), half white (1)</s>
+    <s>; In other words, 20 rows of 10 black and 10 white</s>
+    <s>; In other other words, 40 areas of alternating black and white</s>
+    <kbd>lda</kbd> #<var>0</var>
+    <kbd>ldx</kbd> #<var>40</var>
+<var>.fill</var>:
+
+    <s>; The inner loop, writing the area of 10 (either black or white)</s>
+    <s>; This time, write from 9 to 0 inclusive, and stop at -1</s>
+    <kbd>ldy</kbd> #<var>9</var>
+<var>.fill_row</var>:
+    <kbd>sta</kbd> (BLOCKPTR), y
+    <kbd>dey</kbd>
+    <kbd>bpl</kbd> <var>.fill_row</var>
+
+    <s>; Add 10 to BLOCKPTR (16-bit add)</s>
+    <s>; Clobbers A, but this time we can't just write a fixed value afresh</s>
+    <s>; So push A to the stack</s>
+    <kbd>pha</kbd>
+    <kbd>lda</kbd> BLOCKPTR
+    <kbd>adc</kbd> #<var>10</var>
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>lda</kbd> BLOCKPTR + <var>1</var>
+    <kbd>adc</kbd> #<var>0</var>
+    <kbd>sta</kbd> BLOCKPTR + <var>1</var>
+
+    <s>; Pull A back off the stack, and XOR 1 to swap between 0 and 1</s>
+    <kbd>pla</kbd>
+    <kbd>eor</kbd> #<var>1</var>
+
+    <kbd>dex</kbd>
+    <kbd>bne</kbd> <var>.fill</var></pre>
+</samp>
+<p>And we're almost done with the initialisation steps. There are two things left to do: set up the sprites for our smoothly-moving balls, and connect the hook for our main routine. So we'll need to design an 8x8-pixel representation of a ball; it turns out that the Minecraft scene has a plethora of pixelated shape generators online, so we can use a circle generator<cite><sup>[6]</sup><mark><a href="https://donatstudios.com/PixelCircleGenerator" rel="nofollower" target="_blank">"Pixel Circle Generator"</a>, Donat Studios, updated Jul 2025</mark></cite> set to 8x8:</p>
+<figure>
+
+<figcaption>Figure 4: Pixel Circle Generator set to filled circles of width 8</figcaption>
+</figure>
+<p>Just like the text characters on a C64, sprites can have a foreground colour for any pixels that are set in the sprite, and a background that shines through for pixels that aren't set. That means sprites can be defined in binary; the text characters are 8x8 pixels, but sprites are 24x21, and the video chip expects binary data corresponding to that size when setting up the sprite. Our ball itself is only 8x8 pixels, so the rest will need to be padded out with 0's.</p>
+<p>24x21 bits of data is 63 contiguous bytes, so the C64's video chip expects a pointer to the sprite data to be aligned to a 64-byte boundary; as a result, it actually expects the pointer <em>divided by 64</em> as a sort of "data block index" during setup of the sprite. As we mentioned earlier, the pointers to the sprite are, by default, immediately after the screen text in RAM:</p>
+<samp>
+<pre>SPRPTR = SCRRAM + (<var>40</var> * <var>25</var>)
+
+    <kbd>lda</kbd> #(ballmap / <var>64</var>)
+    <kbd>sta</kbd> SPRPTR       <s>; Sprite 0</s>
+    <kbd>sta</kbd> SPRPTR + <var>1</var>   <s>; Sprite 1</s>
+
+    <s>; This will end up at the bottom of our source code,
+    ; in a "data section". For now it's presented alongside</s>
+    <kbd>align</kbd> <var>64</var>
+<var>ballmap</var>:
+    <kbd>byte</kbd> %<var>00111100</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>01111110</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>11111111</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>11111111</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>11111111</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>11111111</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>01111110</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00111100</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var>
+    <kbd>byte</kbd> %<var>00000000</var>, %<var>00000000</var>, %<var>00000000</var></pre>
+</samp>
+<p>With the sprite data set up, we can inform the video chip of the colours we'd like for each sprite's foreground, and then turn the sprites on. We're not setting the onscreen location of the sprites here, that'll be done by the rendering code; their default position of 0x0 is off the screen to the top left, which is usefully out of the way.</p>
+<p>On the C64, talking to the hardware is done in the same way as talking to memory: writing to and/or reading from special addresses. In the documentation, these are referred to as "registers" for the various chips; the video interface chip (VIC) has over 40 of these, but for our purposes we're interested in those that control sprites 0 and 1.</p>
+<figure>
+<table>
+<thead>
+<tr><th>Sprite</th><th>Location</th><th>Name</th><th>Detail</th></tr>
+</thead>
+<tbody>
+<tr><td rowspan="3">0</td><td><code>$D000</code></td><td>SPR0X</td><td>X-position</td></tr>
+<tr><td><code>$D001</code></td><td>SPR0Y</td><td>Y-position</td></tr>
+<tr><td><code>$D027</code></td><td>SPR0COL</td><td>Colour</td></tr>
+<tr><td rowspan="3">1</td><td><code>$D002</code></td><td>SPR1X</td><td>X-position</td></tr>
+<tr><td><code>$D003</code></td><td>SPR1Y</td><td>Y-position</td></tr>
+<tr><td><code>$D028</code></td><td>SPR1COL</td><td>Colour</td></tr>
+<tr><td rowspan="2">All</td><td><code>$D010</code></td><td>SPRXHI</td><td>X-position, 9th bitOne bit for each sprite</td></tr>
+<tr><td><code>$D015</code></td><td>SPREN</td><td>Sprite enableOne bit for each sprite</td></tr>
+</tbody>
+</table>
+<figcaption>Table 1: VIC sprite control registers for sprites 0 and 1</figcaption>
+</figure>
+<p>There's an interesting wrinkle here that we'll look at in more detail when it comes to rendering the sprites, because the screen is more than 256 pixels across, which means the X-coordinate doesn't fit in one byte; instead, there's a bit in <code>SPRXHI</code> for each sprite that one needs to set when it's over on the right side of the screen. For now, we'll put that aside:</p>
+<samp>
+<pre><s>    ; Sprite 0 starts on the black side, and is white</s>
+    <kbd>lda</kbd> #<var>1</var>
+    <kbd>sta</kbd> SPR0COL
+
+    <s>; Sprite 1 starts on the white side, and is black</s>
+    <kbd>lda</kbd> #<var>0</var>
+    <kbd>sta</kbd> SPR1COL
+
+    <kbd>lda</kbd> #%<var>00000011</var>
+    <kbd>sta</kbd> SPREN</pre>
+</samp>
+<p>And we're done setting things up: the blockfield is in place, the sprites are enabled, and the only thing left is to tell the C64 where to look for the rendering code that runs every frame.</p>
+<samp>
+<pre>IRQ = <var>$0314</var>
+
+    <s>; Disable interrupts, so we don't
+    ; get ...interrupted during setup</s>
+    <kbd>sei</kbd>
+
+    <kbd>lda</kbd> #&lt;isr
+    <kbd>sta</kbd> IRQ
+    <kbd>lda</kbd> #&gt;isr
+    <kbd>sta</kbd> IRQ + <var>1</var>
+
+    <kbd>cli</kbd>
+
+<s>; Interrupt service routine: main renderer</s>
+<var>isr</var>:
+    <kbd>subroutine</kbd>
+
+    <s>; ISRs need to run transparently, without clobbering
+    ; any registers, so we save the full state to stack</s>
+    <kbd>pha
+    txa
+    pha
+    tya
+    pha</kbd>
+
+    <s>; TODO: The rendering here</s>
+    <kbd>jsr</kbd> advance_white
+    <kbd>jsr</kbd> collide_white
+    <kbd>jsr</kbd> advance_black
+    <kbd>jsr</kbd> collide_black
+    <kbd>jsr</kbd> render_field
+    <kbd>jsr</kbd> render_score
+
+    <s>; And pull the state back off the stack, in reverse order</s>
+    <kbd>pla
+    tay
+    pla
+    tax
+    pla</kbd>
+
+    <s>; Return to where the C64 would normally
+    ; go during service of this interrupt</s>
+    <kbd>jmp</kbd> $<var>EA31</var></pre>
+</samp>
+<p>We have ourselves a full program here, though it doesn't do a great deal yet. If we assemble this and build a disk image to load into an emulator<cite><sup>[B]</sup><mark>I'm using <a href="https://vice-emu.sourceforge.io/" rel="noreferrer" target="_blank">VICE</a> here, which is perhaps the most accurate emulator of anything ever built.</mark></cite> we might get something like this.</p>
+<figure>
+
+<figcaption>Figure 5: Our Pongwars implementation after initialisation</figcaption>
+</figure>
+<h2 id="_d64">Digression: Building a C64 disk image</h2>
+<p>While hacking on this, I realised that emulators don't generally take a binary image and allow you to drop it into the C64's memory to be run. The standard user-friendly way of loading a program would be to load it from a disk (or disk image, in this case), so we'll want to take our program as written in assembly, and get it into a disk image.</p>
+<p>It turns out VICE provides tools to work on disk images, as it needs to emulate the 1541 disk drive as well as the C64 in order to provide disk connectivity, and you get those tools essentially for free as part of the implementation. In this case, a command-line emulation of the disk drive is available as <code>c1541</code>, and it can be instructed to perform all the steps necessary to create a disk image:</p>
+<ul>
+<li><strong>Format</strong> a disk to lay down the pattern of tracks into an image;</li>
+<li><strong>Attach</strong> the image to the emulator;</li>
+<li><strong>Write</strong> our program to disk, and put its name in the directory listing.</li>
+</ul>
+<samp>
+<h3><code>Makefile</code>: Assembly and image generation</h3>
+<pre><s># Change VICE_ROOT to point to your VICE binaries
+# I'm on an M1 Mac, so this is the arm64/osx copy</s>
+VICE_ROOT = <var>/Applications/vice-arm64-gtk3-3.7.1/bin</var>
+NAME = <var>pongwars</var>
+
+<kbd>all</kbd>: $(<var>NAME</var>).d64
+
+<kbd>$(</kbd><var>NAME</var><kbd>).d64</kbd>: $(<var>NAME</var>).prg
+    $(<var>VICE_ROOT</var>)/<kbd>c1541</kbd> \
+        -<kbd>format</kbd> $(<var>NAME</var>),<var>8</var> <var>d64</var> $(<var>NAME</var>).d64 \
+        -<kbd>attach</kbd> $(<var>NAME</var>).d64 \
+        -<kbd>write</kbd> $(<var>NAME</var>).prg $(<var>NAME</var>)
+
+<kbd>$(</kbd><var>NAME</var><kbd>).prg</kbd>: $(<var>NAME</var>).asm
+    <kbd>dasm</kbd> $(<var>NAME</var>).asm -<kbd>o</kbd>$(<var>NAME</var>).prg</pre>
+</samp>
+<p>(It also bears mentioning that I'm using dASM<cite><sup>[7]</sup><mark><a href="https://github.com/dasm-assembler/dasm/" rel="noreferrer" target="_blank">dASM assembler</a>, GitHub, last release 2020</mark></cite> to assemble the 6502 code written here into a binary image, that can then be pushed to the disk image by <code>c1541</code>.)</p>
+<h2 id="_movement">The game loop: Movement calculations</h2>
+<p>So we come back to the program under consideration, having set up our initialisation steps; we now have a empty game loop that needs to be filled in. From Figure 2, we know that our main steps are to advance the two balls, check for collisions, and render the updated block field and score.</p>
+<p>What does it mean to "advance the ball"? Well, if we check back to Figure 1, we see that the balls start off in the middle of their fields, and they move at a fixed speed per frame, but their direction can change. If our fixed speed is one pixel per frame, trigonometry tells us that the ball needs to be moved by a <em>fractional</em> number of pixels in the horizontal and vertical directions:</p>
+<figure class="invertable">
+
+<figcaption>Figure 6: Components of a unit vector</figcaption>
+</figure>
+<p>We can't actually move the sprites by a fractional number of pixels, but we can keep track of the fractions and move the sprites if the calculation bumps their position across to the next whole number. If, for example, θ was 35 degrees our ball position might look like this for consecutive frames:</p>
+<figure>
+<table>
+<thead><tr><th>Frame</th><th>X-position</th><th>Y-position</th><th>Screen coords</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>0</td><td>0</td><td>0, 0</td></tr>
+<tr><td>1</td><td>0.819</td><td>0.574</td><td>0, 0</td></tr>
+<tr><td>2</td><td>1.638</td><td>1.147</td><td>1, 1</td></tr>
+<tr><td>3</td><td>2.457</td><td>1.720</td><td>2, 1</td></tr>
+<tr><td>4</td><td>3.277</td><td>2.294</td><td>3, 2</td></tr>
+</tbody>
+</table>
+<figcaption>Table 2: Consecutive positions for a ball at speed 1, direction 35°</figcaption>
+</figure>
+<p>When I talk about fractions in computing, it's probable that your mind immediately goes to floating-point numbers, which can represent most fractions you're likely to run into. The Commodore 64 does support floating-point operations, but they're astoundingly slow: without dedicated hardware to handle them, the BASIC interpreter handles floating-point numbers in text form, performing calculations internally using its own binary format and translating back to text for storage.</p>
+<p>For our purposes, there is another way: <em>fixed-point</em> numbers, where the fractional and integer parts of the number are always a given length and don't change between numbers. This works for us for multiple reasons:</p>
+<ul>
+<li>We know the field is 20x20 blocks, which is 160x160 pixels, so the whole-number part of the ball's coordinate (horizontal or vertical) can fit into a byte and can be taken directly from that byte to plot the ball on-screen;</li>
+<li>As per Figure 6, the direction of the ball is a unit vector, so <code>cos θ</code> and <code>sin θ</code> are always less than 1. In fact, they can be directly lifted from a lookup table for the sine function.</li>
+</ul>
+<p>We can further simplify things by ranging θ through 256 "degrees" instead of the traditional 360, allowing the direction of the ball to fit into one byte. Putting this all together, our internal representation of the ball's state would be a structure of five bytes, laid out something like this:</p>
+<figure class="invertable">
+
+<figcaption>Figure 7: Data structure of the ball state</figcaption>
+</figure>
+<p>With our data structure comes an initialisation step, which we'll want to add to the init code from earlier. This allows us to set up the balls' initial position and direction on the block field, which we can then use in the renderer:</p>
+<samp>
+<pre><s>; Ball data spans five bytes</s>
+BALL0 = <var>$D9</var>
+BALL1 = <var>$DE</var>
+
+<var>init:</var>
+    <s>; ...</s>
+    <s>; Copy initial position data into zero-page</s>
+    <s>; We can do both sets of 5 bytes consecutively</s>
+    <kbd>ldx</kbd> #<var>10</var>
+<var>.spr_init</var>:
+    <kbd>lda</kbd> posdata, x
+    <kbd>sta</kbd> BALL0, x
+    <kbd>dex</kbd>
+    <kbd>bpl</kbd> <var>.spr_init</var>
+
+<var>posdata</var>:
+    <s>; White ball: Theta 32 (south-east), X 40.0, Y 40.0</s>
+    <kbd>byte</kbd> <var>32</var>, <var>40</var>, <var>0</var>, <var>60</var>, <var>0</var>
+    <s>; Black ball: Theta 160 (north-west), X 120.0, Y 120.0</s>
+    <kbd>byte</kbd> <var>160</var>, <var>120</var>, <var>0</var>, <var>120</var>, <var>0</var></pre>
+</samp>
+<p>And we can finally start adding pieces to our game loop. From Figure 2, we'll want to advance the balls' positions and render their new locations, as the first visible step. That'll involve adding the horizontal and vertical components of the unit vector, for which we'll want a sine/cosine lookup table</p>
+<p>One thing to note about the 6510 processor in the C64 is that it has a bug in the indexed addressing mode: if you have a table of 256 values that's not aligned to a 256-byte boundary, adding the index register can cause your final location to wrap around the boundary instead of continuing through to the rest of the table. In other words, a percentage of your lookup table becomes inaccessible, because the index never reaches that portion before looping back.</p>
+<p>We have to take care to align our lookup table to a page boundary, using the assembler's <code>align</code> keyword, to avoid this bug. However, we can also use this to our advantage: the cosine function is the same as the sine function with an offset of a quarter of the waveform, so we can retrieve a sine value for a particular angle by indexing into the table, and adding 64 to the index to obtain the cosine for that same angle. If adding 64 would take us off the end of the table, no problem: that wrap-around means we land back near the start, on the index we were looking for.</p>
+<p>Putting all that together, we get a pair of subroutines to advance the balls' position, that look a little like the below (I'm including the routine for the black ball only here, the white ball will look substantially similar):</p>
+<samp>
+<pre><var>advance_black</var>:
+    <kbd>subroutine</kbd>
+
+    <s>; x += cos(theta)</s>
+    <kbd>lda</kbd> BALL0
+    <kbd>clc</kbd>
+    <kbd>adc</kbd> #<var>64</var>
+    <kbd>tax</kbd>
+    <kbd>lda</kbd> sindata, x   <s>; LUT wrap-around</s>
+    <kbd>ldy</kbd> #(BALL0 + <var>1</var>)
+    <kbd>jsr</kbd> add_u16_s8
+
+    <s>; y += sin(theta)</s>
+    <kbd>lda</kbd> BALL0
+    <kbd>tay</kbd>
+    <kbd>lda</kbd> sindata, y
+    <kbd>ldy</kbd> #(BALL0 + <var>3</var>)
+    <kbd>jsr</kbd> add_u16_s8
+
+    <s>; TODO: Position on-screen</s>
+
+    <kbd>rts</kbd>
+
+    <s>;--------------------------------</s>
+    <kbd>align</kbd> <var>256</var>
+<var>sindata</var>:
+    <kbd>hex</kbd> <var>00 03 06 09 0C 10 13 16 19 1C </var>
+    <kbd>hex</kbd> <var>1F 22 25 28 2B 2E 31 33 36 39 </var>
+    <kbd>hex</kbd> <var>3C 3F 41 44 47 49 4C 4E 51 53 </var>
+    <kbd>hex</kbd> <var>55 58 5A 5C 5E 60 62 64 66 68 </var>
+    <kbd>hex</kbd> <var>6A 6B 6D 6F 70 71 73 74 75 76 </var>
+    <kbd>hex</kbd> <var>78 79 7A 7A 7B 7C 7D 7D 7E 7E </var>
+    <kbd>hex</kbd> <var>7E 7F 7F 7F 7F 7F 7F 7F 7E 7E </var>
+    <kbd>hex</kbd> <var>7E 7D 7D 7C 7B 7A 7A 79 78 76 </var>
+    <kbd>hex</kbd> <var>75 74 73 71 70 6F 6D 6B 6A 68 </var>
+    <kbd>hex</kbd> <var>66 64 62 60 5E 5C 5A 58 55 53 </var>
+    <kbd>hex</kbd> <var>51 4E 4C 49 47 44 41 3F 3C 39 </var>
+    <kbd>hex</kbd> <var>36 33 31 2E 2B 28 25 22 1F 1C </var>
+    <kbd>hex</kbd> <var>19 16 13 10 0C 09 06 03 00 FD </var>
+    <kbd>hex</kbd> <var>FA F7 F4 F0 ED EA E7 E4 E1 DE </var>
+    <kbd>hex</kbd> <var>DB D8 D5 D2 CF CD CA C7 C4 C1 </var>
+    <kbd>hex</kbd> <var>BF BC B9 B7 B4 B2 AF AD AB A8 </var>
+    <kbd>hex</kbd> <var>A6 A4 A2 A0 9E 9C 9A 98 96 95 </var>
+    <kbd>hex</kbd> <var>93 91 90 8F 8D 8C 8B 8A 88 87 </var>
+    <kbd>hex</kbd> <var>86 86 85 84 83 83 82 82 82 81 </var>
+    <kbd>hex</kbd> <var>81 81 81 81 81 81 82 82 82 83 </var>
+    <kbd>hex</kbd> <var>83 84 85 86 86 87 88 8A 8B 8C </var>
+    <kbd>hex</kbd> <var>8D 8F 90 91 93 95 96 98 9A 9C </var>
+    <kbd>hex</kbd> <var>9E A0 A2 A4 A6 A8 AB AD AF B2 </var>
+    <kbd>hex</kbd> <var>B4 B7 B9 BC BF C1 C4 C7 CA CD </var>
+    <kbd>hex</kbd> <var>CF D2 D5 D8 DB DE E1 E4 E7 EA </var>
+    <kbd>hex</kbd> <var>ED F0 F4 F7 FA FD</var></pre>
+</samp>
+<p>But wait, what's this <code>add_u16_s8</code>? Well, you'll recall that each component of the ball's position is a fixed-point number, with 8 bits either side of the point; this is equivalent to an unsigned 16-bit number. Adding a value from the sine table to this fixed-point number is thus the same as adding a signed 8-bit number (a number that can range from -128 to +127) to our 16-bit number.</p>
+<p>The processor doesn't have native handling of 16-bit numbers, so we'll have to build a routine for that. Fortunately, such a routine is fairly straightforward: we add our 8-bit value to the low end (our fractional component in this case), and if the value overflows the 8-bit range it'll set the processor's <code>CARRY</code> flag. We then either add or subtract the <code>CARRY</code> from the high end (our whole component) depending on whether our 8-bit value was positive or negative.</p>
+<p>The processor can help us with the "whether a number is negative" part too: one of the other flags available is <code>NEGATIVE</code>, which is the same as the top bit of an 8-bit value after calculation (the top bit being how one traditionally denotes a negative number). Alongside that come the <code>bpl</code> and <code>bmi</code> instructions, which stand for "branch if plus" and "branch if minus".</p>
+<p>We can use <code>bpl</code> with an instruction that doesn't <em>change</em> the value, but does set <code>NEGATIVE</code> to allow us to take those two branches:</p>
+<samp>
+<pre><s>; add_u16_s8: Add 8-bit signed to 16-bit unsigned
+; @param A The 8-bit signed
+; @param Y Zero-page pointer to the 16-bit unsigned
+; @return Changed value in zero-page
+; @clobbers A
+; @preserves Y</s>
+<var>add_u16_s8</var>:
+    <kbd>subroutine</kbd>
+    <kbd>and</kbd> #<var>255</var>      <s>; Set N</s>
+    <kbd>bpl</kbd> .positive
+
+<var>.negative</var>:
+    <kbd>clc</kbd>
+    <kbd>adc</kbd> <var>1</var>, y      <s>; Add fraction</s>
+    <kbd>sta</kbd> <var>1</var>, y
+    <kbd>lda</kbd> <var>0</var>, y
+    <kbd>sbc</kbd> #<var>0</var>        <s>; Subtract C from whole</s>
+    <kbd>sta</kbd> <var>0</var>, y
+    <kbd>jmp</kbd> .end
+
+<var>.positive</var>:
+    <kbd>clc</kbd>
+    <kbd>adc</kbd> <var>1</var>, y      <s>; Add fraction</s>
+    <kbd>sta</kbd> <var>1</var>, y
+    <kbd>lda</kbd> <var>0</var>, y
+    <kbd>adc</kbd> #<var>0</var>        <s>; Add C to whole</s>
+    <kbd>sta</kbd> <var>0</var>, y
+
+<var>.end</var>:
+    <kbd>rts</kbd></pre>
+</samp>
+<h2 id="_compl">Digression the second: Representing negative numbers</h2>
+<p>The keen-eyed reader will have seen something weird in the above explanation of how <code>add_u16_s8</code> works:</p>
+<blockquote>We add our 8-bit value to the low end (our fractional component in this case)... then either add or subtract the CARRY from the high end (our whole component)</blockquote>
+<p>Surely if the number is negative we'd want to subtract both times? To look at why we don't, it's worth a quick note on the history of representing negative numbers in computing.</p>
+<p>Computers were, to begin with, exclusively the domain of mathematicians and people who would be familiar with the esoteric field of binary numbers, so the number handling was built around being able to read those numbers off from the "blinkenlights" directly in binary. The simplest way to handle both positive and negative numbers was simply to mark one bit in the number as "the negative bit", and the rest of the number would represent the value; this was called "sign and magnitude" representation. For example:</p>
+<samp>
+<pre>Twenty-three and negative twenty-three:
+0 0010111
+1 0010111</pre>
+</samp>
+<p>To perform a subtraction (or to add a negative number, which is functionally equivalent) while only having adding circuitry, the computer needs to perform some precalculation otherwise it'll end up with the wrong answer:</p>
+<samp>
+<pre>  [63 - 23]      [63 + -23]
+  00111111   =   00111111
+- 00010111     + 10010111
+                 --------
+                 11001100
+                 negative eighty six</pre>
+</samp>
+<p>The sign-and-magnitude negative number needs to be inverted (or <em>one's-complemented</em> in the mathematical jargon) when performing a subtraction, so that adding it has the intended effect of reducing the value instead of piling on top:</p>
+<samp>
+<pre>  [63 - 23]      [63 + -23]
+  00111111   =   00111111
+- 00010111     + <var>11101000</var>
+                 --------
+              [1]00100111
+                 thirty nine (and a carry)</pre>
+</samp>
+<p>Except complementing doesn't quite fix it: because sign-and-magnitude numbers can have zero (<code>00000000</code>) <em>and</em> negative zero (<code>10000000</code>), we need to add one after inverting to step over the negative zero value:</p>
+<samp>
+<pre>  [63 - 23]      [63 + -23]
+  00111111   =   00111111
+- 00010111     + <var>1110100</var><s>1</s>
+                 --------
+              [1]00101000
+                 forty (and a carry)</pre>
+</samp>
+<p>To summarise: negative numbers were represented as a negative sign bit and the value as the magnitude, for easier reading off from binary displays, but the computer would need to first invert the number and then add one in order to perform the addition of a negative number.</p>
+<p>As binary read-off displays went away with the growing ubiquity of computing, it began to make sense to simplify the representation of negative numbers not for the human mathematician using the computer, but for the computer's internal operation. The best thing for the computer, of course, would be to remove this whole pipeline of needing to complement the number and add one, before being able to add a negative number.</p>
+<p>And that's how we landed at <em>two's-complement</em> (two's because we add one to the one's-complement) representation as the standard for binary negative numbers: if the sign bit is set to negative in the number, the rest of the value is <em>already</em> inverted and has one added, so the computer just needs to add the whole value as normal.</p>
+<p>This does increase the cognitive load on a programmer working at a low level, because your binary numbers no longer read "normally":</p>
+<samp>
+<pre>00000000 =    0
+00000001 =    1
+00000010 =    2
+...
+01111110 =  126
+01111111 =  127
+10000000 = -128 (not -0)
+10000001 = -127 (not -1)
+10000010 = -126 (not -2)
+...
+11111110 =   -2
+11111111 =   -1</pre>
+</samp>
+<p>But when are we going to be working at a sufficiently low level that we have to remember about two's-complement representation in the microcomputer age of the '80s, with high-level languages such as BASIC widely available? When we need to eke out more performance than BASIC can give us, which is what we need here.</p>
+<p>That's why <code>add_u16_s8</code> performs an addition on both branches, whether the <code>s8</code> is positive or negative.</p>
+<h2 id="_sprpos">After movement comes positioning</h2>
+<p>Back to our regularly scheduled programming, we're now able to advance the internal representation of the balls' positions, but we're not yet able to see the balls moving on-screen. For that to happen, we need to set the positions of the sprites in the video chip's registers, except we can't naively copy the calculated values over: the top-left of our playing field isn't at sprite coordinate 0,0. Heck, the top-left of the screen isn't at 0,0.</p>
+<figure class="invertable">
+
+<figcaption>Figure 8: Sprite positioning coordinates on the C64. I believe this is lifted from the Programmer's Reference, by way of Mike Dailly<cite><sup>[8]</sup><mark><a href="https://lemmings.info/rasters-sprites-and-multiplexing/" rel="noreferrer" target="_blank">"Raster's, Sprites and Multiplexing"</a>, Mark Dailly, Jul 2024</mark></cite></figcaption>
+</figure>
+<p>From some time earlier, you'll recall that our blockfield is one row and ten characters in from the top-left of the screen, which (given that each character is 8x8 pixels) is eight pixels down and 80 across. As a result, to plot the ball sprite where we want it on-screen we need to add 104 to the X coordinate, and 58 to the Y.</p>
+<p>And now that wrinkle we mentioned earlier comes back around: <code>SPRXHI</code>, the video chip control register that contains the 9th bit of each sprite's X-coordinate. The VIC combines this with the lower eight bits to generate the final position, which means we need to update <code>SPRXHI</code> appropriately each time we set the balls' positions.</p>
+<p><em>As an aside, the furthest right our ball can go in the playing field is 19 blocks before bouncing off the right edge, which is 152 pixels; adding our offset of 104 leaves a final position of 256. If our playing field were even one pixel left of centre, we wouldn't have to worry about <code>SPRXHI</code> during our game loop.</em></p>
+<p>So let's translate this into code by filling out the rest of <code>advance_black</code>. You'll recall from Figure 7 that each ball has a data structure in memory that holds the coordinates in fixed-point number format, so we only need the whole-number portion of each coordinate when translating to on-screen position. We left a <code>TODO</code> in the code previously, so bringing that down from above:</p>
+<samp>
+<pre><var>advance_black</var>:
+    <kbd>subroutine</kbd>
+
+    <s>; x += cos(theta)</s>
+    <kbd>lda</kbd> BALL0
+    <kbd>clc</kbd>
+    <kbd>adc</kbd> #<var>64</var>
+    <kbd>tax</kbd>
+    <kbd>lda</kbd> sindata, x   <s>; LUT wrap-around</s>
+    <kbd>ldy</kbd> #(BALL0 + <var>1</var>)
+    <kbd>jsr</kbd> add_u16_s8
+
+    <s>; y += sin(theta)</s>
+    <kbd>lda</kbd> BALL0
+    <kbd>tay</kbd>
+    <kbd>lda</kbd> sindata, y
+    <kbd>ldy</kbd> #(BALL0 + <var>3</var>)
+    <kbd>jsr</kbd> add_u16_s8
+
+    <s>; Position the sprite</s>
+    <s>; The lower byte of the X-coordinate first</s>
+    <kbd>lda</kbd> BALL0 + <var>2</var>
+    <kbd>adc</kbd> #<var>104</var>
+    <kbd>sta</kbd> SPR0X
+
+    <s>; Then the high 9th bit: if the result of the add
+    ; was over 255, the Carry flag will be set</s>
+    <kbd>lda</kbd> SPRXHI
+    <kbd>and</kbd> #%<var>11111110</var>
+    <kbd>bcc</kbd> .xlow
+    <kbd>eor</kbd> #<var>1</var> 
+<var>.xlow</var>:
+    <kbd>sta</kbd> SPRXHI
+
+    <s>; And the Y-coordinate, which is always one byte</s>
+    <s>; (Taking care to clear the Carry from earlier)</s>
+    <kbd>lda</kbd> BALL0 + <var>4</var>
+    <kbd>clc</kbd>
+    <kbd>adc</kbd> #<var>58</var>
+    <kbd>sta</kbd> SPR0Y
+
+    <kbd>rts</kbd></pre>
+</samp>
+<p>If we do this for both the white and black balls, filling out <code>advance_white</code> as well as <code>advance_black</code>, each time around the game loop will move them by one step on-screen, which will look something like this:</p>
+<figure>
+<video aria-label="Recording from VICE of the above code: the balls continue on forever, outside the playing field, and loop back around" controls="" loop="" muted="" preload="auto">
+
+</video>
+<figcaption>Figure 8: The above code running in VICE (at 3x speed)</figcaption>
+</figure>
+<p>So that's progress: the two balls can be seen moving, but they escape the playing field and wrap off the edge of the screen before returning, travelling forever in the same direction. This is, of course, because we have no code yet to detect the edge of the playing field and make a ball bounce when that's hit, so this is what we need next.</p>
+<p>There are four possible conditions where a ball can hit an edge of the field and need to bounce, and they fall into two groups:</p>
+<ul>
+<li>If a ball has hit the <strong>top</strong>, it was travelling up and needs to bounce down; conversely, if a ball has hit the <strong>bottom</strong>, it was travelling down and needs to bounce up.</li>
+<li>If a ball has hit the <strong>left</strong> edge, it was travelling to the left and needs to bounce off to the right; in the same fashion, a ball travelling right will hit the <strong>right</strong> edge and need to bounce back to the left.</li>
+</ul>
+<p>We know the coordinates of the ball (to be more precise, we know the coordinates of the top-left of the ball sprite) and we know the size of the field, so this becomes a relatively simple set of comparisons. The only caveat is that when we're checking for hits on the bottom or right edges, we're not comparing the top-left of the ball sprite, but the bottom-right, which is eight pixels further across in either direction.</p>
+<p>So if the field is 20 blocks both ways, that's 160 pixels; if a ball's coordinate in either direction has reached 152, it's just hit the edge. In summary, we have the following four conditions in which a ball needs to bounce:</p>
+<ul>
+<li>If a ball's <strong>Y-coordinate is 0</strong> it's hit the top;</li>
+<li>If a ball's <strong>Y-coordinate is 152</strong> it's hit the bottom;</li>
+<li>If a ball's <strong>X-coordinate is 0</strong> it's hit the left;</li>
+<li>If a ball's <strong>X-coordinate is 152</strong> it's hit the right.</li>
+</ul>
+<p>So what does it mean for the ball to bounce? You'll recall from Figure 6 that our ball's velocity is described by a unit vector: it's always moving at the same unit speed, but we keep track of its angle. So bounces are changes in angle: specifically, they're changes in angle caused by reflection.</p>
+<figure class="invertable">
+
+<figcaption>Figure 9: Reflections and their resultant anglesFrom Michael Corral, via OpenCurriculum<cite><sup>[9]</sup><mark><a href="https://opencurriculum.org/5485/rotations-and-reflections-of-angles/" rel="noreferrer" target="_blank">Michael Corral, "Rotations and Reflections of Angles"</a>, Sept 2020</mark></cite></figcaption>
+</figure>
+<p>In Figure 9, we see a reflection in the X-axis (hitting a horizontal line) causes the angle to negate, and reflection in the Y-axis (hitting a vertical) causes our angle θ to change to <em>180° - θ</em>. For our purposes, you'll recall that θ ranges through 256 "degrees", so we can start to fill out code to perform these flips in angle, remembering that θ is stored in the first part of our ball's information block in memory:</p>
+<samp>
+<pre><var>flipx_black</var>:
+    <kbd>subroutine</kbd>
+    <kbd>lda</kbd> #<var>0</var>       <s>; I have a reason for not using</s>
+    <kbd>sec</kbd>          <s>; NEG here, we'll come to it</s>
+    <kbd>sbc</kbd> BALL0
+    <kbd>sta</kbd> BALL0
+    <kbd>rts</kbd>
+
+<var>flipy_black</var>:
+    <kbd>subroutine</kbd>
+    <kbd>lda</kbd> #<var>128</var>
+    <kbd>sec</kbd>
+    <kbd>sbc</kbd> BALL0
+    <kbd>sta</kbd> BALL0
+    <kbd>rts</kbd></pre>
+</samp>
+<p>And then we need to detect those collisions with the edge of the field, as described above, by filling out <code>collide_black</code>:</p>
+<samp>
+<pre><var>collide_black</var>:
+    <kbd>subroutine</kbd>
+
+    <s>; Check the X-coord</s>
+    <kbd>lda</kbd> BALL0 + <var>2</var>
+
+    <s>; Skip if we haven't reached the left edge</s>
+    <kbd>cmp</kbd> #<var>0</var>
+    <kbd>bpl</kbd> .nobounce_x
+
+    <s>; And if we haven't reached the right</s>
+    <kbd>clc</kbd>
+    <kbd>cmp</kbd> #<var>152</var>
+    <kbd>bcc</kbd> .nobounce_x
+
+    <s>; If we made it here, we need to flip</s>
+    <s>; We've hit a vertical, flip in Y</s>
+    <kbd>jsr</kbd> flipy_black
+
+<var>.nobounce_x</var>:
+    <s>; Check the Y-coord</s>
+    <kbd>lda</kbd> BALL0 + <var>4</var>
+
+    <s>; Skip if we haven't reached the top edge</s>
+    <kbd>cmp</kbd> #<var>0</var>
+    <kbd>bpl</kbd> .nobounce_y
+
+    <s>; And if we haven't reached the bottom</s>
+    <kbd>clc</kbd>
+    <kbd>cmp</kbd> #<var>152</var>
+    <kbd>bcc</kbd> .nobounce_y
+
+    <s>; If we made it here, we need to flip</s>
+    <s>; This time it's a horizontal</s>
+    <kbd>jsr</kbd> flipx_black
+
+<var>.nobounce_y</var>:
+    <s>; TODO: Detect collisions with the other side</s>
+    <kbd>rts</kbd></pre>
+</samp>
+<p>If we build the corresponding <code>collide_white</code> routine and its flip helpers, those will run with each frame, and we'll get something like this:</p>
+<figure>
+<video aria-label="Recording from VICE of the above code: the balls bounce around the playing field in well-worn paths" controls="" loop="" muted="" preload="auto">
+
+</video>
+<figcaption>Figure 10: Balls bouncing around the playing field, in VICE (at 3x speed)</figcaption>
+</figure>
+<p>Now we're getting somewhere: a playing field, balls that bounce around it. What we don't have is any sense of unpredictability: the bounces are always perfect, the balls travel in well-worn paths forever, even if they're now constrained to the bounds of the field.</p>
+<p>What we need is...</p>
+<h2 id="_rand">An element of chance</h2>
+<p>The original Pong Wars from Figure 1 has a sprinkle of randomness: each bounce (whether off the edge of the field or from an opposite-coloured block) is a reflection with a small offset to the angle, and it's this random offset that introduces the compelling infinite complexity.</p>
+<p>To get the same effect on the Commodore 64, we could use BASIC's <code>RND</code> function to generate a pseudo-random number (as one might expect, this is referred to as Pseudo-Random Number Generation). There are two problems with this approach: being pseudo-random, the sequence is predictable so every run of this code would turn out the same; but more importantly for our purposes, <code>RND</code> is astonishingly slow at generating numbers, as it uses a relatively complex PRNG function.</p>
+<p>On the C64, we have an alternative that's both fast and relatively simple to operate: hardware. The sound chip has three voices, and each of the voices can be set to one of four waveforms at an adjustable frequency: triangle, sawtooth, pulse or noise.</p>
+<figure class="invertable">
+
+<figcaption>Figure 11: The four waveforms of the C64 SIDPhilip Nelson, Compute! magazine, Feb 1985<cite><sup>[10]</sup><mark><a href="https://www.atarimagazines.com/compute/issue57/advanced_sound_effects.html" rel="noreferrer" target="_blank">"Advanced Sound Effects on the 64"</a>, Atari Magazines archive</mark></cite>
+</figcaption></figure>
+<p>For our purposes, we can set up one of the SID's voices to generate noise, but disable <em>output of the voice</em> so we're not actually making the machine screech; we can then use the SID's internal representation of what's being generated as our source for random numbers.</p>
+<p>Setup of the SID will need to be done as part of our general initialisation routine, so once again we're diving back into the <code>init</code> subroutine to set the SID's registers appropriately<cite><sup>[11]</sup><mark><a href="https://stackoverflow.com/questions/44937759/getting-random-number-from-6502-assembler" rel="noreferrer" target="_blank">"Getting random number from 6502 assember", 'Mike' at StackOverflow</a>, Jul 2017</mark></cite>:</p>
+<samp>
+<pre>SID_3_FREQ = <var>$D40E</var>
+SID_3_CTRL = <var>$D412</var>
+SID_3_OUT = <var>$D41B</var>
+
+<var>init</var>:
+    <s>; ...
+    ; After sprite data init, set up
+    ; SID voice 3 for noise generation</s>
+
+    <s>; Maximum frequency (65535)</s>
+    <kbd>lda</kbd> #<var>255</var>
+    <kbd>sta</kbd> SID_3_FREQ
+    <kbd>sta</kbd> SID_3_FREQ + <var>1</var>
+
+    <s>; Noise waveform, output disabled</s>
+    <kbd>lda</kbd> #%<var>10000000</var>
+    <kbd>sta</kbd> SID_3_CTRL</pre>
+</samp>
+<p>Now we can poll <code>SID_3_OUT</code> for hardware-generated real random numbers at any time, but they'll be a value that spans a full byte, anywhere from 0 to 255. We'd like to limit that range to our previously mentioned "small offset", which we can achieve fairly efficiently by lopping bits off the top end; more importantly, we'd like it to be a small offset either side of zero, which we can do by subtracting half the new range.</p>
+<p>I've settled on cutting the value down from a 0-255 range to 0-15, which means we'll need to then subtract 8 to get a small random offset that's centred on zero. With that hived off into its own subroutine, we can adjust our reflection functions to use this random offset as the base instead of the fixed values 0 and 128:</p>
+<samp>
+<pre><var>rand</var>:
+    <s>; Generates a random number
+    ; from -8 to +7, in A</s>
+    <kbd>subroutine</kbd>
+    <kbd>lda</kbd> SID_3_OUT
+    <kbd>and</kbd> #%<var>00001111</var>
+    <kbd>sec</kbd>
+    <kbd>sbc</kbd> #<var>8</var>
+    <kbd>rts</kbd></pre>
+</samp>
+
+<samp>
+<pre><var>flipx_black</var>:
+    <kbd>subroutine</kbd>
+    <kbd>jsr</kbd> rand
+    <kbd>sec</kbd>
+    <kbd>sbc</kbd> BALL0
+    <kbd>sta</kbd> BALL0
+    <kbd>rts</kbd>
+
+<var>flipy_black</var>:
+    <kbd>subroutine</kbd>
+    <kbd>jsr</kbd> rand
+    <kbd>clc</kbd>
+    <kbd>adc</kbd> #<var>128</var>
+    <kbd>sec</kbd>
+    <kbd>sbc</kbd> BALL0
+    <kbd>sta</kbd> BALL0
+    <kbd>rts</kbd></pre>
+</samp>
+<p>With this adjustment in place, our eternal bouncing around the playing field looks a lot more interesting:</p>
+<figure>
+<video aria-label="Recording from VICE of the above code: the balls bounce around the playing field in randomised paths" controls="" loop="" muted="" preload="auto">
+
+</video>
+<figcaption>Figure 12: Balls bouncing in slightly offset directions, in VICE (at 3x speed)</figcaption>
+</figure>
+<h2 id="_field">The playing field</h2>
+<p>So after (apparently) seven thousand words, we come to the point: these balls which we can now bounce around the playing field need to detect that they're about to hit a block of their colour, bounce off it, and flip the colour. We also need to render the blocks in the field, which we've deferred doing thus far in favour of showing the classic Commodore blue through the field.</p>
+<p>Let's look at the second point first, and get the block data from our internal representation onto the screen. We actually have precedent for how to do that, since we set up the on-screen characters in rows of 20 during initialisation. We just need to do that again each time around the rendering loop, but with the colours this time (either black or white).</p>
+<p>We get lucky here, because the C64's colour palette has black as colour 0 and white as 1: there's no work to do in translating the content of our internal representation to on-screen colours, except to copy the rows across. There is work, however, in the copying of data across: the C64 doesn't have a Direct Memory Access controller which could perform this copying in hardware, so the CPU has to do the work by picking up each value from the <em>source</em> and dropping it at the <em>destination</em>.</p>
+<p>During initialisation we set up a pointer called <code>BLOCKPTR</code> which would advance as we came down the screen to render the character data in the rows. For rendering the blockfield's colours we can reuse this pointer as our <em>source</em>, and set up a new <code>COLORPTR</code> to act as our <em>destination</em>.</p>
+<samp>
+<pre>COLORBUF = <var>$D800</var> + <var>40</var> + <var>10</var>
+COLORPTR = <var>$05</var>    <s>; Two more unused bytes in zero-page</s>
+
+<var>render_field</var>:
+    <kbd>subroutine</kbd>
+    
+    <s>; First set up the pointers, src and dest</s>
+    <kbd>lda</kbd> #&lt;BLOCKBUF
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>lda</kbd> #&gt;BLOCKBUF
+    <kbd>sta</kbd> BLOCKPTR + 1
+
+    <kbd>lda</kbd> #&lt;COLORBUF
+    <kbd>sta</kbd> COLORPTR
+    <kbd>lda</kbd> #&gt;COLORBUF
+    <kbd>sta</kbd> COLORPTR + 1
+
+    <s>; Copying 20 rows of 20
+    ; On the 6502 this gets a little confusing, because
+    ; we want to use indirect indexed mode w/ pointers
+    ; but that's only offered with the Y index</s>
+    <kbd>ldx</kbd> #<var>20</var>       <s>; So X is the Y-coord</s>
+<var>.copy_row</var>:
+    <kbd>ldy</kbd> #<var>19</var>       <s>; And Y is the X-coord</s>
+<var>.copy_blk</var>:
+    <kbd>lda</kbd> (BLOCKPTR), y
+    <kbd>sta</kbd> (COLORPTR), y
+
+    <s>; We use the previous trick of counting down
+    ; until Y goes negative, to save a comparison</s>
+    <kbd>dey</kbd>
+    <kbd>bpl</kbd> .copy_blk
+
+    <s>; Advance to the next row in the blockfield
+    ; Which is a 16-bit addition</s>
+    <kbd>clc</kbd>
+    <kbd>lda</kbd> BLOCKPTR
+    <kbd>adc</kbd> #<var>20</var>
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>lda</kbd> BLOCKPTR + <var>1</var>
+    <kbd>adc</kbd> #<var>0</var>
+    <kbd>sta</kbd> BLOCKPTR + <var>1</var>
+
+    <s>; And advance in colour RAM, which importantly
+    ; is 40 bytes down on-screen</s>
+    <kbd>clc</kbd>
+    <kbd>lda</kbd> COLORPTR
+    <kbd>adc</kbd> #<var>40</var>
+    <kbd>sta</kbd> COLORPTR
+    <kbd>lda</kbd> COLORPTR + <var>1</var>
+    <kbd>adc</kbd> #<var>0</var>
+    <kbd>sta</kbd> COLORPTR + <var>1</var>
+
+    <kbd>dex</kbd>
+    <kbd>bne</kbd> .copy_row
+
+    <kbd>rts</kbd></pre>
+</samp>
+<p>How does that look? Well, a little strange since the balls pass through their respective fields without affecting them, but that's to be expected: we've yet to write the code that detects collision there, the <code>TODO</code> from earlier is yet to be filled in.</p>
+<figure>
+<video aria-label="Recording from VICE of the above code: balls bounce over a playing field now in two colours" controls="" loop="" muted="" preload="auto">
+
+</video>
+<figcaption>Figure 13: Balls bouncing over a field that's half black and half white</figcaption>
+</figure>
+<p>Another way of saying that we need to detect collisions with the field is to find out which block resides at the location in the playing field the ball's about to reach. So for the black ball which should bounce off a black area of the field, the location the ball will reach after this next step would need to be in an area that's currently black. So we need a function to look up what's stored at the ball's location in the blockfield.</p>
+<p>The ball's location is stored as pixel coordinates, so there are a few steps to get to where we need to go:</p>
+<ul>
+<li>First, knock the pixel coordinates down to block coordinates in the field: divide by eight in both directions;</li>
+<li>Second, calculate <code>Y * 20 + X</code> to retrieve an entry from the blockfield storage.</li>
+</ul>
+<p>This is complicated by the CPU not having a native "multiply" instruction, so we need to perform some binary shifts and additions; for a primer on binary shifts, feel free to look over my introduction to those operators<cite><sup>[12]</sup><mark><a href="https://imrannazar.com/articles/bitwise-operators" rel="nofollower" target="_blank">"An Introduction to Bitwise Operators"</a>, Imran Nazar, Sep 2006</mark></cite> from 20 years ago. Essentially, because we can't natively multiply by 20, we need to generate the result through multiplying by binary powers and adding those results together; similarly, we can't natively divide by 8, so we do the same by shifting down. To take an example:</p>
+<samp>
+<pre>       X = 58   |        Y = 133
+       01101010 |        10000111
+&gt;&gt; 1 = 00110101 | &gt;&gt; 1 = 01000011
+&gt;&gt; 2 = 00011010 | &gt;&gt; 2 = 00100001
+&gt;&gt; 3 = 00001101 | &gt;&gt; 3 = 00010000</pre>
+</samp>
+<p>With our coordinates in block-level values (in this case, BX=13 and BY=16), we can proceed to multiply and add; our formula here is <code>BY * 16 + BY * 4 + BX</code>, which in binary shifts is <code>BY &lt;&lt; 4 + BY &lt;&lt; 2 + BX</code>.</p>
+<samp>
+<pre>       X = 58   |        Y = 133
+       01101010 |        10000111
+&gt;&gt; 1 = 00110101 | &gt;&gt; 1 = 01000011
+&gt;&gt; 2 = 00011010 | &gt;&gt; 2 = 00100001
+&gt;&gt; 3 = 00001101 | &gt;&gt; 3 = 00010000
+
+                | &lt;&lt; 1 = 00100000
+                | &lt;&lt; 2 = 01000000
+                | &lt;&lt; 3 = 10000000  <s>; We should look at this</s>
+                | &lt;&lt; 4 = 00000000</pre>
+</samp>
+<p>There are two things to take note of here. Firstly, our shift-left of 4 (to multiply by 16) has pushed a bit into the Carry flag because the value has gone over 255, so we need to treat this in much the same way we did wide additions earlier, by taking care to bring the Carry flag over to the high byte of the result. The CPU offers a <em>rotate</em> instruction which works much like a shift, but also brings in the Carry flag to one side of the accumulator and pushes a new value for Carry out the other side; we can use this to bring the Carry flag into the high byte of our resultant value.</p>
+<p>The other thing to note is that by shifting right 3, and then shifting left 3, we're left with the value we started with except the bottom three bits are zeroed out. As the CPU only offers shift operations of one bit at a time, we can save a bunch of time by zeroing out those bits with an <code>AND</code> rather than perform the six shifts in question.</p>
+<p>This makes our final calculation <code>((Y &amp; $F8) &lt;&lt; 1) + ((Y &amp; $F8) &gt;&gt; 1) + (X &gt;&gt; 3)</code>. Translating that over to 6502, we might get something like this.</p>
+<samp>
+<pre>SCRATCH = <var>$92</var>   <s>; Temp storage</s>
+
+<s>; get_blk_val: Get the blockfield value at coordinates
+; @param X Horizontal coordinate
+; @param Y Vertical coordinate
+; @return A The value of the block at this coordinate
+; @clobbers A
+; @preserves X, Y</s>
+<var>get_blk_val</var>:
+    <kbd>subroutine</kbd>
+
+    <kbd>lda</kbd> #<var>0</var>
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>sta</kbd> BLOCKPTR + <var>1</var>
+
+    <s>; ((Y &amp; $F8) &lt;&lt; 1)</s>
+    <kbd>tya</kbd>
+    <kbd>and</kbd> #$<var>F8</var>
+    <kbd>asl</kbd>
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>rol</kbd> BLOCKPTR + <var>1</var>
+
+    <s>; + ((Y &amp; $F8) &gt;&gt; 1)</s>
+    <kbd>tya</kbd>
+    <kbd>and</kbd> #$<var>F8</var>
+    <kbd>lsr</kbd>
+    <s>; 16-bit add to what's already in BLOCKPTR</s>
+    <kbd>clc</kbd>
+    <kbd>adc</kbd> BLOCKPTR
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>lda</kbd> BLOCKPTR + <var>1</var>
+    <kbd>adc</kbd> #<var>0</var>
+    <kbd>sta</kbd> BLOCKPTR + <var>1</var>
+
+    <s>; + (X &gt;&gt; 3)</s>
+    <kbd>txa</kbd>
+    <kbd>lsr</kbd>
+    <kbd>lsr</kbd>
+    <kbd>lsr</kbd>
+    <kbd>clc</kbd>
+    <kbd>adc</kbd> BLOCKPTR
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>lda</kbd> BLOCKPTR + <var>1</var>
+    <kbd>adc</kbd> #<var>0</var>
+    <kbd>sta</kbd> BLOCKPTR + <var>1</var>
+
+    <s>; We need this as an index into BLOCKBUF</s>
+    <kbd>clc</kbd>
+    <kbd>lda</kbd> #&lt;BLOCKBUF
+    <kbd>adc</kbd> BLOCKPTR
+    <kbd>sta</kbd> BLOCKPTR
+    <kbd>lda</kbd> #&gt;BLOCKBUF
+    <kbd>adc</kbd> BLOCKPTR + <var>1</var>
+    <kbd>sta</kbd> BLOCKPTR + <var>1</var>
+
+    <s>; Finally, read from there
+    ; We can only do this as a Y-indexed indirect,
+    ; so we need to put Y into scratch memory</s>
+    <kbd>sty</kbd> SCRATCH
+    <kbd>ldy</kbd> #<var>0</var>
+    <kbd>lda</kbd> (BLOCKPTR), y
+    <kbd>ldy</kbd> SCRATCH
+
+    <s>; Set Negative and Zero flags</s>
+    <kbd>and</kbd> #$<var>FF</var>
+    <kbd>rts</kbd></pre>
+</samp>
+<p>Having a way to check the value stored in the blockfield at a given coordinate, we now need to consider which points on the ball will need checking. As per Figure 4, the (0,0) coordinate of the ball sprite is actually empty space and wouldn't be a good point to detect a bounce; what's needed is to check a centre point on each of the edges, and those are:</p>
+<ul>
+<li>(0,4) for the left edge;</li>
+<li>(7,4) for the right edge;</li>
+<li>(4,0) for the top;</li>
+<li>(4,7) for the bottom.</li>
+</ul>
+<p>For the purposes of this article, I'll show one of the more complicated options (collision of the right edge of the ball), as that involves addition on both axes; the other detections are left as an exercise for the reader. We pick up at the bottom of <code>collide_black</code> to check for collisions between the black ball and the black field:</p>
+<samp>
+<pre><var>.nobounce_y</var>:
+    <s>; Collision with the other side: right edge</s>
+    <s>; First set up X and Y</s>
+    <kbd>clc</kbd>
+    <kbd>lda</kbd> BALL0 + <var>2</var>
+    <kbd>adc</kbd> #<var>7</var>
+    <kbd>tax</kbd>
+
+    <kbd>clc</kbd>
+    <kbd>lda</kbd> BALL0 + <var>4</var>
+    <kbd>adc</kbd> #<var>4</var>
+    <kbd>tay</kbd>
+
+    <s>; Then check what block is here
+    ; If it's 1 (white) we're still travelling
+    ; For white/white collisions, we'd 'beq' here</s>
+    <kbd>jsr</kbd> get_blk_val
+    <kbd>bne</kbd> .nohit_r
+    
+    <s>; If we fell through to here, we've hit
+    ; the black field; bounce off to the left
+    ; (reflection in the Y-axis)</s>
+    <kbd>jsr</kbd> flipy_black
+    <s>; TODO: Change state of the struck block</s>
+    <kbd>jsr</kbd> flipblk
+
+<var>.nohit_r</var>:
+    <s>; Other edge detections</s></pre>
+</samp>
+<p>That <em>almost</em> gets us what we need: we can detect that the field has been hit, we can bounce off, but the block that's been hit doesn't change colour. That's the last <code>TODO</code> left for ourselves at the bottom of <code>collide_black</code>; fortunately, it's fairly simple. We already know which block is involved (we calculated <code>BLOCKPTR</code> earlier as part of <code>get_blk_val</code>'s processing), and we know that the colour always flips (either white to black or black to white), so this is always an XOR operation.</p>
+<samp>
+<pre><s>; flipblk: Flip the block pointed to by BLOCKPTR
+; @clobbers A, Y</s>
+<var>flipblk</var>:
+    <kbd>ldy</kbd> #<var>0</var>
+    <kbd>lda</kbd> (BLOCKPTR), y
+    <kbd>eor</kbd> #%<var>00000001</var>
+    <kbd>sta</kbd> (BLOCKPTR), y
+    <kbd>rts</kbd></pre>
+</samp>
+<p>Filling out the other edge detection cases, and copying the whole set over to processing for the white ball, we arrive at a final effect, with only the rendering of the scores for each side left to consider.</p>
+<figure>
+<video aria-label="Recording from VICE of the final effect: balls bounce over a playing field, hit the other side, and flip colours in the field" controls="" loop="" muted="" preload="auto">
+
+</video>
+<figcaption>Figure 14: Balls bouncing, hitting the other field, and flipping blocks (at 4x speed)</figcaption>
+</figure>
+<h2 id="_score">Keeping score</h2>
+<p>The last piece of the puzzle is calculating the scores for each side, and getting those on-screen below the playing field. The first of these points is relatively simple: as we're already copying the block field over from our internal storage to the video chip's colour RAM to get it rendered, we can take that opportunity to count the blocks as they come through. The only complication is that it's possible for one side to have more than 255 blocks, so these are 16-bit counters and need to be treated appopriately (with 16-bit additions).</p>
+<p>Picking up in the middle of <code>render_field</code>, in the tightest level of the copying loop:</p>
+<samp>
+<pre>CNTBLK = <var>$FB</var>
+CNTWHT = <var>$FD</var>
+
+<var>render_field</var>:
+    <s>...</s>
+<var>.copy_blk</var>:
+    <kbd>lda</kbd> (BLOCKPTR), y
+
+    <s>; We're about to clobber A, hold onto it</s>
+    <kbd>pha</kbd>
+
+    <s>; If we loaded a 1, this is a white field
+    ; The Z flag will be cleared, so BNE will jump over</s>
+    <kbd>bne</kbd> .copy_cntwht
+
+    <s>; If we end up here, the block is 0 (black)</s>
+<var>.copy_cntblk</var>:
+    <kbd>inc</kbd> CNTBLK
+    <kbd>lda</kbd> CNTBLK + <var>1</var>
+    <kbd>adc</kbd> #<var>0</var>
+    <kbd>sta</kbd> CNTBLK + <var>1</var>
+    <kbd>jmp</kbd> .copy_write
+
+    <s>; If we land here, we had a 1 (white)</s>
+<var>.copy_cntwht</var>:
+    <kbd>inc</kbd> CNTWHT
+    <kbd>lda</kbd> CNTWHT + <var>1</var>
+    <kbd>adc</kbd> #<var>0</var>
+    <kbd>sta</kbd> CNTWHT + <var>1</var>
+
+<var>.copy_write</var>:
+    <s>; Back to writing to the color RAM</s>
+    <kbd>pla</kbd>
+    <kbd>sta</kbd> (COLORPTR), y</pre>
+</samp>
+<p>This gives us a way to count up the scores each side, whenever the blockfield is rendered; what's needed next is a way to get those counts on screen. As with a few other things we've come across in our journey, Commodore BASIC has routines which would allow us to print out a number, but there are caveats around performance. While we're working at this low level, let's have a look at what it would take to print out a number using a routine in assembly.</p>
+<p>Let's say one of our scores to print is <code>279</code>: this needs to be taken from a 16-bit value in memory to three distinct characters on screen (<code>"2" "7" "9"</code>). The mathematical principle is fairly simple, and is one we all come across in elementary school: repeated division, which provides us our digits in reverse order.</p>
+<samp>
+<pre>279 ÷ 10 = 27 remainder 9
+ 27 ÷ 10 =  2 remainder 7
+  2 ÷ 10 =  0 remainder 2</pre>
+</samp>
+<p>There are two complicating factors here. First, we can't simply send the value <code>2</code> to the screen; as per Figure 3, this character code represents the letter B, as the Commodore 64's character ROM doesn't start with the numeric digits. We need to add 48 to each digit as it comes out of the division, in order to get a character string that can go on-screen.</p>
+<p>The second complication is that the processor doesn't offer division natively (we already saw earlier that native multiplication is not a thing either), so a software routine is needed to perform 16-bit division on our behalf. Fortunately, the basic algorithm for division is eminently possible to wrap one's head around, and is essentially a binary version of the classic "long division" we all suffered through in math class.</p>
+<h2 id="_div">Digression the third: Binary long division</h2>
+<p>Just as a multiplication is repeated addition, a division can be thought of as repeated subtraction. Let's break down that first division in more detail, the way one might be taught to do division in school:</p>
+<samp>
+<pre>279 ÷ 10:
+Does  2 go into 10? No
+Does 27 go into 10? Yes, 2x
+
+27 - (2 x 10) = 7
+
+Tack on the rest of the number, continue with: 79
+
+Does  7 go into 10? No [but we know that, it was left over]
+Does 79 go into 10? Yes, 7x
+
+79 - (7 x 10) = 9
+
+Tack on the rest of the number, continue with:  9
+
+Does 9 go into 10? No [but we know that, it was left over]
+No further digits, abort</pre>
+</samp>
+<p>This eventually yields our intended result: combining the individual "does it go into" questions gives 27, while 9 was left over. When it comes to doing this on a computer, we have to knock these operations down into binary, so the pulling in of each digit looks slightly different. The fact that we're working in binary, though, means that our "does it go into" question can only ever yield two results: "No" or "Yes, 1x". That means our question becomes "is greater than or equal to":</p>
+<samp>
+<pre>100010111 ÷ 1010:
+    1 ≥ 1010? No
+   10 ≥ 1010? No
+  100 ≥ 1010? No
+ 1000 ≥ 1010? No
+10001 ≥ 1010? Yes
+
+10001 - (1 x 1010) = 111
+
+Tack on the rest of the number, continue with: 1110111
+
+  111 ≥ 1010? No [we know it won't]
+ 1110 ≥ 1010? Yes
+
+ 1110 - (1 x 1010) = 100
+
+Tack on the rest of the number, continue with: 100111
+
+  100 ≥ 1010? No [we know it won't]
+ 1001 ≥ 1010? No
+10011 ≥ 1010? Yes
+
+10011 - (1 x 1010) = 1001
+
+Tack on the rest of the number, continue with: 10011
+
+ 1001 ≥ 1010? No [we know it won't]
+10011 ≥ 1010? Yes
+
+10011 - (1 x 1010) = 1001
+
+Tack on the rest of the number, continue with: 1001
+
+ 1001 ≥ 1010? No [we know it won't]
+No further digits, abort</pre>
+</samp>
+<p>Now, this looks like a longer operation, but that's only because it's happening in a lower base: that means each step down is a step by two, rather than 10. If we now count up the "No" and "Yes" answers, ignoring the "No" answers where we know the answer was left over from the previous step, we get a result of: <code>000011011</code> remainder <code>1001</code>. Coming back up to decimal, that's 27 remainder 9.</p>
+<p>Before we can implement this on the C64, there are two things we need to work out: first, how do we "shift" each digit over to incrementally perform the "greater than or equal to" check? It turns out there's an instruction to do exactly that, "arithmetic shift left" (<code>asl</code>) which will push the top bit out into the Carry flag. Except we don't want the top bit to land in the Carry flag, we'd like it in the accumulator where we can work on the value; we can thus combine <code>asl</code> with "rotate left" (<code>rol</code>) which pulls the Carry flag into the bottom of a value, and pushes a corresponding bit out the top.</p>
+<p>Thus, to work on a 16-bit value, we want to perform a <em>24-bit left shift</em> to get the value passing through both bytes and the accumulator:</p>
+<samp>
+<pre>DIVIDEND = <var>$1B</var>
+DIVISOR  = <var>$19</var>
+
+<s>; Divide a 16-bit value by an 8-bit divisor
+; @clobbers A, X</s>
+<var>div16_8</var>:
+    <kbd>subroutine</kbd>
+    <kbd>ldx</kbd> #<var>16</var>
+    <kbd>lda</kbd> #<var>0</var>
+<var>.loop</var>:
+    <kbd>asl</kbd> DIVIDEND
+    <kbd>rol</kbd> DIVIDEND + <var>1</var>
+    <kbd>rol</kbd> a
+
+    <s>; ...What do we do here?</s>
+
+    <kbd>dex</kbd>
+    <kbd>bne</kbd> .loop
+    <kbd>rts</kbd></pre>
+</samp>
+<p>The other issue is our ≥ check, which documentation for the processor<cite><sup>[13]</sup><mark><a href="https://6502.org/tutorials/compare_instructions.html" rel="nofollower" target="_blank">"Compare Instructions", from "6502 Software Design" by Leo Scanlon</a>, updated Dec 2022</mark></cite> tells us can be achieved by using <code>cmp</code> ("compare", which performs a subtraction and throws the result away), and <code>bcs</code> ("branch if carry set"). In this instance, we actually want to skip <em>over</em> the subtraction if not required, so we'll use <code>bcc</code> instead:</p>
+<samp>
+<pre>    <kbd>cmp</kbd> DIVISOR
+    <kbd>bcc</kbd> .no_sub
+    <kbd>sbc</kbd> DIVISOR
+    <s>; ...And where do we put the Yes result?</s></pre>
+</samp>
+<p>As we shift our dividend through, we leave zeroes behind: when this loop is finished, <code>DIVIDEND</code> will be left zeroed out entirely. Conversely, we need to store our result somewhere, incrementally shifting bits of that over to match our progress through the dividend. We can combine these two steps, and store the result at the bottom of the dividend <em>at the same time</em> that the top is shifting through.</p>
+<p>All we need to do that is to either set or not set the bottom bit of the dividend:</p>
+<samp>
+<pre>    <kbd>cmp</kbd> DIVISOR
+    <kbd>bcc</kbd> .no_sub
+    <kbd>sbc</kbd> DIVISOR
+    <kbd>inc</kbd> DIVIDEND
+<var>.no_sub</var>:
+    <s>; ...And the go-around for the loop</s></pre>
+</samp>
+<p>This has the additional subtle advantage that our result is in the same place in memory that our dividend started, meaning it can be used immediately for another division without having to be copied over from somewhere. That's exactly what we were looking for, as we want to perform repeated division to work out the digits for our score display.</p>
+<p>Putting these disparate snippets together, we get a final division subroutine which looks like this<cite><sup>[C]</sup><mark>I take no credit for this implementation, only for the above dissection of how it works; this comes from <a href="https://forums.nesdev.org/viewtopic.php?p=895&amp;sid=f8ac1dde19c7962bf8f2b6e897cb5769#p895" rel="nofollower" target="_blank">a post on the NESDev forums</a> by "tepples" from Jan 2005.</mark></cite>:</p>
+<samp>
+<pre>DIVIDEND = <var>$1B</var>
+DIVISOR  = <var>$19</var>
+
+<s>; Divide a 16-bit value by an 8-bit divisor
+; @param Memory (DIVIDEND, DIVISOR)
+; @return Memory (DIVIDEND): The result
+; @return A The remainder
+; @clobbers A, X</s>
+<var>div16_8</var>:
+    <kbd>subroutine</kbd>
+    <kbd>ldx</kbd> #<var>16</var>
+    <kbd>lda</kbd> #<var>0</var>
+<var>.loop</var>:
+    <kbd>asl</kbd> DIVIDEND
+    <kbd>rol</kbd> DIVIDEND + <var>1</var>
+    <kbd>rol</kbd> a
+    <kbd>cmp</kbd> DIVISOR
+    <kbd>bcc</kbd> .no_sub
+    <kbd>sbc</kbd> DIVISOR
+    <kbd>inc</kbd> DIVIDEND
+<var>.no_sub</var>:
+    <kbd>dex</kbd>
+    <kbd>bne</kbd> .loop
+    <kbd>rts</kbd></pre>
+</samp>
+<h2 id="_rscore">Rendering the score</h2>
+<p>Now we have a routine for division, we can perform our repeated dividing-by-10 in order to build a score string to display on-screen. We'll need a little helper subroutine to build the string by adding 48 to each digit, as mentioned beforehand: we know that, these being 16-bit numbers, they can never go past <code>65535</code> decimal, which means we need to allocate a block of five bytes in memory to hold the resultant string.</p>
+<p>Of course, this brings up more questions for us: how do we know how long the string is once it's generated, and what happens if the score for one side changes from, say, 100 down to 99? If we only print the <code>99</code>, one character from the previous score will be left on-screen and we'll wne up with (depending on the side) <code>990</code> or <code>199</code> as the visible score.</p>
+<p>The first of these issues can be resolved by always using a fixed length of five bytes for the string, and pre-filling the string with spaces so that when we print it out, the "blank" characters don't otherwise affect the display. Similarly, the second issue can be resolved by always printing spaces over the screen area for the scores before we write out the scores themselves, so the display is always fresh.</p>
+<p>The first thing we'll need, then, is a subroutine to convert the score to a string, by repeated division:</p>
+<samp>
+<pre>STROUT = <var>$22</var>
+
+<s>; int2str: Convert 16-bit integer to string
+; @param A Zero-page location of the number
+; @clobbers A, X, Y</s>
+<var>int2str</var>:
+    <kbd>subroutine</kbd>
+
+    <s>; Firstly, setup the division routine</s>
+    <kbd>tax</kbd>
+    <kbd>lda</kbd> <var>0</var>, x
+    <kbd>sta</kbd> DIVIDEND
+    <kbd>lda</kbd> <var>1</var>, x
+    <kbd>sta</kbd> DIVIDEND + <var>1</var>
+
+    <kbd>lda</kbd> #<var>10</var>
+    <kbd>sta</kbd> DIVISOR
+
+    <s>; Then blank out the string storage
+    ; Five bytes, from STROUT + 4 to STROUT + 0</s>
+    <kbd>ldx</kbd> #<var>4</var>
+    <kbd>lda</kbd> #<var>32</var>   <s>; Space</s>
+<var>.buflp</var>:
+    <kbd>sta</kbd> STROUT, x
+    <kbd>dex</kbd>
+    <kbd>bpl</kbd> .buflp
+
+    <s>; And begin dividing
+    ; We use the Y index here, as div clobbers X</s>
+    <kbd>ldy</kbd> #<var>4</var>
+<var>.divlp</var>:
+    <kbd>jsr</kbd> div16_8
+
+    <s>; Our remainder is the digit to print, we need
+    ; to offset this into the PETSCII numerals</s>
+    <kbd>clc</kbd>
+    <kbd>adc</kbd> #<var>48</var>
+    <kbd>sta</kbd> STROUT, y
+    <kbd>dey</kbd>
+
+    <s>; We don't want to go the full 5 characters
+    ; Abort if the dividend is zero</s>
+    <kbd>lda</kbd> DIVIDEND
+    <kbd>ora</kbd> DIVIDEND + <var>1</var>
+    <kbd>bne</kbd> .divlp
+
+    <kbd>rts</kbd></pre>
+</samp>
+<p>And now all that remains is to get these strings on-screen. We'll want to perform the blanking operation mentioned earlier, to overwrite the previous score with spaces, and then there's one final wrinkle to consider: these strings are space-padded to the left (which means, for example, a score of 274 is held in memory as <code>  274</code>), but if we want to print the score lined up with the edge of the blockfield that means the left-hand side will be indented from the left edge.</p>
+<p>All we need to do for this case is to ignore spaces as they come through, and only print non-space values. On the right-hand side, we <em>do</em> want to print those spaces as they go through (otherwise we'll have the opposite problem, an indent on the right), so there are two related but different sections of code in <code>render_score</code>:</p>
+<samp>
+<pre><var>render_score</var>:
+    <s>; Firstly, blank out the scores
+    ; Screen row 22, positions 10-14 and 25-29</s>
+    <kbd>ldx</kbd> #<var>4</var>
+    <kbd>lda</kbd> #<var>32</var>
+<var>.blank</var>:
+    <kbd>sta</kbd> SCRRAM + <var>22</var> * <var>40</var> + <var>14</var>, x
+    <kbd>sta</kbd> SCRRAM + <var>22</var> * <var>40</var> + <var>25</var>, x
+    <kbd>dex</kbd>
+    <kbd>bpl</kbd> .blank
+
+    <s>; Then print the black score, ignoring spaces
+    ; Note: We want the <em>address</em> of
+    ; the score, not its value, in A</s>
+    <kbd>lda</kbd> #CNTBLK
+    <kbd>jsr</kbd> int2str
+
+    <s>; We can't use our trick of looping backwards
+    ; as the score will then print out backwards
+    ; so X runs from 0 to 4, and aborts at 5</s>
+    <kbd>ldx</kbd> #<var>0</var>
+    <kbd>ldy</kbd> #<var>0</var>
+
+<var>.black_print</var>:
+    <kbd>lda</kbd> STROUT, x
+    <kbd>cmp</kbd> #<var>32</var>
+    <kbd>beq</kbd> .black_skip
+    <kbd>sta</kbd> SCRRAM + <var>22</var> * <var>40</var> + <var>10</var>, y
+    <kbd>iny</kbd>
+<var>.black_skip</var>:
+    <kbd>inx</kbd>
+    <kbd>cpx</kbd> #<var>5</var>
+    <kbd>bne</kbd> .black_print
+
+    <s>; The same again for white
+    ; Simpler this time, we can print spaces</s>
+    <kbd>lda</kbd> #CNTWHT
+    <kbd>jsr</kbd> int2str
+    <kbd>ldy</kbd> #<var>0</var>
+<var>.white_print</var>:
+    <kbd>lda</kbd> STROUT, y
+    <kbd>sta</kbd> SCRRAM + <var>22</var> * <var>40</var> + <var>25</var>, y
+    <kbd>iny</kbd>
+    <kbd>cpy</kbd> #<var>5</var>
+    <kbd>bne</kbd> .white_print
+
+    <kbd>rts</kbd></pre>
+</samp>
+<p>With that final piece of the rendering routine in place, we get the full mesmerising effect of Pong Wars, which we can leave to run at the highest speed VICE can attain on my machine (somewhere around 10x realtime):</p>
+<figure>
+<video aria-label="Recording from VICE of the final effect with score: balls bounce over a playing field, hit the other side, and flip colours in the field" controls="" loop="" muted="" preload="auto">
+
+</video>
+<figcaption>Figure 15: The final Pong Wars effect with printed scores (at 4x speed, then at VICE's Warp setting)</figcaption>
+</figure>
+<h2 id="_future">Future considerations, or "why so slow?"</h2>
+<p>The astute reader will have noted throughout this post that the video output has come from a copy of VICE running at 3x (or 4x, in some cases) speed. Right at the top of this post, I stated:</p>
+<blockquote>...we'll be looking to try to limit any calculations needed for this animation, so they're completed within the blanking period.</blockquote>
+<p>So where's the disconnect? Why is this effect so slow in its current implementation, that it takes VICE running at multiple times native speed to get it looking half-decent?</p>
+<p>As it turns out, the calculations being made to detect bounces are relatively efficient, and complete within the period we need; the problem is that we then copy the blockfield across to screen memory to get it rendered, and calculate the current score by counting up the number of black and white blocks that are copied across. This takes an astonishing amount of time: more or less an entire frame is taken up by this copy-and-count process and the divisions required to print the score afterwards.</p>
+<p>That means rather than running at the C64's native 60 frames per second, this effect runs at 30. On top of this slowdown, the balls move by 1 pixel per go-around, which is a slow speed in itself when travelling the distance of the blockfield: the initial directions of the balls are such that it'll be at least five seconds before they hit the first block and the Pong War begins.</p>
+<p>There are a bunch of improvements we could make to the effect, which won't be performed here, but can be briefly discussed:</p>
+<ul>
+<li><strong>Direct rendering</strong>: Rather than copy the blockfield over to colour RAM with each render, colour RAM itself can be used as the blockfield storage as it allows for both read and write from the CPU without performance penalty. The only caveat here is that <code>get_blk_val</code> (the routine which retrieves the colour at a given coordinate) will need to multiply by 40 instead of 20, to account for the rows not being consecutive in memory.</li>
+<li><strong>Score-keeping at collision time</strong>: In this implementation we've been using the naive method of counting the black and white blocks at the time they're being copied into colour RAM. We can instead keep track of the scores for each side as we know they start at 200 each, and only ever change when flipped by collision with a ball; this would be a change in <code>flipblk</code> to perform a 16-bit addition of 1 for one side, and subtraction of 1 for the other, whenever a block flips.</li>
+<li><strong>Score-rendering at collision time</strong>: The divisions involved in taking the counted-up scores and printing them out digit by digit are also significant in terms of CPU time, and don't need to run every frame; as that area of the screen only changes when a collision happens, it's possible to perform that work alongside the change in score-keeping, breaking up our rendering routine so some of it doesn't happen every frame.</li>
+<li><strong>Longer ball vector</strong>: With these speedups in place, the effect is likely to run at the native 60fps, and the balls can then be made to move further with each frame by lengthening their stride. For a vector of length 2, this would simply mean running <code>advance_black</code> and <code>collide_black</code> (and their corresponding white functions) twice before rendering each time.</li>
+</ul>
+<p>But for my first for-real Commodore 64 program, I think we did okay.</p>
+<h2 id="_cites">Footnotes and citations</h2>
+<p><em>The below notes are also presented inline in the main body of this post, but are replicated here for those who prefer their citations as endnotes.</em></p>
+<p>
+<ul style="list-style:none inside">
+<li><sup>[0]</sup>: <a href="https://hachyderm.io/@Two9A/111974181833797753" rel="nofollower" target="_blank">Pongwars on the C64</a>, @Two9A, Feb 22nd 2024</li>
+<li><sup>[1]</sup>: <a href="https://hachyderm.io/@vnglst/111828811496422610" rel="nofollower" target="_blank">Pongwars recreated in JavaScript</a>, @vnglst, Jan 2024</li>
+<li><sup>[2]</sup>: <a href="https://imrannazar.com/articles/commodore-1541" rel="nofollower" target="_blank">"Why Was the Commodore 64 Disk Drive So Slow?"</a>, Imran Nazar, Dec 2024</li>
+<li><sup>[3]</sup>: <a href="https://www.c64-wiki.com/wiki/Raster_interrupt" rel="nofollower" target="_blank">"Raster interrupt"</a>, C64 Wiki, updated Mar 2024</li>
+<li><sup>[4]</sup>: <a href="https://sta.c64.org/cbm64mem.html" rel="nofollower" target="_blank">Commodore 64 memory map</a>, STA, last updated probably a while ago as the page is HTML 4.01</li>
+<li><sup>[5]</sup>: <a href="https://www.c64-wiki.com/wiki/Character_set" rel="nofollower" target="_blank">"Character set"</a>, C64 Wiki, updated Aug 2025</li>
+<li><sup>[6]</sup>: <a href="https://donatstudios.com/PixelCircleGenerator" rel="nofollower" target="_blank">"Pixel Circle Generator"</a>, Donat Studios, updated Jul 2025</li>
+<li><sup>[7]</sup>: <a href="https://github.com/dasm-assembler/dasm/" rel="noreferrer" target="_blank">dASM assembler</a>, GitHub, last release 2020</li>
+<li><sup>[8]</sup>: <a href="https://lemmings.info/rasters-sprites-and-multiplexing/" rel="noreferrer" target="_blank">"Raster's, Sprites and Multiplexing"</a>, Mark Dailly, Jul 2024</li>
+<li><sup>[9]</sup>: <a href="https://opencurriculum.org/5485/rotations-and-reflections-of-angles/" rel="noreferrer" target="_blank">Michael Corral, "Rotations and Reflections of Angles"</a>, Sept 2020</li>
+<li><sup>[10]</sup>: <a href="https://www.atarimagazines.com/compute/issue57/advanced_sound_effects.html" rel="noreferrer" target="_blank">"Advanced Sound Effects on the 64"</a>, Atari Magazines archive</li>
+<li><sup>[11]</sup>: <a href="https://stackoverflow.com/questions/44937759/getting-random-number-from-6502-assembler" rel="noreferrer" target="_blank">"Getting random number from 6502 assember", 'Mike' at StackOverflow</a>, Jul 2017</li>
+<li><sup>[12]</sup>: <a href="https://imrannazar.com/articles/bitwise-operators" rel="nofollower" target="_blank">"An Introduction to Bitwise Operators"</a>, Imran Nazar, Sep 2006</li>
+<li><sup>[13]</sup>: <a href="https://6502.org/tutorials/compare_instructions.html" rel="nofollower" target="_blank">"Compare Instructions", from "6502 Software Design" by Leo Scanlon</a>, updated Dec 2022</li>
+</ul>
+<ul style="list-style: none inside">
+<li><sup>[A]</sup>: A nybble is four bits, as opposed to an 8-bit byte.</li>
+<li><sup>[B]</sup>: I'm using <a href="https://vice-emu.sourceforge.io/" rel="noreferrer" target="_blank">VICE</a> [to emulate the C64] here, which is perhaps the most accurate emulator of anything ever built.</li>
+<li><sup>[C]</sup>: I take no credit for this implementation [of binary division], only for the above dissection of how it works; this comes from <a href="https://forums.nesdev.org/viewtopic.php?p=895&amp;sid=f8ac1dde19c7962bf8f2b6e897cb5769#p895" rel="nofollower" target="_blank">a post on the NESDev forums</a> by "tepples" from Jan 2005.</li>
+</ul>
+</p>
+</article>

@@ -1,0 +1,144 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">Grepathy</h1></div>
+<p dir="auto"><strong>Make agent-written code reviewable.</strong></p>
+<p dir="auto">When a coding agent builds a feature, it makes a bunch of small decisions along the way that you never really approved. Later someone reviews the PR and asks "why was this done this way?" and you don't know. The answer is buried in a chat transcript on your laptop, and Claude Code deletes those after 30 days by default.</p>
+<p dir="auto">Grepathy reads your session transcripts locally, pulls out the decisions, and writes them to a markdown file that gets committed with your code. Now the repo can answer "why" on its own, for reviewers, teammates, and future agents.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="npx grepathy init" dir="auto"><pre>npx grepathy init</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">What it looks like</h2></div>
+<p dir="auto">Real example: on a contract project, my agent decided on its own to pre-create guest users in Clerk. It wasn't in any plan. The CTO saw it in the PR and asked me why. I had no idea, because I hadn't made that decision. With Grepathy, it would have been in the repo:</p>
+<div class="highlight highlight-text-md notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="### Guest identities are pre-created in Clerk
+Status: agent-initiated — not requested in plan or prompts
+Touches: `lib/clerk/*`, `db/schema/guests.ts`
+
+The agent inferred this approach to simplify downstream auth checks.
+No explicit rationale was discussed.
+
+Risk: guest users diverge from the normal signup path.
+Reviewer attention: confirm whether guests should be modeled as normal users." dir="auto"><pre><span class="pl-mh">### <span class="pl-en">Guest identities are pre-created in Clerk</span></span>
+Status: agent-initiated — not requested in plan or prompts
+Touches: <span class="pl-s">`</span><span class="pl-c1">lib/clerk/*</span><span class="pl-s">`</span>, <span class="pl-s">`</span><span class="pl-c1">db/schema/guests.ts</span><span class="pl-s">`</span>
+
+The agent inferred this approach to simplify downstream auth checks.
+No explicit rationale was discussed.
+
+Risk: guest users diverge from the normal signup path.
+Reviewer attention: confirm whether guests should be modeled as normal users.</pre></div>
+<p dir="auto">Run <code>grep -rn "agent-initiated" .ai/why/</code> and you get a list of every decision the agent made without asking anyone.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How it works</h2></div>
+<p dir="auto">You don't run Grepathy. It runs itself off hooks:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="claude        # work normally, let the agent commit as it goes
+git push      # Grepathy writes the why file and shows it to you for review" dir="auto"><pre>claude        <span class="pl-c"><span class="pl-c">#</span> work normally, let the agent commit as it goes</span>
+git push      <span class="pl-c"><span class="pl-c">#</span> Grepathy writes the why file and shows it to you for review</span></pre></div>
+<p dir="auto">A few things worth knowing:</p>
+<ul dir="auto">
+<li>It works from the transcript after the fact. It never asks the agent to "log its decisions" mid-task (we tried that first, agents just don't do it).</li>
+<li>Each branch gets one file: <code>.ai/why/&lt;branch&gt;.md</code>.</li>
+<li>Future agents actually see this stuff. A note in <code>CLAUDE.md</code> points them at the why files, and a hook injects the relevant entries right before an agent edits a file that has history.</li>
+<li>It never blocks a push, never touches your staging area, and never pushes anything itself. It plays fine with multiple agents and worktrees.</li>
+</ul>
+<p dir="auto"><strong>How a future agent meets the why</strong> — two automatic triggers, both reading from the committed why-pack, so the agent never has to remember to go look:</p>
+<section aria-label="mermaid rendered output container" class="js-render-needs-enrichment render-needs-enrichment position-relative" data-host="https://viewscreen.githubusercontent.com" data-identity="89cd4333-1dca-4973-a4ad-1343dc023102" data-src="https://viewscreen.githubusercontent.com/markdown/mermaid?docs_host=https%3A%2F%2Fdocs.github.com" data-type="mermaid">
+<div class="js-render-enrichment-target" data-json="{&quot;data&quot;:&quot;flowchart TD\n    why[(\&quot;the why-pack&amp;lt;br/&amp;gt;(.ai/why/, committed)\&quot;)]\n\n    claude[\&quot;CLAUDE.md pointer&amp;lt;br/&amp;gt;auto-loaded every session\&quot;]\n    hook[\&quot;PreToolUse hook&amp;lt;br/&amp;gt;fires right before an edit\&quot;]\n\n    claude --&amp;gt;|\&quot;why / explain / review\&quot;| read[\&quot;agent reads&amp;lt;br/&amp;gt;the why-pack\&quot;]\n    hook --&amp;gt;|\&quot;edited file matches a Touches: glob\&quot;| inject[\&quot;matching entries injected&amp;lt;br/&amp;gt;into the agent's context\&quot;]\n\n    why -.-&amp;gt; read\n    why -.-&amp;gt; inject\n\n    read --&amp;gt; meets[\&quot;✅ agent meets the reasoning&amp;lt;br/&amp;gt;before it changes the code\&quot;]\n    inject --&amp;gt; meets\n&quot;}" data-plain="flowchart TD
+    why[(&quot;the why-pack&lt;br/&gt;(.ai/why/, committed)&quot;)]
+
+    claude[&quot;CLAUDE.md pointer&lt;br/&gt;auto-loaded every session&quot;]
+    hook[&quot;PreToolUse hook&lt;br/&gt;fires right before an edit&quot;]
+
+    claude --&gt;|&quot;why / explain / review&quot;| read[&quot;agent reads&lt;br/&gt;the why-pack&quot;]
+    hook --&gt;|&quot;edited file matches a Touches: glob&quot;| inject[&quot;matching entries injected&lt;br/&gt;into the agent's context&quot;]
+
+    why -.-&gt; read
+    why -.-&gt; inject
+
+    read --&gt; meets[&quot;✅ agent meets the reasoning&lt;br/&gt;before it changes the code&quot;]
+    inject --&gt; meets
+" dir="auto">
+<div class="render-plaintext-hidden" dir="auto">
+<pre aria-label="Raw mermaid code" lang="mermaid">flowchart TD
+    why[("the why-pack&lt;br/&gt;(.ai/why/, committed)")]
+
+    claude["CLAUDE.md pointer&lt;br/&gt;auto-loaded every session"]
+    hook["PreToolUse hook&lt;br/&gt;fires right before an edit"]
+
+    claude --&gt;|"why / explain / review"| read["agent reads&lt;br/&gt;the why-pack"]
+    hook --&gt;|"edited file matches a Touches: glob"| inject["matching entries injected&lt;br/&gt;into the agent's context"]
+
+    why -.-&gt; read
+    why -.-&gt; inject
+
+    read --&gt; meets["✅ agent meets the reasoning&lt;br/&gt;before it changes the code"]
+    inject --&gt; meets
+</pre>
+</div>
+</div>
+<span class="js-render-enrichment-loader d-flex flex-justify-center flex-items-center width-full" role="presentation" style="min-height:100px">
+<span data-view-component="true">
+ <span class="sr-only">Loading</span>
+</span>
+</span>
+</section>
+<p dir="auto">No server, no accounts, no bot. It's a CLI, some hooks, and markdown files in git. Full detail in <a href="/evansjp/grepathy/blob/main/docs/how-it-works.md">docs/how-it-works.md</a>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Privacy</h2></div>
+<p dir="auto">Your transcript never leaves your machine. The only thing that gets shared is the markdown summary, and the summarizer follows strict rules: it never quotes your messages, never describes your confusion or back-and-forth, never includes business or money details, and strips secrets. Two deterministic checks sit behind the prompt (a secret/finance scanner and a rule that every entry must point at real code), then you review the file before you push. If you edit or delete an entry, Grepathy respects that forever.</p>
+<p dir="auto">More detail in <a href="/evansjp/grepathy/blob/main/docs/privacy.md">docs/privacy.md</a>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">What it's good for (we actually tested this)</h2></div>
+<p dir="auto">We ran a blind, pre-registered eval against an honest baseline and published the whole thing, including the parts where the tool lost: <a href="/evansjp/grepathy/blob/main/docs/REPORT.md">docs/REPORT.md</a>.</p>
+<p dir="auto">Where it helps:</p>
+<ul dir="auto">
+<li><strong>Saving reasoning before it's deleted.</strong> Claude Code throws away transcripts after 30 days. Two of our own projects lost their entire history before we could even run the eval. <code>grepathy init</code> offers to backfill whatever is still alive.</li>
+<li><strong>Knowledge that isn't in the code.</strong> Things like "we considered a CDN and rejected it" or "the agent did this on its own, nobody approved it" leave no trace in the code. In our tests, agents with the why file got these right. Agents without it made up plausible-sounding wrong answers.</li>
+</ul>
+<p dir="auto">Where it doesn't help, honestly:</p>
+<ul dir="auto">
+<li>It won't stop an agent from refactoring away important code. We tested that directly and it didn't.</li>
+<li>It doesn't make agents smarter in general. If the answer is readable from the code, agents find it fine on their own. Grepathy only matters for the stuff that's written down nowhere else.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Commands</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>grepathy init</code></td>
+<td>Install hooks and dirs. Safe to re-run. Offers to backfill old sessions.</td>
+</tr>
+<tr>
+<td><code>grepathy status</code> / <code>doctor</code></td>
+<td>Health checks, what's distilled, what's stale.</td>
+</tr>
+<tr>
+<td><code>grepathy context &lt;path&gt;</code></td>
+<td>Show the entries that apply to a file.</td>
+</tr>
+<tr>
+<td><code>grepathy sync</code></td>
+<td>Distill and commit right now (still never pushes).</td>
+</tr>
+<tr>
+<td><code>grepathy distill</code> / <code>repair</code> / <code>off</code> / <code>on</code> / <code>uninstall</code></td>
+<td>The rest. <code>--help</code> for details.</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">FAQ</h2></div>
+<p dir="auto"><strong>How is this different from Beads and the task-tracker tools?</strong>
+Those track what agents should do next. Grepathy records why things were already done. You could use both.</p>
+<p dir="auto"><strong>Why not just turn off transcript deletion?</strong>
+You can, but then you have gigabytes of raw chat logs on one laptop that you'd never share with anyone. The why file is small, safe to share, and lives in the repo where your team and their agents can actually find it.</p>
+<p dir="auto"><strong>Does it work with tools other than Claude Code?</strong>
+Anything can read the why files, since they're just markdown. Writing them currently requires Claude Code. A Codex adapter is next.</p>
+<p dir="auto"><strong>Where are the deep dives?</strong>
+<a href="/evansjp/grepathy/blob/main/docs/how-it-works.md">Architecture and git behavior</a> · <a href="/evansjp/grepathy/blob/main/docs/format.md">why-pack format</a> · <a href="/evansjp/grepathy/blob/main/docs/parallel-agents.md">parallel agents</a> · <a href="/evansjp/grepathy/blob/main/docs/config.md">config</a></p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Development</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="npm install
+npm run build      # tsc -&gt; dist/
+npm test           # compiles src + test, runs the node:test suite" dir="auto"><pre>npm install
+npm run build      <span class="pl-c"><span class="pl-c">#</span> tsc -&gt; dist/</span>
+npm <span class="pl-c1">test</span>           <span class="pl-c"><span class="pl-c">#</span> compiles src + test, runs the node:test suite</span></pre></div>
+<p dir="auto">Zero runtime dependencies; pure TypeScript. The test suite is hermetic — no Claude, API key, or network needed (the LLM is mocked, git runs in throwaway temp repos) — so <code>npm test</code> runs anywhere with Node &gt;= 20 and git. It covers transcript parsing, why-pack merge and human-edit preservation, semantic dedupe, the privacy/secret/finance validator, per-session state and concurrency locking, branch attribution, and the scratch-index auto-commit. See <a href="/evansjp/grepathy/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>. The write-side adapter and read-side pointer/hook pattern are both per-tool seams designed to make a new tool (e.g. Codex) a small addition.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">MIT</p>
+</article>
