@@ -1,0 +1,65 @@
+<article>
+<div class="xl:divide-y xl:divide-gray-200 xl:dark:divide-gray-700">
+
+<div class="grid-rows-[auto_1fr] divide-y divide-gray-200 pb-8 dark:divide-gray-700 xl:grid xl:grid-cols-4 xl:gap-x-6 xl:divide-y-0">
+<dl class="pb-10 pt-6 xl:border-b xl:border-gray-200 xl:pt-11 xl:dark:border-gray-700">
+<dt class="sr-only">Author</dt>
+<dd>
+<ul class="flex flex-wrap justify-center gap-4 sm:space-x-12 xl:block xl:space-x-0 xl:space-y-8">
+<li class="flex items-center space-x-2">
+
+<dl class="whitespace-nowrap text-sm font-medium leading-5">
+<dt class="sr-only">User</dt>
+<dd class="text-gray-900 dark:text-gray-100">linb</dd>
+<dt class="sr-only">Posts by this author</dt>
+<dd><a class="text-primary-500 hover:text-primary-600 dark:hover:text-primary-400" href="https://blog.crossui.com/author/linb">Posts by this author</a></dd>
+</dl>
+</li>
+</ul>
+</dd>
+</dl>
+<div class="divide-y divide-gray-200 dark:divide-gray-700 xl:col-span-3 xl:row-span-2 xl:pb-0">
+<div class="prose max-w-none pb-8 pt-10 dark:prose-invert">
+
+<p><em>~7 min read · Engineering</em></p>
+<p>There are only two ways a tool can learn the shape of your React code. Which one you pick decides the single most important thing about the tool: whether it's available in the exact moment you need it most.</p>
+<h2>Two ways to know a codebase</h2>
+<p><strong>Runtime introspection</strong> watches a running app. React DevTools, profilers, error overlays — they read the live fiber tree after the app mounts. This is the richer of the two: they know real prop values, real state, what actually rendered. But all of that is conditional on one thing — the app has to successfully run first. The moment a render throws, they go dark. Nothing mounted, so there's nothing to inspect. And a module that failed to initialize is invisible to them by definition.</p>
+<p><strong>Static AST analysis</strong> reads source. It parses each file into an abstract syntax tree and reads the structure directly — every JSX node, every import, every prop — without executing anything. It's poorer in one sense: it can't tell you what a variable held at 2:04pm, because nothing ran. But it has a property no runtime tool can match: it works on code that has never once rendered cleanly.</p>
+<p>Most developer tooling is built on the first model. We built CrossUI Studio — a visual editor for React — on the second, on purpose. This post is about why that constraint turned out to be the whole point.</p>
+<h2>The moment tooling abandons you</h2>
+<p>Here's the scenario that shaped the decision. A component renders blank. The stack trace points at the component, but the real failure is five imports down — a dynamic import that didn't resolve, a peer dependency that got bumped, a circular reference that's <code>undefined</code> on first access. The component is innocent; the thing it transitively pulls in is the culprit.</p>
+<p>This is exactly when you most need to understand your code's structure — which file imports what, where the break is, what the surrounding code looks like. And it's exactly when every runtime tool has gone dark, because the app didn't render. DevTools shows nothing. The profiler has no render to profile. The error overlay gives you a line number but not the shape of the code around it. They all need the app to run first, and the entire problem is that it won't.</p>
+<blockquote>
+<p>The one moment you most need to see your code's structure is the one moment a runtime tool refuses to produce it.</p>
+</blockquote>
+<p>A static AST tool has no such dependency. It parsed the files when you opened them; it can draw the whole import graph, point at the broken module, and show you the code around it — with the app fully crashed. A broken page isn't a dead end. It's the entry point.</p>
+<h2>Editing what you can't run</h2>
+<p>The same property unlocks something stranger: editing a component that isn't rendering, in a file you never opened.</p>
+<p>Think about what a visual editor normally needs to render a <code>&lt;Card&gt;</code> that lives inside a <code>.map()</code>. To put that Card on a canvas, it has to know what <code>item</code> is — and <code>item</code> only exists at runtime, inside the loop, when real data flows through. A runtime-based editor simply can't render that Card in isolation; there's no live <code>item</code> to feed it. So most visual editors quietly refuse to go inside a <code>.map()</code> at all.</p>
+<p>Working from the AST, the problem reframes. We don't need a running loop; we need the <em>node</em>. Parse the file, find the JSX inside the map callback, and render that subtree in isolation. The one thing missing is the value of <code>item</code> — so we ask you for it (a small mock in a panel) rather than requiring the app to produce it. The Card renders, live, with real theming, standing on its own.</p>
+<p>And because the unit of understanding is the AST node rather than the mounted component, drill-down doesn't stop at the file boundary. A child component imported from another file is just another edge in the graph. Follow the import, parse that file, render its node — you're editing a component defined somewhere you never opened, in an app that may never have rendered as a whole.</p>
+<h2>The cost of the constraint</h2>
+<p>None of this is free, and pretending otherwise would be dishonest. Static analysis buys unconditional availability by giving up runtime knowledge:</p>
+<ul>
+<li><strong>Fully dynamic imports are unresolvable.</strong> <code>import('./pages/' + name)</code> with a runtime-computed path can't be resolved statically. We mark the edge rather than guess.</li>
+<li><strong>We see structure, not values.</strong> The AST tells you <code>AIPanel</code> reaches <code>TreeSitter</code>; it can't tell you what the parser returned on a given render. Mock data stands in for real data; it doesn't replay it.</li>
+<li><strong>Exotic resolution needs config.</strong> Non-standard bundler aliases or monorepo path magic resolve best when we can read your tsconfig/jsconfig. Without it, some edges fall back to raw specifiers.</li>
+</ul>
+<p>These are real boundaries. But notice none of them touch the core promise: the tool is <em>there</em> when you're stuck, because it never needed your code to run in the first place.</p>
+<h2>Why this is one idea, not many</h2>
+<p>The crash-surviving dependency graph, the edit-inside-a-map drill-down, the cross-file navigation, the one-line diffs — from the outside they look like separate features. They're the same decision seen from different angles: <strong>treat parsed source as the source of truth, and make every surface a view over that AST.</strong></p>
+<p>The canvas is a view over the AST. The prop inspector is a view over the AST. The dependency graph is a view over the AST across files. None of them depend on a successful render, because none of them are built on the runtime. That's a harder thing to build than hooking the fiber tree — and it's exactly what keeps the tooling alive in the moments the runtime, and everything built on it, goes dark.</p>
+<p>→ <a href="https://studio.crossui.com">Try it</a> — open a project, break a deep import on purpose, and watch the structure still render.</p>
+
+<p><strong>About CrossUI Studio</strong> — A visual IDE for React &amp; MUI. Code and canvas stay in two-way sync on the same AST: edit code and the canvas updates live; click an element on the canvas, edit its props visually, and the code changes with a surgical one-line diff. No build, no localhost — it runs in the browser, works on your real Git repo or a local folder, with no vendor lock-in.</p>
+<p><a href="https://studio.crossui.com">Try it free → studio.crossui.com</a></p>
+</div>
+<div class="prose max-w-none pb-6 pt-6 text-sm text-gray-700 dark:text-gray-300 related-posts">
+<h2 class="text-xl text-gray-700 dark:text-gray-300">Related posts</h2>
+<ul><li><a href="https://blog.crossui.com/2026/05/why-we-rejected-the-export-and-fork-model-for-visual-ui-editing">Why we rejected the export-and-fork model for visual UI editing</a></li><li><a href="https://blog.crossui.com/2026/06/bypass-the-broken-import">Don't just find the broken import. Bypass it.</a></li></ul> </div>
+</div>
+
+</div>
+</div>
+</article>
