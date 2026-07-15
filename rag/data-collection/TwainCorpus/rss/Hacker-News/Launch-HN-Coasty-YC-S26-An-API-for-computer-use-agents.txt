@@ -1,0 +1,2622 @@
+Coasty API
+API reference
+Run autonomous tasks on managed machines, compose them into workflows, and drop to prediction primitives only when you need direct control.
+llms.txt
+Building with an AI assistant?
+Generate a ready-made prompt tailored to Cursor, Claude Code, ChatGPT, or any LLM.
+Create with AI
+Introduction
+Start with task runs, workflows, and machines. Drop to prediction primitives only when your application needs to own the control loop.
+Start with a 
+task run
+: give Coasty a goal and a machine, then let the agent drive to completion. Use
+ 
+workflows
+ 
+when an automation needs many tasks, branches, loops, approvals, or shared outputs.
+ 
+Machines
+ 
+provide the managed computer those tasks operate.
+The prediction endpoints are lower-level primitives for teams that need to own the control loop themselves. Use 
+sessions
+ 
+for a stateful screenshot loop, 
+predict
+ 
+for a stateless step, grounding for coordinates, and parse for structured actions. Everything is normal HTTPS to 
+https://coasty.ai/v1
+, so you can choose the highest-level surface that fits the job and drop down only when you need finer control.
+Start with
+Use it when
+Task runs
+One goal should be driven autonomously from start to verified completion.
+Workflows
+Many tasks need sequencing, branching, loops, budgets, or human approval.
+Machines
+The agent needs a managed Linux or Windows computer with browser, terminal, and files.
+Primitives
+Your application needs direct control over every screenshot, prediction, and action.
+Authentication
+Every billed call is charged before the model runs and automatically refunded if it fails — the X-Credits-Refunded header confirms the refund.
+Every API-key-authenticated request must include your secret key. The four health probes are public, and webhook ingress uses its documented 
+Coasty-Signature
+ HMAC credential instead. For API-key operations, the canonical form is the
+ 
+X-API-Key
+ header, but
+ 
+Authorization: Bearer <key>
+ works too: a blank
+ 
+X-API-Key
+ falls through to the Bearer header. Pick one form and send the raw key. Do not paste the literal text 
+Bearer 
+ inside
+ 
+X-API-Key
+; that is the single most common first-day mistake and it returns 
+401 INVALID_API_KEY
+. Keys are created and revoked from the
+ 
+API keys
+ 
+page. Treat a key like a password: keep it server-side, store it in an environment variable, and never commit it or ship it in client-side code.
+Header
+Copy
+X-API-Key: sk-coasty-live-your_key_here
+Prefix
+Kind
+Behaviour
+sk-coasty-live-
+Live
+Runs the real model and draws down your USD wallet balance.
+sk-coasty-test-
+Test
+Returns mock responses and never bills. Ideal for local dev and CI.
+Prefer test keys while you wire up your integration. An 
+sk-coasty-test-
+ 
+key never bills and runs against mock VMs, yet exercises the exact same request and response shapes (its 
+X-Credits-Charged
+ and 
+usage.cost_cents
+ 
+are always 
+0
+), so you can build and run CI confidently before flipping to a live key.
+Run your first task
+Your first autonomous task needs an API key and a machine. Grab a test key from the
+ 
+API keys
+ 
+page (it never bills), then use an existing machine or
+ 
+provision one
+. Set the key in your shell:
+Shell
+Copy
+export COASTY_API_KEY="sk-coasty-test-your_key_here"
+Start the task with 
+POST /v1/runs
+. Replace the example
+ 
+machine_id
+, describe the outcome in 
+task
+, and send an 
+Idempotency-Key
+ so a retried create cannot start a duplicate run. The complete example starts the run and follows it to a terminal state:
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import os, time, requests
+
+BASE = "https://coasty.ai/v1"
+HEADERS = {"X-API-Key": os.environ["COASTY_API_KEY"]}
+TERMINAL = {"succeeded", "failed", "cancelled", "timed_out"}
+
+# 1. Start a run. Idempotency-Key makes a retried create safe.
+run = requests.post(
+    f"{BASE}/runs",
+    headers={**HEADERS, "Idempotency-Key": "order-4821"},
+    json={
+        "machine_id": "mch_test_0123456789abcdef",
+        "task": "Open the billing page and download the latest invoice as PDF",
+        "cua_version": "v5",         # any of v1/v3/v4/v5, all tiers; omit to use the v5 default
+        "max_steps": 40,
+        "on_awaiting_human": "pause",
+    },
+    timeout=30,
+).json()
+run_id = run["id"]
+print(run["status"])                 # "queued"
+webhook_secret = run.get("webhook_secret")   # shown once; store it now
+
+# 2. Poll until terminal.
+while True:
+    run = requests.get(f"{BASE}/runs/{run_id}", headers=HEADERS, timeout=30).json()
+    print(run["status"], run["steps_completed"], "steps")
+    if run["status"] in TERMINAL:
+        break
+    time.sleep(2)
+
+print(run["result"])                 # {"passed": ..., "status": ..., "summary": ...}
+The create response begins at 
+queued
+. Coasty then drives the machine, records each step, and finishes as 
+succeeded
+,
+ 
+failed
+, 
+cancelled
+, or
+ 
+timed_out
+. Your application can poll, subscribe to the event stream, or receive signed webhooks; it does not need to execute each prediction itself.
+Next
+Go to
+Understand task fields, lifecycle, and results
+Task runs
+Follow progress without polling
+Streaming events
+Turn the task into repeatable multi-step automation
+Workflows
+Own every screenshot and action yourself
+Prediction primitives
+Task runs are the default starting point for autonomous work. Workflows build on them, machines host them, and prediction primitives remain available when your application needs direct control over the loop.
+Task runs
+POST a task + machine and Coasty runs the whole loop for you — streaming events over SSE, calling your webhook on lifecycle changes, and pausing for a human when asked.
+A run hands the agent a task and a machine, then drives it to completion on our side. The agent loops autonomously, verifies its own work (pass or fail), can pause for a human when it hits a wall, bills $0.05 per completed step from your dollar API wallet ($0.08/step on the legacy v1 engine), and streams every event live. You start one call and watch, instead of running the predict loop yourself.
+Create a run with 
+POST /v1/runs
+. The two required fields are
+ 
+machine_id
+ and 
+task
+. The response is an
+ 
+agent.run
+ object with 
+status
+ of
+ 
+queued
+, plus a one-time 
+webhook_secret
+ you store to verify 
+webhooks
+. Send an 
+Idempotency-Key
+ header to make a retried create safe.
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import os, time, requests
+
+BASE = "https://coasty.ai/v1"
+HEADERS = {"X-API-Key": os.environ["COASTY_API_KEY"]}
+TERMINAL = {"succeeded", "failed", "cancelled", "timed_out"}
+
+# 1. Start a run. Idempotency-Key makes a retried create safe.
+run = requests.post(
+    f"{BASE}/runs",
+    headers={**HEADERS, "Idempotency-Key": "order-4821"},
+    json={
+        "machine_id": "mch_test_0123456789abcdef",
+        "task": "Open the billing page and download the latest invoice as PDF",
+        "cua_version": "v5",         # any of v1/v3/v4/v5, all tiers; omit to use the v5 default
+        "max_steps": 40,
+        "on_awaiting_human": "pause",
+    },
+    timeout=30,
+).json()
+run_id = run["id"]
+print(run["status"])                 # "queued"
+webhook_secret = run.get("webhook_secret")   # shown once; store it now
+
+# 2. Poll until terminal.
+while True:
+    run = requests.get(f"{BASE}/runs/{run_id}", headers=HEADERS, timeout=30).json()
+    print(run["status"], run["steps_completed"], "steps")
+    if run["status"] in TERMINAL:
+        break
+    time.sleep(2)
+
+print(run["result"])                 # {"passed": ..., "status": ..., "summary": ...}
+Field
+Required
+Description
+machine_id
+Yes
+The machine the agent will drive.
+task
+Yes
+The natural-language goal to accomplish.
+cua_version
+No
+Model family. 
+v5
+ by default; 
+v1
+ / 
+v3
+ / 
+v4
+ / 
+v5
+ on all tiers.
+instructions
+No
+Extra guidance appended to the base prompt.
+system_prompt
+No
+A preamble placed ahead of the base prompt.
+max_steps
+No
+Hard cap on agent steps (default 50).
+deadline_seconds
+No
+Wall-clock budget; the run becomes 
+timed_out
+ if breached.
+on_awaiting_human
+No
+What to do when a human is needed: 
+pause
+ (default), 
+fail
+, or 
+cancel
+.
+awaiting_human_timeout_seconds
+No
+How long to wait for a human before timing out.
+webhook_url
+No
+HTTPS endpoint for lifecycle callbacks (https only).
+metadata
+No
+Arbitrary JSON echoed back on the run object.
+Endpoint
+Purpose
+POST /v1/runs
+Start a run. Returns the run plus a one-time webhook_secret.
+GET /v1/runs
+List runs. Filter with 
+?status=
+ and 
+?limit=
+.
+GET /v1/runs/
+{id}
+Fetch a single run and its current status.
+GET /v1/runs/
+{id}
+/events
+Server-Sent Events stream of the run (see Streaming events).
+POST /v1/runs/
+{id}
+/cancel
+Cancel a run that has not reached a terminal state.
+POST /v1/runs/
+{id}
+/resume
+Hand control back after a human takeover.
+JSON
+Copy
+{
+  "id": "run_7a1b2c3d",
+  "object": "agent.run",
+  "status": "queued",
+  "machine_id": "mch_test_0123456789abcdef",
+  "task": "Open the billing page and download the latest invoice as PDF",
+  "cua_version": "v5",
+  "instructions": null,
+  "max_steps": 40,
+  "on_awaiting_human": "pause",
+  "steps_completed": 0,
+  "credits_charged": 0,
+  "cost_cents": 0,
+  "result": null,
+  "error": null,
+  "awaiting_human_reason": null,
+  "metadata": {
+    "team": "finance"
+  },
+  "webhook_url": "https://example.com/hooks/coasty",
+  "created_at": "2026-06-01T12:00:00Z",
+  "started_at": null,
+  "awaiting_human_since": null,
+  "finished_at": null,
+  "request_id": "req_4f9a2b1c",
+  "webhook_secret": "whsec_one_time_value_shown_here"
+}
+Field
+Type
+Description
+id
+string
+Unique run id, prefixed run_.
+object
+string
+Always "agent.run".
+status
+string
+queued, running, awaiting_human, succeeded, failed, cancelled, or timed_out.
+machine_id
+string
+The machine the agent is driving.
+task
+string
+The natural-language goal you submitted.
+cua_version
+string
+Model family: "v5" (default). Any of "v1" / "v3" / "v4" / "v5", available on all tiers.
+instructions
+string
+Extra guidance appended to the base prompt (nullable).
+max_steps
+int
+Hard cap on agent steps (default 50).
+on_awaiting_human
+string
+What to do when a human is needed: pause, fail, or cancel.
+steps_completed
+int
+How many agent steps have run so far.
+credits_charged
+int
+Internal cost units billed (1 unit = $0.01). See cost_cents for the dollar amount.
+cost_cents
+int
+Dollar cost so far, in cents (USD).
+result
+object
+{ passed, status, summary, verdict? } once the run finishes.
+error
+object
+{ code, message } when the run failed (nullable).
+awaiting_human_reason
+string
+Why the run paused for a human (nullable).
+metadata
+object
+The metadata you attached at create time.
+llm
+object|null
+Non-secret BYOK echo when the run opted into your own key: { provider, model, key_fingerprint, key_source, key_scrubbed }. Never contains the key itself. See Bring your own model.
+webhook_url
+string
+Where lifecycle events are POSTed (nullable).
+created_at
+string
+ISO-8601 creation timestamp.
+started_at
+string
+When the run left the queue (nullable).
+awaiting_human_since
+string
+When the run last paused for a human (nullable).
+finished_at
+string
+When the run reached a terminal state (nullable).
+request_id
+string
+Id of the create request, for support and tracing.
+A run moves through 
+queued
+ to 
+running
+, can bounce between 
+running
+ and 
+awaiting_human
+, and ends in one of 
+succeeded
+, 
+failed
+,
+ 
+cancelled
+, or 
+timed_out
+. Terminal states are immutable, so it is always safe to stop polling once you reach one. Runs need the
+ 
+runs:read
+ and 
+runs:write
+ scopes, granted to new keys by default.
+Streaming events
+GET /v1/runs/
+{id}
+/events
+ returns a Server-Sent Events stream so you can follow a run as it happens, instead of polling. Each event has a type and a numeric
+ 
+id
+ (the sequence number). If your connection drops, reconnect and replay everything you missed by sending the last sequence you saw as a
+ 
+Last-Event-ID
+ header, or as the 
+?after=
+ query parameter. The stream closes after the 
+done
+ event.
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import os, httpx
+
+BASE = "https://coasty.ai/v1"
+HEADERS = {"X-API-Key": os.environ["COASTY_API_KEY"]}
+run_id = "run_7a1b"
+last_seq = 0  # persist this so a reconnect can replay
+
+# httpx streams the SSE body line by line. Reconnect with Last-Event-ID.
+with httpx.stream(
+    "GET",
+    f"{BASE}/runs/{run_id}/events",
+    headers={**HEADERS, "Last-Event-ID": str(last_seq)},
+    timeout=None,
+) as resp:
+    event_type = "message"
+    for line in resp.iter_lines():
+        if line.startswith("id:"):
+            last_seq = int(line[3:].strip())
+        elif line.startswith("event:"):
+            event_type = line[6:].strip()
+        elif line.startswith("data:"):
+            data = line[5:].strip()
+            print(event_type, data)
+            if event_type == "done":
+                break
+Event
+Meaning
+status
+The run moved to a new status (running, awaiting_human, succeeded, etc.).
+text
+A chunk of the agent's natural-language narration.
+reasoning
+A chunk of the model's private reasoning, if exposed.
+tool_call
+The agent invoked a tool (a click, a keypress, a navigation).
+tool_result
+The result of the most recent tool call.
+awaiting_human
+The run paused and is waiting for a human to take over.
+resumed
+Control was handed back after a human takeover.
+step
+A full agent step completed; carries steps_completed.
+billing
+Incremental billing update (credits_charged, cost_cents).
+error
+A non-fatal or fatal error occurred during the run.
+done
+Terminal event. The stream closes after this is sent.
+Human takeover
+Some steps need a person: a captcha, a one-time code, a judgment call. When the agent reaches one and 
+on_awaiting_human
+ is 
+pause
+, the run moves to 
+awaiting_human
+ and emits an
+ 
+awaiting_human
+ event with a reason. A human completes the blocking step (in the same machine session), then you hand control back with
+ 
+POST /v1/runs/
+{id}
+/resume
+ and an optional
+ 
+note
+. Resume is only valid while the status is
+ 
+awaiting_human
+.
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import os, requests
+
+BASE = "https://coasty.ai/v1"
+HEADERS = {"X-API-Key": os.environ["COASTY_API_KEY"]}
+run_id = "run_7a1b"
+
+run = requests.get(f"{BASE}/runs/{run_id}", headers=HEADERS, timeout=30).json()
+
+# resume is only valid while status == "awaiting_human".
+if run["status"] == "awaiting_human":
+    print("paused:", run["awaiting_human_reason"])
+    # ... a human completes the blocking step out of band ...
+    resumed = requests.post(
+        f"{BASE}/runs/{run_id}/resume",
+        headers=HEADERS,
+        json={"note": "Solved the captcha; continue"},
+        timeout=30,
+    ).json()
+    print(resumed["status"])         # back to "running"
+Detect the pause from either the run object (
+status == awaiting_human
+ 
+with 
+awaiting_human_reason
+ set), the SSE
+ 
+awaiting_human
+ event, or the 
+run.awaiting_human
+ 
+webhook. After resume, the run returns to 
+running
+ and emits a
+ 
+resumed
+ event. Set 
+on_awaiting_human
+ to
+ 
+fail
+ or 
+cancel
+ at create time if you would rather the run stop than wait for a human.
+Webhooks
+Pass a 
+webhook_url
+ (https only) when you create a run and we POST a signed callback at each lifecycle transition. The response to your create call includes a
+ 
+webhook_secret
+ exactly once: store it, because every callback is signed with it. Each request carries a 
+Coasty-Signature
+ header of the form 
+t=<unix_ts>,v1=<hex>
+.
+To verify, build the signed payload as 
+"<t>." + raw_request_body
+, compute 
+HMAC-SHA256
+ over it keyed by the
+ 
+webhook_secret
+, and compare against 
+v1
+ with a constant-time check. Always hash the raw body bytes, before any JSON re-serialisation.
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import hashlib, hmac, os, requests
+
+BASE = "https://coasty.ai/v1"
+HEADERS = {"X-API-Key": os.environ["COASTY_API_KEY"]}
+
+# 1. Create a run with a webhook_url. webhook_secret is returned exactly once.
+run = requests.post(
+    f"{BASE}/runs",
+    headers=HEADERS,
+    json={
+        "machine_id": "mch_test_0123456789abcdef",
+        "task": "Reconcile the invoice against the order",
+        "webhook_url": "https://example.com/hooks/coasty",
+    },
+    timeout=30,
+).json()
+webhook_secret = run["webhook_secret"]   # persist this securely
+
+# 2. In your webhook handler, verify the Coasty-Signature header.
+def verify(raw_body: bytes, signature_header: str, secret: str) -> bool:
+    parts = dict(p.split("=", 1) for p in signature_header.split(","))
+    signed = f"{parts['t']}.".encode() + raw_body
+    expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, parts["v1"])
+
+# Example (your framework supplies the raw body + header):
+# ok = verify(request.body, request.headers["Coasty-Signature"], webhook_secret)
+Event
+Meaning
+run.awaiting_human
+The run paused and needs a human to take over.
+run.succeeded
+The run finished and verification passed.
+run.failed
+The run ended in failure (verification failed or an error).
+run.cancelled
+The run was cancelled via the cancel endpoint.
+run.timed_out
+The run breached its deadline before finishing.
+Bring your own model
+By default every LLM call in the computer-use harness runs on Coasty's managed models. BYOK (bring your own key) flips that: opt in and the entire harness (the worker, grounding, the code agent, and compaction; every LLM call) runs on your own Anthropic or OpenAI account instead. Opt-in is always explicit, per request or per stored key.
+ 
+provider: "managed"
+ (or omitting 
+llm
+ 
+entirely) keeps the platform default, unchanged.
+There are two ways to hand over a key. Store it once with
+ 
+PUT /v1/llm/keys/
+{provider}
+ (encrypted with AES-256-GCM at rest; only a sha256-prefix fingerprint is ever echoed back), or send it per request in headers. A header key takes precedence over the stored key. Sending a key without a provider returns
+ 
+422
+.
+Headers
+Copy
+X-LLM-Provider: anthropic
+X-LLM-Api-Key: sk-ant-your_key_here
+X-LLM-Model: claude-sonnet-4-6
+Header
+Required
+Meaning
+X-LLM-Provider
+With a header key
+Which provider the key belongs to: 
+anthropic
+ or 
+openai
+. A key without a provider is a 
+422
+.
+X-LLM-Api-Key
+No
+Your own provider API key, for this request only. Takes precedence over the stored key. Never logged, never echoed.
+X-LLM-Model
+No
+Model override for this request. Any model string your account can access; must be vision-capable.
+The headers work on 
+POST /v1/predict
+,
+ 
+POST /v1/runs
+, 
+POST /v1/workflows/
+{id}
+/runs
+,
+ 
+POST /v1/sessions
+, and 
+POST /v1/schedules
+. Stored keys are managed through three endpoints, gated by the 
+llm_keys
+ 
+scope (granted to new live keys by default). These endpoints require a live key; sandbox keys cannot read, overwrite, or delete the production credential store:
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import os, requests
+
+BASE = "https://coasty.ai/v1"
+HEADERS = {"X-API-Key": os.environ["COASTY_API_KEY"]}
+
+# Store (upsert) your own Anthropic key. Encrypted at rest; never echoed back.
+stored = requests.put(
+    f"{BASE}/llm/keys/anthropic",
+    headers=HEADERS,
+    json={"api_key": os.environ["ANTHROPIC_API_KEY"]},
+    timeout=30,
+).json()
+print(stored)   # {"provider": "anthropic", "key_fingerprint": "a1b2c3d4", "stored": true}
+
+# List stored keys: provider, fingerprint, timestamps. Never the key itself.
+keys = requests.get(f"{BASE}/llm/keys", headers=HEADERS, timeout=30).json()
+for k in keys["keys"]:
+    print(k["provider"], k["key_fingerprint"])
+
+# Delete when you rotate away (404 LLM_KEY_NOT_FOUND when none is stored)
+requests.delete(f"{BASE}/llm/keys/anthropic", headers=HEADERS, timeout=30)
+Endpoint
+Purpose
+PUT /v1/llm/keys/
+{provider}
+Store (upsert) your key: body 
+{
+"api_key": "sk-..."
+}
+. Returns 
+{
+provider, key_fingerprint, stored: true
+}
+; the key is never returned again.
+GET /v1/llm/keys
+List stored keys: 
+{
+keys: [
+{
+provider, key_fingerprint, created_at, updated_at
+}
+]
+}
+. Non-secret metadata only.
+DELETE /v1/llm/keys/
+{provider}
+Delete the stored key. Returns 
+{
+deleted: true
+}
+, or 
+404 LLM_KEY_NOT_FOUND
+ when none exists.
+On the request body, the same endpoints accept an 
+llm
+ object that selects the provider and, optionally, a model per harness role. It deliberately has
+ 
+no api_key field
+ (a 
+422
+ 
+if you attempt one): keys ride headers or the encrypted store only, so they can never be echoed in run objects, webhooks, or idempotency replays.
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import os, requests
+
+BASE = "https://coasty.ai/v1"
+HEADERS = {"X-API-Key": os.environ["COASTY_API_KEY"]}
+
+# Start a run on YOUR Anthropic key (stored earlier via PUT /llm/keys/anthropic).
+# The llm block deliberately has NO api_key field (422 if you try): keys ride
+# headers or the encrypted store only, never request bodies.
+run = requests.post(
+    f"{BASE}/runs",
+    headers=HEADERS,
+    json={
+        "machine_id": "mch_test_0123456789abcdef",
+        "task": "Open the billing page and download the latest invoice as PDF",
+        "llm": {
+            "provider": "anthropic",             # or "openai"; "managed" = platform default
+            "model": "claude-sonnet-4-6",        # any model on your account (vision-capable)
+            "compaction_model": "claude-haiku-4-5",  # optional per-role override
+        },
+    },
+    timeout=30,
+).json()
+
+# Per-request variant: send the key in headers instead of storing it.
+# A header key takes precedence over the stored key for this request only.
+byok_headers = {
+    **HEADERS,
+    "X-LLM-Provider": "anthropic",
+    "X-LLM-Api-Key": os.environ["ANTHROPIC_API_KEY"],
+    "X-LLM-Model": "claude-sonnet-4-6",
+}
+
+# The run echoes a non-secret llm block; the key itself is never returned.
+run = requests.get(f"{BASE}/runs/{run['id']}", headers=HEADERS, timeout=30).json()
+print(run["llm"])   # {"provider": ..., "model": ..., "key_fingerprint": ..., "key_source": ..., "key_scrubbed": ...}
+Field
+Type
+Description
+provider
+string
+managed
+ (platform default), 
+anthropic
+, or 
+openai
+. Anything else is 
+422 LLM_PROVIDER_UNSUPPORTED
+.
+model
+string
+The main worker model. Defaults: 
+claude-sonnet-4-6
+ (anthropic), 
+gpt-4o
+ (openai). Any model string your account can access is accepted; it must be vision-capable.
+grounding_model
+string
+Override for pixel-coordinate grounding. Defaults to model.
+compaction_model
+string
+Override for trajectory compaction. Defaults to model. A cheaper model here is the classic cost tune.
+code_agent_model
+string
+Override for the code agent. Defaults to model.
+Per-role overrides exist for tuning cost against quality: run compaction on a cheaper model while the worker stays on the default, for example. For runs, workflows, and schedules the key is snapshotted encrypted into the run, so crash-recovery on another replica keeps using your key; it is scrubbed the moment the run reaches a terminal state.
+ 
+GET /v1/runs/
+{id}
+ echoes a non-secret 
+llm
+ 
+block: 
+{
+provider, model, key_fingerprint, key_source, key_scrubbed
+}
+. Schedules store only the non-secret preference; at fire time the current stored key is used. Delete the stored key and future firings fail loudly with
+ 
+LLM_KEY_NOT_CONFIGURED
+; they never silently run on platform keys.
+Grounding (pixel-coordinate resolution) quality is tuned on the platform model. When running grounding on your own model, expect the best results with the defaults, and use
+ 
+grounding_model
+ to experiment before committing a cheaper or different model to that role.
+No silent fallback, ever: once you ask for BYOK, no code path can use Coasty's platform LLM keys. Errors from your provider surface as your key's issue with stable codes:
+ 
+LLM_KEY_NOT_CONFIGURED
+, 
+LLM_KEY_INVALID
+,
+ 
+LLM_PROVIDER_AUTH_FAILED
+, 
+LLM_PROVIDER_RATE_LIMITED
+,
+ 
+LLM_PROVIDER_QUOTA_EXCEEDED
+, and 
+LLM_PROVIDER_ERROR
+.
+Status
+Code
+Cause and fix
+422
+LLM_KEY_NOT_CONFIGURED
+You asked for BYOK (llm.provider is anthropic or openai) but no key was found. Store one with PUT /v1/llm/keys/{provider} or send X-LLM-Api-Key per request. The request never runs on Coasty's platform keys.
+422
+LLM_KEY_INVALID
+The supplied LLM key is unusable: empty, malformed, the wrong provider's format, or a stored key that could not be decrypted. Check the key matches the provider (sk-ant-... for anthropic) and re-store it.
+404
+LLM_KEY_NOT_FOUND
+DELETE /v1/llm/keys/{provider} found no stored key for that provider. List what you have with GET /v1/llm/keys.
+422
+LLM_PROVIDER_UNSUPPORTED
+llm.provider (or X-LLM-Provider) is not one of managed, anthropic, or openai. Also returned when X-LLM-Api-Key is sent without a provider, or when you try to store a key for "managed".
+401
+LLM_PROVIDER_AUTH_FAILED
+Your Anthropic/OpenAI account rejected the key (their 401/403). Rotate the key in your provider console and update it with PUT /v1/llm/keys/{provider}. Never retried on platform keys.
+429
+LLM_PROVIDER_RATE_LIMITED
+Your own provider account is rate-limiting (their 429). Retryable: honor Retry-After, raise your provider tier, or reduce volume.
+402
+LLM_PROVIDER_QUOTA_EXCEEDED
+Your provider account is out of credits or quota. Top up your Anthropic/OpenAI billing; this is your provider's balance, not your Coasty wallet.
+502
+LLM_PROVIDER_ERROR
+Your LLM provider returned a server error (their 5xx). Retryable with backoff; if it persists, check the provider's status page.
+Billing: Coasty's per-call and per-step platform charges are unchanged with BYOK. The model tokens are billed by your provider account directly.
+Workflows
+A workflow is a small JSON DSL. Control steps (if / loop / parallel / human_approval) are pure and safe; each task step executes as a real run with its own billing and events.
+A workflow composes many runs into one versioned program, with branching, loops, and guards expressed as a JSON DSL. Each 
+task
+ step is itself an agent run, so a workflow is the way to chain tasks, gate them on conditions, and pass results between them. Workflows are versioned: re-creating the same 
+slug
+ bumps the version, and a 
+PUT
+ does too.
+Create one with 
+POST /v1/workflows
+. The 
+slug
+ 
+must match 
+[a-z0-9_-]
+. The response is a 
+Workflow
+ 
+carrying an 
+id
+, a 
+version
+, and the current
+ 
+dsl_version
+ (
+2026-06-01
+).
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import os, requests
+
+BASE = "https://coasty.ai/v1"
+HEADERS = {"X-API-Key": os.environ["COASTY_API_KEY"]}
+
+definition = {
+    "steps": [
+        {
+            "id": "fetch",
+            "type": "task",
+            "task": "Open order {{inputs.order_id}} and read the invoice total",
+            "save_as": "invoice",
+        },
+        {
+            "id": "check",
+            "type": "assert",
+            "condition": {"op": "truthy", "value": "{{invoice.passed}}"},
+            "message": "Agent failed to read the invoice",
+        },
+        {
+            "id": "branch",
+            "type": "if",
+            "condition": {"op": "contains", "left": "{{invoice.result}}", "right": "PAID"},
+            "then": [{"id": "ok", "type": "succeed", "output": {"state": "paid"}}],
+            "else": [{"id": "no", "type": "fail", "message": "Invoice not marked paid"}],
+        },
+    ],
+}
+
+# 1. Create the workflow. Re-using the same slug bumps its version.
+wf = requests.post(
+    f"{BASE}/workflows",
+    headers=HEADERS,
+    json={
+        "name": "Invoice reconciliation",
+        "slug": "invoice-reconcile",
+        "inputs_schema": {"type": "object", "properties": {"order_id": {"type": "string"}}},
+        "definition": definition,
+    },
+    timeout=30,
+).json()
+print(wf["id"], "v", wf["version"], wf["dsl_version"])
+
+# 2. Start a run of the saved workflow.
+run = requests.post(
+    f"{BASE}/workflows/{wf['id']}/runs",
+    headers=HEADERS,
+    json={"inputs": {"order_id": "ord_4821"}, "machine_id": "mch_test_0123456789abcdef", "budget_cents": 500},
+    timeout=30,
+).json()
+print(run["id"], run["status"])
+Endpoint
+Purpose
+POST /v1/workflows
+Create a workflow (or bump its version when the slug already exists).
+GET /v1/workflows
+List workflows. Filter with 
+?limit=
+.
+GET /v1/workflows/
+{id}
+Fetch a workflow and its definition.
+PUT /v1/workflows/
+{id}
+Replace the definition; bumps the version.
+DELETE /v1/workflows/
+{id}
+Archive a workflow.
+Workflows need the 
+workflows:read
+ and
+ 
+workflows:write
+ scopes, granted to new keys by default. See the
+ 
+Workflow DSL
+ 
+for the full step and condition catalogue.
+Workflow DSL
+The DSL (
+dsl_version
+ 
+2026-06-01
+) is a JSON object with a 
+steps
+ array and an optional 
+output
+. Each step has an 
+id
+ and a 
+type
+. A
+ 
+task
+ step runs the agent and binds its result (
+{ status, passed, result, run_id, steps, error }
+) under both its
+ 
+save_as
+ name and its step id, so later steps can read it.
+JSON
+Copy
+{
+  "dsl_version": "2026-06-01",
+  "definition": {
+    "steps": [
+      {
+        "id": "fetch",
+        "type": "task",
+        "task": "Open order {{inputs.order_id}} and read the invoice total",
+        "save_as": "invoice"
+      },
+      {
+        "id": "check",
+        "type": "assert",
+        "condition": {
+          "op": "truthy",
+          "value": "{{invoice.passed}}"
+        },
+        "message": "Agent failed to read the invoice"
+      },
+      {
+        "id": "branch",
+        "type": "if",
+        "condition": {
+          "op": "contains",
+          "left": "{{invoice.result}}",
+          "right": "PAID"
+        },
+        "then": [
+          {
+            "id": "ok",
+            "type": "succeed",
+            "output": {
+              "state": "paid"
+            }
+          }
+        ],
+        "else": [
+          {
+            "id": "no",
+            "type": "fail",
+            "message": "Invoice not marked paid"
+          }
+        ]
+      }
+    ],
+    "output": {
+      "paid": "{{invoice.result}}"
+    }
+  }
+}
+Step type
+Shape
+Description
+task
+{ task, machine_id?, save_as? }
+Run an agent task. Supports {{var}} templating. Binds its result under save_as and the step id.
+assert
+{ condition, message? }
+Fail the workflow unless the structured condition holds.
+if
+{ condition, then, else? }
+Branch on a structured condition.
+loop
+{ count | while, body }
+Repeat a body a fixed number of times or while a condition holds.
+parallel
+{ branches: [[...], [...]] }
+Run independent branches concurrently.
+human_approval
+{ message?, timeout_seconds? }
+Pause for a human to approve or reject before continuing.
+retry
+{ body, max_attempts }
+Retry a body up to max_attempts times on failure.
+succeed
+{ output? }
+Finish the workflow successfully with an optional output.
+fail
+{ message? }
+Finish the workflow as failed with an optional message.
+Conditions are structured rather than expression strings, which keeps them injection-safe. Each 
+left
+, 
+right
+, or
+ 
+value
+ is either a literal or a 
+{{path}}
+ 
+reference. Paths are dotted lookups into 
+inputs.*
+,
+ 
+vars.*
+, and any step id or 
+save_as
+ name.
+Operator
+Shape
+Description
+eq / ne
+{ op, left, right }
+Equal / not equal.
+lt / gt / lte / gte
+{ op, left, right }
+Ordered numeric comparison.
+contains
+{ op, left, right }
+left contains right (substring or membership).
+truthy / falsy / exists
+{ op, value }
+Test a single value for truthiness, falsiness, or presence.
+and / or
+{ op, conditions: [..] }
+Combine several conditions.
+not
+{ op, condition }
+Negate a condition.
+Three hard guards stop a workflow run when breached:
+ 
+budget_cents
+ (spend cap in USD cents; 0 means unlimited),
+ 
+max_iterations
+ (loop cap), and
+ 
+deadline_seconds
+ (wall-clock). A breach ends the run as
+ 
+failed
+ or 
+timed_out
+.
+A definition is validated before it is accepted. The limits below are enforced at create and ad-hoc time, so an invalid definition is rejected with 
+422 VALIDATION_ERROR
+ 
+rather than failing mid-run.
+Limit
+Rule
+Max steps
+A definition holds at most 200 steps in total (counting every nested step).
+Max nesting depth
+Steps can nest at most 8 levels deep (if, loop, parallel, retry bodies).
+Parallel branches
+A parallel step takes at most 16 branches; they run concurrently.
+Retry attempts
+retry max_attempts is an integer from 1 to 20.
+Parallel contents
+human_approval, succeed, and fail are not allowed inside a parallel branch.
+save_as name
+save_as must not be "inputs" or "vars" (those namespaces are reserved).
+Workflows are version-pinned. When a run starts, the workflow's current
+ 
+definition
+ is snapshotted into that run, so editing or replacing the workflow (which bumps its 
+version
+) never changes runs already in flight. Each run records the 
+workflow_version
+ it executed.
+Running workflows
+Start a saved workflow with 
+POST /v1/workflows/
+{id}
+/runs
+, or run a definition inline (without saving) with 
+POST /v1/workflows/runs
+ by adding a 
+definition
+ (and optional 
+inputs_schema
+) to the same body. Both return a 
+workflow.run
+. The body accepts
+ 
+inputs
+, a default 
+machine_id
+ for task steps,
+ 
+and the 
+budget_cents
+, 
+max_iterations
+, and
+ 
+deadline_seconds
+ guards. An 
+Idempotency-Key
+ 
+header is honoured here too.
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import os, requests
+
+BASE = "https://coasty.ai/v1"
+HEADERS = {"X-API-Key": os.environ["COASTY_API_KEY"]}
+
+# POST /v1/workflows/runs runs a definition inline, without saving a workflow.
+run = requests.post(
+    f"{BASE}/workflows/runs",
+    headers=HEADERS,
+    json={
+        "machine_id": "mch_test_0123456789abcdef",
+        "inputs": {"url": "https://status.example.com"},
+        "max_iterations": 5,
+        "definition": {
+            "steps": [
+                {
+                    "id": "open",
+                    "type": "task",
+                    "save_as": "page",
+                    "task": "Open {{inputs.url}} and report whether all systems are operational",
+                },
+                {
+                    "id": "gate",
+                    "type": "assert",
+                    "condition": {"op": "truthy", "value": "{{page.passed}}"},
+                },
+            ],
+        },
+    },
+    timeout=30,
+).json()
+print(run["id"], run["status"])      # object == "workflow.run"
+Endpoint
+Purpose
+POST /v1/workflows/
+{id}
+/runs
+Start a run of a saved workflow.
+POST /v1/workflows/runs
+Run an inline definition without saving a workflow.
+GET /v1/workflows/runs
+List workflow runs. Filter with 
+?workflow_id=
+ and 
+?limit=
+.
+GET /v1/workflows/runs/
+{id}
+Fetch a single workflow run.
+GET /v1/workflows/runs/
+{id}
+/events
+SSE stream with the same Last-Event-ID replay semantics.
+POST /v1/workflows/runs/
+{id}
+/cancel
+Cancel a workflow run.
+POST /v1/workflows/runs/
+{id}
+/resume
+Approve or reject a human_approval pause with 
+{ approved, note? }
+.
+JSON
+Copy
+{
+  "id": "wfr_5e6f7a8b",
+  "object": "workflow.run",
+  "status": "running",
+  "workflow_id": "wf_1a2b3c",
+  "workflow_version": 3,
+  "machine_id": "mch_test_0123456789abcdef",
+  "inputs": {
+    "order_id": "ord_4821"
+  },
+  "output": null,
+  "error": null,
+  "awaiting_human_reason": null,
+  "awaiting_step_id": null,
+  "iterations_used": 0,
+  "spent_cents": 0,
+  "budget_cents": 500,
+  "created_at": "2026-06-01T12:00:00Z",
+  "started_at": "2026-06-01T12:00:01Z",
+  "finished_at": null,
+  "request_id": "req_9c8b7a6d"
+}
+Field
+Type
+Description
+id
+string
+Unique workflow-run id, prefixed wfr_.
+object
+string
+Always "workflow.run".
+status
+string
+queued, running, awaiting_human, succeeded, failed, cancelled, or timed_out.
+workflow_id
+string
+The workflow this run belongs to (null for inline runs).
+workflow_version
+int
+The version of the workflow definition that ran.
+machine_id
+string
+Default machine for task steps that omit machine_id.
+inputs
+object
+The inputs you passed in, available as {{inputs.*}}.
+output
+object
+The output produced by a succeed step (nullable).
+error
+object
+{ code, message } when the run failed (nullable).
+awaiting_human_reason
+string
+Why the run paused (nullable).
+awaiting_step_id
+string
+The step id awaiting human approval (nullable).
+iterations_used
+int
+Loop iterations consumed against max_iterations.
+spent_cents
+int
+Total spend so far, in USD cents.
+budget_cents
+int
+Spend cap, in USD cents (0 means unlimited).
+created_at
+string
+ISO-8601 creation timestamp.
+started_at
+string
+When execution began (nullable).
+finished_at
+string
+When the run reached a terminal state (nullable).
+request_id
+string
+Id of the create request, for support and tracing.
+Provisioning
+A machine is a Coasty-managed cloud VM that an agent can see and control. You provision one, poll until it is 
+running
+, then either hand it to a
+ 
+task run
+ 
+(the agent drives it to done) or drive it yourself with the
+ 
+action endpoints
+. Machines are optional: 
+/predict
+, 
+/sessions
+, and
+ 
+/ground
+ run against 
+your
+ screen. You only need a Coasty machine when you want the agent to execute on a VM Coasty hosts.
+Provision
+ with
+ 
+POST /v1/machines
+. Only 
+display_name
+ is required; everything else has a sensible default. The body rejects unknown fields, so a typo returns
+ 
+422 VALIDATION_ERROR
+ rather than being silently ignored.
+Field
+Type
+Default
+Notes
+display_name
+string
+required
+Human label, 1–64 chars.
+os_type
+enum
+linux
+linux
+ or 
+windows
+. Windows costs more to run.
+desktop_enabled
+boolean
+false
+Installs a GUI (XFCE + VNC). Required for screenshots and VNC.
+cpu_cores
+number
+auto
+1–16. Capped by your tier.
+memory_gb
+number
+auto
+1–64. Capped by your tier.
+storage_gb
+number
+auto
+8–500.
+restore_from_snapshot
+boolean
+false
+Boot from your latest snapshot instead of a clean image (Linux only).
+ttl_minutes
+number
+null
+Auto-destroy after N minutes (5–10080). Omit for no auto-destroy — see 
+Lifecycle & TTL
+.
+metadata
+object
+null
+Free-form tags: ≤16 entries, 64-char keys, 256-char values.
+curl — provision a Linux desktop VM
+Copy
+curl -X POST https://coasty.ai/v1/machines \
+  -H "X-API-Key: $COASTY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"display_name": "agent-box", "os_type": "linux", "desktop_enabled": true, "ttl_minutes": 120}'
+Provisioning is 
+asynchronous
+. The response returns immediately with the machine in 
+creating
+ status and a
+ 
+connection
+ object whose secrets are redacted. The VM is not drivable yet — poll 
+GET /v1/machines/{id}
+ until 
+status
+ 
+is 
+running
+ before you send actions or start a run.
+JSON
+Copy
+{
+  "machine": {
+    "id": "9f2c1e7a-3b6d-4c81-9a0e-2d5f8b1c4e90",
+    "display_name": "agent-box",
+    "status": "creating",
+    "os_type": "linux",
+    "desktop_enabled": true,
+    "cpu_cores": 2,
+    "memory_gb": 4,
+    "storage_gb": 16,
+    "public_ip": null,
+    "auto_destroy_at": "2026-06-17T14:30:00Z",
+    "ttl_minutes": 120,
+    "is_test": false,
+    "created_at": "2026-06-17T12:30:00Z"
+  },
+  "connection": {
+    "public_ip": null,
+    "ssh_port": 22,
+    "ssh_username": "ubuntu",
+    "has_ssh_key": true,
+    "has_vnc_password": true
+  },
+  "request_id": "req_2f9c1a7b3e4d"
+}
+The machine object
+ — returned by provision, list, and get:
+Field
+Type
+Description
+id
+string
+Stable id. A UUID for live VMs; mch_test_<hex> for test-key mocks. Pass it to runs, workflows, and every /v1/machines/{id} call.
+display_name
+string
+The human label you set at provision time.
+status
+string
+Lifecycle status — see the status table. Poll this until running before driving the machine.
+os_type
+string
+"linux" or "windows".
+desktop_enabled
+boolean
+Whether a GUI (XFCE + VNC) is installed. Required for screenshots and VNC.
+cpu_cores
+number
+Provisioned vCPUs.
+memory_gb
+number
+Provisioned RAM in GB.
+storage_gb
+number
+Provisioned disk in GB.
+public_ip
+string|null
+Public IP once assigned (null while creating).
+auto_destroy_at
+string|null
+ISO-8601 timestamp when the TTL sweep will terminate it, or null if no TTL is set.
+ttl_minutes
+number|null
+The TTL last applied (null = no auto-destroy).
+is_test
+boolean
+true for a test-key mock VM. Lets you guard against mixing sandbox and live ids.
+billing
+object|null
+Runtime-billing summary (rates, total_credits_billed, suspended_for_billing, auto_destroy_at). null on machines not metered to the API wallet.
+created_at
+string
+ISO-8601 creation time.
+started_at
+string|null
+ISO-8601 time it last reached running.
+metadata
+object
+Your free-form key/value tags (echoed back verbatim).
+List
+ your machines with
+ 
+GET /v1/machines
+ (newest first, 
+?limit=
+ 1–200, default 50) — it returns 
+{ data, has_more, request_id }
+. Fetch one with 
+GET /v1/machines/{id}
+. Both read straight from the registry, so they keep working even when provisioning is busy.
+Provisioning a live machine needs the 
+machines:write
+ scope, a wallet balance of at least 
+20
+ credits (Unlimited-tier keys skip this), and room under your plan's concurrent-machine cap. Building? An 
+sk-coasty-test-
+ key returns a fully-shaped mock VM (id 
+mch_test_…
+, 
+is_test: true
+) with zero billing — up to 5 at a time.
+Lifecycle & TTL
+Machines bill per minute while they exist. Out of funds → stopped (never destroyed). A TTL auto-destroys the VM at created_at + ttl_minutes.
+A machine moves through a small set of statuses. 
+status
+ is the field you poll: drive the machine only while it is 
+running
+. The runtime rate that applies in each status is shown below; exact per-hour USD numbers are in the
+ 
+Pricing
+ 
+section.
+Status
+Billed
+Meaning
+creating
+Free
+Provisioned and booting. The cloud instance is coming up and getting an IP; not yet drivable. Poll until running.
+running
+Running rate
+Up and ready. Connection details are populated and actions/runs can target it. This is the only status from which work executes.
+starting
+Running rate
+A stopped machine is booting back up after POST /start. Transitional — bills at the running rate. Poll until running.
+stopping
+Running rate
+Shutting down after POST /stop. Transitional — bills at the running rate until it settles into stopped.
+restarting
+Running rate
+Rebooting after POST /restart. Transitional.
+stopped
+Stopped rate
+Powered off but preserved (disk + snapshots kept). Bills the low keep-alive rate. Start it again with POST /start.
+suspended
+Stopped rate
+Auto-stopped because the API wallet emptied mid-run. Identical to stopped; data is preserved. Top up the wallet and start it again.
+error
+Free
+Provisioning or a lifecycle action failed. Not billed. You can start (retry) or terminate it.
+terminated
+Free
+Permanently destroyed (manual DELETE or TTL auto-destroy). The id is gone; a later GET returns 404. Not billed.
+Start, stop, restart
+ are
+ 
+POST /v1/machines/{id}/start
+ (and
+ 
+/stop
+, 
+/restart
+). They are asynchronous: the call returns a transitional status (
+starting
+ / 
+stopping
+) and you poll until it settles. They are state-checked — starting a machine that is already running, or stopping one that is not running, returns 
+409 INVALID_STATE
+ with
+ 
+current_state
+ and 
+allowed_from
+ in the body, so you can react without guessing. 
+start
+ is allowed from
+ 
+stopped
+ or 
+error
+; 
+stop
+ only from 
+running
+.
+Terminate
+ with
+ 
+DELETE /v1/machines/{id}
+. This is permanent — the VM and its disk are destroyed and a later GET returns 
+404 MACHINE_NOT_FOUND
+. Delete is idempotent: deleting an already-gone machine still succeeds, so retries are safe.
+curl — stop, then terminate
+Copy
+curl -X POST https://coasty.ai/v1/machines/$MACHINE_ID/stop   -H "X-API-Key: $COASTY_API_KEY"
+curl -X DELETE https://coasty.ai/v1/machines/$MACHINE_ID       -H "X-API-Key: $COASTY_API_KEY"
+Auto-destroy (TTL).
+ A machine left running bills until you destroy it, so set 
+ttl_minutes
+ as a safety net. A background sweep (every ~60s) terminates a machine once its 
+auto_destroy_at
+ passes. Adjust it any time with 
+PATCH /v1/machines/{id}
+:
+ 
+ttl_minutes
+ is measured 
+from now
+ (so it doubles as a lease extension), accepts 
+5
+–
+10080
+ (5 min to 7 days), and
+ 
+0
+ clears auto-destroy entirely. Anything else is
+ 
+400 INVALID_TTL
+. Provisioning without a TTL works but adds a
+ 
+Warning
+ response header nudging you to set one.
+curl — extend the lease to 30 more minutes (0 to disable)
+Copy
+curl -X PATCH https://coasty.ai/v1/machines/$MACHINE_ID \
+  -H "X-API-Key: $COASTY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"ttl_minutes": 30}'
+Runtime billing.
+ Machines bill the
+ 
+developer API wallet (separate from any subscription credits) by the minute, rounded down to whole credits in your favour. Running Linux is 
+$0.05/hr
+, running Windows
+ 
+$0.09/hr
+, and a 
+stopped
+ or
+ 
+suspended
+ machine the keep-alive rate of 
+$0.01/hr
+;
+ 
+creating
+, 
+error
+, and
+ 
+terminated
+ are free. Transitional states (starting/stopping/restarting) bill at the running rate. The per-call control endpoints (actions, terminal, files, browser, screenshot, connection) are never billed — you pay for runtime only.
+If the API wallet empties while a machine is running, the next sweep 
+stops
+ it (status becomes 
+suspended
+) rather than destroying it — your disk and snapshots are preserved. Top up the wallet and 
+POST /start
+ to resume. You can watch live accrual for every metered machine at 
+GET /v1/billing/active
+.
+Connect & control
+On the exact 18 reserve-and-replay operations, send Idempotency-Key with the original request. A retry with that same key replays the stored result and never bills twice; unsupported mutations cannot gain idempotency retroactively.
+Once a machine is 
+running
+ you can reach it three ways: connect directly over SSH/VNC, drive it through Coasty's control endpoints, or hand it to an agent run. Normal machine responses redact secrets and only expose 
+has_ssh_key
+ /
+ 
+has_vnc_password
+ booleans plus ports.
+Connection secrets.
+ 
+GET /v1/machines/{id}/connection
+ returns the full
+ 
+ssh_private_key_pem
+, 
+vnc_password
+, public IP, and ports. It is gated by the 
+opt-in
+ 
+connection:read
+ scope
+ (not granted by default — request it when you mint the key), and the response is sent 
+Cache-Control: no-store
+. Treat that payload like a password: never log it. SSH usernames are 
+ubuntu
+ on Linux and
+ 
+Administrator
+ on Windows; VNC details exist only on
+ 
+desktop_enabled
+ machines.
+curl — fetch SSH key + VNC password (needs connection:read)
+Copy
+curl https://coasty.ai/v1/machines/$MACHINE_ID/connection \
+  -H "X-API-Key: $COASTY_API_KEY"
+Screenshots & snapshots.
+ 
+GET /v1/machines/{id}/screenshot
+ returns the current screen of a desktop machine (a still-booting VM returns 
+502 SCREENSHOT_FAILED
+ — poll for
+ 
+running
+ first). 
+POST /v1/machines/{id}/snapshot
+ 
+captures a restorable image (Linux), needs the 
+snapshots:write
+ scope, and is the one machine op with a flat fee (
+$0.01
+ per snapshot). A conclusive pre-creation failure is refunded, confirmed by 
+X-Credits-Refunded
+. A timeout, an upstream 5xx, or malformed post-dispatch result may already have created the image and instead returns terminal 
+503 SNAPSHOT_OUTCOME_UNKNOWN
+ without a blind refund or re-execution. Boot a future machine from a confirmed snapshot with
+ 
+restore_from_snapshot: true
+.
+The control surface.
+ Drive the VM directly with these endpoints. Each enforces a specific scope, and the high-risk ones —
+ 
+browser_execute
+ (arbitrary JS) and anything under
+ 
+connection:read
+ — are opt-in. 
+/actions/batch
+ runs up to 50 steps and stops on the first error by default (
+stop_on_error: false
+ to continue); 
+/terminal
+ truncates output to 5000 chars.
+Method
+Path
+Scope
+Summary
+POST
+/v1/machines
+machines:write
+Provision a new VM. Idempotent with Idempotency-Key.
+GET
+/v1/machines
+machines:read
+List your machines (newest first). Supports ?limit=1–200.
+GET
+/v1/machines/{id}
+machines:read
+Fetch one machine, with redacted connection metadata.
+PATCH
+/v1/machines/{id}
+machines:write
+Set or clear the auto-destroy TTL (ttl_minutes).
+DELETE
+/v1/machines/{id}
+machines:write
+Terminate the VM permanently. Idempotent for already-gone machines.
+POST
+/v1/machines/{id}/start
+machines:write
+Boot a stopped/error machine. Async — poll for running.
+POST
+/v1/machines/{id}/stop
+machines:write
+Power off a running machine (disk preserved). Async.
+POST
+/v1/machines/{id}/restart
+machines:write
+Reboot the machine. Async.
+POST
+/v1/machines/{id}/snapshot
+snapshots:write
+Capture a restorable image (Linux). Charged once per snapshot.
+GET
+/v1/machines/{id}/screenshot
+machines:read
+Current screen as a JPEG/PNG (desktop machines).
+GET
+/v1/machines/{id}/connection
+connection:read
+Full SSH key + VNC password. Opt-in scope; no-store. High-risk.
+GET
+/v1/machines/pricing
+machines:read
+The live runtime rate card.
+POST
+/v1/machines/{id}/actions
+per-command
+Run one control action (click/type/etc.) on the VM.
+POST
+/v1/machines/{id}/actions/batch
+per-command
+Run up to 50 actions in sequence. Union of step scopes.
+POST
+/v1/machines/{id}/browser/{op}
+actions:exec*
+Browser ops (navigate, click, …). browser_execute needs browser:execute.
+POST
+/v1/machines/{id}/terminal
+terminal:exec
+Run a shell command. Output truncated to 5000 chars.
+POST
+/v1/machines/{id}/files/{op}
+files:read/write
+File ops. Reads need files:read; writes need files:write.
+curl — run a shell command on the VM
+Copy
+curl -X POST https://coasty.ai/v1/machines/$MACHINE_ID/terminal \
+  -H "X-API-Key: $COASTY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"command": "ls -la /home/ubuntu"}'
+Idempotency & safety.
+ The machine operations in the exact reserve-and-replay set — provision, snapshot, actions, action batches, browser, terminal, and file operations — accept an 
+Idempotency-Key
+ (≤128 chars). Lifecycle start/stop/restart, TTL updates, and termination do not. For supported operations, a duplicate key replays the original result without re-executing; a duplicate that arrives while the first is still running waits up to ~25s, then returns 
+409 IDEMPOTENCY_IN_FLIGHT
+. One nuance worth knowing: a command that never reached the VM (a dispatch failure) is 
+not
+ cached, so retrying the same key runs it fresh; a command the VM actually ran (even if it errored) 
+is
+ cached. Every machine lookup is ownership-scoped, so a wrong or someone-else's id returns 
+404
+ — never a leak. Full code list in
+ 
+Errors
+.
+Predict
+The low-level prediction loop: send a screenshot, apply the returned actions, then capture the next screen and repeat until status is done.
+POST /v1/predict
+ is the low-level, stateless prediction primitive. Each call is independent: you provide the full context, execute the returned actions, capture the next screenshot, and decide when to call again. Use it when your application must own that loop. For an autonomous goal, start a
+ 
+task run
+. When a manually driven loop needs server-side trajectory memory, reach for
+ 
+sessions
+ 
+instead.
+Field
+Type
+Required
+Description
+screenshot
+string
+Yes
+Base64-encoded PNG or JPEG of the current screen.
+instruction
+string
+Yes
+Natural-language goal, e.g. "Click the login button".
+screen_width
+int
+No
+Width in pixels (320-3840). When omitted, measured from the screenshot.
+screen_height
+int
+No
+Height in pixels (240-2160). When omitted, measured from the screenshot.
+max_actions
+int
+No
+Cap on actions returned per call (default 5).
+tools
+string[]
+No
+Restrict to a subset of action types, e.g. ["click", "type_text"].
+include_reasoning
+bool
+No
+Return the model's reasoning string (default true).
+The response is the standard prediction shape, covered in 
+Response format
+.
+Sessions
+A session keeps the trajectory — the running history of screenshots and actions — on our side, so each step only needs the latest screenshot and instruction. This produces better multi-step behaviour on long tasks and keeps your request bodies small. Create a session once, step through the task, then delete it to release your concurrency quota.
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import base64, os, requests
+
+BASE = "https://coasty.ai/v1"
+HEADERS = {"X-API-Key": os.environ["COASTY_API_KEY"]}
+
+def screenshot() -> str:
+    with open("screen.png", "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+# 1. Open a session — it remembers the trajectory across steps
+session = requests.post(f"{BASE}/sessions", headers=HEADERS, json={
+    "screen_width": 1920,
+    "screen_height": 1080,
+}, timeout=60).json()
+session_id = session["session_id"]
+
+# 2. Drive the task one step at a time
+try:
+    for _ in range(20):  # safety cap
+        res = requests.post(
+            f"{BASE}/sessions/{session_id}/predict",
+            headers=HEADERS,
+            json={
+                "screenshot": screenshot(),
+                "instruction": "Book a meeting tomorrow at 3pm",
+            },
+            timeout=60,
+        ).json()
+
+        for action in res["actions"]:
+            perform(action)          # your action executor
+
+        if res["status"] != "continue":
+            break
+finally:
+    # 3. Always release the session to free your concurrency quota
+    requests.delete(f"{BASE}/sessions/{session_id}", headers=HEADERS, timeout=30)
+Endpoint
+Purpose
+POST /v1/sessions
+Create a session. Returns a session_id with a 2-hour (7200-second) idle TTL.
+POST /v1/sessions/
+{id}
+/predict
+Predict the next step. Body is just screenshot + instruction.
+POST /v1/sessions/
+{id}
+/reset
+Clear history to start a new task on the same session. Free.
+DELETE /v1/sessions/
+{id}
+End the session and free a concurrency slot. Free.
+Always delete a session in a 
+finally
+ block. Sessions count against your tier's concurrent-session limit. The 2-hour (7200-second) idle TTL is reset on each predict and reset; deleting the session releases the slot immediately.
+Grounding
+Grounding answers a narrower question than predict: “where is this element?” Give it a screenshot and a description and it returns the exact 
+x
+,
+ 
+y
+ coordinate to target. It is faster and cheaper than a full prediction ($0.03 instead of $0.05), which makes it ideal when you already know what to do and only need a pixel to click.
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import os, requests
+
+res = requests.post(
+    "https://coasty.ai/v1/ground",
+    headers={"X-API-Key": os.environ["COASTY_API_KEY"]},
+    json={
+        "screenshot": screenshot,   # base64 PNG (see Predict)
+        "element": "the blue Submit button below the form",
+    },
+    timeout=60,
+).json()
+
+print(res["x"], res["y"])           # exact click coordinates
+The response is 
+{ x, y, usage, request_id }
+. Coordinates are in the same pixel space as the screenshot you sent.
+Parse
+Parse converts a block of 
+pyautogui
+ code into the same structured action objects the model returns. It is deterministic, runs no model, and is free. Use it to migrate existing automation scripts onto Coasty's executor, or to normalise hand-written steps into the canonical action schema.
+cURL
+Python
+Node
+Go
+Ruby
+PHP
+Copy
+import os, requests
+
+res = requests.post(
+    "https://coasty.ai/v1/parse",
+    headers={"X-API-Key": os.environ["COASTY_API_KEY"]},
+    json={"code": "pyautogui.click(100, 200)\npyautogui.typewrite('hello')"},
+    timeout=30,
+).json()
+
+for action in res["actions"]:
+    print(action["action_type"], action["params"])
+Action types
+Every action the model can return uses an 
+action_type
+ from the table below, paired with a 
+params
+ object. Your executor switches on the type and applies the parameters. The terminal types — 
+done
+ and
+ 
+fail
+ — set the response 
+status
+ and signal you to stop looping.
+Action
+Params
+Description
+click
+{ x, y, button?, clicks? }
+Click at the pixel coordinate; button defaults to left and clicks defaults to 1.
+type_text
+{ text }
+Type a literal string at the current focus.
+key_press
+{ keys: [..] }
+Press one or more keys in order, e.g. ["tab", "enter"].
+key_combo
+{ keys: [..] }
+Press a chord, e.g. ["ctrl", "c"] or ["cmd", "v"].
+scroll
+{ clicks, direction?, x?, y? }
+Scroll by signed clicks; direction defaults to vertical and position is optional.
+drag
+{ x1, y1, x2, y2, button? }
+Press, move, and release between two points.
+move
+{ x, y }
+Move the cursor without clicking.
+wait
+{ seconds }
+Pause for the given number of seconds before the next step.
+done
+{}
+The task is complete. status becomes "done".
+fail
+{ reason? }
+The task is impossible. status becomes "fail".
+Response format
+Predict and session-predict return the same shape. 
+actions
+ is the ordered list to execute; 
+status
+ tells you whether to keep going (
+continue
+), stop successfully (
+done
+), or stop because the task is impossible (
+fail
+). 
+usage
+ 
+reports tokens and the dollar cost of the call (
+cost_cents
+).
+Billed success responses also carry two headers you can read without parsing the body:
+ 
+X-Credits-Charged
+ (what this call cost) and
+ 
+X-Credits-Remaining
+ (your wallet balance after it). In the body, the same numbers appear as 
+usage.credits_charged
+ and
+ 
+usage.cost_cents
+. On an 
+sk-coasty-test-
+ key both are always 
+0
+. Every response (success or error) additionally carries an 
+X-Coasty-Request-Id
+ header that mirrors
+ 
+request_id
+; quote it when contacting support.
+On a failed billed request, 
+X-Credits-Refunded
+ is the authoritative confirmation that credits were returned, and 
+X-Credits-Charged
+ is then
+0
+. If settlement cannot be confirmed, the API returns
+503 BILLING_UNAVAILABLE
+ without the refund header. Follow the error's
+retry_with_same_idempotency_key
+ field rather than retrying by status alone.
+JSON
+Copy
+{
+  "request_id": "req_8f2c1e9a",
+  "status": "continue",
+  "reasoning": "The login form is visible. I'll click the email field, then type the address.",
+  "actions": [
+    {
+      "action_type": "click",
+      "params": {
+        "x": 512,
+        "y": 340
+      },
+      "description": "Click the email field"
+    },
+    {
+      "action_type": "type_text",
+      "params": {
+        "text": "
+[email protected]
+"
+      },
+      "description": "Type the email address"
+    }
+  ],
+  "raw_code": [
+    "pyautogui.click(512, 340)",
+    "pyautogui.typewrite('
+[email protected]
+')"
+  ],
+  "usage": {
+    "input_tokens": 1523,
+    "output_tokens": 245,
+    "credits_charged": 5,
+    "cost_cents": 5
+  }
+}
+Field
+Description
+request_id
+Unique id for the call. Include it when contacting support.
+status
+One of 
+continue
+, 
+done
+, 
+fail
+.
+actions
+Ordered list of actions to perform this step.
+reasoning
+The model's explanation (omitted if include_reasoning is false).
+raw_code
+The equivalent pyautogui lines, if you prefer to run those.
+usage
+Tokens plus the cost of the request (see the two fields below).
+usage.credits_charged
+Internal cost units billed (1 unit = 
+$0.01
+). See 
+cost_cents
+ for the dollar amount.
+usage.cost_cents
+Dollar cost so far, in cents (USD).
+Errors
+Errors return a non-2xx status and a JSON envelope under an 
+error
+ key. The 
+code
+ is stable and safe to branch on; 
+message
+ 
+is human-readable and may change. Every error also carries an
+ 
+error.request_id
+ (mirrored in the
+ 
+X-Coasty-Request-Id
+ response header), plus
+ 
+error.suggestion
+ and 
+error.docs_url
+ for self-service. A 
+Link: <url>; rel="help"
+ header mirrors
+ 
+docs_url
+. Always log the request id: it is the fastest way for us to trace a failed call.
+Some codes attach machine-readable context to the body. A 
+402
+ 
+(
+INSUFFICIENT_CREDITS
+) reports 
+required
+ and
+ 
+balance
+; a 
+403
+ reports
+ 
+required_scope
+ and 
+current_scopes
+; a
+ 
+422
+ 
+VALIDATION_ERROR
+ lists the offending field path under 
+error.details
+; and a 
+409
+ state conflict carries 
+current_state
+ with
+ 
+allowed_from
+ or 
+required_state
+.
+JSON
+Copy
+{
+  "error": {
+    "code": "INSUFFICIENT_CREDITS",
+    "message": "Your API wallet does not have enough funds to complete this request.",
+    "type": "billing_error",
+    "suggestion": "Add funds in the dashboard, or use an sk-coasty-test- key while building (test keys never bill).",
+    "docs_url": "https://coasty.ai/docs#errors",
+    "required": 5,
+    "balance": 2,
+    "request_id": "req_8f2c1e9a",
+    "retryable": false,
+    "retry_with_same_idempotency_key": false
+  }
+}
+Status
+Code
+Cause and fix
+401
+INVALID_API_KEY
+Key missing, malformed, or revoked (or "Bearer " was wrongly pasted into X-API-Key). 401s carry a WWW-Authenticate header.
+403
+INSUFFICIENT_SCOPE
+The key is valid but lacks the scope this endpoint needs. The body lists required_scope and current_scopes; re-mint a key with the scope.
+402
+INSUFFICIENT_CREDITS
+Your USD wallet can't cover the request. The body reports required and balance. Add funds, or use a test key while building.
+402
+WALLET_EXHAUSTED
+The wallet emptied mid-run. Steps that already completed were billed; top up to continue.
+422
+VALIDATION_ERROR
+The body failed schema validation. error.details lists the offending field path and the expected type.
+422
+INVALID_SCREENSHOT
+The screenshot is not decodable base64 PNG or JPEG. Strip any data: prefix and remove whitespace before encoding.
+413
+PAYLOAD_TOO_LARGE
+The screenshot exceeds the 10 MB base64 limit. Downscale the image or re-encode it as JPEG.
+400
+INVALID_LIMIT
+A ?limit= query parameter fell outside the allowed range of 1 to 200.
+400
+INVALID_STATUS_FILTER
+A ?status= query parameter is not one of the real statuses for that resource.
+404
+NOT_FOUND
+The resource id is unknown or expired. Ids are mode-isolated, so a test key can't see live resources.
+404
+SESSION_NOT_FOUND
+The session id is unknown or its 2-hour (7200-second) idle window expired.
+404
+RUN_NOT_FOUND
+The run id is unknown, expired, or belongs to the other key mode.
+404
+WORKFLOW_NOT_FOUND
+The workflow id (or workflow-run id) is unknown or was archived.
+409
+NOT_AWAITING_HUMAN
+You resumed a run that is not in awaiting_human. The body reports current_state and required_state.
+409
+RESUME_CONFLICT
+A resume or cancel race was lost (the run already moved on). Re-read the run and retry against its new state.
+409
+IDEMPOTENCY_KEY_REUSED
+The same Idempotency-Key was sent with a different body. Use a fresh key, or replay the original request verbatim.
+409
+IDEMPOTENCY_IN_FLIGHT
+The original keyed request is still running. Honor Retry-After and retry the identical body with the same key.
+409
+IDEMPOTENCY_ALREADY_REFUNDED
+This key's stable wallet debit was already refunded and cannot fund new work. Use a new Idempotency-Key for a new execution.
+400
+FEATURE_NOT_AVAILABLE
+A requested option is not available on your tier (for example a custom system_prompt on the free tier). Upgrade the plan or drop the gated option.
+500
+INTERNAL_ERROR
+An unexpected server error. Retry, and quote request_id when contacting support.
+500
+PREDICTION_FAILED
+The prediction model run failed. X-Credits-Refunded confirms that its wallet debit was returned.
+500
+GROUNDING_FAILED
+The grounding model run failed. X-Credits-Refunded confirms that its wallet debit was returned.
+503
+BILLING_UNAVAILABLE
+The wallet charge or refund could not be confirmed. Follow retry_with_same_idempotency_key exactly; do not infer settlement from the status alone.
+503
+UPSTREAM_UNAVAILABLE
+A transient upstream outage. Retry with backoff. Reuse an Idempotency-Key only when the original operation is marked reserve-and-replay and the response explicitly permits same-key retry.
+504
+UPSTREAM_TIMEOUT
+An upstream call timed out. Check the original operation's idempotency policy before retrying; unsupported mutations have no duplicate-suppression guarantee.
+404
+MACHINE_NOT_FOUND
+The machine id is unknown, was terminated, or belongs to the other key mode. Machine ids are mode-isolated, so a test key can't see a live VM. Returned (not 403) even for someone else's id, so ids can't be enumerated.
+400
+INVALID_MACHINE_ID
+The path id is not a UUID (live) or an mch_test_<hex> id (test). Use the id returned by POST /v1/machines verbatim.
+409
+INVALID_STATE
+A lifecycle action conflicts with the machine's status (e.g. start while running). The body carries current_state and allowed_from. Re-read the machine and act on its real state.
+400
+INVALID_TTL
+ttl_minutes must be 0 (clear auto-destroy) or 5–10080 (5 min to 7 days). A value of 1–4 or above 10080 is rejected.
+409
+TEST_MACHINE_LIMIT
+A test key may hold at most 5 mock machines at once. Delete one, or move to a live key for real VMs.
+400
+UNKNOWN_BROWSER_OP
+The /browser/{op} path segment is not a known browser operation. See the action surface table for valid ops.
+400
+UNKNOWN_FILE_OP
+The /files/{op} path segment is not a known file operation. See the action surface table for valid ops.
+502
+SCREENSHOT_FAILED
+The VM could not produce a screenshot (still booting, or the desktop service is not ready). Poll until status is running, then retry.
+502
+UPSTREAM_AUTH_FAILED
+The provisioning service rejected our internal call (a Coasty-side configuration issue, never your key). Transient from your side; honor Retry-After and retry, and quote request_id if it persists.
+503
+DB_UNAVAILABLE
+The machine registry was briefly unreachable. Transient; retry with backoff.
+503
+SNAPSHOT_OUTCOME_UNKNOWN
+Snapshot dispatch may have created the machine image, but completion could not be confirmed. The keyed result is terminal and the debit is retained for reconciliation; do not retry blindly.
+422
+LLM_KEY_NOT_CONFIGURED
+You asked for BYOK (llm.provider is anthropic or openai) but no key was found. Store one with PUT /v1/llm/keys/{provider} or send X-LLM-Api-Key per request. The request never runs on Coasty's platform keys.
+422
+LLM_KEY_INVALID
+The supplied LLM key is unusable: empty, malformed, the wrong provider's format, or a stored key that could not be decrypted. Check the key matches the provider (sk-ant-... for anthropic) and re-store it.
+404
+LLM_KEY_NOT_FOUND
+DELETE /v1/llm/keys/{provider} found no stored key for that provider. List what you have with GET /v1/llm/keys.
+422
+LLM_PROVIDER_UNSUPPORTED
+llm.provider (or X-LLM-Provider) is not one of managed, anthropic, or openai. Also returned when X-LLM-Api-Key is sent without a provider, or when you try to store a key for "managed".
+401
+LLM_PROVIDER_AUTH_FAILED
+Your Anthropic/OpenAI account rejected the key (their 401/403). Rotate the key in your provider console and update it with PUT /v1/llm/keys/{provider}. Never retried on platform keys.
+429
+LLM_PROVIDER_RATE_LIMITED
+Your own provider account is rate-limiting (their 429). Retryable: honor Retry-After, raise your provider tier, or reduce volume.
+402
+LLM_PROVIDER_QUOTA_EXCEEDED
+Your provider account is out of credits or quota. Top up your Anthropic/OpenAI billing; this is your provider's balance, not your Coasty wallet.
+502
+LLM_PROVIDER_ERROR
+Your LLM provider returned a server error (their 5xx). Retryable with backoff; if it persists, check the provider's status page.
+Treat 
+429
+, 
+503
+ (
+UPSTREAM_UNAVAILABLE
+), and 
+504
+ (
+UPSTREAM_TIMEOUT
+) as retryable: honor 
+Retry-After
+ 
+on a 429, and use an 
+Idempotency-Key
+ with exponential backoff on the upstream codes only when the response's 
+retryable
+ and
+retry_with_same_idempotency_key
+ fields permit it. A
+500
+ model failure (
+PREDICTION_FAILED
+ or 
+GROUNDING_FAILED
+) is refunded only when 
+X-Credits-Refunded
+ is present; after a confirmed refund, use a new idempotency key for a new execution.
+Troubleshooting
+Five mistakes account for almost every first-week support ticket. Each maps to one status and one fix:
+Symptom
+Likely cause
+Fix
+401
+Wrong header. The key is missing, or 
+Bearer 
+ was pasted into 
+X-API-Key
+.
+Send the raw key in 
+X-API-Key
+, or use 
+Authorization: Bearer <key>
+. Never both prefixes.
+402
+No credits. Your live wallet can't cover the call (
+INSUFFICIENT_CREDITS
+).
+Add funds, or build against an 
+sk-coasty-test-
+ key (test keys never bill).
+403
+Missing scope. The key lacks 
+required_scope
+ for this endpoint.
+Re-mint a key with the needed scope (for example 
+runs:write
+ or 
+workflows:write
+).
+422
+Bad screenshot or missing field. Undecodable base64, a 
+data:
+ prefix, or an absent required field.
+Strip the 
+data:
+ prefix and whitespace; read 
+error.details
+ for the exact field path.
+Pricing
+Requests are billed in US dollars from your prepaid API wallet. The charge is taken before the model runs. On a conclusive server-side failure, the API submits a refund; treat it as complete only when 
+X-Credits-Refunded
+ is present. Ambiguous provider mutations may retain the debit until reconciliation. Internally each request unit is 
+$0.01
+ (the granularity behind every price below), but everything you pay and see is dollars. Every price on this page is exact; test keys (
+sk-coasty-test-
+) always bill 
+$0.00
+.
+Endpoint
+Cost
+Notes
+POST /v1/predict
+$0.05
+Stateless prediction.
+POST /v1/sessions
+$0.10
+One-time session creation.
+POST /v1/sessions/{id}/predict
+$0.04
+Each step inside a session.
+POST /v1/ground
+$0.03
+Coordinate grounding.
+POST /v1/parse
+Free
+Deterministic, no model call.
+POST /v1/runs
+$0.05/step
+Per completed agent step on v3/v4/v5 ($0.08/step on the legacy v1 engine), billed from your dollar API wallet.
+POST /v1/workflows/runs
+$0.05/step
+Each task step is a run ($0.08/step on v1). Control-flow steps (if, assert, loop, parallel, retry, human_approval, succeed, fail) are free. Total capped by budget_cents.
+/v1/machines (Linux, running)
+$0.05/hr
+Runtime metered per minute, rounded down. Starting, stopping, and restarting bill at the running rate.
+/v1/machines (Windows, running)
+$0.09/hr
+Runtime metered per minute, rounded down.
+/v1/machines (stopped or suspended)
+$0.01/hr
+Keep-alive rate while a machine is parked. The creating, error, and terminated states bill nothing.
+POST /v1/machines/{id}/snapshot
+$0.01
+One-time charge. Conclusive rejection is refunded; an ambiguous post-dispatch outcome retains the debit for reconciliation.
+/v1/machines/{id} per-call ops
+Free
+Actions, batch, browser, terminal, files, screenshot, and connection calls are never billed; you pay for runtime only.
+POST /v1/schedules
+Free
+No per-fire fee; webhook fires are free (limited to 60/min). Create, run-now, and webhook fires require a $0.20 wallet minimum as a gate, not a charge.
+Surcharges
+Four fixed surcharges can apply on top of a base price, all on the vision endpoints (predict, session steps, ground). Each is an exact USD amount:
+Surcharge
+Cost
+Applies to
+Trajectory screenshot
++$0.02 each
+Every screenshot you include in a request's trajectory history.
+High-resolution image
++$0.01 each
+Any image wider than 1280px or taller than 720px (strict), counting the current screenshot and every trajectory image.
+v1 engine
++$0.03 per request
+Requests served by the legacy v1 engine instead of v3/v4.
+Long system prompt
++$0.01 per request
+Requests whose system_prompt exceeds 500 characters.
+Machines
+Machines bill for runtime only, metered per minute and rounded down:
+ 
+$0.05/hr
+ for a running Linux machine,
+ 
+$0.09/hr
+ for a running Windows machine, and
+ 
+$0.01/hr
+ while stopped or suspended. The starting, stopping, and restarting transitions bill at the running rate; the creating, error, and terminated states bill nothing, and TTL auto-destroy is free. Snapshots are a one-time
+ 
+$0.01
+ each, and every per-call operation (actions, batch, browser, terminal, files, screenshot, connection) is free. Provisioning requires a
+ 
+$0.20
+ wallet minimum, which is a gate, not a charge. If the wallet empties mid-flight the machine is automatically stopped, never destroyed, and resumes after you top up. The live rate card is always at 
+GET /v1/machines/pricing
+.
+Schedules
+Schedules have no per-fire fee: webhook fires are free (limited to 60/min), and create, run-now, and webhook fires only require the same 
+$0.20
+ wallet minimum as a gate. The execution itself is billed differently from everything else on this page: scheduled agent runtime is charged to your subscription credit balance at 10 credits per minute ($0.10 of subscription value per minute, at 1 credit = $0.01), not to this USD API wallet. Keep both balances funded if you rely on schedules.
+Create an API key
+View your usage
+Cookbook
+Curated open-source repositories for building on the Coasty API. Clone a repo, mint a key, and ship.
+coasty-ai
+/
+computer-use-cookbook
+Computer Use Cookbook
+Runnable, copy-paste examples for every part of the Coasty API: predict, sessions, task runs, workflows, and driving machines. Start here.
+Examples
+Python
+Node
+cURL
+View on GitHub
+coasty-ai
+/
+open-cowork
+Open Cowork
+The open-source Coasty project for computer-use agents that work alongside you. Build on it, fork it, or contribute.
+Open source
+Agents
+Reference app
+View on GitHub
