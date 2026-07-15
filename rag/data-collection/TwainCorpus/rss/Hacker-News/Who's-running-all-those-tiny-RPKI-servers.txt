@@ -1,0 +1,626 @@
+Skip to the article
+
+Photo by 
+Conny Schneider
+ on 
+Unsplash
+.
+
+Border Gateway Protocol (BGP) lacks built-in trust, leaving the Internet routing layer exposed to accidental or malicious prefix hijacks. Resource Public Key Infrastructure (RPKI) addresses that problem by letting address space holders cryptographically authorize which Autonomous System (AS) may originate their prefixes, via Route Origin Authorizations (ROAs) published through a chain of trust anchored at the five Regional Internet Registries (RIRs).
+
+While most ROAs are published directly by the RIRs, a long tail of smaller, independently operated publication servers (run by cloud providers, ISPs, hobbyists, educational institutions, and RPKI as a Service (RPKIaaS) companies) also contributes to the global RPKI dataset. In this post, we investigate who operates those small servers and why.
+
+What is RPKI and why should you care?
+
+Every time you open a website, your traffic hops across dozens of routers guided by BGP. BGP is the glue of the Internet: It tells routers where to send packets to reach any IP address on the planet. The trouble is that BGP was designed for an era when networks trusted each other, and misbehaviour was still uncommon. Any network can (accidentally or maliciously) announce that it owns an IP prefix it does not actually control. That is called a routing incident, and it can cause your traffic to be silently redirected to the wrong destination.
+
+RPKI is (one of) the Internet’s answers to that problem. It works by letting the rightful owners of IP address blocks cryptographically sign a ROA; a small record that says: ‘IP prefix X is authorized to be announced by Autonomous System Number (ASN) Y.’ Routers that implement Route Origin Validation (ROV) then use those signed records to check incoming BGP announcements and drop the ones that don’t match.
+
+The entire system rests on a chain of trust anchored at the five Regional Internet Registries (RIRs): ARIN (North America), RIPE NCC (Europe/Middle East/Central Asia), APNIC (Asia Pacific), LACNIC (Latin America) and AFRINIC (Africa). Those bodies issue IP address space to networks and operate the top-level RPKI Certification Authorities (CAs). ROA objects can be published directly from the RIR servers, or from smaller, independent publication servers.
+
+Small RPKI publication servers
+
+Most ROA objects are published by the five RIRs, which are well-resourced, professionally maintained and globally trusted. But alongside those giants sits a long tail of smaller publication servers run by cloud providers, hobbyists, educational institutions, Internet Service Providers (ISPs) and RPKIaaS companies. During the research described in this post, we examined these ‘small’ servers to see what we can learn from them, why they operate and why they exist in the first place.
+
+Defining ‘small’
+
+The first methodological challenge was defining what makes a server ‘small’. We used a straightforward, ROA-count-based definition:
+
+A server is classified as ‘small’ if it announces fewer than 1,300 ROA objects.
+
+That threshold was chosen by inspecting the empirical cumulative distribution function (ECDF) of ROA counts across all known RPKI servers. The distribution is heavily skewed: A handful of large providers (the five RIRs and Amazon Web Services (AWS)) account for most ROAs. The 1,300-ROA cut-off captures the natural break between those large players and the rest.
+
+One notable exclusion: 
+The AWS RPKI Repository Delta Protocol (RRDP) servers. Amazon constructs its RPKI publication infrastructure unusually. Their architecture is distinct enough from the other small servers that it was kept out of scope. Whether that construction offers operational advantages remains an open question for future research.
+
+Why would anyone run their own RPKI server?
+
+The existence of small servers naturally raises the question: Why bother? The RIRs already provide publication services as part of membership. The answer is that there are several legitimate reasons to operate independently; the table below lists a few examples.
+
+Reason
+Explanation
+RPKIaaS
+Offer RPKI as a managed service with a uniform REST API, enabling customers to automate resource management without interacting with RIR portals directly or juggling multiple APIs.
+Cross-RIR simplicity
+Organizations with IP allocations from multiple RIRs (for example, ARIN and RIPE) can update all their ROAs from a single interface instead of maintaining accounts at each registry.
+Research and  education
+Academic institutions and hobbyists can run Krill (NLnet Labs’ open-source CA software) to experiment with RPKI, test configurations, or contribute to deployment research.
+Operational control
+Full control over publication schedules, object signing and infrastructure, useful for organizations with strict security requirements or custom routing setups.
+Fun / learning
+Running your own RPKI server is a legitimate way to deepen your understanding of the Internet routing infrastructure. Many of the smallest servers in the dataset appear to be personal or hobby setups.
+Table 1 — Reasons to operate an independent RPKI publication server.
+
+The dataset: IP space statistics
+
+Using the Routinator API (version 0.15.1), we fetched all ROA objects from each qualifying publication server as of 23 April 2026. The resulting dataset spans 2,467 unique ROAs covering 3,778 prefixes across 1,163 unique ASes. Table 2 summarizes the key numbers.
+
+Valid: At least one Validated ROA Payload (VRP) covering the announced prefix exists (same or less specific, within max length) with a matching origin AS.
+
+Invalid: A Validated ROA Payload (VRP) covering that prefix space exists, but part of the information in the VRP is incorrect, or the object has expired.
+
+Unknown: No VRP was found, or an incorrect VRP was found and has been dropped.
+
+Metric
+Value
+Note
+IPv4 prefixes with ROA coverage
+1,409
+Covering ~698,000 individual addresses
+IPv6 prefixes with ROA coverage
+2,369
+Covering an astronomical address range
+IPv4 fraction of Internet
+0.0162%
+A tiny but non-trivial slice
+Total ROA objects analysed
+3,778
+Across 1,163 unique ASes
+Valid ROA objects
+3,444 (91%)
+Passing cryptographic validation
+Invalid ROA objects
+48 (1.2%)
+Not passing cryptographic validation
+Unknown
+286 (7.6%)
+Excluded from further analysis
+ROAs using maxLength
+53.98%
+The set maxLength is set lower than the set bits of the prefix
+maxLength using ROAs with no BGP coverage
+19.6%
+Potentially at risk of sub-prefix hijack
+Table 2 — Key statistics for the small RPKI server dataset (data collected 23 April 2026).
+
+A few figures stand out. The covered IPv4 space (698,000 addresses, or 0.016% of all IPv4 addresses) and IPv6 space (addresses or %) both look small, but it is far from insignificant. The dataset includes prefixes hosting government services (such as 
+gov.ai
+, the official domain of the Government of Anguilla) and potentially other services people rely on daily. The failure of such servers would not break the Internet, but it could quietly make parts of it unverifiable for a subset of users.
+
+None of the unknown ROA objects had active BGP announcements. That is good news, since it would indicate that the prefixes in question are vulnerable to BGP-hijacks.
+
+Inside the numbers: The server overview
+
+Table 3 condenses the per-server statistics from the research. Each row represents one publication server, with columns showing prefix counts, validity breakdown, maxLength usage, BGP reachability and 
+Firehol
+ (a company that combines lists of different abuse lists to try and create a comprehensive and complete list of prefixes to block to ensure an acceptable level of safety) blocklist overlap. A few rows are shown below as examples.
+
+                                        Server                    
+
+                                        Prefixes                    
+
+                                        Valid                    
+
+                                        Invalid                    
+
+                                        Unknown                    
+
+                                        MaxLength                    
+
+                                        BGP %                    
+
+                                        At-risk                    
+
+                                        Firehol                    
+
+                                        r.magellan.ipxo.com                    
+
+                                        776                    
+
+                                        755                    
+
+                                        18                    
+
+                                        3                    
+
+                                        164                    
+
+                                        100%                    
+
+                                        103                    
+
+                                        4                    
+
+                                        cloudie-repo.rpki.app                    
+
+                                        504                    
+
+                                        504                    
+
+                                        0                    
+
+                                        0                    
+
+                                        424                    
+
+                                        80.8%                    
+
+                                        147                    
+
+                                        2                    
+
+                                        rpki.admin.freerangecloud.com                    
+
+                                        476                    
+
+                                        476                    
+
+                                        0                    
+
+                                        0                    
+
+                                        48                    
+
+                                        100%                    
+
+                                        28                    
+
+                                        0                    
+
+                                        rpki.sub.apnic.net                    
+
+                                        390                    
+
+                                        254                    
+
+                                        28                    
+
+                                        108                    
+
+                                        91                    
+
+                                        98.2%                    
+
+                                        27                    
+
+                                        4                    
+
+                                        krill.47272.net                    
+
+                                        388                    
+
+                                        388                    
+
+                                        0                    
+
+                                        0                    
+
+                                        143                    
+
+                                        96.6%                    
+
+                                        69                    
+
+                                        0                    
+
+                                        rpki.roa.net                    
+
+                                        156                    
+
+                                        156                    
+
+                                        0                    
+
+                                        0                    
+
+                                        94                    
+
+                                        100%                    
+
+                                        73                    
+
+                                        0                    
+
+                                        rsync.rp.ki                    
+
+                                        150                    
+
+                                        150                    
+
+                                        0                    
+
+                                        0                    
+
+                                        104                    
+
+                                        98.7%                    
+
+                                        81                    
+
+                                        0                    
+
+                                        krill.peering.ee.columbia.edu                    
+
+                                        133                    
+
+                                        129                    
+
+                                        0                    
+
+                                        4                    
+
+                                        1                    
+
+                                        100%                    
+
+                                        1                    
+
+                                        0                    
+
+                                        rpki-01.pdxnet.uk                    
+
+                                        121                    
+
+                                        121                    
+
+                                        0                    
+
+                                        0                    
+
+                                        81                    
+
+                                        100%                    
+
+                                        4                    
+
+                                        0                    
+
+                                        ca.nat.moe                    
+
+                                        99                    
+
+                                        0                    
+
+                                        0                    
+
+                                        99                    
+
+                                        64                    
+
+                                        100%                    
+
+                                        75                    
+
+                                        0                    
+
+                                        repo.rpki.space                    
+
+                                        79                    
+
+                                        79                    
+
+                                        0                    
+
+                                        0                    
+
+                                        33                    
+
+                                        75.9%                    
+
+                                        13                    
+
+                                        8                    
+
+                                        krill.accuristechnologies.ca                    
+
+                                        45                    
+
+                                        45                    
+
+                                        0                    
+
+                                        0                    
+
+                                        3                    
+
+                                        88.9%                    
+
+                                        1                    
+
+                                        0                    
+
+                                        rpki.axivora.net                    
+
+                                        44                    
+
+                                        0                    
+
+                                        0                    
+
+                                        44                    
+
+                                        8                    
+
+                                        97.7%                    
+
+                                        6                    
+
+                                        0                    
+
+                                        rpki.cc                    
+
+                                        42                    
+
+                                        42                    
+
+                                        0                    
+
+                                        0                    
+
+                                        14                    
+
+                                        92.9%                    
+
+                                        7                    
+
+                                        0                    
+
+                                        rpki.apernet.io                    
+
+                                        37                    
+
+                                        18                    
+
+                                        0                    
+
+                                        19                    
+
+                                        10                    
+
+                                        100%                    
+
+                                        6                    
+
+                                        0                    
+
+Table 3 — Condensed overview of analysed RPKI publication servers (top 15 by prefix count). ‘At-Risk’ = maxLength ROAs with no corresponding BGP announcement for the authorized sub-prefixes.
+
+In the remainder of this section, we will point out some servers that exhibit strange behaviours and describe the uncommon behaviours they exhibit.
+
+r.magellan.ipxo.com
+: The largest and most complex
+
+With 776 prefixes, the Magellan server operated by the company 
+IPXO
+ is the largest in the dataset. All 776 are IPv4, and 100% are BGP-reachable, but 103 are flagged as at-risk due to broad 
+maxLength settings without full BGP
+ coverage of the authorized range.
+
+repo.rpki.space
+: Spam infrastructure
+
+With 8 Firehol level 1 blocklist matches out of only 79 prefixes, 
+repo.rpki.space
+ stands out immediately. Inspection of BGP Tools DNS records for this server reveals a high density of mailing domains, strongly suggesting that spam mailing infrastructure is hosted across the prefixes in question. One potential reason a spam operator would run their own RPKI server — the RIRs have active abuse prevention procedures, and having an independent publication server adds an extra step in the takedown chain; a layer of operational friction for abuse reporters.
+
+ca.nat.moe
+: 99 unknown objects
+
+This server is a striking outlier: Every single one of its 99 ROA objects has unknown validity status, meaning all 99 failed cryptographic validation. Nevertheless, of the valid objects, 100% are BGP-reachable and 64 use maxLength.
+
+rpki-01.pdxnet.uk
+: The maxLength puzzle
+
+This server announces almost half of its prefixes with maxLength set to 32 (IPv4) or 128 (IPv6) — the maximum possible prefix length. That means that every IP address within the announced range is formally authorized. In practice, that is not exploitable: BGP does not accept prefixes more specific than /24 for IPv4 or /48 for IPv6, and the underlying prefixes are already at those limits. The reason for this unusual configuration remains unexplained.
+
+Where does the IP space come from?
+
+One of the most interesting structural findings concerns the RIR origin of prefixes announced by small servers. When an organization publishes ROAs on its own server, a natural expectation might be that it has cross-RIR allocations (IP space from multiple registries), which would make a single publication point convenient. The data tells a more nuanced story.
+
+                                        Server                    
+
+                                        ARIN                    
+
+                                        RIPE                    
+
+                                        APNIC                    
+
+                                        LACNIC                    
+
+                                        AFRINIC                    
+
+                                        r.magellan.ipxo.com                    
+
+                                        ✓                    
+
+                                        cloudie-repo.rpki.app                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        rpki.admin.freerangecloud.com                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        rpki.sub.apnic.net                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        krill.47272.net                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        rpki.roa.net                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        rsync.rp.ki                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        krill.peering.ee.columbia.edu                    
+
+                                        ✓                    
+
+                                        rpki-01.pdxnet.uk                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        ca.nat.moe                    
+
+                                        ✓                    
+
+                                        repo.rpki.space                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        krill.accuristechnologies.ca                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        rpki.axivora.net                    
+
+                                        ✓                    
+
+                                        rpki.cc                    
+
+                                        ✓                    
+
+                                        rpki.apernet.io                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+                                        rpki-repo.as207960.net                    
+
+                                        ✓                    
+
+                                        rpki.sunoaki.net                    
+
+                                        ✓                    
+
+                                        rpki.pudu.be                    
+
+                                        ✓                    
+
+                                        ✓                    
+
+Table 4 — RIR origin presence per publication server (condensed first 18 servers). A checkmark indicates that at least one prefix from that RIR was present in the server’s ROA set.
+
+A sizable proportion of servers announce prefixes from only a single RIR (mainly RIPE). For servers that draw exclusively from RIPE, one of the most compelling reasons for running a custom server (avoiding managing multiple RIR accounts) does not apply.
+
+The maxLength problem
+
+More than half of all ROA objects in the dataset (53.98%) use the maxLength parameter to authorize announcements for prefixes more specific than the one listed in the ROA. 
+RFC 9319
+ explicitly discourages that practice.
+
+An ROA for 
+103.0.0.0/22
+ with maxLength /24 does not just authorize the /22; it authorizes every /23 and /24 within that block, 
+103.0.0.0/24
+ through 
+103.0.3.0/24
+, without requiring a separate ROA for each. From a BGP perspective, the most specific matching prefix wins. So, if an attacker who controls the authorized ASN announces 
+103.0.0.0/24
+ (in principle), every relying party will mark it valid. The broader ROA has authorized the hijack (if there is no competing BGP announcement that is faster, and the announcement is RPKI valid).
+
+Of the ROAs with a broad maxLength setting, approximately 80% already have the more specific sub-prefixes covered by existing BGP announcements, meaning the actual exposure is limited in most cases.
+
+However, the remaining 19.6% have no BGP announcement covering the authorized sub-prefixes. Those represent potentially at-risk configurations: A sub-prefix hijack using the legitimate origin of the ASN could pass RPKI validation unchallenged (again if there is no competing BGP announcement that is faster, and the announcement is RPKI valid).
+
+The fix is straightforward in principle — create a separate ROA for each prefix you intend to announce and set maxLength equal to the prefix length itself. The downside is that that increases the ROA count significantly — exactly the opposite of the aggregation benefit that maxLength was designed to provide.
+
+BGPsec
+
+BGPsec is a method that verifies whether the announced BGP route has been cryptographically validated by every single AS in its path. That means that BGPsec verifies whether every AS in the announced path agrees that the path is valid. Even though BGPsec has been standardized since 2017, we found that (not only in our dataset) BGPsec is simply not deployed (having only a single AS announcing its routing keys), as also noted by Lisa Bruder in her blog post: 
+BGPsec – Could you run it if you wanted to?
+.
+
+A word from one of the operators
+
+We have reached out to one of the bigger operators (
+Axivora
+, which operates 
+rpki.cc
+, 
+krill.accuristechnologies.ca
+ and 
+rpki.folf.systems
+) to understand why they run their own RRDP notification server, and we got the following response:
+
+The short answer is that we originally started running our own RPKI publication infrastructure because we were (and still are) Internet enthusiasts who wanted to understand how the system actually works.
+
+Axivora still leases two dedicated IPv6 PA /40 allocations for educational and research purposes. Within those prefixes, they delegate smaller allocations to individuals who want their own independent address space. They handle the logistics of creating the corresponding ROA and IRR records for them, and they eliminate the need for them to operate their own ASN.
+
+The original reason for running their own publication infrastructure was to get a better understanding of the RPKI ecosystem and to learn how ROAs propagate through the Internet.
+
+Today, all their business prefixes use RIPE’s PaaS services, yet they continue to operate their own publisher server for research, educational and experimental purposes.
+
+And, admittedly, we still think it’s pretty cool.
+
+Conclusion
+
+Taken together, the data suggests that small RPKI publication servers cover a relatively modest corner of the Internet. Even though the prefixes they cover are tiny in aggregate, they include some crucial services such as government domains. While the failure of such servers would not break the entire Internet, it would have ramifications for the verifiability of the Internet and potentially break specific prefixes, making them unreachable.
+
+On the validation side, the picture seems relatively healthy: 92.4% of the ROA objects are valid and, of those objects, 91% carry an active and matching BGP announcement. The only notable metric here is that the unknown rate of 7.6% is relatively high.
+
+A clearer area that raises some concern is the usage of maxLength. More than half of the ROA objects did not adhere to the recommendations of RFC 9319, which is not inherently problematic. However, 19.6% of those did not have BGP announcements that covered all sub-prefixes they permitted. Leaving a relatively limited but relevant risk of sub-prefix hijacks. That risk is, however, not exclusive to those publication servers and could very well exist with larger publication servers as well.
+
+Other protective technologies had similarly not been deployed on the set of servers we studied. BGPsec was not deployed at all.
+
+As for why operators choose to run their own infrastructure, the data broadly suggests cross-RIR simplicity as the dominant reason, but not the only one. Educational purposes proved to be a less common motivation than initially expected.
+
+Ties Dirksen is a second-year Master’s student in Computing Science specializing in Cybersecurity at Radboud University Nijmegen in the Netherlands. In 2026, he interned at SIDN Labs, where he conducted research into small RRDP notification servers, why they exist, and who operates them. SIDN Labs is the research team of SIDN, the administrator of the .nl domain.
+
+This post was originally published at 
+SIDN Labs
+.
+
+The views expressed by the authors of this blog are their own
+    and do not necessarily reflect the views of APNIC. Please note a 
+Code of Conduct
+ applies to this blog.
+
+Leave a Reply 
+Cancel reply
+
+Top
