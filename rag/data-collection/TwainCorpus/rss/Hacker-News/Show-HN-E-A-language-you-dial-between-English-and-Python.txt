@@ -1,0 +1,676 @@
+E-- (English--)
+
+A programming language you write in plain, canonical English — and that
+compiles 
+deterministically
+ to Python.
+
+E-- ("English--") is English with the ambiguity removed: a closed grammar and a
+fixed vocabulary, with exactly one canonical phrasing per construct. It is meant
+to read and edit like English while still compiling to ordinary, reproducible
+Python.
+
+Why this exists
+
+LLM-generated code is fuzzy at runtime: non-reproducible, expensive per call,
+hard to debug. E-- separates the LLM's role from execution — LLM (optionally)
+writes canonical E-- at authoring time; a deterministic parser compiles the
+E-- to Python; runtime is pure. Best of both worlds: LLM creativity when you
+need it, deterministic behavior forever after.
+
+Quick start
+
+Install from PyPI:
+
+pip install e-minus-minus
+
+Transpile a canonical E-- file to Python:
+
+emm-transpile examples/describe.emm
+
+That's it. No LLM required for canonical E-- with no 
+{{ }}
+ slots. See
+"Running E--" below for more, and "Resolving 
+{{ }}
+ slots" for the LLM setup
+when you use free-English input or value slots. The LLM path is optional and
+lives behind the 
+[llm]
+ extra: 
+pip install "e-minus-minus[llm]"
+.
+
+Developing on E-- itself? Clone the repo and invoke the CLI as a module while
+your working tree is on 
+PYTHONPATH
+:
+
+PYTHONPATH=src python -m e_minus_minus.transpiler examples/describe.emm
+
+Using E-- in your own software
+
+E-- is licensed under 
+Apache License 2.0
+ (see 
+LICENSE
+) —
+permissive, with an explicit patent grant, so it can be embedded in commercial
+products freely.
+
+Two clarifications:
+
+The license covers the E-- tooling.
+ The Python that E-- generates is
+yours — the output is not encumbered by this project's license.
+
+The LLM is your own.
+ E--'s normalizer and 
+{{ }}
+ resolution require a
+language model that you supply; that provider's terms are separate from this
+project.
+
+Programmatic API:
+
+from
+ 
+e_minus_minus
+ 
+import
+ 
+transpile
+
+python_source
+ 
+=
+ 
+transpile
+(
+emm_source
+)
+
+transpile()
+ is pure: no network, no side effects. Pass a 
+resolve_slot
+
+callable to handle 
+{{ ... }}
+ slots (see 
+docs/spec.md
+ and
+the CLI implementation in 
+src/transpiler.py
+ for the injected-resolver
+pattern).
+
+How it works
+
+E-- is a two-stage pipeline, split so that the unreliable part and the
+deterministic part never mix:
+
+Free English  --LLM (transpile-time)-->  Canonical E--  --plain parser-->  Python
+
+Normalizer (LLM, optional).
+ Turns free-form English into canonical E--.
+This is the only stage that deals with linguistic ambiguity.
+
+Compiler (deterministic).
+ Turns canonical E-- into Python with an ordinary
+parser — no LLM, fully reproducible and debuggable.
+
+The LLM runs only at transpile time, never at runtime.
+ Generated Python is
+always pure and self-contained. The LLM is never allowed to decide program
+structure; it is used only to fill clearly-delimited value slots written as
+
+{{ ... }}
+, and those resolutions are cached so builds stay reproducible.
+
+A taste
+
+Canonical E--:
+
+Set result to [[fibonacci]]( {{the first prime number greater than 5}} ).
+Do [[print]](result).
+
+compiles to:
+
+result
+ 
+=
+ 
+fibonacci
+(
+7
+)
+
+print
+(
+result
+)
+
+Markers keep it unambiguous: 
+[[name]]
+ is a function call, a bare word is a
+variable, 
+"x"
+/
+3
+ are literals, 
+<1, 2, 3>
+ is a list, and 
+{{ ... }}
+ is an
+English phrase the transpiler resolves once and bakes in.
+
+Running E--
+
+E-- source files use the 
+.emm
+ extension (English--). The deterministic
+canonical-to-Python core is implemented; you can transpile and run 
+.emm
+ files
+from the command line.
+
+Given this canonical E-- source at 
+examples/describe.emm
+:
+
+Define [[describe]] taking n:
+    If n is greater than 10:
+        Give back "big".
+    Give back "small".
+
+For each n in <3, 42, 7>:
+    Do [[print]]([[describe]](n)).
+
+transpile it and print the generated Python to your screen:
+
+python3 src/transpiler.py examples/describe.emm
+
+prints:
+
+def
+ 
+describe
+(
+n
+):
+    
+if
+ 
+n
+ 
+>
+ 
+10
+:
+        
+return
+ 
+"big"
+
+return
+ 
+"small"
+
+for
+ 
+n
+ 
+in
+ [
+3
+, 
+42
+, 
+7
+]:
+    
+print
+(
+describe
+(
+n
+))
+
+Write the generated Python to a file instead of the screen:
+
+python3 src/transpiler.py examples/describe.emm -o out.py
+
+Transpile 
+and run
+ it, so you see the program's actual output:
+
+python3 src/transpiler.py examples/describe.emm --run
+
+prints:
+
+small
+big
+small
+
+See the generated Python 
+and
+ run it in one go with 
+--show
+ (alias 
+-s
+):
+
+python3 src/transpiler.py examples/describe.emm --run --show
+
+prints the code and its output, separated by comment lines:
+
+# --- generated Python ---
+def describe(n):
+    if n > 10:
+        return "big"
+    return "small"
+for n in [3, 42, 7]:
+    print(describe(n))
+# --- output ---
+small
+big
+small
+
+The delimiters are Python comments, so the whole block stays copy-pasteable.
+
+--show
+ on its own (without 
+--run
+) just prints the Python, like the default.
+
+Notes:
+
+The 
+.emm
+ extension is the convention for E-- source files.
+
+{{ ... }}
+ LLM value slots 
+are
+ runnable — see "Resolving 
+{{ }}
+ slots"
+below for the one-time setup. Files with no slots (like
+
+examples/describe.emm
+) need no key and 
+--run
+ works with no model.
+
+Resolving 
+{{ }}
+ slots (LLM setup)
+
+A 
+{{ ... }}
+ slot is an English phrase that the transpiler resolves to a Python
+expression 
+once, at transpile time
+, using an LLM — then caches the result so
+later builds are offline and reproducible. Files with 
+no
+ 
+{{ }}
+ slots need
+no API key and no setup.
+
+To run a slot example end to end:
+
+# 1. create and activate a virtual env
+python3 -m venv .venv && source .venv/bin/activate
+
+# 2. install dependencies (the Anthropic SDK)
+pip install -r requirements.txt
+
+# 3. set your Anthropic API key
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# 4. transpile and run a slot example
+python3 src/transpiler.py examples/primes.emm --show --run
+
+examples/primes.emm
+ is minimal:
+
+For each p in {{the first five prime numbers, as a Python list}}:
+    Do [[print]](p).
+
+which transpiles to:
+
+for
+ 
+p
+ 
+in
+ [
+2
+, 
+3
+, 
+5
+, 
+7
+, 
+11
+]:
+    
+print
+(
+p
+)
+
+and prints 
+2 3 5 7 11
+ (one per line). The 
+{{ ... }}
+ slot resolved once via
+the LLM to the concrete list 
+[2, 3, 5, 7, 11]
+, was cached, and gets used for
+every subsequent build with no API call.
+
+The first run calls the model (Anthropic Haiku) to resolve each slot, writes the
+resolved Python expression to 
+.emm_cache.json
+, and bakes it into the
+output. Every later run is an 
+offline cache hit
+ — no model call, identical
+result. The cache file maps the exact slot text to its resolved expression and
+is meant to be 
+committed
+, so resolved values stay diffable and reviewable.
+
+Editing a slot's text is a cache miss and re-resolves; deleting the cache forces
+full re-resolution. Files without 
+{{ }}
+ slots (like 
+examples/describe.emm
+)
+never touch the API.
+
+A one-liner value-slot example
+
+You can also build a slot example inline without any file setup:
+
+printf 'Set year to {{the current year, as an integer literal}}.\nDo [[print]](year).\n' > hello.emm
+emm-transpile hello.emm --show --run
+
+The slot at line 1 is at 
+expression
+ position (inside 
+Set year to ...
+), so
+the LLM returns a single Python expression — e.g. 
+2026
+ — and the compiler
+splices it in:
+
+year
+ 
+=
+ 
+2026
+
+print
+(
+year
+)
+
+Prints 
+2026
+. Second run is offline (cache hit).
+
+Code slots (v0.2.0)
+
+A 
+{{ ... }}
+ slot can appear at a 
+statement
+ position, not just an
+expression position — putting it on its own line, at a block's indentation,
+delegates one or more Python statements to the LLM. Author writes the
+surrounding structure; the LLM fills the region.
+
+Define [[summarize]] taking numbers:
+    {{ compute mean, median and count of numbers into mean_v median_v count_v }}
+    Do [[print]](count_v).
+    Do [[print]](mean_v).
+    Give back mean_v.
+
+At transpile time the statement slot resolves to real Python:
+
+def
+ 
+summarize
+(
+numbers
+):
+    
+from
+ 
+statistics
+ 
+import
+ 
+mean
+, 
+median
+
+mean_v
+ 
+=
+ 
+mean
+(
+numbers
+)
+    
+median_v
+ 
+=
+ 
+median
+(
+numbers
+)
+    
+count_v
+ 
+=
+ 
+len
+(
+numbers
+)
+    
+print
+(
+count_v
+)
+    
+print
+(
+mean_v
+)
+    
+return
+ 
+mean_v
+
+Trade-off
+: 
+[[wikilinks]]
+ or callable references inside a code-slot's
+resolved Python are 
+opaque
+ to any downstream tool that inspects the E--
+source. Author knowingly accepts DAG invisibility inside code-slot regions in
+exchange for region-level delegation. Use expression slots when you need
+graph visibility; use code slots when you're delegating structure the LLM
+knows better than you do.
+
+Runnable code-slot examples
+
+examples/code_slot_example.emm
+ is a runnable code-slot demo:
+
+Define [[summarize]] taking numbers:
+    {{ compute the mean, median and count of numbers into named variables mean_v median_v and count_v }}
+    Do [[print]](count_v).
+    Do [[print]](mean_v).
+    Do [[print]](median_v).
+    Give back mean_v.
+
+Set data to <2, 3, 5, 7, 11, 13>.
+Do [[summarize]](data).
+
+Transpile and run it:
+
+emm-transpile examples/code_slot_example.emm --show --run
+
+The statement slot on line 2 resolves to real Python that binds 
+mean_v
+,
+
+median_v
+, 
+count_v
+ — e.g. via 
+from statistics import mean, median
+ plus
+three assignments. Because it's a code slot, it can add the 
+import
+ on its
+own line, which a value slot cannot.
+
+Code slots let you delegate imports.
+ A value slot at expression position
+can only emit a single Python expression, so getting the current year with a
+value slot produces the awkward
+
+__import__('datetime').datetime.now().year
+. A code slot at statement
+position sidesteps the constraint:
+
+printf '{{ import datetime and set x to the current year }}\nDo [[print]](x).\n' > hello.emm
+emm-transpile hello.emm --show --run
+
+The LLM resolves the statement slot to:
+
+import
+ 
+datetime
+
+x
+ 
+=
+ 
+datetime
+.
+datetime
+.
+now
+().
+year
+
+print
+(
+x
+)
+
+Prints the current year. Same syntax as a value slot; position determines
+shape.
+
+Writing in free English
+
+You don't have to write canonical E-- by hand. The transpiler's first phase
+
+normalizes
+ free-English E-- into canonical E-- with an LLM, then compiles
+the canonical form to Python — one input, two outputs. An English source
+(
+examples/describe_en.en
+) reads like prose:
+
+Define a function called describe that takes a number n. If n is greater than
+ten, give back the string "big". Otherwise, give back the string "small".
+Then, for each n in the list 3, 42 and 7, print describe of n.
+
+Normalize it to canonical and run the result, saving the canonical form too:
+
+python3 src/transpiler.py examples/describe_en.en --canonical-out out.em --run
+
+out.em
+ holds the canonical E-- (equivalent to 
+examples/describe.emm
+) and the
+program prints 
+small / big / small
+.
+
+Two properties make this safe and cheap:
+
+The parser is the canonical-detector.
+ Whether a file "is already
+canonical" is decided by trying to parse it deterministically — no LLM, no
+heuristic. An 
+already-canonical file needs no API key
+: normalization
+short-circuits before any model call. Only genuinely English input hits the
+model.
+
+Fixed point + cache.
+ Feeding the canonical output (
+out.em
+) back in
+parses as canonical, so Phase 1 does nothing and reproduces the same outputs.
+Normalizations are cached in a committed 
+.emm_norm_cache.json
+ (keyed by
+source text), so re-running English input is an offline cache hit. Setup is
+the same as for slots: 
+pip install -r requirements.txt
+ and
+
+export ANTHROPIC_API_KEY=...
+.
+
+Normalization and 
+{{ }}
+ slot resolution are independent, separately cached LLM
+touchpoints — a canonical file with all slots cached makes 
+zero
+ live calls.
+
+Status
+
+Early design. The language is specified in 
+docs/spec.md
+. The
+deterministic canonical-to-Python core (lexer, parser, emitter) is implemented
+with a runnable CLI — see "Running E--" above — and 
+{{ }}
+ slot resolution is
+wired up (Anthropic Haiku + a committed cache; see "Resolving 
+{{ }}
+ slots").
+The LLM normalizer (free English → canonical) is wired up at whole-file
+granularity (see "Writing in free English"); per-region normalization is the
+next refinement.
+
+Docs
+
+docs/spec.md
+ — the language specification (source of truth).
+
+docs/cowork-protocol.md
+ /
+
+docs/cc-prompt-queue.md
+ — internal development
+workflow.
