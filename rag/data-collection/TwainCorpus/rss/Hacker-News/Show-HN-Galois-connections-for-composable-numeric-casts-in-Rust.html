@@ -1,0 +1,516 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><p dir="auto"><a href="https://crates.io/crates/connections" rel="nofollow"></a>
+<a href="https://docs.rs/connections" rel="nofollow"></a>
+<a href="https://cmk.github.io/connections/" rel="nofollow"></a>
+<a href="https://github.com/cmk/connections"></a>
+<a href="https://github.com/cmk/connections/actions/workflows/ci.yml"></a></p>
+<p dir="auto">Read the docs <a href="https://cmk.github.io/connections/" rel="nofollow">here</a> or on <a href="https://docs.rs/connections" rel="nofollow">docs.rs</a>.</p>
+<div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">Overview</h1></div>
+<p dir="auto">Galois connections as first-class Rust values. Use them to cast lawfully
+between numeric types, and compose ladders of conversions whose round-trip
+behavior is determined by simple inequalities rather than left to chance.
+Every operation derived from a <code>Conn</code> (rounding, saturation, median, ...)
+carries a property-tested invariant. The generated fixed-width
+integer, Q-format, NonZero, and iso families also have Kani harnesses
+for full bit-width SMT proofs; float SMT coverage is narrower and
+called out under <a href="#smt-verification-kani">Testing → SMT verification</a>.</p>
+<p dir="auto"><strong>MSRV: Rust 1.88.</strong> Bumps to the MSRV will be treated as minor-version
+changes — pin <code>connections = "0.1"</code> and an MSRV upgrade will surface as
+a 0.2 release rather than a silent break on a patch update.</p>
+<p dir="auto">This crate is a Rust-native port of the Haskell library
+<a href="https://github.com/cmk/connections-haskell"><code>connections</code></a>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Why this crate</h2></div>
+<p dir="auto">Galois connections are the right shape for <em>static, lawful</em>
+conversions between partially ordered types (e.g. <code>f64 → f32</code>,
+<code>Duration → seconds</code>, <code>f32 → u32 → IpAddr</code>, etc) where each link in
+the chain is specifiable at compile time.</p>
+<p dir="auto">The standard cast operators <code>as</code>, <code>From</code>, and <code>Into</code> give you exactly one
+direction at a time — and <code>as</code> in particular is silent on rounding,
+saturation, and lossy conversion. Two concrete things this crate gives
+you that the standard tools don't:</p>
+<ol dir="auto">
+<li>
+<p dir="auto"><strong>Clear semantics.</strong></p>
+<p dir="auto"><code>(x as f32) as f64 != x</code> for many <code>x: f64</code>. With a <code>Conn</code>, at least
+one of the following pairs of inequalities is property-tested for
+every connection in this crate:</p>
+<ul dir="auto">
+<li>left-Galois: <code>ceil(a) ≤ b iff a ≤ upper(b)</code></li>
+<li>right-Galois: <code>lower(b) ≤ a iff b ≤ floor(a)</code></li>
+</ul>
+<p dir="auto">A <code>Conn</code> is <code>Copy</code>, <code>const</code>-constructible, heap-free, and the crate
+is <code>#![forbid(unsafe_code)]</code>.</p>
+</li>
+<li>
+<p dir="auto"><strong>Safely composable.</strong></p>
+<p dir="auto">The <code>compose!</code> macro folds a chain of pairwise Conns into one
+fresh <code>Conn&lt;Src, Dst&gt;</code> at compile time. A composed <code>Conn</code> obeys
+the same properties as its component connections by construction.</p>
+</li>
+</ol>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Quick start</h2></div>
+<div class="highlight highlight-source-rust notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="use connections::conn::ConnR;
+use connections::core::u032::U032I032;
+
+// Rust's `as` keeps the low bits; this Conn makes saturation explicit.
+assert_eq!(u32::MAX as i32, -1);
+assert_eq!(U032I032.floor(u32::MAX), i32::MAX);
+
+// The reverse arm is paired with `floor` by the right-Galois law.
+assert_eq!(U032I032.lower(-1), 0_u32);" dir="auto"><pre><span class="pl-k">use</span> connections<span class="pl-kos">::</span>conn<span class="pl-kos">::</span><span class="pl-v">ConnR</span><span class="pl-kos">;</span>
+<span class="pl-k">use</span> connections<span class="pl-kos">::</span>core<span class="pl-kos">::</span>u032<span class="pl-kos">::</span><span class="pl-v">U032I032</span><span class="pl-kos">;</span>
+
+<span class="pl-c">// Rust's `as` keeps the low bits; this Conn makes saturation explicit.</span>
+<span class="pl-en">assert_eq</span><span class="pl-en">!</span><span class="pl-kos">(</span><span class="pl-smi">u32</span><span class="pl-kos">::</span><span class="pl-v">MAX</span> <span class="pl-k">as</span> <span class="pl-smi">i32</span><span class="pl-kos">,</span> -<span class="pl-c1">1</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+<span class="pl-en">assert_eq</span><span class="pl-en">!</span><span class="pl-kos">(</span><span class="pl-v">U032I032</span><span class="pl-kos">.</span>floor<span class="pl-kos">(</span><span class="pl-smi">u32</span><span class="pl-kos">::</span><span class="pl-v">MAX</span><span class="pl-kos">)</span><span class="pl-kos">,</span> <span class="pl-smi">i32</span><span class="pl-kos">::</span><span class="pl-v">MAX</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+
+<span class="pl-c">// The reverse arm is paired with `floor` by the right-Galois law.</span>
+<span class="pl-en">assert_eq</span><span class="pl-en">!</span><span class="pl-kos">(</span><span class="pl-v">U032I032</span><span class="pl-kos">.</span>lower<span class="pl-kos">(</span>-<span class="pl-c1">1</span><span class="pl-kos">)</span><span class="pl-kos">,</span> <span class="pl-c1">0_u32</span><span class="pl-kos">)</span><span class="pl-kos">;</span></pre></div>
+<p dir="auto">See <a href="https://github.com/cmk/connections/blob/main/EXAMPLES.md">EXAMPLES.md</a>
+for a sequence of ten worked examples in various domains.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">What are connections?</h2></div>
+<p dir="auto">A <a href="https://en.wikipedia.org/wiki/Galois_connection" rel="nofollow">Galois connection</a>
+between preorders A and B is a pair of monotone maps <code>f: A → B</code> and
+<code>g: B → A</code> such that <code>f(x) ≤ y ⇔ x ≤ g(y)</code>. We say <code>f</code> is the <em>left</em>
+or <em>lower</em> adjoint, and <code>g</code> is the <em>right</em> or <em>upper</em> adjoint of the
+connection.</p>
+<p dir="auto">Here is a simple connection between two 3-element sets:</p>
+<p dir="auto"><a href="https://github.com/cmk/connections/raw/main/img/example.png" rel="noopener noreferrer" target="_blank"></a></p>
+<p dir="auto">(image courtesy of <a href="https://math.mit.edu/~dspivak/teaching/sp18/7Sketches.pdf" rel="nofollow">7 Sketches in Compositionality</a>).</p>
+<p dir="auto">Each row is a <code>(a, b)</code> pair; arrows show the action of <code>f</code> (A → B,
+bottom legend) and <code>g</code> (B → A, top legend). Lone arrows mark
+single-direction maps (<code>f(1) = 1</code>, <code>g(2) = 2</code>); the <code>↔</code> marks a
+matched pair where both adjoints agree (<code>f(3) = 3</code>, <code>g(3) = 3</code>); the
+adjacent <code>↰ ↳</code> glyphs depict the <em>lens</em> <code>f(2) ↔ g(1)</code> — two
+non-crossing curves between rows 2 and 1, the geometric signature of
+adjointness.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How to use connections</h2></div>
+<p dir="auto">Galois connections compose: (f₁ ⊣ g₁) ∘ (f₂ ⊣ g₂) is again an
+adjunction, and <code>compose!</code> builds that composite statically,
+law-checked as a whole. The moment you apply a destructor (e.g.
+<code>upper</code> , <code>lower</code>, <code>ceil</code>, <code>floor</code>, etc) you've left the Conn algebra
+and produced a concrete value that can no longer be composed. So early
+destructuring throws away the static guarantees that the full
+chain would have otherwise enjoyed. Therefore you will get the most
+bang for your buck if you follow two heuristics.</p>
+<p dir="auto"><strong>Lift through the Conn.</strong> A Conn is a little black box: the higher-
+arity helpers (e.g. <code>ceil*</code>, <code>floor*</code>, <code>round*</code>, <code>truncate*</code>, etc)
+take your arguments, do something with them in the Conn's other
+(usually higher-fidelity) domain, and return the result back in
+your original domain. <code>ceil2(t, h, b1, b2)</code> is <code>f(h(g(b1), g(b2)))</code>:
+embed <code>b1</code>/<code>b2</code> into the wider domain via <code>g</code>, run the closure <code>h</code>
+there, round back via <code>f</code>. Use this for domain arithmetic that would
+overflow or lose precision in your own type - do it in the wider
+domain and round back. Never hand-roll saturating math.</p>
+<p dir="auto"><strong>Compose at the site.</strong> Export Conns at the library level and use
+the <code>ConnL</code>/<code>ConnR</code>/<code>ConnK</code> API instead of get/set functions. When
+client code needs a multi-hop conversion, build the exact Conn with
+the compose macros (<code>compose</code>, <code>compose_l</code>, <code>compose_r</code>, <code>compose_k</code>)
+statically at the call site. Do not thread intermediates by hand.
+If the client code takes a runtime parameter then it's best to keep the
+helper as a normal named function whose body <em>visibly composes</em> with
+the lawful Conns it depends on.</p>
+<p dir="auto">The discipline of pushing runtime parameters and conversion policy
+choices close to the static Conn call site means that the policy and
+the static cast are both visible in the same body. The result is code
+that is visibly correct, easy to test, and extensible to future use
+cases.</p>
+<div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">Library</h1></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">L &amp; R kind connections</h2></div>
+<p dir="auto">The basic type in this library is:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="pub struct Conn&lt;A, B, K: Kind = L&gt; {
+    f: fn(A) -&gt; B,   // L-kind: ceil; R-kind: floor
+    g: fn(B) -&gt; A,   // L-kind: upper, R-kind: lower
+    // plus a phantom kind tag K ∈ {L, R}
+}"><pre class="notranslate" lang="text"><code>pub struct Conn&lt;A, B, K: Kind = L&gt; {
+    f: fn(A) -&gt; B,   // L-kind: ceil; R-kind: floor
+    g: fn(B) -&gt; A,   // L-kind: upper, R-kind: lower
+    // plus a phantom kind tag K ∈ {L, R}
+}
+</code></pre></div>
+<p dir="auto">A <code>Conn&lt;A, B, K&gt;</code> is exactly a Galois connection — a pair of monotone
+functions <code>(f, g)</code> whose adjoint role depends on the kind tag. An
+L-kind Conn satisfies <code>f(a) ≤ b ⟺ a ≤ g(b)</code>; an R-kind Conn
+satisfies <code>g(b) ≤ a ⟺ b ≤ f(a)</code>.</p>
+<p dir="auto">The kind <code>K = {L, R}</code> determines the API. <code>L</code>/<code>ConnL</code> exposes <code>.ceil()</code>
+and <code>.upper()</code>, while <code>R</code>/<code>ConnR</code> exposes <code>.floor()</code> and <code>.lower()</code>.</p>
+<ul dir="auto">
+<li><strong>Direction names</strong> — <code>ceil</code> (rounds up) and <code>floor</code> (rounds down) —
+match downstream intuition. "Give me a ceiling cast" doesn't require
+the caller to know which side of an adjunction they're on. However
+calling <code>.floor()</code> on an L-kind connection, or <code>ceil</code> on an R-kind
+connection results in a compiler error.</li>
+<li><strong>Position names</strong> — <code>upper</code> (the upper adjoint of the L-pair) and
+<code>lower</code> (the lower adjoint of the R-pair) — match the math: a
+generic <code>T: ConnK</code> bound exposes both because a triple has both
+adjunctions, regardless of which way each one rounds in any concrete
+instance.</li>
+<li><strong>Consts vs markers</strong> - Regular connections are <code>pub const</code>s of type
+<code>Conn&lt;A, B, L&gt;</code> or <code>Conn&lt;A, B, R&gt;</code>. Two-sided <code>ConnK</code> connections
+ship as <code>pub struct</code>s — zero-sized marker types implementing both
+<code>ConnL</code> and <code>ConnR</code>. The const-vs-struct shape tells you which kind
+a name refers to at a glance.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">API</h2></div>
+<ul dir="auto">
+<li>L-side methods on <code>Conn&lt;_, _, L&gt;</code> (and on any <code>ConnL</code> implementor
+via default-method dispatch): <code>ceil</code>, <code>upper</code>, plus <code>ceil1</code>/<code>2</code>,
+<code>upper1</code>/<code>2</code> lifters.</li>
+<li>R-side methods on <code>Conn&lt;_, _, R&gt;</code> (and on any <code>ConnR</code> implementor):
+<code>floor</code>, <code>lower</code>, plus <code>floor1</code>/<code>2</code>, <code>lower1</code>/<code>2</code> lifters.</li>
+<li>Two-sided helpers (re-exported at the crate root): <code>interval</code>,
+<code>round</code>/<code>round1</code>/<code>round2</code>,
+<code>truncate</code>/<code>truncate1</code>/<code>truncate2</code>, <code>median</code>. All bind on
+<code>T: ConnK</code> (super-trait of <code>ConnL + ConnR</code> over the same <code>(A, B)</code>),
+so they're callable only on triple markers — not on one-sided Conns.</li>
+</ul>
+<p dir="auto">Kind discipline is structural: calling <code>.floor(...)</code> on an L-kind
+Conn is a compile error (the method only exists on <code>Conn&lt;_, _, R&gt;</code>),
+and likewise <code>.ceil(...)</code> on R. Two-sided helpers similarly reject
+one-sided operands at compile time because a one-sided <code>Conn</code> doesn't
+implement <code>ConnK</code>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Modules</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Module</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IEEE-754 types</td>
+<td><code>float</code></td>
+</tr>
+<tr>
+<td>Q-format binary fixed-point (<code>Q###Q###</code>, i8/u8 … i128/u128 backing)</td>
+<td><code>fixed::{i008,…,i128, u008,…,u128}</code> (<code>fixed</code> cargo feature)</td>
+</tr>
+<tr>
+<td>Std-int widening + narrowing + cross-sign (<code>I###I###</code>, <code>U###I###</code>, <code>U###U###</code>, <code>I###U###</code>)</td>
+<td><code>core::{i008,…,i128, u008,…,u128}</code></td>
+</tr>
+<tr>
+<td><code>iN</code>/<code>uN</code> ↔ <code>NonZero&lt;{i,u}N&gt;</code> (<code>I###N###</code>, <code>U###N###</code>)</td>
+<td><code>core::{i008,…,i128, u008,…,u128}</code></td>
+</tr>
+<tr>
+<td>Cross-crate iso <code>Fixed{I,U}&lt;U0&gt; ↔ {i,u}{N}</code> (<code>Q000I###</code>, <code>Q000U###</code>) and signed normalized bit isos (<code>Q007I008</code> … <code>Q127I128</code>)</td>
+<td><code>fixed::{i008,…,i128, u008,…,u128}</code> (<code>fixed</code> cargo feature)</td>
+</tr>
+<tr>
+<td>Float narrowing <code>f64 ↔ f32 ↔ f16</code> under N5 (<code>F064F032</code>, <code>F032F016</code>, <code>F064F016</code>)</td>
+<td><code>core::{f032,f064}</code> (<code>f16</code> cargo feature for f16)</td>
+</tr>
+<tr>
+<td><code>time</code> crate types (<code>DATEJDAY</code>, <code>TIMENANO</code>, <code>TIMESECS</code>, <code>TDURSECS</code>, <code>F032TDUR</code>, <code>F064TDUR</code>, <code>PDTMDATE</code>, <code>ODTMNANO</code>, <code>ODTMSECS</code>) and the <code>std::time::Duration</code> family (<code>SDURU064</code>, <code>SDURU128</code>, <code>F064SDUR</code>, <code>F032SDUR</code>) for users on <code>std::time</code></td>
+<td><code>time::{clock,date,datetime,duration,offset}</code> (<code>time</code> cargo feature)</td>
+</tr>
+<tr>
+<td>hifitime nanosecond <code>Duration</code> + <code>Epoch</code> Conns — calendar (<code>MONTU008</code>, <code>WKDYU008</code>), duration (<code>HDURNANO</code>, <code>HDURSECS</code>, <code>F064HDUR</code>), and per-timescale epoch bridges (<code>EUNXNANO</code>, <code>ETAINANO</code>, <code>F064ETAI</code>, <code>EGPSNANO</code>, …)</td>
+<td><code>hifi::{calendar,duration,epoch}</code> (<code>hifi</code> cargo feature)</td>
+</tr>
+<tr>
+<td><code>uhlc</code> hybrid-logical-clock Conns — <code>NTP64 ↔ u64</code> (<code>NDURU064</code>) and the HLC <code>ID</code> bridge (<code>HLIDLX16</code>)</td>
+<td><code>uhlc::{ntp64,id}</code> (<code>uhlc</code> cargo feature)</td>
+</tr>
+<tr>
+<td><code>std::net</code> addresses (<code>U032IPV4</code>, <code>U128IPV6</code>, <code>IPV6IPV4</code>, <code>IPVXIPV4</code>, <code>IPVXIPV6</code>, <code>SOVXSOV4</code>, <code>SOVXSOV6</code>)</td>
+<td><code>addr</code></td>
+</tr>
+<tr>
+<td><code>char</code> codepoint projection (<code>U032CHAR</code>, surrogate-gap-aware)</td>
+<td><code>core::char</code></td>
+</tr>
+<tr>
+<td>Pointer-width <code>usize</code> saturating casts (<code>USZEU008</code>, <code>USZEU016</code>, <code>USZEU032</code>, <code>USZEU064</code>, <code>USZEU128</code>)</td>
+<td><code>core::usize</code></td>
+</tr>
+<tr>
+<td>Pointer-width <code>isize</code> casts (<code>ISZEI008</code>, <code>ISZEI016</code>, <code>ISZEI128</code>; <code>→ i32</code>/<code>→ i64</code> deferred)</td>
+<td><code>core::isize</code></td>
+</tr>
+<tr>
+<td>Sortable byte encodings (<code>U008BE01</code>, <code>U008LE01</code>, <code>I008BE01</code>, <code>I008LE01</code>, <code>BOOLBE01</code>, <code>BOOLLE01</code>, through <code>U128BE16</code>, <code>U128LE16</code>, <code>I128BE16</code>, <code>I128LE16</code>)</td>
+<td><code>core::{bool, i008,…,i128, u008,…,u128}</code></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Constant-name prefixes are letter-disambiguated: <code>Q</code> for Q-format
+wrappers (sign and host bit-width come from the module path), <code>I</code>/<code>U</code>
+for std primitives (digits = bit-width), <code>N</code> for <code>NonZero&lt;*&gt;</code>, <code>F</code> for
+IEEE floats. Cross-module name collisions are allowed and resolved by
+qualified import (e.g. <code>fixed::i008::Q008Q000</code> and
+<code>fixed::i064::Q008Q000</code> co-exist).</p>
+<div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1"><code>ConnK</code> connections</h1></div>
+<p dir="auto">When the same <code>inner</code> function can serve as both <code>upper</code> and <code>lower</code>
+<em>and</em> satisfies an additional order-reflecting property (see
+<a href="#sandwich-inequality">Sandwich inequality</a>), the library combines
+the two resulting connections into a zero-sized marker struct that
+gains a third group of 'ambidextrous' helpers via a super-trait that
+ties the <code>L</code> and <code>R</code> sides together:</p>
+<ul dir="auto">
+<li><strong><code>ConnL</code></strong> — capability trait with associated types <code>type A: Copy; type B: Copy;</code> and a <code>conn_l()</code> projection to the L-view
+<code>Conn&lt;A, B, L&gt;</code>. Default methods expose <code>.ceil()</code> and <code>.upper()</code>.</li>
+<li><strong><code>ConnR</code></strong> — symmetric capability trait whose <code>conn_r()</code> projects
+to the R-view <code>Conn&lt;A, B, R&gt;</code>. Default methods expose <code>.floor()</code>
+and <code>.lower()</code>.</li>
+<li><strong><code>ConnK</code></strong> — super-trait <code>ConnL + ConnR</code> over the same <code>(A, B)</code>
+pair; the two-sided helpers (<code>round</code>, <code>truncate</code>, …) bind on
+<code>ConnK</code> and reach through both views.</li>
+</ul>
+<p dir="auto">The trait names match the value-type spellings on purpose: a blanket
+<code>impl ConnL for Conn&lt;A, B, L&gt;</code> (and the R-side analogue) makes every
+one-sided value also satisfy the trait, so a generic <code>T: ConnL</code> bound
+accepts triple markers and raw <code>Conn&lt;A, B, L&gt;</code> values uniformly, and
+<code>inner</code> is defined as a free function in module scope, referenced
+from the marker's trait impls; no struct in the crate stores three
+function pointers.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Adjoint triples</h2></div>
+<p dir="auto">You construct a <code>ConnK</code> marker out of three functions: <code>ceil</code>, <code>inner</code>,
+and <code>floor</code> using one of the crate's provided macros. Note that both
+<code>ceil</code>/<code>inner</code> and <code>inner</code>/<code>floor</code> must satisfy the connection
+inequalities given above. In addition <code>ceil</code>/<code>floor</code> must satisfy
+the following 'sandwich' inequality: for every <code>a</code>, <code>floor(a) ≤ ceil(a)</code></p>
+<p dir="auto">Triples <code>ceil</code>/<code>inner</code>/<code>floor</code> that satisfy all three properties are known
+as <a href="https://ncatlab.org/nlab/show/adjoint+triple" rel="nofollow">adjoint triples</a> — the
+<code>ceil ⊣ inner ⊣ floor</code> shape outlined in
+<a href="https://github.com/cmk/connections/blob/main/EXAMPLES.md#example-3">Example 3</a>.</p>
+<p dir="auto">The sandwich inequality is equivalent to the earlier requirement that
+<code>inner</code> be <a href="https://en.wikipedia.org/wiki/Order_theory#Functions_between_orders" rel="nofollow">order-reflecting</a>.
+The <code>prop::conn::law_battery!</code> <code>full</code> subset enforces both <a href="https://docs.rs/connections/latest/connections/prop/conn/fn.floor_le_ceil.html" rel="nofollow"><code>floor_le_ceil</code></a>
+as well as <a href="https://docs.rs/connections/latest/connections/prop/conn/fn.order_reflecting.html" rel="nofollow"><code>order_reflecting</code></a>:</p>
+<p dir="auto">Proof of equivalence is outlined in the following section.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Sandwich inequality</h2></div>
+<p dir="auto">Both directions of the equivalence follow from applications of the
+adjunction laws. Both proofs use only L-Galois <code>f ⊣ g</code>, R-Galois
+<code>g ⊣ h</code>, monotonicity, and transitivity — no extra assumptions.</p>
+<p dir="auto"><strong>Sufficiency</strong> (<code>inner</code> order-reflecting ⟹ <code>floor(a) ≤ ceil(a)</code>).
+Take any <code>a ∈ A</code>. The two closure laws give</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="inner(floor(a)) ≤ a ≤ inner(ceil(a))"><pre class="notranslate" lang="text"><code>inner(floor(a)) ≤ a ≤ inner(ceil(a))
+</code></pre></div>
+<p dir="auto">so by transitivity <code>inner(floor(a)) ≤ inner(ceil(a))</code>. Since <code>inner</code>
+is order-reflecting, this lifts to <code>floor(a) ≤ ceil(a)</code>. ∎</p>
+<p dir="auto"><strong>Necessity</strong> (<code>floor(a) ≤ ceil(a)</code> everywhere ⟹ <code>inner</code> order-reflecting).
+Take <code>x, y ∈ B</code> with <code>inner(x) ≤ inner(y)</code>. Chain:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="x ≤ floor(inner(x))     -- kernel of inner ⊣ floor, with b = x
+  ≤ ceil(inner(x))      -- assumption at a = inner(x)
+  ≤ y                   -- L-Galois ceil(a) ≤ b ⟺ a ≤ inner(b),
+                           with a = inner(x), b = y; the RHS
+                           inner(x) ≤ inner(y) is given"><pre class="notranslate" lang="text"><code>x ≤ floor(inner(x))     -- kernel of inner ⊣ floor, with b = x
+  ≤ ceil(inner(x))      -- assumption at a = inner(x)
+  ≤ y                   -- L-Galois ceil(a) ≤ b ⟺ a ≤ inner(b),
+                           with a = inner(x), b = y; the RHS
+                           inner(x) ≤ inner(y) is given
+</code></pre></div>
+<p dir="auto">So <code>x ≤ y</code>. ∎</p>
+<p dir="auto">(Categorically: in an adjoint triple <code>f ⊣ g ⊣ h</code> over posets, <code>g</code>
+fully faithful ⟺  the counit of <code>g ⊣ h</code> is iso ⟺  the unit of <code>f ⊣ g</code>
+is iso ⟺ <code>h ≤ f</code>. The two displays above are that equivalence written for
+posets, where "fully faithful" reduces to "order-reflecting" and "iso" to
+"equality".)</p>
+<p dir="auto"><strong>Counterexample</strong> — necessity is sharp. Let <code>A = {a}</code> (one element)
+and <code>B = {b₁ &lt; b₂ &lt; b₃}</code>, with <code>inner: B → A</code> the constant map
+(<code>inner(b) = a</code> for every <code>b</code> — monotone but maximally non-injective).
+Watch what the per-side Galois laws force:</p>
+<ul dir="auto">
+<li>L-Galois <code>ceil(a) ≤ b ⟺ a ≤ inner(b)</code>. The RHS reduces to <code>a ≤ a</code>,
+which is always true, so <code>ceil(a) ≤ b</code> for <em>every</em> <code>b ∈ B</code>. The
+smallest such <code>b</code> is <code>b₁</code>, so <strong><code>ceil(a) = b₁</code></strong>.</li>
+<li>R-Galois <code>inner(b) ≤ a ⟺ b ≤ floor(a)</code>. The LHS reduces to <code>a ≤ a</code>,
+always true, so <code>b ≤ floor(a)</code> for <em>every</em> <code>b</code>, giving
+<strong><code>floor(a) = b₃</code></strong>.</li>
+</ul>
+<p dir="auto">Both per-side adjunctions hold, every monotonicity check passes — and
+yet <code>floor(a) = b₃ &gt; b₁ = ceil(a)</code>. The "triple" type-checks and the
+per-side laws are satisfied, but the rounding sandwich is <em>inverted</em>.</p>
+<p dir="auto">The two-sided helpers inherit the inversion. <code>round(a)</code> compares
+<code>inner(floor(a)) = a</code> with <code>inner(ceil(a)) = a</code> to pick the closer
+endpoint, finds them equal, and falls through to <code>truncate</code>, which
+returns whichever side the source-zero rule selects — a value with no
+in-band signal that anything is wrong. <strong>A connection that fails the
+sandwich inequality isn't an academic foul; the two-sided helpers
+actively misbehave on it.</strong></p>
+<div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">Installation</h1></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo add connections" dir="auto"><pre>cargo add connections</pre></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+
+
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MSRV</strong></td>
+<td>Rust 1.88 (matches <code>rust-toolchain.toml</code>)</td>
+</tr>
+<tr>
+<td><strong>Edition</strong></td>
+<td>2024</td>
+</tr>
+<tr>
+<td><strong>License</strong></td>
+<td>MIT (see <a href="/cmk/connections/blob/main/LICENSE-MIT"><code>LICENSE-MIT</code></a>)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Optional cargo features:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>What it enables</th>
+<th>Toolchain</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fixed</code></td>
+<td><code>connections::fixed::{i008,…,u128}</code> Q-format ladders, float→Q bridges, Q.0 primitive isos, and signed normalized bit isos</td>
+<td>stable</td>
+</tr>
+<tr>
+<td><code>proptest</code></td>
+<td>Re-exports <code>connections::prop::arb</code> (proptest strategies) for downstream test suites</td>
+<td>stable</td>
+</tr>
+<tr>
+<td><code>macros</code></td>
+<td>Re-exports the internal codegen macro families under <code>connections::macros</code> / crate-root macro paths</td>
+<td>stable</td>
+</tr>
+<tr>
+<td><code>time</code></td>
+<td>Civil-calendar and time-span Conns backed by the <code>time</code> crate</td>
+<td>stable</td>
+</tr>
+<tr>
+<td><code>hifi</code></td>
+<td>Nanosecond-precision <code>hifitime::Duration</code> / <code>Epoch</code> Conns</td>
+<td>stable</td>
+</tr>
+<tr>
+<td><code>f16</code></td>
+<td>IEEE binary16 connections (<code>F016</code>, <code>F032F016</code>, <code>F064F016</code>) and their proptest strategies</td>
+<td>nightly (uses <code>#![feature(f16)]</code> — tracking <a data-hovercard-type="issue" data-hovercard-url="/rust-lang/rust/issues/116909/hovercard" href="https://github.com/rust-lang/rust/issues/116909">#116909</a>)</td>
+</tr>
+<tr>
+<td><code>try_trait</code></td>
+<td><code>?</code>-operator (<code>Try</code> / <code>FromResidual</code>) support on <code>Interval</code>, <code>Extended</code>, <code>N5</code> — extracts the success payload; <code>Interval</code> / <code>Extended</code> short-circuit on boundary variants, <code>N5</code> is infallible</td>
+<td>nightly (uses <code>#![feature(try_trait_v2)]</code> — tracking <a data-hovercard-type="issue" data-hovercard-url="/rust-lang/rust/issues/84277/hovercard" href="https://github.com/rust-lang/rust/issues/84277">#84277</a>)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">The <code>connections::prop::conn</code> and <code>connections::prop::lattice</code>
+predicate modules are <em>always</em> public — they're pure <code>bool</code>-returning
+functions over this crate's own types and don't depend on <code>proptest</code>.
+The <code>proptest</code> feature only adds <code>prop::arb</code>, the strategy module that
+does pull <code>proptest</code> in as a regular dependency.</p>
+<div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">Testing</h1></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo test --workspace" dir="auto"><pre>cargo <span class="pl-c1">test</span> --workspace</pre></div>
+<p dir="auto">Every connection runs its <code>proptest</code> law suite in CI and in the
+repository's pre-push gate. Float
+generators are biased toward NaN, ±∞, ±0, denormals, and ULP-boundary
+values. Fixed-point generators are biased toward <code>0</code>, <code>±PREC</code>, and
+<code>±i64::MAX/PREC</code> so saturation boundaries are exercised on every run.</p>
+<p dir="auto">Runtime dependencies are feature-gated. The
+<a href="https://crates.io/crates/fixed" rel="nofollow"><code>fixed</code></a> crate backs the optional
+binary fixed-point ladder, <a href="https://crates.io/crates/time" rel="nofollow"><code>time</code></a>
+backs the optional civil-calendar / clock surface, and
+<a href="https://crates.io/crates/hifitime" rel="nofollow"><code>hifitime</code></a> backs the optional
+high-precision time surface. Proptest is a dev-dependency, exposed
+publicly behind the <code>proptest</code> feature for downstream test suites.</p>
+<p dir="auto">Every connection ships with proptest coverage of the following laws — the
+predicates live in <code>prop::conn</code> and are re-runnable by downstream
+crates against their own connections:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Law</th>
+<th>Statement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>conn_galois_l</code></td>
+<td><code>ceil(a) ≤ b ⟺ a ≤ inner(b)</code></td>
+</tr>
+<tr>
+<td><code>conn_galois_r</code></td>
+<td><code>inner(b) ≤ a ⟺ b ≤ floor(a)</code></td>
+</tr>
+<tr>
+<td><code>conn_closure_l</code></td>
+<td><code>a ≤ inner(ceil(a))</code> (unit)</td>
+</tr>
+<tr>
+<td><code>conn_closure_r</code></td>
+<td><code>inner(floor(a)) ≤ a</code></td>
+</tr>
+<tr>
+<td><code>conn_kernel_l</code></td>
+<td><code>ceil(inner(b)) ≤ b</code> (counit)</td>
+</tr>
+<tr>
+<td><code>conn_kernel_r</code></td>
+<td><code>b ≤ floor(inner(b))</code></td>
+</tr>
+<tr>
+<td><code>conn_monotone_l</code></td>
+<td><code>a₁ ≤ a₂ ⟹ ceil(a₁) ≤ ceil(a₂) ∧ floor(a₁) ≤ floor(a₂)</code></td>
+</tr>
+<tr>
+<td><code>conn_monotone_r</code></td>
+<td><code>b₁ ≤ b₂ ⟹ inner(b₁) ≤ inner(b₂)</code></td>
+</tr>
+<tr>
+<td><code>conn_idempotent</code></td>
+<td><code>inner ∘ ceil</code> is idempotent on its image</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">A tenth law, <code>conn_floor_le_ceil</code> (<code>floor(a) ≤ ceil(a)</code>), is asserted
+only on <code>ConnK</code> connections whose <code>inner</code> is an injective embedding. See
+<a href="#sandwich-inequality">above</a>.</p>
+<p dir="auto">For float-bearing types, the <code>≤</code> is an <a href="https://en.wikipedia.org/wiki/Modular_lattice#Examples" rel="nofollow">N5 lattice</a>.
+In particular, NaN is reflexive, NaN sits between ±∞, and finite values
+are strictly ordered. <code>N5</code> carries these semantics.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">SMT verification (Kani)</h2></div>
+<p dir="auto">Beyond the proptest law suite — which samples — the generated
+fixed-width integer / Q-format / NonZero / iso connection families
+listed in <a href="https://github.com/cmk/connections/blob/main/src/kani.rs"><code>src/kani.rs</code></a>
+have Kani harnesses for their Galois-law predicates over the full
+bit-width domain. The pointer-width
+<code>usize</code> / <code>isize</code> families (<code>core::usize</code> / <code>core::isize</code>) are the
+exception: CBMC models a single concrete pointer width per run, so
+those Conns are covered by the proptest battery on the host target
+rather than a width-agnostic SMT proof. The proof tree lives at
+<a href="https://github.com/cmk/connections/tree/main/src/kani"><code>src/kani/</code></a>
+and is gated behind <code>#[cfg(kani)]</code> so it compiles only under
+<code>cargo kani</code> — release builds, <code>cargo test</code>, and downstream consumers
+see no proof code. No new runtime dependency: Kani injects its own
+crate at proof time.</p>
+<p dir="auto">The float-specific SMT result is deliberately narrower: the IEEE bit
+space is too large for full-Galois proofs to be tractable, so the
+<code>f64 → f32</code> ULP-walk in <code>src/core/f064.rs</code> (<code>ceil_f64_f32</code> /
+<code>floor_f64_f32</code>) is proven to converge in <strong>≤ 2 iterations for every
+finite non-NaN f64</strong>, not just the proptest sample. Three tiered harnesses
+(<code>float_walk::t0_*</code> for the full domain, <code>t1_*</code> for <code>|x| ≤ 1e6</code>,
+<code>t2_*</code> for the <code>[1, 2)</code> binade) each verify the bound under
+progressively tighter input restrictions. These harnesses do not prove
+full float Galois laws over NaN/±∞, and they do not cover the
+float→integer or float→fixed macro helper bodies; those branches are
+covered by the proptest law batteries and explicit helper/unit tests.</p>
+<p dir="auto">Run with:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo install --locked kani-verifier
+cargo kani setup
+cargo kani                                   # full proof tree
+cargo kani --harness 'float_walk::t0_'       # the headline
+cargo kani --harness 'int_narrow::'          # one family" dir="auto"><pre>cargo install --locked kani-verifier
+cargo kani setup
+cargo kani                                   <span class="pl-c"><span class="pl-c">#</span> full proof tree</span>
+cargo kani --harness <span class="pl-s"><span class="pl-pds">'</span>float_walk::t0_<span class="pl-pds">'</span></span>       <span class="pl-c"><span class="pl-c">#</span> the headline</span>
+cargo kani --harness <span class="pl-s"><span class="pl-pds">'</span>int_narrow::<span class="pl-pds">'</span></span>          <span class="pl-c"><span class="pl-c">#</span> one family</span></pre></div>
+<p dir="auto">Per-harness wall times are in the milliseconds-to-seconds range; the
+full tree runs in well under two minutes.</p>
+</article>

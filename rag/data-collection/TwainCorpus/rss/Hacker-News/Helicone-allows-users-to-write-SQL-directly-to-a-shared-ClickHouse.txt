@@ -1,0 +1,385 @@
+We added a SQL editor to Helicone called HQL. Customers get a text box, they write SELECT statements, and the queries run directly against our ClickHouse cluster. Every org's request data lives in the same table, 
+request_response_rmt
+, separated only by an 
+organization_id
+ column.
+Letting strangers run arbitrary SQL against a shared table sounds like a security incident with extra steps, so before shipping we needed the database itself to guarantee that a query from org A can never read a row belonging to org B. ClickHouse can do this with two features that don't get much attention: row policies and custom settings. Here's how we wired them together, and what the app-side code (including an AST parser) still has to do.
+HQL in production. Every query on this screen runs against the same shared table.
+The row policy
+A row policy in ClickHouse is a filter the server appends to every read, per table, per user. The setup is two statements, straight from
+ 
+our migrations
+: create a unique user that will have the row policy, then attach the policy to that user.
+CREATE
+ USER
+ IF
+ NOT
+ EXISTS
+ hql_user;
+
+CREATE
+ ROW
+ POLICY
+ hql_organization_filter 
+ON
+ request_response_rmt
+
+    FOR
+ SELECT
+
+    USING
+ organization_id 
+=
+ getSetting(
+'SQL_helicone_organization_id'
+)
+
+    TO
+ hql_user;
+The unique user is the whole point of the first statement.
+ 
+hql_user
+ exists purely to serve HQL traffic, and the policy binds to it through the 
+TO hql_user
+ clause. Our ingest and dashboard code connects as a different user and never sees the policy. For 
+hql_user
+, every SELECT on
+ 
+request_response_rmt
+ behaves as if
+ 
+WHERE organization_id = getSetting('SQL_helicone_organization_id')
+ 
+were part of the query, no matter what SQL the customer actually wrote.
+getSetting
+ is the interesting part. It reads a setting from the context of the current query. ClickHouse rejects setting names it doesn't recognize, and custom ones are only legal when they start with a declared prefix. If you self-host, you pick that prefix in the server config:
+<
+clickhouse
+>
+
+    <
+custom_settings_prefixes
+>SQL_</
+custom_settings_prefixes
+>
+
+</
+clickhouse
+>
+On ClickHouse Cloud, where our cluster runs, there is no picking. You can't touch server config, and the
+ 
+ClickHouse docs
+ 
+state that "it is not possible to specify a custom prefix". Every custom setting begins with 
+SQL_
+, no exceptions. So ours is called
+ 
+SQL_helicone_organization_id
+ instead of something cleaner, and that awkward prefix is load-bearing rather than a naming choice. You'll notice there's no
+ 
+custom_settings_prefixes
+ entry anywhere in our repo; on Cloud there's nothing to configure.
+The prefix has a history, too. MySQL clients set session variables like 
+SQL_AUTO_IS_NULL
+ when they connect, and ClickHouse accepts those as no-ops (
+ClickHouse PR #50013
+) so MySQL-speaking tools like Tableau don't fall over when they connect. My guess is that's why Cloud standardized on
+ 
+SQL_
+ as the one allowed prefix, which means our tenancy filter rides on a naming convention built for MySQL drivers.
+Where the query parameters come in
+Settings in ClickHouse can be set per query. Over the HTTP interface they travel as URL query parameters, so every HQL request carries the tenant id in the query string:
+ 
+?SQL_helicone_organization_id=<org>
+. The official Node client hides that behind 
+clickhouse_settings
+; ours lives in
+ 
+ClickhouseWrapper.ts
+:
+const
+ result
+ =
+ await
+ clickHouseHqlClient.
+query
+({
+
+  query: userSql,
+
+  format: 
+"JSONEachRow"
+,
+
+  clickhouse_settings: {
+
+    SQL_helicone_organization_id: organizationId,
+
+    readonly: 
+"1"
+,
+
+    allow_ddl: 
+0
+,
+
+    max_execution_time: 
+30
+,
+
+    max_memory_usage: 
+"4000000000"
+,
+
+    max_result_rows: 
+"10000"
+,
+
+  },
+
+});
+The 
+organizationId
+ comes from our auth layer, never from anything the customer typed. The other settings exist because customers share the cluster with our ingest pipeline and with each other: a 30 second timeout, a memory cap, a cap on result rows.
+readonly
+ deserves its own paragraph. A ClickHouse SELECT can end with a SETTINGS clause, which means a customer could try
+ 
+SELECT * FROM request_response_rmt SETTINGS SQL_helicone_organization_id = 'victim-org'
+ 
+and overwrite the value we passed. With 
+readonly = 1
+ the server rejects any settings change at query time, which closes that hole. On top of that, the app refuses any query that so much as mentions the setting name:
+const
+ forbiddenPattern
+ =
+ /sql
+[_\s]
+*
+helicone
+[_\s]
+*
+organization
+[_\s]
+*
+id/
+i
+;
+
+if
+ (forbiddenPattern.
+test
+(query)) {
+
+  return
+ err
+(
+"Query contains a reserved setting name"
+);
+
+}
+ClickHouse enforces the actual block. The regex means an attempt shows up in our logs as a rejected query rather than a database error.
+Revoking everything else
+A row policy on one table does nothing for the rest of the database, and ClickHouse ships with very readable system tables.
+ 
+system.query_log
+ alone contains every query every tenant has ever run, SQL text included. So 
+hql_user
+ gets stripped down to
+ 
+exactly one grant
+:
+REVOKE
+ ALL 
+ON
+ system
+.
+*
+ FROM
+ hql_user;
+
+REVOKE
+ ALL 
+ON
+ information_schema.
+*
+ FROM
+ hql_user;
+
+REVOKE
+ ALL 
+ON
+ default
+.
+*
+ FROM
+ hql_user;
+
+GRANT
+ SELECT
+ ON
+ default
+.request_response_rmt 
+TO
+ hql_user;
+We also filter the 
+organization_id
+ column out of the DESCRIBE results that power the editor's autocomplete. The column still exists and the policy still references it, but from inside the editor there's no visible sign the table is shared at all.
+What the AST is for
+None of the tenancy enforcement happens in the application, and that's deliberate. The tempting design is to parse each query, walk the AST, and splice 
+organization_id = ?
+ into the WHERE clause before execution. Then your security boundary is a JavaScript SQL parser keeping up with ClickHouse syntax, and ClickHouse syntax includes things like
+ 
+properties['user_id']
+ map subscripts and
+ 
+arrayJoin
+ that most parsers choke on. A query the parser mishandles becomes a query that leaks.
+We still parse queries, but only for things that are allowed to fail. node-sql-parser has no ClickHouse dialect, so we parse with its Postgres one, clamp or insert a LIMIT on the AST, and serialize the query back out (the whole dance is in
+ 
+HeliconeSqlManager.ts
+):
+const
+ ast
+ =
+ parser.
+astify
+(sql, { database: 
+"Postgresql"
+ });
+
+const
+ limitedAst
+ =
+ addLimit
+(
+normalizeAst
+(ast)[
+0
+], limit);
+
+firstSql 
+=
+ parser.
+sqlify
+(limitedAst, { database: 
+"Postgresql"
+ });
+When ClickHouse-specific syntax breaks the parse, we catch the exception and fall back to clamping the LIMIT with a regex on the raw string. That fallback would be terrifying if the org filter depended on it. Since the filter lives in the database, the worst a parser bug can do here is let a query return more rows than we'd like, and 
+max_result_rows
+ catches that anyway.
+Before any of this runs, a validation pass rejects everything that isn't a plain SELECT, along with any table reference outside an allowlist that currently contains exactly one name.
+Subqueries were the scary part
+The query shape that made us nervous while designing this was the subquery. If tenancy lives in an app-side rewriter, then
+ 
+SELECT * FROM (SELECT * FROM request_response_rmt) AS sub
+ 
+is the query that breaks it. Splice
+ 
+WHERE organization_id = ?
+ onto the outer SELECT and you've filtered nothing; the inner SELECT already read the whole table. A correct rewriter has to find every table reference in every nested SELECT, every CTE, every UNION branch, and every JOIN operand, then prove it filtered each one.
+Our own validation code shows the limits of walking queries in the app. The table allowlist works by scanning for FROM and JOIN followed by an identifier, and it deliberately skips anything that opens a parenthesis, because a subquery isn't a table name. As a guardrail that's fine. As a security boundary it would be a hole you could drive a UNION through. And when node-sql-parser can't produce an AST at all, which real ClickHouse queries trigger constantly, there is no tree to walk in the first place.
+So the test suite mostly attacks the database instead of the parser.
+ 
+hqlSecurityTests.test.ts
+ 
+is 843 lines of adversarial queries run against a real ClickHouse instance with the real row policy attached, because a database-enforced guarantee is exactly the thing mocks can't test. The describe blocks read like a threat model: settings override, system table access, function abuse (
+file()
+, 
+url()
+, 
+s3()
+,
+ 
+mysql()
+), UNION attacks, permission escalation, and a section of parsing edge cases where the subquery fear lives:
+it
+(
+"should handle queries with subqueries"
+, 
+async
+ () 
+=>
+ {
+
+  const
+ query
+ =
+ `
+
+    SELECT * FROM (
+
+      SELECT * FROM request_response_rmt
+
+      WHERE status = 200
+
+    ) AS subquery
+
+    LIMIT 10
+
+  `
+;
+
+  // every row that comes back must belong to testOrgId
+
+});
+
+it
+(
+"should handle CTEs"
+, 
+async
+ () 
+=>
+ {
+
+  const
+ query
+ =
+ `
+
+    WITH filtered AS (
+
+      SELECT * FROM request_response_rmt WHERE status = 200
+
+    )
+
+    SELECT * FROM filtered LIMIT 10
+
+  `
+;
+
+});
+Self-joins get the same treatment, since
+ 
+r1 JOIN request_response_rmt r2
+ is two table references a rewriter would have to filter separately under different aliases. With the row policy they collapse into one case: the filter applies at read time on the table itself, underneath whatever shape the query takes, so subqueries, CTEs, UNION branches, and aliased joins all inherit it for free. The tests exist to prove that claim, and they pass without the application contributing a single WHERE clause.
+My favorite test in the file asks ClickHouse to count everyone else's rows:
+SELECT
+ count
+(
+*
+) 
+as
+ cnt 
+FROM
+ request_response_rmt
+
+WHERE
+ organization_id 
+!=
+ '<my own org id>'
+
+-- expected result: 0
+The query is legal, runs cleanly, and counts an empty world. A hostile query under a row policy doesn't get an error to probe against; there's simply nothing there.
+Failing closed
+My favorite property of this setup is that a missing setting fails loudly. If app code ever forgets to send
+ 
+SQL_helicone_organization_id
+, 
+getSetting
+ throws and the query dies. Misconfiguration produces an error, never a response containing someone else's rows. Compare that with app-side filtering, where a forgotten WHERE clause returns everything and looks like success.
+Our admin tooling bypasses all of this on purpose by connecting as our normal database user, since the policy is granted to
+ 
+hql_user
+ only. The bypass is a different connection string rather than a flag on the query, which makes it hard to trip over by accident.
+If you're adding customer-facing SQL to a ClickHouse-backed product, the whole mechanism costs about ten lines of SQL in migrations plus one setting per query. The parser work is real, but you get to do it for ergonomics instead of for safety, and that's a much better place to be.
