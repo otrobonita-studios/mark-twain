@@ -1,0 +1,66 @@
+01 · Display
+
+The board draws itself: no render buffer, no int 21h/09h
+
+This accounts for the largest saving.
+
+The original renders the position into a separate buffer: it walks the board, transforms each square into a printable character, stores it, appends a 
+$
+ terminator, and prints the whole string with DOS function 
+09h
+ (
+int 21h
+). That path costs a buffer pointer setup, the copy loop's store, the terminator write, and, because the buffer lives after the board, a reserved board array in the image.
+
+AttoChess deletes all of it. The board's border columns are laid out as 
+CR, LF, CR, LF
+ (
+0Dh, 0Ah, 0Dh, 0Ah
+) instead of the previous 
+08h
+ filler. Both CR and LF still have bit 3 set, so every existing border/color mask test fires exactly as before, but now the raw board bytes are already a printable frame. The display loop streams each byte straight to the console with 
+int 29h
+ (DOS fast console output): borders become newlines, empty squares become NULs, and only real pieces take the ASCII transform.
+
+main_loop:
+
+    mov si, offset board_db + 24   
+; row 2 (black back rank), col 0
+
+    mov cl, 98                     
+; 8 rank rows + final CR,LF (CH=0)
+
+disp_loop:
+
+    lodsb                          
+; read square contents
+
+    test al, 30h                   
+; piece?
+
+    jz disp_cont                   
+;   no: emit raw (CR / LF / NUL)
+
+    inc ax                         
+; zero-align king
+
+    and al, 27h                    
+; isolate piece type + black/lowercase bit
+
+    add al, 4Bh                    
+; K, N, B, P, Q, R (upper/lower by color)
+
+disp_cont:
+
+    int 29h                        
+; fast console output of AL
+
+    loop disp_loop
+
+Removed in one move: the render buffer, its pointer setup, the 
+$
+ terminator, the 
+int 21h
+/
+09h
+ string print, and the reserved board array in the file image.

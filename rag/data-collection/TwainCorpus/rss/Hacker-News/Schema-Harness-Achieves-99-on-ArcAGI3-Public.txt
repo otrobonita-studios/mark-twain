@@ -1,0 +1,805 @@
+ARC-AGI-3: games that don’t tell you the rules
+
+ARC‑AGI‑3 gives an agent a game environment, without an explanation of what it is seeing. At each step, the agent receives a 64×64 grid of 16 color indices and a set of legal actions. The environment supplies no object list, rule sheet, stated goal, or shaped reward. There is only one way to make progress: the physicist’s way. The agent must act while its model of the game is still provisional, forming hypotheses about what the grid represents, how actions change it, and what counts as success, then revising both its model and its plan as new observations arrive.
+
+ARC‑AGI‑3 has proved exceptionally difficult for frontier models. Its official metric, 
+Relative Human Action Efficiency (RHAE)
+, compares an agent’s per-level action count with a first-exposure human baseline and aggregates the result across environments; 100% means completing every level of every environment at or above human-baseline action efficiency. On the Semi‑private set, verified frontier-model performance rose from 0.51% at 
+launch in March
+ to 7.78% with 
+GPT‑5.6 Sol at max reasoning
+ in July. Sol also scored 13.33% on Public set, but still far from the human reference.
+
+VERIFICATION
+
+Verified
+
+Self-reported
+
+EVALUATION SET
+
+Public
+
+Semi-private
+
+Figure 1.
+ ARC‑AGI‑3 RHAE results reported through July 2026. Filled markers denote ARC Prize-verified evaluations; hollow markers denote self-reported evaluations on the Public set. Magenta identifies Schema. Both Schema results are self-reported and have not been verified by ARC Prize.
+
+Schema
+, the harness we introduce today, 
+reaches 99% on the ARC‑AGI‑3 Public set using Claude Opus 4.8 and Fable 5, and 95.35% using GPT‑5.6 Sol
+. It does not change the underlying model weights. Instead, it changes the process around them: how observations are turned into a working model of the game, how predictions are tested against the interaction history, and how plans are executed and revised.
+
+Both scores come from a fixed fallback rule: Opus 4.8 and Sol xhigh run first; games scoring below 80 are rerun with Fable 5 and Sol max, respectively, and the higher per-game score is retained.
+
+The takeaway: how you use the model matters a lot.
+ The rest of this post shows the arrangement.
+
+Thinking like a physicist
+
+Schema thinks like a physicist. Before a physicist can write down a law, they must decide what the law is about. Which parts of an observation are objects? Which properties define the state? Only then can they ask how that state changes. Schema formalizes these questions as two problems. 
+State grounding
+ turns raw observations into objects, variables, and relations that can be tracked. 
+Mechanism discovery
+ finds how that state changes under an action and writes the rule as an executable program. Our earlier system, 
+VIGA
+, focused on the first problem. Through analysis-by-synthesis against a graphics engine, it recovered scene programs from continuous visual input far richer than an ARC grid. Other systems like 
+WorldCoder
+ focus on the second: they learn transition programs from trajectories but begin with an already structured state representation. We believe these two problems must be solved jointly, with the agent constructing the state representation and the transition rules.
+
+LEVEL 2 · MECHANISM DISCOVERY
+
+WorldCoder
+
+(state, action, state′) → 
+transition program step()
+
+How the world moves between moments — the rule, written as a program. Each game hides mechanisms like these:
+
+spring wall
+
+refuel ring
+
+color rotator
+
+LEVEL 1 · STATE GROUNDING
+
+VIGA
+
+observation → 
+state program
+
+What the world is — objects, quantities, names, invented from raw pixels. Nothing says which pixels count as the player, a wall, a counter.
+
+player?
+
+counter?
+
+[
+schema
+]
+ solves both levels, jointly — in one editable program.
+
+Figure 2.
+ The two levels of abstraction. Level 1 invents the state — which pixels form the player, a wall, a counter. Level 2 recovers the mechanism over that state, like the spring walls, refuel rings, and color rotators above. Schema holds both in one editable program: when a rule refuses to stay consistent with experiments, the counterexample can indict the representation itself.
+
+State grounding and mechanism discovery cannot be resolved independently. A state representation that appears plausible at first may prove inadequate when no consistent transition rule can explain the outcomes of subsequent experiments. In Schema, the state representation and transition rules are jointly encoded in the same editable program. When an observation contradicts a prediction, the agent can revise either the representation or the rule, then update the other to restore a consistent model. This mirrors how 
+physicists work
+: when predictions fail persistently, they do not only adjust the law. They change what the state 
+is
+. The cleanest case is the birth of special relativity. When Michelson and Morley could not detect the medium light was supposed to wave in, Lorentz took the first route: keep the aether, patch the rules with contraction hypotheses that absorbed the null result. Einstein took the second: in special relativity, he discarded the aether as part of the state and made simultaneity frame-relative, yielding a simple electrodynamics of moving bodies.
+
+ARC‑AGI‑3 requires the agent to construct both layers from raw observations. The grid identifies neither objects nor goals, so the agent must decide which patterns correspond to entities such as the player, walls, and counters, infer how actions transform them, and determine which configurations count as progress or completion. Even the goal predicate—implemented in Schema as 
+is_goal
+—must be inferred from interaction.
+
+Core idea.
+ The latent world representation is a program, not a vector — so it is 
+interpretable
+ (a text file you can read and diff), 
+verifiable
+ (replayable against recorded reality, belief by belief), and 
+searchable
+ (a program is a simulator; planning inside it is free).
+
+observe
+
+The raw grid — pixels. Every object in it was invented by the agent.
+
+deliberate
+
+An open-ended reasoning episode that ends only in a committed queue of actions.
+
+execute
+
+Runs the queue with a per-step self-check against the world model’s predictions.
+
+record
+
+Appends every real transition to the Timeline.
+
+append-only
+
+TIMELINE — GROUND TRUTH
+
+deliberate
+
+INSIDE ONE DELIBERATION — THE INNER LOOP
+
+theorize
+
+write_code
+
+Edit the theory of the game as step(state, action).
+
+certify
+
+run_backtest
+
+Replay every recorded transition — exact match, or a pointed bug.
+
+plan
+
+run_bfs
+
+Search inside the certified program — zero real cost.
+
+commit
+
+commit_actions
+
+The only channel from thinking to action.
+
+PERSISTENT MEMORY — THE AGENT’S “WEIGHTS”
+world_model.py
+notes.md
+Timeline 
+append-only
+
+RUNNING EXAMPLE — LS20 · REAL TRACE
+
+Opus 4.8 · 642 actions vs human 780 · RHAE 100
+
+[observe] 64×64 grid, 16 colors, actions 0–4 — a plus-shaped sprite, a cyan+maroon block, a framed maroon glyph, a color-11 bar.
+
+[deliberate] notes.md: the avatar is the 5×5 cyan+maroon block — the plus sprite is static; the bar is a move budget that depletes only on successful moves.
+
+[deliberate] write step() · run_backtest → world_model_v5.py replays 36/36 recorded transitions exactly.
+
+[execute] commit [2,2,2,3,2,2] → 
+surprise:
+ 77 cells mispredicted — the block repainted the indicator maroon. plan voided.
+
+[record] repaint rule encoded · backtest green · run_bfs finds the shortest plan → level up. 7 levels this way: 642 actions vs the 780-action human baseline.
+
+The outer loop.
+ The agent runs a four-stage cycle against the game: 
+observe
+ → 
+deliberate
+ → 
+execute
+ → 
+record
+.
+
+Record
+ is the system’s immutable interaction history. The agent can revise its hypotheses and working notes, but it cannot alter the observations it received or the actions it took.
+
+During each deliberation
+, the agent updates its theory of the game as a 
+step(state, action)
+ program. It tests the program against the complete interaction history with 
+run_backtest
+, uses any mismatch to locate errors, searches the resulting model for a plan with 
+run_bfs
+, and records its working conclusions in 
+notes.md
+. None of these operations changes the environment. Only 
+commit_actions
+ sends actions to the game, separating internal modeling and search from external interaction.
+
+Action for discovery.
+ The agent does not act only to reach the goal; it also acts to investigate the hidden mechanisms. When multiple candidate rules remain consistent with the recorded history, the agent searches for an experiment that separates them: an action for which they predict different outcomes. It commits that action, compares the observation with the competing predictions, updates 
+step()
+, and reruns the backtest. This targeted experimentation is also efficient under the official metric, which applies a squared penalty to excess actions (details below): the best experiment is the one that resolves the most uncertainty with the fewest real interactions.
+
+Reality outranks the model.
+ During execution, every real transition is checked against the theory’s prediction. A single mismatch stops execution of the current plan. The agent returns to deliberation with the mismatched transition as a counterexample and must revise the model to account for it before planning resumes.
+
+Planning moves into the model.
+ Once 
+step()
+ reproduces every transition in the recorded history, the agent can search for a solution inside the model without spending additional environment actions. Only the resulting plan is executed in the game. Across levels, this is how an accurate model translates into the action efficiency reflected in the 98.98% score.
+
+Figure 3.
+ The Schema control loop, steppable — scroll to walk it: the four-stage outer cycle and its append-only Timeline, a zoom into one deliberation (theorize → certify → plan → commit), then a real LS20 trace playing out at each stage.
+
+What the numbers say
+
+The metric, in full.
+ The official ARC‑AGI‑3 evaluates performance in 
+Relative Human Action Efficiency (RHAE)
+, which compares the number of actions used by the agent with an upper-median first-time human baseline for each completed level. The per-level score is 
+(human actions ÷ agent actions)²
+, capped at 
+1.15
+. Within each game, levels receive increasing weights from 1 to 
+n
+, so later levels contribute more to the game score. A completion cap based on the same weights prevents a game from receiving 100% unless every level is cleared. The benchmark score is the average of the game scores. All environment actions, including exploratory ones, count toward the agent’s total; because the efficiency ratio is squared, additional actions reduce the score sharply. Thus, 98.98% is an aggregate measure of completion and action efficiency—not the percentage of games solved.
+
+Figure 4.
+ 
+RHAE rewards both completion and action efficiency.
+ Agent A completes all seven levels in 785 actions, close to the 776 actions used by the human baseline. Agent B uses 1,591 actions across the first six levels—2.7 times the corresponding human baseline—and fails to complete Level 7. Because RHAE squares the action-efficiency ratio and caps the score according to completion, Agent B scores below 14%.
+
+The Claude row (Figure 5) provides a controlled comparison with the same Opus 4.8 and Fable 5 pairing. Treating the final Claude Code scratch snapshot as the baseline output produces a score of 
+42.83%
+; with Schema, the same pairing reaches 
+98.98%
+, an increase of 56.15%.
+
+With the Sol xhigh and Sol max fallback pairing, Schema reaches 
+95.35%
+. The nearest official reference is not a matched harness comparison: ARC Prize reports the best individual variant, Sol max, at 
+13.33% on Public and 7.78% on Semi‑private
+. The 82.02% Public-set difference shown in the chart is therefore contextual, not a controlled estimate of the gain produced by Schema.
+
+The controlled Claude comparison isolates a difference in process rather than underlying model capability. Claude Code provides a strong general-purpose harness for file operations and long-context management. In principle, it can mimic Schema’s workflow, but it does not require the model to do so. Under the generic harness, the model acts on the game directly and may keep its beliefs implicit in context. Schema instead enforces three constraints:
+
+Encode the current world model as a runnable 
+step()
+ program.
+
+Validate that program against every recorded transition before using it for planning.
+
+Send actions only through 
+commit_actions
+, immediately discarding the remaining plan after any prediction error.
+
+Under this controlled configuration, Schema’s harness yields a 56.15% improvement over the Claude Code baseline.
+
+Figure 5.
+ The Claude row holds the Opus & Fable pairing fixed and changes the harness. The Sol row compares Schema’s xhigh & max pairing with the best official single-variant public score, so it is shown as a reference rather than a controlled ablation.
+
+Verification status.
+ The 98.98% and 95.35% scores are self-reported results on the Public set, calculated from the run artifacts released with this post. Neither score has been independently verified by ARC Prize.
+
+How much does the public set indicate?
+ Every Schema number here is measured on the 25 public games. Sol max supplies one official calibration point across evaluation sets — 13.33% public versus 7.78% Semi‑Private — but that does not justify numerically extrapolating a near-ceiling public score. What 98.98% public maps to on Semi‑private is unknown until it is measured. The available artifacts document public-set runs only, so this draft makes no frozen-harness or held-out-performance claim.
+
+Schema v.s. First-time human baseline
+
+All 25 public games
+
+w/ Claude Opus & Fable
+
+w/ GPT-5.6 Sol
+
+Schema (Ours)
+
+First-time human
+
+RHAE 98.98%
+
+horizontal axis: cumulative real actions · vertical axis: levels cleared
+
+Figure 6.
+ All 25 public games, with the retained run per game. Toggle between the two Schema pairings; the human baseline and each game’s axes stay fixed so the curves compare directly. Claude curves and the first-time-human baselines are the exact cumulative action counts from the evaluation export; the retained run per game is whichever of Opus 4.8 or Fable 5 scored higher (badge, top-left). Sol curves are drawn from the source figures pending release of the full Sol evaluation artifacts, and are indicative.
+
+The pairing ledger.
+ Among the retained Claude results, 14 games use the Opus run and 11 use the Fable run. 13 of the 14 Opus runs and 6 of the 11 Fable runs score exactly 100, yielding 19 games with a score of 100 overall. Among the retained Sol results, 15 games use the xhigh run and 10 use the max run. All 15 xhigh runs score 100; of the 10 max runs, 5 score 100 and 5 fall below 100.
+
+The residual is concentrated.
+ The Claude pairing falls 1.02% short of 100 overall. Nineteen games score exactly 100, while the remaining six range from 89.87 to 99.10; the median game score is 100. The Sol pairing also has a median game score of 100: 20 games score exactly 100, while the remaining five range from 60.93 to 87.80.
+
+Case studies
+
+Observation 1: An induced world program makes action efficient
+
+In the 14 of 25 games where the agent induced a program world model that exactly reproduced its
+        recorded history, it used 1.6–5.0× fewer actions than the human reference. The reason is a
+        shift in where actions are spent: the agent pays real actions only once, to discover a mechanism, and
+        then plans inside the model for free instead of rediscovering the mechanic through trial and error.
+        This depends on two capabilities:
+
+A. Verify against complete history.
+ Every real transition is logged, and
+        
+run_backtest
+ checks each candidate rule against the entire record rather than relying on
+        recollection. Because the record survives both bounded working memory and the auto-compacted context
+        window, the certified model can be trusted in place of further real-environment testing.
+
+B. Plan inside a reusable simulator.
+ Once 
+step()
+ and
+        
+is_goal()
+ are certified, breadth-first search explores 10
+3
+-10
+4
+ modeled
+        states without spending a single environment action. And because the model persists as code, this
+        free planning repeats on every later level.
+
+The payoff is sharpest where humans struggle most: on M0R0 Level 4, the agent needs 42 actions to
+        the human's 500, consistent with paying the discovery cost once and recomputing plans inside the
+        model thereafter. Each expandable item below is one game-level case supporting this pattern.
+
+Evidence 1A · RE86
+
+exact verification supports a one-shot plan
+
+393/393 exact · 61-action plan
+
+RE86 shows the full sequence in one game: 
+run_backtest
+ replays the model over every
+            recorded transition, then the verified model supplies a plan that clears a whole level without
+            additional trial and error.
+
+RE86
+—
+
+Schema w/ Opus 4.8
+
+Certify the model against all recorded history
+
+393 / 393 exact
+
+after 394 steps
+state
+
+394 real environment steps recorded so far — 393 checkable, 1 skipped
+                (a reset with no prior grid).
+
+events.jsonl:3144
+backtest
+
+The model, replayed over the entire history, matches every prediction:
+                
+backtest [all transitions]: 393/393 transitions fully correct (grid on non-terminal steps + level_up/dead/win flags on EVERY step); 0 mismatch(es), 1 skipped.
+
+reading
+meaning
+
+“My world model reproduces all 393 real steps I have taken,
+                exactly.” This is retrodictive consistency against ground truth, at a scale — hundreds
+                of exact 64×64 frames in one operation — with no counterpart in unaided human play.
+                The same appears across the winning games: 
+KA59 391/391
+,
+                
+SK48 387/387
+, 
+AR25 238/238
+,
+                
+M0R0 182/182
+.
+
+A whole level cleared by one verified plan
+
+61-action one-shot → WIN
+
+events.jsonl:3450
+backtest
+
+run_backtest: 8/8 transitions fully correct
+
+events.jsonl:3673
+commit
+
+A single committed plan of 
+61 actions
+, searched
+                inside the model (recurs across the winners: SK48 56, G50T 52, AR25 46).
+
+execution
+outcome
+
+All 61 executed with 
+0
+ mispredictions → WIN.
+                RE86's margin peaks on the human's worst level (L7: 
+110 vs 424
+).
+
+RE86 (Schema w/ Opus 4.8), final level — interactive trace playback (press ▶ to replay): game grid left, the agent's
+              reasoning, backtest results, and committed plans right. The segment ends with the single
+              61-action plan executed to the WIN with zero mispredictions.
+
+Evidence 1B · KA59
+
+complete-history comparison refutes a plausible rule
+
+two runs compared
+
+KA59 isolates the memory advantage: exact records from two complete runs reveal that an
+            apparently successful rule only fit by coincidence.
+
+KA59
+—
+
+Schema w/ Opus 4.8
+
+A refutation that needs total recall of two complete runs
+
+epicycle killed
+
+events.jsonl:314
+model /
+                notes.md
+
+It compares two 
+entire
+ past move-sequences exactly and discards a
+                rule that only coincidentally fit:
+                
+"...('H costs, horizontal free' R1, and 'H costs 1/2' R2) were EPICYCLES that
+                  happened to fit. Killed by: two runs with completely different direction sequences
+                  produced the SAME cost pattern +1,+0,+1,+1,+0 by move index."
+
+reading
+meaning
+
+Detecting that two full runs share a cost signature requires holding both,
+                exactly — the concrete form of the memory asymmetry. A person relies on gestalt; the agent
+                
+disproves
+ a plausible rule with complete-history evidence.
+
+KA59 (Schema w/ Opus 4.8), level 1 — interactive trace playback (press ▶ to replay) of the level during which the epicycle
+              rule is tested and killed: the reasoning panel shows deliberately discriminating probes
+              (“an informative mispredict”) and the model revisions they force before the
+              clear.
+
+Evidence 1C · M0R0
+
+search replaces trial on a difficult level
+
+42 vs 500 actions
+
+M0R0 isolates the planning advantage: once the model is exact, the solution is searched inside
+            the simulator rather than discovered through further real-environment trial.
+
+M0R0
+—
+
+Schema w/ Opus 4.8
+
+Search replaces trial on the human's hardest level
+
+42 vs 500 actions
+
+events.jsonl:56
+policy
+
+"...run_backtest green before planning with BFS —
+                  rather than hand-playing moves, which is the fail[ure mode]..."
+
+events.jsonl:84
+search
+
+Breadth-first search inside the verified model:
+                
+BFS: goal in 19 step(s) via level_up; expanded 3300 nodes, 891 distinct
+                  states.
+
+baseline
+vs human
+
+The human spends 
+500
+ actions on this level (their
+                plateau); the agent commits the 19-step plan and clears it in 
+42
+. Search
+                cost does not scale with how hard the level “feels.”
+
+M0R0 (Schema w/ Opus 4.8), level 4 — interactive trace playback (press ▶ to replay) of the winning segment: the reasoning
+              panel shows 
+run_backtest
+ going green and BFS returning the 19-step plan; the grid
+              then clears the human's 500-action level in 42 actions.
+
+Observation 2: Fable reaches the correct world model through better experimental decisions
+
+To understand how model choice affects world-model discovery under the same executable harness, we
+        compare Schema w/ Opus 4.8 Max vs Fable 5 on games attempted by both models. Fable achieves higher RHAE across
+        these games in two ways: on some games, it discovers a model that allows it to complete levels Opus
+        cannot; on others, both models finish, but Fable reaches the same endpoint with fewer environment
+        actions.
+
+The paired traces suggest a common explanation. After a failed prediction, Fable more often
+        questions the current representation itself, identifies the uncertainty that matters, and chooses
+        an interaction whose possible outcomes distinguish between competing hypotheses. It then converts
+        the observation into a reusable transition rule. Opus often eventually discovers the same mechanism,
+        but only after spending more actions testing alternative targets, conditions, or configurations
+        within its existing representation.
+
+The matched-completion cases are particularly informative: because Opus eventually encodes the same
+        mechanism, the action gap cannot be explained simply by one model being able to express the rule and
+        the other being unable to. The difference lies in the discovery process—what to question, which
+        experiment to run, and when to turn the result into executable code.
+
+Evidence 2A · DC22
+
+a complete search over a graph missing one edge
+
+Schema w/ Fable 6/6 · Opus 2/6
+
+Opus built a detailed model of movement and three toggles. From a fresh reset, BFS later
+            exhausted every state reachable in that model and correctly concluded that the target was
+            unreachable. Fable exposed a transition that was absent from the modeled graph.
+
+Fable
+
+Occupancy changes the meaning of a paired region
+
+175 / 175 exact
+
+failed hypothesis
+revision 1
+
+Fable first treated the colored regions as phase-keyed item boxes.
+                Another ordinary swim falsified that explanation.
+
+before step 176
+new hypothesis
+
+Plain swim again — duals aren't phase-keyed item-boxes.
+                  But NEW idea: the two duals are EQUAL-SIZE slots — a cell-wise swap
+                  could CARRY e!
+
+intervention
+probe
+
+Fable entered one slot and triggered the paired control. Its current
+                model predicted a penalty and no swap, so occupancy made the experiment discriminating.
+
+step 176
+observation
+
+THE PORTAL WORKED!!! ... The duals were never state-flippers:
+                  they're a paired CELL-WISE CONTENT SWAP (e rides along!).
+
+world model v5
+code
+                revision
+
+The avatar moves because it is content, without an avatar-specific
+                teleport exception:
+                
+for (xa, ya), (xb, yb) in zip(_cells(a), _cells(b)):
+                  va, vb = grid[ya][xa], grid[yb][xb]
+                  if va != vb:
+                  grid[ya][xa], grid[yb][xb] = vb, va
+
+after backtest
+result
+
+The revised model reproduced 
+175/175
+ recorded
+                transitions. Fable then cleared the level with a 24-action route through the newly reachable
+                island.
+
+DC22, level 3 — Schema w/ Fable 5 on the left exposes the portal edge and clears the level;
+              Opus 4.8 Max on the right exhausts the graph that omits it. In each playback, the game image is
+              left and the reasoning trace is right.
+
+Observed pattern:
+ search did not invent the transport
+            interaction. Fable's useful change happened one layer earlier, by representing region contents
+            and occupancy as part of state.
+
+Evidence 2B · LF52
+
+the cart was a board cell
+
+Schema w/ Fable 10/10 · Opus 4/10
+
+Both models recognized peg solitaire and learned that a cart moved along tracks. The decisive
+            issue was how the two mechanisms composed. Fable first excluded the useful interaction too, then
+            drove the cart to an exact docking coordinate and treated that moment as an observation point.
+
+Fable
+
+Two object systems become one transition graph
+
+10 / 10 levels
+
+initial inference
+false negative
+
+a peg can only be selected if it has ≥1 legal jump,
+                  meaning c5-over-c6-into-pipe/box is NOT legal.
+
+cart discovery
+observation
+
+An arrow moved the box along the rail. Fable then drove it to the dock,
+                explicitly expecting the docking step to reveal how cart and board composed.
+
+at the dock
+boundary revision
+
+The cart docked — with a surprise: the board reflowed! ...
+                  cart core ... sits flush as an extra cell next to c6.
+
+world model v5
+code
+                revision
+
+Fixed cells and mobile cart cores enter the same cell map:
+                
+def _find_cells(world):
+                  cells = detect_fixed_cells(world)
+                  for x, y in _find_carts(world):
+                  cells[(x, y)] = _cart_kind(world, x, y)
+                  return cells
+
+transfer
+result
+
+The ordinary jump generator now handled jump-in, transport, and
+                jump-out. Fable reused the representation across later multi-cart and scrolling levels.
+
+Opus
+
+A related probe tests the wrong causal role
+
+eventual convergence
+
+early test
+probe
+
+Opus asked whether a peg could jump 
+over
+ the cart. The result
+                correctly rejected “cart as middle piece,” but did not test “cart as landing cell.”
+
+~100 turns later
+test repair
+
+Prior test clicked c6 not c5 ... c5 over c6 lands EXACTLY
+                  at ... box dock ... THIS combo untested.
+
+exact geometry
+observation
+
+BREAKTHROUGH! ... a color-2 landing marker appeared on
+                  the box ... the box IS a valid peg landing!
+
+                Opus then revised to the same transport mechanism.
+
+LF52, level 2 — Schema w/ Fable 5 on the left tests the cart at the exact docking geometry;
+              Opus 4.8 Max on the right reaches the same composition only after leaving that combination
+              untested much longer. Game image left, reasoning trace right in both playbacks.
+
+Observed pattern:
+ a negative experiment rejects only
+            the mechanism-instance combination actually tested. Fable found the useful composition earlier
+            by testing the cart at the exact source–middle–landing geometry.
+
+Evidence 2C · SB26
+
+generality appears as structured revision
+
+SCHEMA w/ Fable 135 vs Opus 456 actions
+
+Both models discovered a DFS-like rule after Level 1 and both eventually solved all eight
+            levels. This pair separates “stating a general idea” from maintaining a reusable coded abstraction
+            that absorbs later variation.
+
+Fable
+
+Recursive mechanism with later extensions
+
+8 / 8 · 135 actions
+
+Level 1
+structural hypothesis
+
+Hypothesis: the code reads depth-first ... Let me
+                  generalize the model with boxes/portals/DFS target assignment.
+
+                Fable submitted the complete generated assignment, making the hypothesis strongly
+                falsifiable. The level cleared.
+
+world model v5
+code
+                abstraction
+
+def traverse(box):
+                  if box in visited:
+                  return
+                  visited.add(box)
+                  for kind, obj in sorted(elements_inside(box)):
+                  if kind == "marker":
+                  assign_next_target(obj)
+                  else:
+                  for child in boxes_for_portal(obj):
+                  traverse(child)
+
+Levels 3–6
+structured revisions
+
+Fable still changed the model: portals became movable; a global visited
+                set became a path-based cycle guard; depth-three nesting appeared. The stable part was the
+                causal schema—hollow objects reference containers, and traversal generates assignments.
+
+later levels
+compression
+
+After the first DFS hypothesis, later level increments were approximately
+                
+15 / 15 / 15 / 17 / 19 / 17 / 28
+ actions.
+
+Opus
+
+Same first idea, less robust transfer
+
+8 / 8 · 456 actions
+
+Level 1
+confirmation
+
+Level 1 cleared! The DFS-traversal target rule is
+                  confirmed.
+
+later variation
+hypothesis
+                sweeps
+
+Opus repeatedly switched from structure to assignment conventions such
+                as contiguous color blocks and grid reading order when new shapes appeared.
+
+Level 6
+missing state
+
+16 turns stuck on L6 ... The missing variable was tile
+                  shape — TEST3's colors were right all along, but the two hollow tiles must
+                  go in the middle column slots.
+
+SB26 — Schema w/ Fable 5 on the left reuses the DFS abstraction on level 2 in about 15
+              actions; Opus 4.8 Max on the right shows the later level-6 grind before recovering the missing
+              tile-shape variable. Game image left, reasoning trace right in both playbacks.
+
+Observed pattern:
+ a general mechanism is not one that
+            never changes. It is one whose revisions preserve earlier explanatory machinery and compress
+            the cost of new levels.
+
+Summary.
+ The harness and the underlying model affect efficiency
+          at distinct stages:
+
+The executable harness reduces the cost of using a theory.
+ It makes
+          the theory persistent, exactly verifiable, and searchable. This is the source of the efficiency
+          pattern observed relative to the human reference.
+
+The underlying model determines the cost of discovering a useful theory.
+
+          Paired runs sometimes converge on the same representation through markedly different trajectories.
+          Fable more often makes the decisive representational revision earlier and therefore reaches an
+          executable solution with fewer environment actions.
+
+Search is only complete relative to the world model it operates
+          over. Once the missing object, state variable, or transition is represented, the
+          existing verifier and planner are often enough. If observations do not distinguish the right
+          representation, the same machinery can verify and exhaustively search the wrong one.
+
+This is a new beginning
+
+ARC‑AGI‑3 is an important benchmark in a rapidly advancing field. When it launched in March, the leading frontier agent scored just 0.51%. By July, the best official Sol Max result had reached 13.33% on Public and 7.78% on Semi‑private, while self-reported results climbed as high as 58.12% mean per-game RHAE.
+
+Our self-reported 98.98% continues this trajectory rather than breaking from it. The key ingredients were already emerging: frontier models capable of adapting to novel environments, coding-agent harnesses, and programmatic world models. Schema is the system that brings them together.
+
+We read a saturated ARC‑3 as the new beginning: mechanism discovery as a general capability — grounding the causal structure of a world through the agentic loop of action and perception, in environments far richer than a 64×64 grid. This is where we are heading to.
