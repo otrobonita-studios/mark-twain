@@ -1,0 +1,196 @@
+<article><h1>How to Solve Santa Claus Concurrency Puzzle with a Model Checker</h1><p class="subtitle">Jan 10, 2026</p><p>When I enjoy a book, I often look for other work by the same author. While reading a book by Ben-Ari, I looked up his other writing and came across a paper on the Santa Claus concurrency puzzle <sup id="fnref:1" role="doc-noteref"><a class="footnote" href="#fn:1" rel="footnote">1</a></sup>. The puzzle is stated as follows:</p><blockquote><p>Santa Claus sleeps at the North Pole until awakened by either all nine reindeer or a group of three out of ten elves. He performs one of two indivisible actions:</p><ul><li>If awakened by the group of reindeer, Santa harnesses them to a sleigh, delivers toys, and finally unharnesses the reindeer, who then go on vacation.<li>If awakened by a group of elves, Santa shows them into his office, consults with them on toy R&amp;D, and finally shows them out so they can return to work constructing toys.</li></li></ul><p>A waiting group of reindeer must be served by Santa before a waiting group of elves. Since Santa’s time is extremely valuable, marshalling the reindeer or elves into a group must not be done by Santa.</p></blockquote><p>The puzzle captures the kind of synchronization challenges that arise whenever multiple processes must coordinate. I wanted to validate its correctness using a model checker. I expected this to be a simple problem. What surprised me is how easy it is to get it wrong.</p><p>I also chose a different path to the solution. Before writing the correct model, I spent some time exploring what incorrect designs might look like. I find failures instructive because they expose unsafe assumptions and make clear what a correct solution must prevent. As a learning exercise, I wrote three small models, each reproducing a different failure scenario, and used correctness properties to catch the bugs. We will look at these failures in a bit. After that, I present the correct model and validate it with a model checker.</p><p>To carry out this analysis, I used the SPIN model checker and wrote the models in Promela, SPIN’s specification language.</p><p>A natural question is why use a model checker instead of simply writing the solution in Python or Go. The answer is coverage: a model checker explores interleavings that tests or experiments might miss, and either proves correctness or produces a counterexample.</p><p>Let’s look at three key puzzle constraints:</p><ul><li><p>Santa must not marshal the groups himself.</p><li><p>If both reindeer and elves are waiting, Santa must serve the reindeer first (Christmas delivery is critical).</p><li><p>When Santa serves a group, the entire group must participate together: exactly nine reindeer for delivery, or exactly three elves for consultation. Santa cannot deliver toys with seven reindeer or consult with two elves, for example.</p></li></li></li></ul><p>At first, the problem seems straightforward. You wait until nine reindeer arrive or three elves arrive, wake Santa, do the work, and repeat. It is tempting to think that a few counters or locks are enough to solve it. The difficulty is in the interleavings. A solution that appears correct when reasoning step by step can fail when operations interleave in unexpected ways.</p><p>Let’s now consider three failure scenarios that solve the puzzle incorrectly.</p><ul><li>Santa delivers toys even though fewer than nine reindeer are actually ready.<li>Under a subtle interleaving, Santa ends up doing something impossible in the real world: delivering toys <em>and</em> consulting with elves at the same time.<li>Santa chooses to consult with elves even though nine reindeer are already waiting and ready to go.</li></li></li></ul><p>We’ll look at each of these failure scenarios next, and then work toward a solution that satisfies all puzzle constraints. Before that, let’s briefly introduce the Promela concepts we’ll need: channels, options, and guards.</p><p>To communicate between processes, we use channels in Promela. A channel is a data type that supports two operations: send and receive. Channels transfer messages of a specified type from a sender to a receiver.</p><p>SPIN supports two kinds of channels: rendezvous channels and buffered channels. In a rendezvous channel, send and receive synchronize: the sender blocks until the receiver is ready (and vice versa), and the transfer occurs as one atomic handshake. Buffered channels can hold messages temporarily, even if no process is ready to receive them yet. Buffered channels let a sender run ahead of a receiver; rendezvous channels force them to move together.</p><p>A send operation consists of a channel variable followed by an exclamation mark (!) and a sequence of expressions whose number and types must match the channel’s message type. A receive operation, by contrast, consists of a channel variable followed by a question mark (?) and a sequence of variables into which the message is received.</p><p>For example, we can declare a rendezvous channel named <em>request</em> that carries messages of type <em>byte</em> as follows (rendezvous channels have capacity of 0 as indicated by [0] syntax):</p><div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>chan request = [0] of { byte };
+</code></pre></div></div><p>We can send data on this channel as:</p><pre><code class="language-promela">request ! 1
+</code></pre><p>and receive data as:</p><pre><code class="language-promela">byte client;
+request ? client
+</code></pre><p>Now a few words about options and guards. Options in Promela can be used to do branching in the code. For example, one could write an <em>if</em> statement in Promela as:</p><div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>if
+:: (a &lt; 50) -&gt; printf("a &lt; 50\n");
+:: (a &gt; 50) -&gt; printf("a &gt; 50\n");
+fi
+
+</code></pre></div></div><p>Each line beginning with :: is an option. An option consists of a guard followed by an action. The guard is the Boolean expression before the arrow (-&gt;). An option is enabled if its guard evaluates to true.</p><p>When the <em>if</em> statement is reached:</p><ul><li><p>if exactly one option is enabled, Promela takes that option;</p><li><p>if multiple options are enabled, SPIN may choose any one of them nondeterministically;</p><li><p>if no option is enabled, the process blocks at the if.</p></li></li></li></ul><p>Now let’s look at the first failure scenario in which Santa may deliver toys without all nine reindeer being ready. In the failure models I sometimes shrink the number of elves (e.g., to 3) to keep the state space small; the failure mechanism is the same.</p><p>Here is a code excerpt from the model that simulates the first failure scenario:</p><div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>#define NUM_REINDEER 9
+#define NUM_ELVES 3
+
+// buffered channels
+chan harnessed = [NUM_REINDEER] of { bit };
+chan done_consulting = [NUM_ELVES] of { bit };
+
+// Some code omitted for brevity
+
+active [NUM_REINDEER] proctype Reindeer()
+{
+    do
+    ::
+        r_arrive ! 1;
+        harnessed ? 1;
+        actually_harnessed++;
+        actually_harnessed--;
+    od
+}
+
+active proctype Santa()
+{
+    byte i = 0;
+    byte e = 0;
+    byte j;
+    
+    do
+    :: (i &lt; NUM_REINDEER) -&gt;
+        r_arrive ? 1;
+        i++;
+        if
+        :: (i == NUM_REINDEER) -&gt; reindeer_ready = true
+        :: else -&gt; skip
+        fi
+        
+    
+    :: (i == NUM_REINDEER) -&gt;
+        
+        for (j : 1 .. NUM_REINDEER) {
+            harnessed ! 1;
+        }
+        
+        delivering = true;
+        /*
+            simulating delivering toys
+        */
+        delivering = false;
+        reindeer_ready = false;
+        i = 0;
+    
+    // Some code omitted for brevity - complete code linked below
+}
+
+// Correctness property 
+ltl safety { [] (delivering -&gt; actually_harnessed == NUM_REINDEER) }
+</code></pre></div></div><p>This Promela model is a small “executable spec” of the Santa problem. The full model and instructions for running it are available in the repository <sup id="fnref:2" role="doc-noteref"><a class="footnote" href="#fn:2" rel="footnote">2</a></sup>. To keep things simple, I mainly discuss the Santa–reindeer interaction; elves are present only to keep the overall structure similar.</p><p>The syntax <em>active [N] proctype P(){…}</em> tells SPIN to start N concurrent copies of process P in the initial state, so here you get 9 Reindeer processes, 3 Elves processes, and 1 Santa process. Each reindeer loops by rendezvous-sending on the <em>r_arrive</em> channel, so it blocks until Santa receives, then waits for a harness message on <em>harnessed</em>. Santa loops, counting reindeer arrivals. Once all nine reindeer have arrived, he “harnesses” them by sending nine messages on <em>harnessed</em> and then briefly sets <em>delivering = true</em> to represent toy delivery.</p><p></p><p>The bug is that <em>harnessed</em> is a buffered channel, so Santa can enqueue all nine harness messages and immediately proceed; nothing forces the reindeer to have actually received them yet. That violates the puzzle constraint that Santa must deliver with the whole group participating together. To check whether this implementation respects the puzzle’s constraints, we write correctness properties in Linear Temporal Logic (LTL).</p><p>In simple terms, an LTL property describes a rule that must hold over time as the system runs. The model checker constructs the system’s state space by enumerating all reachable states, each state being a snapshot of all variables and the current position of each process in its code, under all possible interleavings. You can think of this state space as a graph: each node is a state, and each edge represents a single step the program can take as processes interleave. An LTL property is then checked against this entire state space: when we say a condition must “always” hold, we mean it must be true in every reachable state that SPIN explores.</p><p>The LTL property <em>ltl safety { [] (delivering -&gt; actually_harnessed == NUM_REINDEER) }</em> encodes that requirement. Here [] means “always,” so the property states that in every reachable state, if delivering is true, then all nine reindeer must already be harnessed.</p><p>When SPIN checks this property, it finds an execution in which Santa sets <em>delivering = true</em> before all nine reindeer have received their harness signals. In other words, Santa starts delivering toys while some reindeer are still unharnessed. The property fails, and SPIN produces a counterexample showing exactly how this execution occurs. The code shows this model, along with instructions for running it and viewing the trace that contains the counterexample.</p><p>Now let’s look at a second failure scenario, in which Santa may end up doing the seemingly impossible, delivering toys with the reindeer and consulting with the elves at the same time. The complete model that simulates this fault is available here <sup id="fnref:3" role="doc-noteref"><a class="footnote" href="#fn:3" rel="footnote">3</a></sup>; an excerpt is shown below.</p><p>To make this bug easy to trigger, I did something silly: I split Santa into two: one responsible for toy delivery and one for consultation. Each process independently waits for its own group to form and then sets the corresponding flag (<em>delivering</em> or <em>consulting</em>) to indicate that work has begun. Because these two processes run concurrently and share no mutual exclusion, there exists an interleaving in which both flags become true at the same time.</p><p></p><p>The code violates a core constraint of the puzzle: Santa must perform only one indivisible action at a time. By adding an assert statement that asserts Santa never delivers and consults simultaneously, SPIN is able to find a concrete counterexample trace showing exactly how this impossible situation arises under a particular interleaving.</p><div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+active proctype SantaConsulting()
+{
+
+ byte e = 0;
+    byte j;
+    end:
+    do
+    
+    :: (e &lt; NUM_ELVES) -&gt;
+        e_arrive ? 1;
+        e++;
+    :: (e == NUM_ELVES) -&gt;
+
+        consulting = true;
+        
+        assert !(consulting &amp;&amp; delivering);
+        // We release elves here
+        consulting = false;
+        e = 0;
+    od 
+
+}
+active proctype SantaToyDelivery()
+{
+    byte i = 0;
+    byte j=0;
+    end:
+    do
+    :: (i &lt; NUM_REINDEER) -&gt;
+        r_arrive ? 1;
+        i++;
+        
+    :: (i == NUM_REINDEER) -&gt;
+        
+        delivering = true;
+        // We release the reindeer here
+        delivering = false;
+        
+        i = 0;
+        
+    
+    od
+}
+
+// correctness property
+
+ltl reindeer_precedence {
+    [] ( (r_count == NUM_REINDEER) -&gt; ( (!consulting) U delivering ) )
+}
+</code></pre></div></div><p>Now let’s examine the final failure scenario, in which Santa may consult with elves even when a full group of nine reindeer is already waiting. The complete model that simulates this fault is available here <sup id="fnref:4" role="doc-noteref"><a class="footnote" href="#fn:4" rel="footnote">4</a></sup>; structurally, it is very similar to the previous one.</p><p>In this version, Santa’s consultation logic does not check whether a full reindeer group is ready before proceeding. As a result, there exists an interleaving in which all nine reindeer have arrived and a group of three elves is also ready, yet Santa begins consulting with the elves. This violates a central constraint of the puzzle: when both groups are waiting, reindeer must be served before elves.</p><p></p><p>I found it tricky to detect this using only the tools discussed so far, and then discovered a precedence property expressed in LTL. Informally, the property states: once a full group of nine reindeer is ready, consulting must not occur before delivery begins. We encode this using the LTL ‘until’ operator (written as ‘U’), which lets us state that consulting must remain false until delivery occurs. When SPIN checks this property, it finds a counterexample in which Santa consults first, demonstrating that the implementation violates the required precedence rule.</p><p>There’s one more rule that all of the models above break: Santa must not do the marshalling himself. In the above models, Santa is directly counting arrivals and releasing reindeer and elves, which makes it easy to mix up group formation with the work itself.</p><p>The fix is to give Santa some help. Following Ben-Ari <sup id="fnref:1:1" role="doc-noteref"><a class="footnote" href="#fn:1" rel="footnote">1</a></sup>, we introduce rooms. A room’s only job is to collect arrivals and let Santa know when a complete group is ready. Santa never counts arrivals anymore, he simply waits for a “group ready” signal and then does the work.</p><p>To build a correct model, we use one room for the reindeer and another for the elves. The key idea is to separate marshalling (handled by the rooms) from serving. Let’s now look at the modified sequence of events.</p><p></p><p>When a group of nine reindeer arrives at the reindeer room, the room signals Santa. While this is happening, two elves also arrive. Santa delivers toys and releases the reindeer. When the third elf later arrives, the elf room signals Santa; Santa consults with the elves and then releases them.</p><p>To model this behavior in SPIN, each component is represented as a separate process. SPIN explores all possible interleavings of these processes and checks that specified correctness properties hold in every reachable state.</p><p>We model the system using the following processes:</p><p><em>Reindeer</em>: We run nine reindeer processes concurrently. Each reindeer arrives at the reindeer room and waits there until it is released.</p><p><em>Elves</em>: We also run ten elf processes concurrently. Each elf arrives at the elf room and waits there until it is released.</p><p><em>Reindeer room</em>: We run a single instance of this process, which simulates the reindeer room. It collects arriving reindeer, signals Santa when a full group of nine has formed, and releases the group after Santa completes delivery.</p><p><em>Elf room</em>: Similarly, we run a single instance of this process to simulate the elf room. It collects arriving elves, signals Santa when a group of three has formed, and releases the group after Santa completes consultation.</p><p><em>Santa</em>: A single Santa process waits for “group ready” signals from the rooms. It serves reindeer with priority over elves and notifies the appropriate room when its work is complete.</p><p>To communicate between processes, we use the following rendezvous channels, each carrying messages of type <em>bit</em>:</p><pre><code class="language-promela">chan r_arrive  = [0] of { bit };
+chan e_arrive  = [0] of { bit };
+chan r_release = [0] of { bit };
+chan e_release = [0] of { bit };
+chan r_done    = [0] of { bit };
+chan e_done    = [0] of { bit };
+
+</code></pre><p>We append an <em>r</em> to channel names that transfer data for reindeer, and an <em>e</em> to those for elves. Below are the roles of the main channels:</p><ul><li><p><em>r_arrive / e_arrive</em>: These rendezvous channels represent how reindeer and elves enter their rooms. A reindeer tries to enter by sending on <em>r_arrive</em>; because the channel is rendezvous, it blocks until the room is ready to receive. When the room is full, it stops receiving arrivals, so additional reindeer (or elves) block until the room re-opens.</p><li><p><em>r_release / e_release</em>: These channels represent how a room releases a complete group. After Santa finishes, the room sends on <em>r_release</em> (or <em>e_release</em>) once per group member. Because the channel is rendezvous, the room cannot “release ahead”, each send synchronizes with an actual waiting reindeer (or elf).</p><li><p><em>r_done / e_done</em>: These channels represent Santa’s “I’m finished” notification to the room. The room waits for this signal before releasing anyone. For example, after Santa finishes delivering toys, he sends on <em>r_done</em>; without it, the room would not know when it is safe to release the reindeer.</p></li></li></li></ul><p>Now let’s look at the reindeer and elf processes, which are quite similar. We’ll start with the reindeer process:</p><pre><code class="language-promela">active [9] proctype Reindeer()
+{
+    do
+    :: r_arrive ! 1;     // enter the room
+       r_release ? 1;    // wait to be released
+    od
+}
+</code></pre><p>Because of the <em>active [9]</em> keyword, SPIN starts nine reindeer processes running concurrently in the initial system state. The statement <em>r_arrive ! 1</em> indicates that a reindeer is attempting to enter the reindeer room by sending on the <em>r_arrive</em> channel. Because <em>r_arrive</em> is a rendezvous channel, the reindeer blocks until the room is ready to accept it. After entering the room, the reindeer waits to be released by blocking on the <em>r_release</em> channel.</p><p>The code for the elf process is similar:</p><pre><code class="language-promela">active [10] proctype Elf()
+{
+    do 
+    :: e_arrive ! 1;
+       e_release ? 1;
+    od
+}
+</code></pre><p>The room is where marshalling and synchronization take place. Let’s now look at the reindeer room.</p><div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>active proctype RoomReindeer()
+{
+    byte waiting = 0;
+    byte i = 0;
+
+    do
+    /* Collect reindeer until the group is complete (entrance open iff waiting &lt; 9) */
+    :: (waiting &lt; NUM_REINDEER) -&gt;
+        atomic {
+            r_arrive ? 1;
+            waiting++;
+            reindeer_waiting = waiting;
+            if
+            :: (waiting == NUM_REINDEER) -&gt; r_request = 1
+            :: else -&gt; skip
+            fi
+        }
+
+    /* Group complete: wait for Santa, then release all 9 and reset */
+    :: (waiting == NUM_REINDEER) -&gt;
+        atomic { r_done ? 1; i = 0; }
+
+        do
+        :: (i &lt; NUM_REINDEER) -&gt;
+            atomic { r_release ! 1; i++; }
+        :: else -&gt; break
+        od;
+
+        atomic {
+            waiting = 0;
+            reindeer_waiting = 0;
+        }
+    od
+}
+</code></pre></div></div><p>The repetition structure has two alternatives. When <em>waiting</em> is less than <em>NUM_REINDEER</em>, the room accepts arriving reindeer and increments the counter. If the arrival completes the group, the room sets <em>r_request = 1</em> to notify Santa.</p><p>When <em>waiting</em> equals <em>NUM_REINDEER</em>, the room stops accepting arrivals and waits for Santa to message completion on <em>r_done</em>. After receiving this message, the room releases the reindeer via <em>r_release</em> and resets its state to accept new arrivals.</p><p>The logic for the elf room follows the same pattern and is omitted here for brevity.</p><p>The Santa process models two kinds of work: toy delivery with the reindeer and consultation with the elves. Its main loop contains two guarded alternatives.</p><p>In the first alternative, guarded by <em>r_request</em>, Santa performs the toy delivery action, clears <em>r_request</em>, and signals completion to the reindeer room by sending on <em>r_done</em>. The corresponding code is shown below.</p><div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>:: r_request -&gt;
+        atomic {
+            delivering = true;
+            r_request = 0;   /* claim the request */
+        }
+
+        /* Deliver toys (abstracted). */
+        delivering = false;
+
+        /* Notify the Room that delivery is complete; it can release the reindeer. */
+        r_done ! 1;
+</code></pre></div></div><p>The second alternative is guarded by <em>!r_request &amp;&amp; e_request</em>. This guard enforces the priority rule: Santa consults with the elves only if no reindeer group is waiting and a group of three elves has formed. Santa then performs the consultation and signals completion to the elf room by sending on <em>e_done</em>.</p><pre><code class="language-promela">:: (!r_request &amp;&amp; e_request) -&gt;
+        atomic {
+            consulting = true;
+            e_request = 0;   /* claim the request */
+        }
+
+        /* Consult (abstracted). */
+        consulting = false;
+
+        /* Notify the Room that consultation is complete; it can release the elves. */
+        e_done ! 1;
+</code></pre><p>How do we validate that the model is correct?</p><p>We can specify two kinds of correctness properties: safety properties and liveness properties. Let’s look at them one by one.</p><p>Safety properties assert that nothing bad ever happens. We use three safety properties in this model. First, we ensure that Santa always delivers toys with exactly nine reindeer, that is, a full group of nine reindeer must be present in the room. We specify this as:</p><div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ltl safety_delivery { [] (delivering -&gt; reindeer_waiting == 9) }
+</code></pre></div></div><p>This property states that, at all times, if Santa is delivering toys, then the variable <em>reindeer_waiting</em> must equal 9.</p><p>Second, we ensure that Santa always consults with exactly three elves. We specify this as:</p><div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ltl safety_consult { [] (consulting -&gt; elf_waiting == 3) }
+</code></pre></div></div><p>Finally, we specify a mutual-exclusion property to ensure that Santa never delivers toys and consults at the same time:</p><div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ltl mutex_santa { [] !(delivering &amp;&amp; consulting) }
+</code></pre></div></div><p>You might wonder why the variables delivering and consulting are set to true only briefly. In this model, delivery and consultation are not simulated in detail, they are represented as single abstract steps. The boolean flags simply mark the moment when Santa starts a delivery or consultation, so that we can state and check correctness properties. Their purpose is not to model time passing, but to make illegal overlaps visible to the model checker.</p><p>Now let’s turn to the liveness property. Liveness properties state that something good eventually happens. The liveness property we specify is: always, if a request is pending, then eventually Santa will either be delivering toys or consulting with elves. This rules out executions where requests remain pending forever without Santa ever doing work.</p><p>We specify this property as follows (where [] denotes “always” and &lt;&gt; denotes “eventually”):</p><div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ltl live_progress { [] ((r_request || e_request) -&gt; &lt;&gt; (delivering || consulting)) }
+</code></pre></div></div><p>One important role of a liveness property is to avoid vacuous correctness. For example, a safety property such as <em>[] (delivering -&gt; reindeer_waiting == 9)</em> can hold even if <em>delivering</em> is never true (‘-&gt;’ is an implication, and in logic an implication “A implies B” is considered true whenever A is false, regardless of whether B is true or false.). In contrast, this liveness property rules out executions where a request remains pending forever without Santa ever taking a delivery or consultation step, in other words, it checks that some service step eventually occurs whenever a request is pending.</p><p>When we run the model in SPIN, all safety and liveness properties pass. In separate runs, SPIN explored about 5 million states while checking <em>safety_delivery</em> and <em>mutex_santa</em>, and about 7 million states while checking the liveness property and found no counterexamples. In a similar fashion, we can also specify and check the precedence property.</p><p>Both the model and the instructions for running it are available in the repository <sup id="fnref:5" role="doc-noteref"><a class="footnote" href="#fn:5" rel="footnote">5</a></sup>.</p><p>Let’s now look at an example execution to see how these pieces fit together.</p><p></p><p>Time flows from top to bottom. When the ninth reindeer arrives, the reindeer room sets <em>r_request</em> and closes the room to further arrivals. While <em>r_request</em> remains true, Santa serves the reindeer, even if elves arrive, because the elf branch is disabled by the guard <em>!r_request</em>.</p><p>After Santa signals completion by sending on <em>r_done</em>, the room releases all nine reindeer via rendezvous. When a group of three elves later forms, the model sets <em>e_request</em>. Since <em>r_request</em> is now false, Santa serves the elves.</p><p>To transform this model into a computer program, I thought I would try implementing it in Go. I do not know Go particularly well, so I collaborated with an AI to translate the Promela design into a simple, idiomatic Go implementation. I reviewed the code <sup id="fnref:6" role="doc-noteref"><a class="footnote" href="#fn:6" rel="footnote">6</a></sup> to keep it faithful to the model, but any mistakes are mine.</p><p><em>Please keep in mind that I’m only human, and there’s a chance this post contains errors. If you notice anything off, I’d appreciate a correction. Please feel free to <a href="mailto:waqas.younas@gmail.com">send me an email</a>.</em></p><h2 id="endnotes">Endnotes:</h2><div class="footnotes" role="doc-endnotes"><ol><li id="fn:1" role="doc-endnote"><p>Ben-Ari, M. <em>How to Solve the Santa Claus Problem</em>. Concurrency: Practice and Experience, 1998. <a class="reversefootnote" href="#fnref:1" role="doc-backlink">↩</a> <a class="reversefootnote" href="#fnref:1:1" role="doc-backlink">↩<sup>2</sup></a></p><li id="fn:2" role="doc-endnote"><p>Link to the source code for the first failure scenario: <a href="https://github.com/wyounas/model-checking/blob/main/puzzles/santa_claus/santa_bug_deliver_without_full_group.pml">https://github.com/wyounas/model-checking/blob/main/puzzles/santa_claus/santa_bug_deliver_without_full_group.pml</a> <a class="reversefootnote" href="#fnref:2" role="doc-backlink">↩</a></p><li id="fn:3" role="doc-endnote"><p>Link to the source code for the second failure scenario: <a href="https://github.com/wyounas/model-checking/blob/main/puzzles/santa_claus/santa_bug_deliver_and_consult_simultaneously.pml">https://github.com/wyounas/model-checking/blob/main/puzzles/santa_claus/santa_bug_deliver_and_consult_simultaneously.pml</a> <a class="reversefootnote" href="#fnref:3" role="doc-backlink">↩</a></p><li id="fn:4" role="doc-endnote"><p>Link to the source code for the third failure scenario: <a href="https://github.com/wyounas/model-checking/blob/main/puzzles/santa_claus/santa_bug_consult_before_delivery.pml">https://github.com/wyounas/model-checking/blob/main/puzzles/santa_claus/santa_bug_consult_before_delivery.pml</a> <a class="reversefootnote" href="#fnref:4" role="doc-backlink">↩</a></p><li id="fn:5" role="doc-endnote"><p>Link to the source code for the room-based solution: <a href="https://github.com/wyounas/model-checking/blob/main/puzzles/santa_claus/santa_claus.pml">https://github.com/wyounas/model-checking/blob/main/puzzles/santa_claus/santa_claus.pml</a> <a class="reversefootnote" href="#fnref:5" role="doc-backlink">↩</a></p><li id="fn:6" role="doc-endnote"><p>Link to the Go implementation of the room-based solution: <a href="https://github.com/wyounas/model-checking/blob/main/puzzles/santa_claus/santa_claus.go">https://github.com/wyounas/model-checking/blob/main/puzzles/santa_claus/santa_claus.go</a> <a class="reversefootnote" href="#fnref:6" role="doc-backlink">↩</a></p></li></li></li></li></li></li></ol></div><p><a href="/articles">← Back to all articles</a></p></article>
