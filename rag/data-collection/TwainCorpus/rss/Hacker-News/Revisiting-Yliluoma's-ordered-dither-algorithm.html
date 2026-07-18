@@ -1,0 +1,589 @@
+<body>
+<div class="topbar">
+<span class="logo"><a href="/">30fps.net</a> — Computer Graphics &amp; Programming with Pekka Väänänen</span>
+</div>
+<div id="text">
+
+<div class="wide-figure">
+<div class="flex-figure">
+<figure style="width: 260px">
+<figcaption>
+Yliluoma’s 2nd dithering algorithm
+</figcaption>
+
+</figure>
+<figure style="width: 260px">
+<figcaption>
+EMA-Constant
+</figcaption>
+
+</figure>
+<figure style="width: 260px">
+<figcaption>
+Knoll (10% strength)
+</figcaption>
+
+</figure>
+</div>
+</div>
+<p><strong>Summary:</strong> This article discusses Joel Yliluoma’s 2011 ordered dither algorithm (left), explains its internals in greater detail than other treatments, presents new simplified variants (middle), and compares the results to a state-of-the-art algorithm (right).
+Source code is included at the end.</p>
+<h2 id="a-1-bit-introduction">A 1-bit introduction</h2>
+<p>Let’s lay some foundations first.
+I assume you know what ordered dithering looks like (if not, see above).
+In black and white it’s easy to code.
+First you acquire a <em>threshold matrix</em> from somewhere.
+For example, a 4x4 Bayer matrix like this:</p>
+<p><span class="math display">
+\begin{bmatrix}
+0 &amp; 8 &amp; 2 &amp; 10 \\
+12 &amp; 4 &amp; 14 &amp; 6 \\
+3 &amp; 11 &amp; 1 &amp; 9 \\
+15 &amp; 7 &amp; 13 &amp; 5
+\end{bmatrix}
+</span></p>
+<p>To apply the matrix to a grayscale image, you go over each pixel, find out which matrix element it corresponds to (conceptually, the matrix is tiled over the image), and read a <em>threshold</em> from the matrix.
+If the input pixel’s gray value is higher than the threshold, you output a white pixel.
+The code could look like this:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb1-1">bayer_4x4 <span class="op">=</span> np.array([</span>
+<span id="cb1-2">    [ <span class="dv">0</span>,  <span class="dv">8</span>,  <span class="dv">2</span>, <span class="dv">10</span>],</span>
+<span id="cb1-3">    [<span class="dv">12</span>,  <span class="dv">4</span>, <span class="dv">14</span>,  <span class="dv">6</span>],</span>
+<span id="cb1-4">    [ <span class="dv">3</span>, <span class="dv">11</span>,  <span class="dv">1</span>, <span class="dv">9</span>],</span>
+<span id="cb1-5">    [<span class="dv">15</span>,  <span class="dv">7</span>, <span class="dv">13</span>,  <span class="dv">5</span>]])</span>
+<span id="cb1-6"></span>
+<span id="cb1-7"><span class="kw">def</span> dither_bayer4x4_1bit(img: np.ndarray):</span>
+<span id="cb1-8">    img_float <span class="op">=</span> img <span class="op">/</span> <span class="dv">255</span> <span class="co"># process in [0,1] range</span></span>
+<span id="cb1-9">    H, W, _ <span class="op">=</span> img.shape</span>
+<span id="cb1-10"></span>
+<span id="cb1-11">    <span class="co"># The floating point output image</span></span>
+<span id="cb1-12">    out <span class="op">=</span> np.zeros((H, W, <span class="dv">1</span>), dtype<span class="op">=</span><span class="bu">float</span>)</span>
+<span id="cb1-13"></span>
+<span id="cb1-14">    <span class="cf">for</span> y <span class="kw">in</span> <span class="bu">range</span>(H):</span>
+<span id="cb1-15">        <span class="cf">for</span> x <span class="kw">in</span> <span class="bu">range</span>(W):</span>
+<span id="cb1-16">            color <span class="op">=</span> img_float[y, x]</span>
+<span id="cb1-17">            threshold <span class="op">=</span> (bayer_4x4[y<span class="op">%</span><span class="dv">4</span>,x<span class="op">%</span><span class="dv">4</span>] <span class="op">+</span> <span class="fl">0.5</span>) <span class="op">/</span> <span class="fl">16.0</span></span>
+<span id="cb1-18">            <span class="cf">if</span> color <span class="op">&gt;</span> threshold:</span>
+<span id="cb1-19">                out[y, x] <span class="op">=</span> <span class="dv">1</span></span>
+<span id="cb1-20">            <span class="cf">else</span>:</span>
+<span id="cb1-21">                out[y, x] <span class="op">=</span> <span class="dv">0</span></span>
+<span id="cb1-22"></span>
+<span id="cb1-23">    <span class="cf">return</span> out</span></code></pre></div>
+<p>And below you see what it produces.</p>
+<div class="wide-figure">
+<div class="flex-figure">
+<figure style="width: 370px">
+
+<figcaption>
+Grayscale image
+</figcaption>
+</figure>
+<figure style="width: 370px">
+
+<figcaption>
+Dithered to 1-bit with a 4x4 threshold matrix
+</figcaption>
+</figure>
+</div>
+</div>
+<p>For 1-bit output, an ordered matrix like this creates pretty grainy results.
+If I had to choose, something like Atkinson error diffusion dithering would work better in black and white.</p>
+<p>But this was a mere warmup exercise.
+The real question is how to do the same for color images.
+To create something like this:</p>
+<figure>
+
+<figcaption>
+16-color indexed image with ordered dithering
+</figcaption>
+</figure>
+<p>Today we are discussing how exactly it’s done.</p>
+<h2 id="ordered-dithering-in-color-is-both-harder-and-easier-than-you-think">Ordered dithering in color is both harder and easier than you think</h2>
+<p>Doing ordered dithering well is surprisingly tricky.
+Getting started is easy though.
+We can reinterpret the threshold matrix as structured noise, repeat it over the whole image and add it to the original colors, and then find the closest color for each pixel.
+The 1-bit example code turns into something like this:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb2-1"><span class="co"># Assume "offset" is the average distance between two palette colors.</span></span>
+<span id="cb2-2"></span>
+<span id="cb2-3"><span class="cf">for</span> y <span class="kw">in</span> <span class="bu">range</span>(H):</span>
+<span id="cb2-4">    <span class="cf">for</span> x <span class="kw">in</span> <span class="bu">range</span>(W):</span>
+<span id="cb2-5">        <span class="co"># input color</span></span>
+<span id="cb2-6">        color <span class="op">=</span> img_float[y, x]</span>
+<span id="cb2-7"></span>
+<span id="cb2-8">        <span class="co"># (0, 1) range threshold</span></span>
+<span id="cb2-9">        threshold <span class="op">=</span> (bayer_4x4[y<span class="op">%</span><span class="dv">4</span>,x<span class="op">%</span><span class="dv">4</span>] <span class="op">+</span> <span class="fl">0.5</span>) <span class="op">/</span> <span class="fl">16.0</span></span>
+<span id="cb2-10"></span>
+<span id="cb2-11">        <span class="co"># bias threshold to (-0.5, 0.5) range, then add</span></span>
+<span id="cb2-12">        moved <span class="op">=</span> color <span class="op">+</span> offset <span class="op">*</span> (threshold <span class="op">-</span> <span class="fl">0.5</span>)</span>
+<span id="cb2-13"></span>
+<span id="cb2-14">        <span class="co"># find closest palette color to 'moved'</span></span>
+<span id="cb2-15">        idx <span class="op">=</span> find_index_of_closest(moved)</span>
+<span id="cb2-16">        inds[y, x] <span class="op">=</span> idx</span></code></pre></div>
+<p>This actually works better than it should, at least with the palettes used for my test images.
+The only question is the noise magnitude, the value of <code>offset</code> above.
+There’s no right answer, but in my experiments this magic formula worked OK:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb3-1">offset <span class="op">=</span> dither_strength <span class="op">*</span> <span class="fl">0.5</span> <span class="op">*</span> median(pairwise_color_distances)</span></code></pre></div>
+<p>Here’s how this “greyscale offset” method looks:</p>
+<div class="wide-figure">
+<div class="flex-figure">
+<figure style="width: 370px">
+
+<figcaption>
+Original
+</figcaption>
+</figure>
+<figure style="width: 370px">
+
+<figcaption>
+16-color image dithered with the above code
+</figcaption>
+</figure>
+</div>
+</div>
+<p>Not bad!
+The black dots in the sky are a bit rough but those could be cleaned up by reducing dither strength.
+For arbitrary palettes, this approach tends to produce desaturated results, unfortunately.
+But when a palette is designed for the image like here, it works OK.</p>
+<h3 id="n-candidate-methods">N-candidate methods</h3>
+<!-- Now we are approaching the main subject matter. -->
+<p>One family of more advanced solutions to the <em>color selection problem</em> involves collecting a set of <span class="math inline">N</span> <em>candidate</em> palette colors for each pixel, assigning a probability to each, and then picking one either at random or via a threshold matrix.
+These are called <em>N-candidate</em> methods.
+I won’t go into detail here, but will point you to a 2023 blog post titled <a href="https://matejlou.blog/2023/12/06/ordered-dithering-for-arbitrary-or-irregular-palettes/"><em>Ordered Dithering with Arbitrary or Irregular Colour Palettes</em></a> that explains everything you need to know.
+Please read at least its <a href="https://matejlou.blog/2023/12/06/ordered-dithering-for-arbitrary-or-irregular-palettes/#n-candidate-methods">“The Probability Matrix”</a> section.</p>
+<p>A key property these algorithms try to satisfy is <em>local mean reproduction</em>:
+when the dithered result is seen from afar (or blurred), it should look like the original.
+This translates to minimizing the distance between the input pixel color <span class="math inline">\mathbf{p}</span> and the weighted sum of all chosen candidates <span class="math inline">w_1 \mathbf{r}_1 + ... + w_N \mathbf{r}_N</span>.
+For more details, I suggest reading the blog post linked above.</p>
+<h3 id="knolls-algorithm">Knoll’s algorithm</h3>
+<figure>
+
+<figcaption aria-hidden="true">A 16-color image dithered with Knoll’s algorithm.</figcaption>
+</figure>
+<p>One algorithm that minimizes the above distance astonishingly well is Thomas Knoll’s dither algorithm, famously used in Adobe Photoshop (he’s its inventor after all).
+Knoll’s algorithm first sets a <em>goal color</em> <span class="math inline">\mathbf{x}_1</span> to the palette color closest to the input color <span class="math inline">\mathbf{p}</span>.
+This palette color <span class="math inline">\mathbf{r}_1</span> is the first candidate color.
+Then the algorithm measures how much error there is between <span class="math inline">\mathbf{r}_1</span> and <span class="math inline">\mathbf{p}</span>, and moves the goal in the opposite direction:</p>
+<p><span class="math display">
+\mathbf{x}_{2} = \mathbf{x}_1 + (\mathbf{p} - \mathbf{r}_1).
+</span></p>
+<p>Now the process repeats and a new closest point to the goal <span class="math inline">\mathbf{x}_2</span> is found.
+This will be the second candidate color.
+It compensates for the error of the earlier candidate; if the first palette color found was too blue, then this one will be yellowish.
+After <span class="math inline">N</span> rounds of this, the iteration has visited different colors around <span class="math inline">\mathbf{p}</span>.
+Each color could’ve been visited multiple times, and the final candidate probabilities are relative to the frequency of the visits.
+<!-- The final candidate weights by counting how many times each palette color was chosen as a candidate (repeats are possible) and dividing by $N$. -->
+The process can be summarized as follows:</p>
+<table style="table-layout:fixed;">
+<tr>
+
+<th style="width: 70%;">
+Knoll’s algorithm’s error compensation loop
+</th>
+</tr>
+<tr>
+<td>
+
+</td>
+<td style="vertical-align: top;">
+<ol type="1">
+<li>Find the palette color <span class="math inline">\mathbf{r}_i</span> closest to the goal point <span class="math inline">\mathbf{x}_i</span>.</li>
+<li>Increase <span class="math inline">\mathbf{r}_i</span>’s weight by 1.</li>
+<li>Move the goal <span class="math inline">\mathbf{x}_{i+1} = \mathbf{x}_i + (\mathbf{p} - \mathbf{r}_i).</span></li>
+<li>Repeat <span class="math inline">N</span> times.</li>
+<li>Normalize weights by <span class="math inline">N</span>.</li>
+</ol>
+When the process repeats for <span class="math inline">\mathbf{x}_{i+1}</span>, the closest-point-query is done on the opposite side of <span class="math inline">\mathbf{p}</span>.
+Selecting successive points this way approximates a convex hull.
+</td>
+</tr>
+</table>
+<p>I know the procedure may still seem abstract, but the point is that the algorithm is both simple and effective.
+There are some subtleties like <a href="https://matejlou.blog/2023/12/06/ordered-dithering-for-arbitrary-or-irregular-palettes/#appendix-i-candidate-sorting">sorting by brightness</a> to keep the color choices consistent across pixels, but in Python it boils down to this:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb4-1"><span class="co"># Work arrays allocated outside the main loop</span></span>
+<span id="cb4-2">weights <span class="op">=</span> np.zeros(K, dtype<span class="op">=</span><span class="bu">float</span>)</span>
+<span id="cb4-3">error <span class="op">=</span> np.zeros(<span class="dv">3</span>, dtype<span class="op">=</span><span class="bu">float</span>)</span>
+<span id="cb4-4"></span>
+<span id="cb4-5"><span class="cf">for</span> y <span class="kw">in</span> <span class="bu">range</span>(H):</span>
+<span id="cb4-6">    <span class="cf">for</span> x <span class="kw">in</span> <span class="bu">range</span>(W):</span>
+<span id="cb4-7">        color <span class="op">=</span> img_float[y, x]</span>
+<span id="cb4-8"></span>
+<span id="cb4-9">        <span class="co"># Clear work arrays</span></span>
+<span id="cb4-10">        weights[:] <span class="op">=</span> <span class="fl">0.0</span>  <span class="co"># candidate weights</span></span>
+<span id="cb4-11">        weight_sum <span class="op">=</span> <span class="fl">0.0</span></span>
+<span id="cb4-12">        error[:] <span class="op">=</span> <span class="fl">0.0</span>    <span class="co"># accumulated error compensation</span></span>
+<span id="cb4-13"></span>
+<span id="cb4-14">        <span class="co"># Find candidates, can be less than N unique colors</span></span>
+<span id="cb4-15">        <span class="cf">for</span> _ <span class="kw">in</span> <span class="bu">range</span>(N):</span>
+<span id="cb4-16">            idx <span class="op">=</span> find_closest(color <span class="op">+</span> error <span class="op">*</span> dither_strength)</span>
+<span id="cb4-17">            weights[idx] <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb4-18">            weight_sum <span class="op">+=</span> <span class="dv">1</span></span>
+<span id="cb4-19">            error <span class="op">+=</span> color <span class="op">-</span> palette_float[idx]</span>
+<span id="cb4-20"></span>
+<span id="cb4-21">        weights <span class="op">/=</span> weight_sum</span>
+<span id="cb4-22"></span>
+<span id="cb4-23">        threshold <span class="op">=</span> (bayer_4x4[y<span class="op">%</span><span class="dv">4</span>,x<span class="op">%</span><span class="dv">4</span>] <span class="op">+</span> <span class="fl">0.5</span>) <span class="op">/</span> <span class="fl">16.0</span></span>
+<span id="cb4-24"></span>
+<span id="cb4-25">        <span class="co"># Output the candidate index on which cumulative weight sum</span></span>
+<span id="cb4-26">        <span class="co"># first crosses the threshold read from the 4x4 matrix</span></span>
+<span id="cb4-27">        <span class="co"># If a palette index wasn't used, its weight will be zero</span></span>
+<span id="cb4-28">        <span class="co"># and it won't be selected by this loop.</span></span>
+<span id="cb4-29">        cumulative_sum <span class="op">=</span> <span class="fl">0.0</span></span>
+<span id="cb4-30">        <span class="cf">for</span> idx <span class="kw">in</span> luma_order:</span>
+<span id="cb4-31">            w_ko <span class="op">=</span> weights[idx]</span>
+<span id="cb4-32">            cumulative_sum <span class="op">+=</span> w_ko</span>
+<span id="cb4-33">            <span class="cf">if</span> cumulative_sum <span class="op">&gt;</span> threshold:</span>
+<span id="cb4-34">                <span class="cf">break</span></span>
+<span id="cb4-35">        </span>
+<span id="cb4-36">        inds[y, x] <span class="op">=</span> idx </span></code></pre></div>
+<p>Notice how dither strength can be adjusted by modulating the scale of the error compensation.
+You can also study <a href="https://www.shadertoy.com/view/dlcGzN">mateljou’s shader version</a>.
+This should be enough context to understand the alternative solution presented next.</p>
+<h2 id="yliluomas-algorithms">Yliluoma’s algorithms</h2>
+<figure>
+<a href="yliluoma2-full.jpg">
+
+</a>
+</figure>
+<p>In 2011, Joel Yliluoma presented a series of dithering algorithms as alternatives to Knoll’s.
+They were described on his website in an article titled <a href="https://bisqwit.iki.fi/story/howto/dither/jy/"><em>Arbitrary-palette positional dithering algorithm</em></a>.
+As far as I know, they haven’t gained much traction.
+I studied them carefully and found one particularly interesting.</p>
+<h2 id="yliluoma-2-simplified">Yliluoma-2 simplified</h2>
+<figure>
+
+<figcaption aria-hidden="true">The previous 16-color image now dithered with Yliluoma’s algorithm #2.</figcaption>
+</figure>
+<p>I will focus on <a href="https://bisqwit.iki.fi/story/howto/dither/jy/#YliluomaSOrderedDitheringAlgorithm%202">the second algorithm</a> presented in the article.
+The variant in its C++ implementation, to be exact.
+Let’s call it <em>Yliluoma-2</em>.</p>
+<p>On a high level, Yliluoma-2 is similar to other N-candidate algorithms like Knoll’s: on each pixel, select weighted candidate colors from the palette, then output one based on a threshold matrix (or noise).
+The difference is how the candidates are selected, which in this case is done by testing every palette color using a unique error formula.</p>
+<h3 id="no-need-for-complex-color-difference-formulas">No need for complex color difference formulas</h3>
+<p>There’s a common belief that you need complex color difference calculations for high quality dithering.
+I think this is mistaken, and what you really want are (a) more weight for the green channel and (b) emphasis on differences of bright colors.</p>
+<p>The article proposes a luma-weighted (<a href="https://30fps.net/pages/better-srgb-to-greyscale/">previously</a> on this site) color difference formula, which I implemented.
+You can see its result in the first image from the left below.
+A simpler way to achieve the same thing is to desaturate your image <em>and</em> palette before dithering.
+The final indexed image still uses the original, colorful palette.
+For example <a href="https://pngquant.org/lib/">libimagequant</a> multiplies RGB colors by <span class="math inline">(0.5, 1, 0.45)</span> and raises each channel to the power of <span class="math inline">0.8</span>.
+I did that in the second picture below, and it works just as well.</p>
+<div class="wide-figure">
+<div class="flex-figure">
+<figure style="width: 300px">
+
+<figcaption>
+Dithered using a luma-weighted color distance
+</figcaption>
+</figure>
+<figure style="width: 300px">
+
+<figcaption>
+Dithered but colors desaturated and brightened before
+</figcaption>
+</figure>
+<figure style="width: 300px">
+
+<figcaption>
+Original
+</figcaption>
+</figure>
+</div>
+</div>
+<p>Of course, if you want a high-quality reconstruction, as in “looks like the original when squinting”, then do dithering in linear space.
+I’d also argue that if your output resolution is low and pixels big, you can do whatever you like.
+You’re constructing something very different-looking that you hope the viewer will interpret the same way as the original.</p>
+<h3 id="candidates-are-chosen-via-closest-point-to-line-segment-tests">Candidates are chosen via closest-point-to-line-segment tests</h3>
+<p>Back to the main topic.
+I spent a pleasant afternoon with the code and arrived at a geometric interpretation of it.
+Recall how N-candidate methods both find candidate palette colors and assign weights (probabilities) to them.
+The color selection loop in Yliluoma-2 keeps track of an <a href="https://en.wikipedia.org/wiki/Exponential_smoothing"><em>exponential moving average (EMA)</em></a> of the candidate colors chosen so far.
+In other words, on each search iteration, the routine updates the moving average <span class="math inline">\mathbf{x}_i</span> with a new candidate <span class="math inline">\mathbf{r}_i</span> via <span class="math inline">\mathbf{x}_{i+1} = (1 - t)\mathbf{x}_i + t\mathbf{r}_i</span>, where <span class="math inline">t \in [0,1]</span> is a mixing weight that varies on every iteration.
+(Perhaps <span class="math inline">t</span> should be called <span class="math inline">t_i</span> instead?)</p>
+<p>Okay, so the candidate is mixed in to the running average via <strong>lerp()</strong>.
+But how is the candidate chosen and where does the mixing factor <span class="math inline">t</span> come from?
+The candidate point is chosen by testing line segments between every palette color <span class="math inline">\mathbf{c}_k</span> and the current mean <span class="math inline">\mathbf{x}_i</span>.
+The line that passes closest to the input color <span class="math inline">\mathbf{p}</span> tells which palette color to choose as the candidate <span class="math inline">\mathbf{r}_i</span>.</p>
+<p>The value of <span class="math inline">t</span> is then the mixing factor that produced the closest point on the segment that passed nearest to the input.
+It’s hard to explain, but visually things should make more sense:</p>
+<figure>
+
+<figcaption aria-hidden="true">The closest point to input <span class="math inline">\mathbf{p}</span> on the line segment from <span class="math inline">\mathbf{x}_i</span> to <span class="math inline">\mathbf{r}_i</span> is identified by <span class="math inline">t</span>. In this example, <span class="math inline">t</span> would be about <span class="math inline">0.6</span>.</figcaption>
+</figure>
+<p>To summarize: of all palette colors, the chosen candidate best approximates the input when linearly combined with the current mean.</p>
+<h3 id="exponential-moving-average-loop-in-detail">Exponential moving average loop in detail</h3>
+<p>Here’s the algorithm in more detail.
+Studying it is not necessary to understand the developments below, but I thought it prudent to document it.</p>
+<p>On the first iteration, the candidate is chosen as the closest palette color to the input: <span class="math inline">\mathbf{x}_1 = \text{closest}(\mathbf{p})</span>.
+Its weight is <span class="math inline">1</span>.
+The rest of the iterations proceed like this:</p>
+<table class="table-layout:fixed;">
+<tr>
+
+<th style="width: 70%;">
+Yliluoma-2’s exponential moving average loop (simplified)
+</th>
+</tr>
+<tr>
+<td>
+
+</td>
+<td style="vertical-align: top;">
+<ol type="1">
+<li>Consider every palette color <span class="math inline">\mathbf{c}_k</span> as a possible candidate.
+<ul>
+<li>Find a mixing factor <span class="math inline">t</span> that minimizes the squared distance <span class="math inline">||((1-t)\mathbf{x}_i + t \mathbf{c}_k) - \mathbf{p}||^2</span>.</li>
+<li>If the distance was the shortest found so far, then:
+<ul>
+<li>Update <span class="math inline">t_\text{best} = t</span></li>
+<li>Update <span class="math inline">\mathbf{c}_\text{best} = \mathbf{c}_k</span>.</li>
+<li>Update <span class="math inline">k_\text{best} = k</span>.</li>
+</ul></li>
+</ul></li>
+<li>Choose the candidate <span class="math inline">\mathbf{r}_i</span> = <span class="math inline">\mathbf{c}_\text{best}</span>.</li>
+<li>Move the mean point towards the candidate via the best mixing factor: <span class="math inline">\mathbf{x}_{i+1} = (1 - t_\text{best})\mathbf{x}_i + t_\text{best}\mathbf{r}_{i}</span></li>
+<li>Add <span class="math inline">t_\text{best}</span> to candidate <span class="math inline">\mathbf{r}_i</span>’s weight.</li>
+<li>Repeat <span class="math inline">N</span> times.</li>
+</ol>
+<p>Normalize weights via <code>weights /= sum(weights)</code>.</p>
+</td>
+</tr>
+</table>
+<p>Like Knoll’s algorithm, Yliluoma-2 also ends up approximating a convex hull.
+On each iteration, the goal <span class="math inline">\mathbf{x}_{i+1}</span> is moved to the closest point on the segment that was found earlier.
+Because this point is in between the old goal <span class="math inline">\mathbf{x}_i</span> and the input color <span class="math inline">\mathbf{p}</span>, it must be on the opposite side (loosely speaking) of <span class="math inline">\mathbf{p}</span>.
+That’s why the goal, the running average, moves around <span class="math inline">\mathbf{p}</span>.</p>
+<p><em>In the above explanation, I tried to make the procedure easy to understand by choosing a formulation with explicit averaging steps. The original C++ code uses a running average instead, presumably for speed.</em></p>
+<h2 id="how-to-find-t">How to find <em>t</em></h2>
+<p>Above, I left it open as to how exactly the closest point on a line is found.
+The simplest way is to do a <em>parameter sweep</em>: test different values of <span class="math inline">t \in [0,1]</span> and keep the one that was closest to the input point.
+Here’s a diagram.
+We are trying to find the point <span class="math inline">D</span> that’s closest to <span class="math inline">C</span> on the line segment <span class="math inline">AB</span>.
+Below, the red dots stand for individual values of <span class="math inline">t</span> we are testing:</p>
+<figure>
+
+<figcaption aria-hidden="true">We want the point closest to <span class="math inline">C</span> on the line segment <span class="math inline">AB</span>.</figcaption>
+</figure>
+<p>Unfortunately, a parameter sweep is unlikely to hit the exact optimal <em>t</em> value.
+It also takes time, but if you have a complex color difference formula, it might be the only thing that works.
+But remember how we established that luma weighting can be done via preprocessing?
+That’s why we can ignore the perceptual stuff when searching for <span class="math inline">t</span> and solve the geometry problem directly.</p>
+<h3 id="an-analytic-t-solution">An analytic <em>t</em> solution</h3>
+<p>Assuming <span class="math inline">A \neq B</span>, we get</p>
+<p><span class="math display">
+t_\text{closest} = \frac{(C - A) \cdot (B - A)}{||(B - A)||^2},
+</span></p>
+<p>where “<span class="math inline">\cdot</span>” denotes a dot product.
+Since we want the point in between <span class="math inline">A</span> and <span class="math inline">B</span>, we have to clamp the range to <span class="math inline">[0,1]</span>:</p>
+<p><span class="math display">t = \max(0, \min(1, t_\text{closest}))</span></p>
+<p>and like earlier, <span class="math inline">D = (1-t)A + tB</span>.</p>
+<details>
+<summary>
+The same as code
+</summary>
+<div class="sourceCode" id="cb5"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb5-1">c_k <span class="op">=</span> palette_float[k] <span class="co"># B</span></span>
+<span id="cb5-2">delta <span class="op">=</span> c_k <span class="op">-</span> mean     <span class="co"># B - A</span></span>
+<span id="cb5-3"></span>
+<span id="cb5-4">t <span class="op">=</span> <span class="fl">0.0</span></span>
+<span id="cb5-5"></span>
+<span id="cb5-6">delta2 <span class="op">=</span> delta.dot(delta) <span class="co"># ||B - A||^2</span></span>
+<span id="cb5-7"></span>
+<span id="cb5-8"><span class="co"># Avoid division by zero</span></span>
+<span id="cb5-9"><span class="cf">if</span> delta2 <span class="op">&gt;=</span> <span class="fl">1e-9</span>:</span>
+<span id="cb5-10">    t <span class="op">=</span> (p <span class="op">-</span> mean).dot(delta) <span class="op">/</span> delta2</span>
+<span id="cb5-11"></span>
+<span id="cb5-12"><span class="co"># Limit the choice to the given range</span></span>
+<span id="cb5-13">t <span class="op">=</span> <span class="bu">max</span>(min_t, <span class="bu">min</span>(max_t, t))</span>
+<span id="cb5-14"></span>
+<span id="cb5-15">mix <span class="op">=</span> (<span class="dv">1</span><span class="op">-</span>t) <span class="op">*</span> mean <span class="op">+</span> t <span class="op">*</span> c_k  <span class="co"># D</span></span>
+<span id="cb5-16"></span>
+<span id="cb5-17">diff <span class="op">=</span> p <span class="op">-</span> mix</span>
+<span id="cb5-18">cand_dist <span class="op">=</span> diff.dot(diff) <span class="co"># d^2</span></span></code></pre></div>
+</details>
+<h3 id="limits-to-t">Limits to <em>t</em></h3>
+<p>As the exact solution can be anywhere in <span class="math inline">[0,1]</span>, it can pick really weird points.
+For example <span class="math inline">t=0</span> equals not moving the mean at all, which is probably not what you want.
+That’s why I experimented with various minimum values for <em>t</em>, and found <span class="math inline">0.2</span> to be a decent compromise.
+So in practice, my code for the closest point calculates this instead:</p>
+<p><span class="math display">t = \max(\textcolor{red}{0.2}, \min(1, t_\text{closest}).</span></p>
+<p>We have already strayed far from the original Yliluoma-2 algorithm that has no such limit.
+Let’s go one step further.</p>
+<h3 id="fixed-t">Fixed <em>t</em></h3>
+<p>In my experiments, I noticed that the optimal <em>t</em> was near zero 97% of the time.
+This makes sense if you consider a situation where the mean color has drifted near the input color; keeping it still minimizes error.</p>
+<p>This motivated an alternative method where instead of solving for <em>t</em>, it’s just always a constant.
+I chose <span class="math inline">t = 0.3</span> and in most cases the results are indistinguishable from the exact method.</p>
+<p>This approach can be thought of as choosing candidates that are in the direction of the input color, but quite far.
+In practice its output quality seems on par with the exact method, perhaps slightly worse.</p>
+<h2 id="three-variants-and-some-observations">Three variants and some observations</h2>
+<p>Since I’ve modified the original Yliluoma-2 approach, I dubbed the three variants above as “EMA” color selection algorithms:</p>
+<ul>
+<li><strong>EMA-Sweep</strong>: This is Yliluoma-2 reimplemented in Python. Uses a 4x4 threshold matrix and tests 8 values of <span class="math inline">t</span> in <span class="math inline">[0.2, 1.0)</span>. The C++ code tests 1–16 values in <span class="math inline">(0.0, 1.0)</span> based on the number of candidates chosen so far.</li>
+<li><strong>EMA-Exact</strong>: Calculates an exact solution for <span class="math inline">t \in [0.2, 1.0)</span>. Does less work than the original.</li>
+<li><strong>EMA-Constant</strong>: Sets a fixed <span class="math inline">t=0.3</span>. Simplest of the three.</li>
+</ul>
+<h3 id="time-complexities-of-the-new-variants">Time complexities of the new variants</h3>
+<p>Assume <span class="math inline">K</span> colors and <span class="math inline">N</span> candidates.
+Per-pixel work of Knoll’s algorithm is <span class="math inline">O(N \log K)</span> assuming closest point lookups accelerated with a kd-tree.
+Yliluoma-2 has to do <span class="math inline">O(N^2 K)</span> work because the number of distinct values of <span class="math inline">t</span> tested seems to depend on <span class="math inline">N</span> (not totally clear from the code).</p>
+<p>EMA-Sweep tests 8 points on a segment for every candidate, so it’s <span class="math inline">O(NK*8) = O(NK)</span> but basically the same speed as Yliluoma-2.
+EMA-Exact and EMA-Constant test only a single <span class="math inline">t</span> value per candidate, so they are faster but in the same <span class="math inline">O(NK)</span> complexity class.</p>
+<h3 id="results-and-discussion">Results and discussion</h3>
+<p>In these images, EMA and Knoll’s algorithms use Euclidean sRGB distances, while Yliluoma-2 uses its luma-weighted distance.</p>
+<p>First of all, EMA-Sweep and EMA-Exact produce close to identical results.
+You can see the two images below are indistinguishable.
+The <span class="math inline">t=0.3</span> constant chosen for EMA-Constant creates slightly weaker dithering.
+See the supplement for <a href="supplement.html#effect-of-ema-constants-fixed-t-value">a demonstration</a>.</p>
+<div class="wide-figure">
+<div class="flex-figure">
+<figure style="width: 370px">
+
+<figcaption>
+EMA-Sweep
+</figcaption>
+</figure>
+<figure style="width: 370px">
+
+<figcaption>
+EMA-Exact
+</figcaption>
+</figure>
+<figure style="width: 370px">
+
+<figcaption>
+EMA-Constant
+</figcaption>
+</figure>
+</div>
+</div>
+<p>The exact <span class="math inline">t</span>s chosen by EMA-Exact produce results similar to Yliluoma-2’s parameter sweep.
+Since the solved <span class="math inline">t</span> is clamped to <span class="math inline">[0.2, 1.0)</span>, the resulting dithering is also a tad weaker than Yliluoma-2’s.</p>
+<p>Below is an EMA-Exact vs Yliluoma-2 comparison with 16 colors, N=16 candidate iterations, and a 4x4 threshold matrix in both.
+They look mostly the same.</p>
+<div class="wide-figure">
+<div class="flex-figure">
+<figure style="width: 520px">
+
+<figcaption>
+EMA-Exact
+</figcaption>
+</figure>
+<figure style="width: 520px">
+
+<figcaption>
+Yliluoma-2
+</figcaption>
+</figure>
+<figure style="width: 520px">
+
+<figcaption>
+Original
+</figcaption>
+</figure>
+</div>
+</div>
+<p>The number of candidates <span class="math inline">N</span> has a large influence on the noisiness of the result.
+This applies to all N-candidate methods.
+The comparison below demonstrates with EMA-Exact how much worse 16 candidates look than 32.
+See for example the back of the yellow-turquoise macaw.</p>
+<div class="wide-figure">
+<div class="flex-figure">
+<figure style="width: 520px">
+
+<figcaption>
+EMA-Exact (N=16)
+</figcaption>
+</figure>
+<figure style="width: 520px">
+
+<figcaption>
+EMA-Exact (N=32)
+</figcaption>
+</figure>
+</div>
+</div>
+<p>At high enough candidate counts, the EMA-Exact and EMA-Constant variants are comparable to Knoll’s algorithm at 20% and 10% dither strengths, respectively.
+At least that’s the case in the Chrono Cross screenshot used as an example in Yliluoma’s 2011 article.</p>
+<p>Below is a 16-color comparison with the fixed palette used in the article.
+I used N=32 candidate iterations, so Yliluoma-2 was left out of this as its C++ code does only N=16.
+See the <a href="supplement.html#chronocross">supplement</a> for a direct N=16 comparison against Yliluoma-2.</p>
+<div class="wide-figure">
+<div class="flex-figure inverted-color padded">
+<figure style="width: 590px">
+
+<figcaption>
+EMA-Exact
+</figcaption>
+</figure>
+<figure style="width: 590px">
+
+<figcaption>
+EMA-Constant
+</figcaption>
+</figure>
+<figure style="width: 590px">
+
+<figcaption>
+Knoll (20% strength)
+</figcaption>
+</figure>
+<figure style="width: 590px">
+
+<figcaption>
+Knoll (10% strength)
+</figcaption>
+</figure>
+<figure style="width: 590px">
+
+<figcaption>
+Original
+</figcaption>
+</figure>
+</div>
+</div>
+<h2 id="conclusion">Conclusion</h2>
+<p>Yliluoma’s second color selection algorithm does not need a perceptual color difference function to work.
+The algorithm calculates repeated weighted averages, and the chosen color candidate set’s quality is determined by the mixing factor <em>t</em> along with the number of candidates <span class="math inline">N</span>.
+The optimal value for <span class="math inline">t</span> can be solved exactly when using an Euclidean color difference formula.
+A suitable <span class="math inline">N</span> for a <span class="math inline">K</span>-color image seems to be around <span class="math inline">N=2K</span>.</p>
+<p>The simplified “EMA” variants yield comparable quality to the original despite being faster.
+While these variants occasionally overtake Knoll’s algorithm in quality, this isn’t the case most of the time.
+Also, the variants inherit their predecessor’s structure and thus have to test all <span class="math inline">K</span> palette colors on each candidate search iteration.
+Knoll’s algorithm, on the other hand, can use a faster <span class="math inline">O(\log K)</span> closest point lookup.</p>
+<p>For cases when only light dithering is needed, the EMA-Constant variant presents a new, simple alternative.
+But since it’s still slower than Knoll’s algorithm, it’s difficult to recommend it.</p>
+<h2 id="material">Material</h2>
+<p>The article <a href="supplement.html">supplement</a> includes more result images and an artificial 2D comparison at the end.</p>
+<p>A standalone script that implements the Knoll, EMA-Sweep, EMA-Exact, EMA-Constant, and Offset ordered dithers with a 4x4 threshold matrix:</p>
+<ul>
+<li><a href="color_selection.py">color_selection.py</a></li>
+</ul>
+<p>Usage: <code>uv run color_selection.py bigbuckbunny_bird.png 16 32 --algo=ema-exact</code></p>
+<p>My doctored C++ version of the original Yliluoma-2 algorithm:</p>
+<ul>
+<li><a href="yliluoma2.cpp">yliluoma2.cpp</a></li>
+</ul>
+<p><em>This article is based on research I did for a book I’m writing. It’s about color reduction algorithms. <a href="https://paletteprogramming.com/">Sign up here</a> if you’re interested.</em></p>
+<h3 id="further-reading">Further reading</h3>
+<ul>
+<li>K. Lemström, J. Tarhio &amp; T. Takala: <a href="https://www.researchgate.net/publication/2945114_Color_Dithering_with_n-Best_Algorithm"><em>Color Dithering with n-Best Algorithm</em></a>, 1996.</li>
+<li>K. Lemström &amp; P. Fränti: <a href="https://cs.joensuu.fi/sipu/pub/N-candidateDithering-IVC.pdf"><em>N-Candidate methods for location invariant dithering of color images</em></a>, 2000.</li>
+<li>Joel Yliluoma, <a href="https://bisqwit.iki.fi/story/howto/dither/jy/"><em>Arbitrary-palette positional dithering algorithm</em></a>, 2011.</li>
+<li>mateljou, <a href="https://matejlou.blog/2023/12/06/ordered-dithering-for-arbitrary-or-irregular-palettes/"><em>Ordered Dithering with Arbitrary or Irregular Colour Palettes</em></a>, 2023.</li>
+<li>mateljou, <a href="https://www.shadertoy.com/view/dlcGzN">Thomas Knoll’s Pattern Dithering</a> shader, 2023.</li>
+</ul>
+<div id="footer">
+<div class="footer-separator">
+
+</div>
+
+<div class="some">
+<p><a href="https://mastodon.gamedev.place/@pekkavaa">Mastodon</a>
+<a href="https://bsky.app/profile/pekkavaa.bsky.social">Bluesky</a>
+<a href="https://www.youtube.com/@pekkavaa">YouTube</a>
+<a href="/atom.xml">Feed</a>
+</p>
+<p>
+<a class="footerlogo" href="/">30fps.net</a>
+</p>
+</div>
+</div>
+</div></body>

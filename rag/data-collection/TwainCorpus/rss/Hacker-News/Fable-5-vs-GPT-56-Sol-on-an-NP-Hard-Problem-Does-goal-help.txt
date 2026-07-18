@@ -1,0 +1,285 @@
+Blog
+
+TL;DR:
+ I gave Claude Fable 5 and GPT-5.6 Sol the same unpublished NP-hard
+optimization problem, with and without their native 
+/goal
+ mode. Fable 5 is an absolute beast;
+
+/goal
+ is not a game changer.
+
+Context:
+ This is an operations research problem originally submitted to students at a
+hackathon. I spent a week years
+ago writing C++ to solve it, so I have a useful human baseline.
+
+Fable 5 was an absolute beast on this benchmark. It produced the best solution overall, and its
+consistency is unlike anything I have seen from a model on this problem. This is pure raw
+intelligence. Incredible.
+
+The other result is that 
+/goal
+ is not a generic “try harder” switch. It changes the control
+loop and the search path. Sometimes that finds a better basin. Sometimes it gives a bad idea
+more time to mature.
+
+All code, prompts, result tables, exclusions, and trajectory notes are in
+
+CLIArena
+. This is a follow-up to my
+
+first article about this benchmark
+.
+
+The problem
+
+KIRO is a fiber-network design problem I worked on as an engineering student in 2018. Given
+directed distance matrices for Grenoble, Nice, and Paris, the solver has to connect distribution
+points and terminals using loops and short chains while respecting several structural
+constraints. The objective is total cable length. Lower is better.
+
+A valid network consists of redundant loops rooted at distribution hubs, with short branches
+hanging from towers on those loops. Every tower must appear exactly once, and reversing a cable
+segment can change its cost.
+
+How large is the search space?
+
+There is no single closed-form count because a solution can use any number of loops, variable
+loop sizes, and differently anchored and ordered branches. But Paris alone gives a useful lower
+bound.
+
+Even if we ignore ordering and branches and only assign each of the 532 terminals to one of
+11 distribution hubs, there are 
+11^532
+ possible assignments.
+
+A stronger lower bound comes from one deliberately restricted family of valid solutions:
+exactly 19 loops of 28 terminals each, with no branches. This covers all 532 terminals because
+
+19 x 28 = 532
+, while staying below the 30-terminal limit for a loop. Order the 532 terminals,
+split that ordering into 19 consecutive groups, divide by 
+19!
+ because the set of loops is
+unordered, and choose one of the 11 hubs for each loop:
+
+(532! / 19!) x 11^19 ~= 10^1223
+
+What I tested
+
+The primary experiment was intentionally narrow:
+
+Setting
+Value
+Models
+Claude Fable 5, Opus 4.8, Sonnet 5; GPT-5.6 Sol, Terra, Luna
+Modes
+Plain; native 
+/goal
+Optimization budget
+30 minutes
+Outer agent timeout
+1,900 seconds
+Reasoning
+Maximum available setting for every model
+Execution
+Harbor 0.1.43, Docker, subscription authentication
+
+Results
+
+Before concentrating repetitions on the flagship pair, I ran one matched 30-minute no-hint
+pair for every model in the sweep. For Fable and Sol, the chart uses Pair 1 from the replicated
+headline set; the other four models have one pair each.
+
+I then repeated the flagship comparison until I had three matched runs for Fable 5 and three
+for Sol.
+
+Model
+Run
+Plain
+/goal
+Goal minus plain
+Fable 5
+1
+32,197
+31,934
+-263
+Fable 5
+2
+32,516
+32,324
+-192
+Fable 5
+3
+32,446
+35,178
++2,732
+GPT-5.6 Sol
+1
+33,581
+39,371
++5,790
+GPT-5.6 Sol
+2
+35,539
+32,703
+-2,836
+GPT-5.6 Sol
+3
+33,663
+33,313
+-350
+
+Negative means 
+/goal
+ was better. Goal won four of six trials, so win rate alone makes the
+feature look useful. The means tell the other half:
+
+Model
+Plain mean
+/goal
+ mean
+Mean effect
+Median effect
+Fable 5
+32,386
+33,145
++759 worse
+-192 better
+GPT-5.6 Sol
+34,261
+35,129
++868 worse
+-350 better
+
+Both models usually got a small benefit and occasionally suffered a large regression. That is
+why 
+/goal
+ won most runs but made both means worse.
+
+Fable was also clearly stronger. Its plain mean beat Sol’s by 1,875 points, and its goal mean
+beat Sol’s by 1,984. More importantly, Fable plain stayed inside a tiny 319-point range while
+Sol plain spanned 1,958 points. Fable goal produced the best clean score, 31,934; Fable plain
+was the safest configuration.
+
+Deep dive into the goal command
+
+The same command hides two different systems
+
+Claude Code and Codex both expose 
+/goal
+, but the implementations are fundamentally different.
+
+Claude Code: a separate evaluator
+
+Claude Code implements 
+/goal
+ as a session-scoped Stop hook. After each main-model turn, a
+small evaluator model, Haiku by default, reads the condition and conversation. It returns yes
+or no with a reason. A no starts another turn; a yes clears the goal.
+
+The evaluator cannot use tools or inspect files. It can only judge evidence that appeared in
+the transcript. That can catch an early exit, but it cannot know whether another ten million
+solver iterations are worthwhile. 
+Anthropic’s goal documentation
+
+Keep in mind that claude code is not open source, so we rely solely on what Anthropic tells us.
+
+Codex: persisted state and lifecycle tools
+
+I also read the source for the benchmarked release,
+
+Codex CLI 0.144.4
+. Codex treats a goal as
+persisted thread state:
+
+The TUI saves the objective for the active thread, and SQLite stores its status and budget
+accounting. 
+TUI
+,
+
+schema
+
+The working model receives 
+create_goal
+, 
+get_goal
+, and 
+update_goal
+ tools.
+
+Tool specification
+
+If the thread becomes idle while the goal is active, Codex injects a continuation turn with
+the objective and a completion audit. 
+Runtime
+,
+
+prompt
+
+Claude delegates completion to another model. Codex lets the working model declare completion,
+then resumes it while the persisted goal remains active. Claude’s evaluator is independent but
+sees only the transcript; Codex sees the files and tools but effectively grades its own work.
+
+Why 
+/goal
+ can win most runs and still be a bad default
+
+On a normal coding task, progress is often legible: another turn can fix a test or complete a
+migration. Optimization is different. Once an agent chooses a solver, extra time can amplify
+either a good decision or a bad one.
+
+That is exactly what happened here. Goal helped when it sustained Fable’s fast compiled
+portfolio or Sol’s successful chain repartition. It hurt when Fable built a slow solver or Sol
+committed to an exhaustive anchor sweep. The median moved slightly in the right direction; the
+bad tail moved much farther in the wrong one.
+
+Limitations
+
+This is one unpublished NP-hard task, not a general coding leaderboard. Only Fable and Sol have
+three clean matched pairs. Other comparisons mix prompts, wrapper versions, and time limits,
+and the trials ran sequentially through subscription services that may have drifted.
+
+The containers exposed eight CPUs despite task metadata declaring one, which favored Fable’s
+parallel portfolios. Every scored Fable and Sol output was valid, partly because the wrapper
+required early checkpoints and final verification. The benchmark measures the complete system:
+model, CLI, prompt, subscription service, and harness.
+
+Reproducing this
+
+The benchmark task, wrappers, analysis scripts, figure generator, and full evidence memo are in
+
+CLIArena
+. Raw job directories are excluded from Git
+because of their size, but the memo records every publishable score, city breakdown, elapsed
+time, strategy, exclusion, and run ID.
+
+The primary commands are:
+
+RUN_ID
+=
+article-kiro-YYYYMMDD-clean
+ \
+
+PHASE=nohint-all 
+\
+
+./scripts/run_subscription_article_matrix.sh
+
+uv
+ run
+ python
+ scripts/summarize_subscription_article_results.py
+ RUN_ID...
+
+uv
+ run
+ python
+ scripts/analyze_subscription_article_results.py
+ RUN_ID...
+
+The result I would put in the headline is not that goal helps or hurts. It is that a persistence
+feature can win most individual trials while making observed average performance worse. On a hard
+optimization problem, the quality of the loop matters less than the quality of what the loop
+keeps doing.
