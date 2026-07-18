@@ -1,0 +1,375 @@
+"Disk Not Ejected Properly" 😡: what that macOS alert really means    
+
+Mike Bombich
+ 
+July 7, 2026
+
+From the Help Desk
+
+    For many macOS users, myself included, this phrase can be triggering. Maybe
+    you've bumped into it once or twice after errantly detaching a disk without
+    unmounting it first -- if that's you: you'll find the short
+    version in the 
+what to try
+
+    section below, and the rest of the article explains the "why" if you're
+    curious.
+
+    But this one is especially for the beleaguered -- the people who have
+    dismissed that alert not a handful of times, not even dozens of times, but
+    seemingly hundreds. If that sounds like you, 
+you're not
+    alone
+, and we're going to get to the bottom of what's actually
+    going on.
+
+    How does a disk actually get mounted in the first place?
+
+    When a storage device is attached to a Mac, several services collaborate to
+    present the content of that storage to the user in the Finder.
+    
+IOKit
+, the manager of hardware devices, is the first system
+    service to see the device (via the "kernel_task" process). IOKit will create
+    an internal device tree representing components of the hardware device, each
+    component being 
+vended
+, or supplied, by some IOKit driver (e.g.
+    
+IOUSBHostInterface
+ >
+    
+IOUSBMassStorageInterface
+ >
+    
+IOUSBMassStorageDriver
+ ...
+    
+IOBlockStorageDriver
+ >
+    
+Sabrent ROCKET-XTRM-Q Media (IOMedia)
+ >
+    
+IOMediaBSDClient
+). The storage drivers then get the
+    
+DiskArbitration
+ service involved to handle the logistics of
+    volume mounting. DiskArbitration probes the storage to determine what
+    filesystem is present, then invokes the appropriate filesystem drivers to
+    handle filesystem consistency checking and other volume pre-mount logistics.
+    Once volumes are identified for mounting, DiskArbitration creates a mount
+    point folder (e.g. 
+/Volumes/Backup
+), mounts the volume, and
+    
+voila
+, you can access the content of that volume in the Finder.
+
+What happens when you unmount a volume the polite way?
+
+    In contrast to mounting, graceful volume unmounting is actually very
+    superficial. When a request is made to unmount a volume, that request is
+    fielded by the DiskArbitration service. DiskArbitration issues a system-wide
+    notice of the impending unmount, and gives any application that cares the
+    opportunity to "dissent" the unmount request (and blocking the action). If
+    there are no dissenters, the volume is unmounted and the mount point folder
+    is deleted. It stops there, though. All of the underlying device objects
+    remain intact and tracked by the IOKit service. If you're curious to see
+    these "under the covers", run 
+ioreg -w 0 -l
+ in the Terminal and
+    then search for "IOMediaBSDClient". You can also see the top of this device
+    tree in Disk Utility if you select "Show All Devices" from the "View" menu.
+    If you just unmounted a volume, you'll see the unmounted volume and one or
+    two "parent" devices in the sidebar.
+
+    So what's the difference between "ejecting" and just unmounting?
+
+    Disk ejection is the comparable opposite to attachment; once the storage is
+    ejected, macOS can no longer see it. I need to make a brief grammatical
+    digression here. The "eject" verb is used ambiguously nowadays, and its use
+    has changed over the years as hardware has changed. Originally, "ejecting"
+    storage meant that the storage was 
+physically
+ ejected from the
+    storage device. Think Zip drives and DVDs – when you ask the system to eject
+    the device, that means you want to take the storage out of the storage
+    device and put it somewhere else. In those cases when the physical media was
+    removed from the storage device, that was a true "ejection" – not only does
+    the volume mount get unwound, but all of the supporting IOKit tree objects
+    are also discarded. In contrast, when you "eject" a volume in the Finder,
+    that's not actually ejecting anything, it's only unmounting a volume. Even
+    when Finder offers to "eject" all volumes on a disk when you choose to
+    "eject" one of them, the subsequent action is only unmounting the volumes,
+    nothing happens to the underlying internal device objects. As far as the
+    "Disk Not Ejected Properly" dialog and this article are concerned, though,
+    we're referring to an ejection in which IOKit has discarded all internal
+    tree objects associated with the storage device and macOS can no longer
+    "see" it.
+
+    Storage – in particular, tracking the coming and going of the storage – is
+    important to CCC, so we log these events for context. These log entries will
+    help illustrate the differences between device appearance and disappearance,
+    as well as graceful and ungraceful volume unmount, and device ejection.
+    First, the normal appearance of a storage device:
+
+16:19:01    Adding [/dev/disk8] to diskobjects[90]
+16:19:01    Adding [/dev/disk8s1] to diskobjects[91]
+16:19:01    Adding [/dev/disk8s2] to diskobjects[92]
+16:19:01    Adding [/dev/disk9] to diskobjects[94]
+16:19:01    Adding [/dev/disk9s1] to diskobjects[95] 🔒 FileVault encrypted. [APFS Test]
+16:19:01    Adding [/dev/disk9s2] to diskobjects[96]
+16:19:01    [INFO] Volume mounted: "/Volumes/Photos Archive" (/dev/disk9s2)
+
+    Now graceful unmounting of that volume:
+
+16:54:30    Not dissenting the volume unmount request for /Volumes/Photos Archive.
+16:54:30    [INFO] Volume unmounted: "Photos Archive" (/dev/disk9s2)
+
+    Proving the graceful nature of this unmount, we see that CCC received an
+    offer to dissent the unmount request. CCC wasn't using the volume as a
+    source or destination to a backup task, so it did not dissent. The volume
+    was subsequently unmounted, but the underlying storage devices remained
+    within IOKit. Next, we see what happens when the device is physically
+    detached:
+
+16:56:03    Device removed from IOKit by the macOS kernel: /dev/disk9s2
+16:56:03    Device removed from IOKit by the macOS kernel: /dev/disk9s1
+16:56:03    Device removed from IOKit by the macOS kernel: /dev/disk9
+16:56:03    Device removed from IOKit by the macOS kernel: /dev/disk8s2
+16:56:03    Device removed from IOKit by the macOS kernel: /dev/disk8s1
+16:56:03    Device removed from IOKit by the macOS kernel: /dev/disk8
+
+    Very cleanly, the devices are removed from IOKit (CCC "sees" these events
+    because it subscribes to IOKit for "interest notifications", i.e. "tell me
+    when a state change occurs for this device").
+
+    Now I'll revisit the annoying behavior that 
+actually
+ occurred a few
+    minutes prior when I attached this device to my Mac, picking back up where
+    the "Photos Archive" volume was mounted:
+
+16:19:01    [INFO] Volume mounted: "/Volumes/Photos Archive" (/dev/disk9s2)
+
+16:19:06    [INFO] Volume unmounted: "Photos Archive" (/dev/disk9s2)
+16:19:06    Device removed from IOKit by the macOS kernel: /dev/disk9s2
+16:19:06    Device removed from IOKit by the macOS kernel: /dev/disk9s1
+16:19:06    Device removed from IOKit by the macOS kernel: /dev/disk9
+16:19:06    Device removed from IOKit by the macOS kernel: /dev/disk8s2
+16:19:06    Device removed from IOKit by the macOS kernel: /dev/disk8s1
+16:19:06    Device removed from IOKit by the macOS kernel: /dev/disk8
+
+16:19:09    Adding [/dev/disk8] to diskobjects[90]
+16:19:09    Adding [/dev/disk8s1] to diskobjects[91]
+16:19:09    Adding [/dev/disk8s2] to diskobjects[92]
+16:19:09    Adding [/dev/disk9] to diskobjects[93]
+16:19:09    Adding [/dev/disk9s1] to diskobjects[94] 🔒 FileVault encrypted. [APFS Test]
+16:19:09    Adding [/dev/disk9s2] to diskobjects[95]
+16:19:09    [INFO] Volume mounted: "/Volumes/Photos Archive" (/dev/disk9s2)
+
+    Five seconds after the "Photos Archive" volume was mounted, and while I was
+    contemplating whether I should plug in the password for the encrypted volume
+    on that disk, the device popped offline. The key difference between this
+    event and the graceful unmount is that a) there was never a "would you like
+    to dissent this unmount" notification sent from DiskArbitration and b) all
+    of the underlying devices were simultaneously removed from IOKit by the
+    macOS kernel. Three seconds later (and no physical intervention on my part),
+    the devices reappeared and the volume remounted – once the storage device's
+    firmware rebooted, IOKit rediscovered the hardware and repeated the
+    "attached" procedure. Meanwhile, Notification Center informed me that the
+    disk was not ejected properly. Dismiss, again. 🙄
+
+    Who or what is ultimately to blame for this behavior?
+
+    The system log entries offer a little bit of insight into the events
+    (actually, system log provides way, way too much, but as far as we're
+    concerned, "a little bit"). Here is a selection of the relevant events (some
+    trimmed for brevity) that ensued when the device popped offline without any
+    physical intervention:
+
+16:19:06    kernel: (IOUSBHostFamily) usb-drd2-port-ss@02200000: AppleUSBHostPort::terminateDevice: destroying 0x2eb9/9211/3000 (Rocket XTRM Q): link change interrupt
+16:19:06    kernel: (AppleUSBXHCI) AppleUSBXHCIStreamingEndpoint: AppleUSBXHCIEndpoint::transferEvent: 1-3 no transfer ring claimed event 0x0000000000000000 1b000000 01038001
+16:19:06    kernel: (AppleUSBXHCI) AppleUSBXHCIStreamingEndpoint: AppleUSBXHCIEndpoint::transferEvent: 1-4 no transfer ring claimed event 0x0000000000000000 1b000000 01048001
+16:19:06    kernel: (AppleUSBXHCI) AppleUSBXHCIStreamingEndpoint: AppleUSBXHCIEndpoint::transferEvent: 1-7 no transfer ring claimed event 0x0000000000000000 1b000000 01078001
+16:19:06    kernel: (IOAccessoryManager) IOPortTransportState::handleStateChange(): [Port-USB-C@3: USB2] Handling state change...
+16:19:06    usbpowerd: terminated <private>
+16:19:06    kernel: (IOUSBMassStorageDriver) USB device 2EB9921102200000 - Sabrent, Rocket XTRM Q - detected termination of interfaceNub, currentPowerState 1, provider is IOUSBMassStorageInterfaceNub
+
+16:19:06    kernel: (apfs) dangling_mount_callback:4689: Found dangling mount /dev/disk9s2
+16:19:06    kernel: (apfs) container_get_dangling_mounts:4713: Found 1 dangling mounts on /dev/disk9
+16:19:06    kernel: (apfs) apfs_log_op_with_proc:3297: disk9s2 unmounting volume Photos Archive, requested by: kernel_task (pid 0); parent: kernel_task (pid 0)
+16:19:06    kernel: (IOStorageFamily) disk9: media is not present.
+16:19:06    kernel: (IOStorageFamily) disk9: media is not present.
+16:19:06    kernel: (IOStorageFamily) disk9: media is not present.
+16:19:06    kernel: (apfs) tx_flush:1194: disk9 xid 3893 sync/barrier failed: 6
+16:19:06    kernel: (apfs) apfs_vfsop_unmount:3416: disk9s2 failed to finish all transactions before unmount! (err 6)
+16:19:06    kernel: (IOUSBMassStorageDriver) IOUSBMassStorageDriver: 2EB9921102200000 stop ...
+
+16:19:06    storagekitd: [com.apple.storagekit:general] -[SKDaemonManager(DiskNotifications) addDisappearedDisk:]: <SKDisk: [566] { BSD Name: disk8, Mounted: No, Role: kSKDiskRolePhysicalDisk, Type: kSKDiskTypeGPTWholeDisk, Valid: Yes, Volume UUID: None, Media UUID: None }>
+16:19:06    storagekitd: [com.apple.storagekit:general] -[SKDaemonManager(DiskNotifications) addDisappearedDisk:]: <SKDisk: [570] { BSD Name: disk8s1, Mounted: No, Role: kSKDiskRoleBooter, Type: kSKDiskTypeEFI, Valid: Yes, Volume UUID: 0E239BC6-F960-3107-89CF-1C97F78BB46B, Media UUID: 7DBB6279-5B23-46AD-A096-5379D6ADC2C6 }>
+16:19:06    storagekitd: [com.apple.storagekit:general] -[SKDaemonManager(DiskNotifications) addDisappearedDisk:]: <SKAPFSContainerDisk: [565] { BSD Name: disk9, Mounted: No, APFS UUID: 5F77A7AC-C88E-4FF5-8296-4BC6C8B41FE7 }>
+16:19:06    storagekitd: [com.apple.storagekit:general] -[SKDaemonManager(DiskNotifications) addDisappearedDisk:]: <SKAPFSDisk: [568] { BSD Name: disk9s1, Mounted: No, APFS UUID: 54C64ED0-AC32-4356-B6AE-01F8CA9E81B7, Encrypted: Yes }>
+16:19:06    storagekitd: [com.apple.storagekit:general] -[SKDaemonManager(DiskNotifications) addDisappearedDisk:]: <SKAPFSDisk: [567] { BSD Name: disk9s2, Mounted: Yes, APFS UUID: 0182A5EF-E92C-403E-BC4E-6FECD0A58531, Encrypted: No }>
+16:19:06    storagekitd: [com.apple.storagekit:general] -[SKDaemonManager(DiskNotifications) addDisappearedDisk:]: <SKAPFSStoreDisk: [569] { BSD Name: disk8s2, Mounted: No, APFS UUID: CB41A2CA-AF1C-4B6B-8C9A-6C5CA3C46C8D, Container UUID: 5F77A7AC-C88E-4FF5-8296-4BC6C8B41FE7 }>
+
+    Roughly in three sections, and the order is important context:
+
+        The USB device drivers report that they are destroying the "Rocket XTRM
+        Q" device due to a "link change interrupt"
+
+        APFS filesystem drivers report a "dangling mount", failures to finish
+        transactions before unmount, and dozens of "media is not present"
+        errors. Side note here: don't be mislead by "disk9s2 unmounting volume
+        Photos Archive, requested by: kernel_task". I have seen some AI models
+        that incorrectly interpret this as "the disk disappeared because the
+        kernel asked to unmount it". That would be a naive assessment in
+        consideration of the adjacent context.
+
+        storagekit collects a report of the "disappeared" devices and notices
+        that one of them was mounted. This is ultimately what leads to the "Disk
+        Not Ejected Properly" notification.
+
+    Unfortunately, nothing in here explains what 
+caused
+ the "link
+    change interrupt"; all we know is that the USB device drivers detected an
+    interruption.
+
+    Next I decided to reattach the device, then physically disconnect it
+    (improperly!) to see if the system log messages differed at all for the
+    slightly-different scenario. Nearly all of the ensuing entries were the
+    same, but there were two important differences:
+
+17:26:19    kernel: (IOUSBHostFamily) usb-drd2-port-ss@02200000: AppleUSBHostPort::terminateDevice: destroying 0x2eb9/9211/3100 (Rocket XTRM Q): hardware connection lost
+17:26:19    kernel: (IOUSBHostFamily) usb-drd2-port-ss@02200000: AppleUSBHostPort::cableChangeOccurred: powering off
+
+    When the AppleUSBHostPort device drivers called "terminateDevice", they
+    logged "link change interrupt" in the case where the device was not
+    physically detached. When the device was physically detached, they logged
+    "hardware connection lost", and indicated that something (perhaps the port)
+    was powering off. Again, not a smoking gun, but clearly macOS is aware of
+    the difference between the device being physically detached vs. some other
+    communication failure occurring. Unfortunately this little piece of context
+    is not bubbled up to the user. If the notifications were presented in this
+    manner, for example:
+
+Alert
+
+What it would mean
+
+Likely cause
+
+A: Disk Not Ejected Properly (the device was physically detached before the volume was unmounted)
+
+The drive was physically unplugged
+
+Accidental unplug, or a flaky USB port/cable
+
+B: Disk Not Ejected Properly (a communication failure occurred between the computer and this device, although the device remained attached to the computer)
+
+The device stayed connected, but stopped responding
+
+A crashing/rebooting USB hub, or a crash in the storage device's own firmware
+
+    macOS only ever shows you today's single, generic alert -- never A or
+    B specifically -- so you're left to work out from context (and from
+    whether it keeps happening) which situation you're actually in.
+
+    Is there anything I can do to resolve this when the behavior recurs
+    frequently?
+
+    We offer several
+    
+troubleshooting recommendations in CCC's Knowledgebase
+. If the behavior is the result of a bad cable, port, or USB hub, then
+    swapping/avoiding those components can improve the outcome. If you have a
+    storage device whose firmware is crashing, though, erasing the device
+    
+may
+ resolve the issue. I recall seeing a case like that just
+    recently with an SSD device; the device appeared to be crashing shortly
+    after mount when APFS drivers issued TRIM commands. The behavior vanished
+    once the volume was erased. The APFS TRIM requests didn't stop after that,
+    but the storage device's ability to deal with them seemed to improve.
+
+    If erasing the device does not resolve the behavior, then replacing the
+    storage device may be the only remaining solution.
+
+Frequently asked questions
+
+Why does my external hard drive keep saying "Disk Not Ejected Properly"?
+
+    Because the drive briefly dropped off the bus before macOS could cleanly
+    unmount its volume -- and macOS can't tell you 
+why
+ it dropped,
+    only that it did. If it happens once in a blue moon, it's almost always a
+    loose cable or a sleepy USB port. If it happens constantly on the same
+    drive, the more likely culprit is the storage device's own firmware
+    crashing and rebooting (see
+    
+who's to blame
+).
+
+Does "Disk Not Ejected Properly" mean I lost data or corrupted my files?
+
+    Usually not. The alert on its own just means macOS lost track of the device
+    unexpectedly; it isn't an announcement that files were damaged. The real
+    risk is timing: if the drive vanished 
+while data was being written
+
+    -- during a backup, for example -- that particular operation
+    could be left incomplete. That's why an occasional alert is no big deal, but
+    a drive that keeps disappearing mid-task is worth taking seriously.
+
+How do I stop the "Disk Not Ejected Properly" message on my Mac?
+
+    There's no macOS setting that silences it, because it's a symptom rather
+    than a preference -- the fix is to address whatever is making the drive
+    disappear. Start with the cheap, easy suspects: try a different cable, a
+    different port, and remove any USB hub from the equation. If the drive still
+    drops out, the problem may be inside the drive itself, in which case erasing
+    it -- or ultimately replacing it -- is the path forward (see
+    
+what to try
+).
+
+Does this mean my external drive or SSD is failing?
+
+    Not necessarily. An occasional alert points at the connection (cable, port,
+    or hub), not the drive. But if a specific SSD or hard drive drops offline
+    
+constantly
+ (especially right after it mounts)
+    that pattern points at the storage device's firmware. In some of those
+    cases erasing the drive restores reliable behavior; if it doesn't, the drive
+    is likely on its way out and should be replaced. Either way, don't trust an
+    unreliable drive as your only backup.
+
+Is it safe to just ignore the "Disk Not Ejected Properly" alert?
+
+    A one-off alert after your Mac wakes from sleep, or after you bumped a
+    cable, is harmless -- dismiss it and move on. What you shouldn't ignore
+    is a 
+pattern
+: if the same drive triggers the alert repeatedly, or
+    it coincides with failed or incomplete backups, that's your Mac telling you
+    a connection or a drive is unreliable, and it's worth investigating before
+    you actually need that backup.
+
+We're here to help
+
+    A "Disk Not Ejected Properly" alert is annoying, but it's rarely dangerous
+    on its own. It's really just macOS telling you it lost track of a
+    device unexpectedly. The bigger concern is when that same flaky connection
+    starts 
+interrupting
+    your backups
+. If you're seeing this alert often, or you suspect it's
+    affecting the reliability of your backup tasks, choose "Ask a question"
+    from CCC's Help menu. We're always happy to dig through your task
+    history and logs with you to figure out whether it's a cable, a port, or
+    the storage device itself.
