@@ -1,0 +1,452 @@
+<body>
+<div class="container-lg px-3 my-5 markdown-body">
+<h1><a href="https://ykdojo.github.io/claude-controls-mac/">claude-controls-mac</a></h1>
+<h1 id="how-to-set-up-your-spare-mac-for-claude-code-to-fully-control---a-step-by-step-guide">How to set up your spare Mac for Claude Code to fully control - a step-by-step guide</h1>
+<p>Here’s a full step-by-step guide on how to turn your spare Mac into an always-on
+machine Claude Code can fully control, with computer use enabled. You’ll be able to talk to it from your phone
+through the Claude app, or from your main Mac over SSH.</p>
+<h2 id="why-do-this">Why do this?</h2>
+<p>I wanted to create a separate environment Claude Code can control on its own, so I can
+delegate tasks I don’t necessarily want to run on my own machine - certain types of
+research tasks, and development tasks.</p>
+<p>Claude Code, especially with the <code class="language-plaintext highlighter-rouge">--dangerously-skip-permissions</code> flag on,
+carries inherent risk when run on your main machine. You can eliminate / mitigate these
+risks by creating a separate environment on your spare Mac with everything it needs
+to have access to.</p>
+<p>It has an added bonus of being able to talk to Claude Code anytime, anywhere from
+your phone. I’ve personally found it really useful because I often prefer to talk to
+Claude Code instead of regular Claude on the mobile app - Claude Code is often more
+capable.</p>
+<p>The following guide assumes you have your main Mac as well as a spare Mac you can set
+up for this, but you should be able to take inspiration from it and apply it to any
+combination of two machines.</p>
+<h2 id="why-this-setup">Why this setup?</h2>
+<p>First, let’s quickly address a few questions you might have.</p>
+<h3 id="why-not-run-it-in-a-container">Why not run it in a container?</h3>
+<p>I’m a big proponent of running it in a container - I even built
+<a href="https://github.com/ykdojo/safeclaw">an entire environment for doing so conveniently</a>.
+However, I’ve found it has a few limitations.
+First, it still runs on your main machine, so it’s not completely separated. For
+example, network requests it sends still go through your main machine.</p>
+<p>Second, there are limitations to the container’s capabilities. For example, I wanted
+my agent to be able to run Unity for game development, and there’s no easy way to do
+that in a container. The same goes for any other app that’s only available on a Mac -
+you won’t have access to it. That’s especially relevant if you want Claude Code to
+control these apps through computer use - clicking, dragging, and so on.</p>
+<h3 id="why-not-use-something-like-openclaw">Why not use something like OpenClaw?</h3>
+<p>I personally like having access to the full, latest features of Claude Code. I also
+like being able to control it from the Claude app - I’ve found it really convenient.
+And you get to use your Claude subscription usage if you happen to have one, which is
+an added bonus.</p>
+<p>At the end of the day, running an agent with broad permissions is safer on a machine
+that has nothing to lose - but you get the benefit of being able to use a full Mac
+instead of a container. The approach here:</p>
+<ul>
+<li><strong>Use an old/spare Mac</strong>, not your main one.</li>
+<li><strong>Create a fresh local account with no personal data and no Apple ID</strong> signed in, so
+the agent has nothing sensitive to reach.</li>
+<li><strong>Drive it over SSH</strong> from your main Mac on your local network, and control it from
+your phone.</li>
+</ul>
+<h2 id="what-youll-need">What you’ll need</h2>
+<ul>
+<li>A spare Mac (the <strong>target</strong>).</li>
+<li>Your everyday Mac (the <strong>source</strong>), on the same Wi-Fi.</li>
+</ul>
+
+<h2 id="1-start-fresh-on-the-target-mac">1. Start fresh on the target Mac</h2>
+<h3 id="wipe-it-first-if-it-has-any-personal-data">Wipe it first (if it has any personal data)</h3>
+<p>You’ll be giving the agent full access to this machine, so it can reach anything stored
+on it. If there’s existing data you don’t want it to have access to, erase the machine
+first:</p>
+<ul>
+<li><strong>Macs that support it:</strong> System Settings -&gt; General -&gt; Transfer or Reset -&gt;
+<strong>Erase All Content and Settings</strong>.</li>
+<li><strong>Older Intel Macs:</strong> restart into Recovery (hold <strong>Cmd-R</strong> at
+boot), use <strong>Disk Utility</strong> to erase the internal drive, then reinstall macOS.</li>
+</ul>
+<p>Optionally update to the latest macOS afterward (System Settings -&gt; General -&gt;
+Software Update).</p>
+<h3 id="create-a-fresh-isolated-account">Create a fresh, isolated account</h3>
+<ul>
+<li>Create a <strong>new local user account</strong> (System Settings -&gt; Users &amp; Groups).</li>
+<li><strong>I recommend not signing into an Apple ID.</strong> Skip it during setup.</li>
+</ul>
+<h3 id="make-the-account-an-admin-if-you-havent-already">Make the account an admin (if you haven’t already)</h3>
+<p>The account needs admin rights or <code class="language-plaintext highlighter-rouge">sudo</code> will refuse to run.</p>
+<ul>
+<li>System Settings -&gt; Users &amp; Groups -&gt; set the account to <strong>Allow this user to
+administer this computer</strong>.</li>
+<li>If you ever need to repair it from another admin account:
+<code class="language-plaintext highlighter-rouge">sudo dseditgroup -o edit -a &lt;user&gt; -t user admin</code></li>
+</ul>
+
+<h2 id="2-enable-remote-login-ssh-on-the-target-mac">2. Enable Remote Login (SSH) on the target Mac</h2>
+<p>On the <strong>target</strong>, turn on SSH so the source Mac can connect:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nb">sudo </span>systemsetup <span class="nt">-setremotelogin</span> on
+</code></pre></div></div>
+<p>If the command fails with <code class="language-plaintext highlighter-rouge">Turning Remote Login on or off requires Full Disk Access
+privileges</code>, give your terminal app Full Disk Access first:</p>
+<ul>
+<li>System Settings -&gt; Privacy &amp; Security -&gt; <strong>Full Disk Access</strong>.</li>
+<li>Click <strong>+</strong>, then in the file picker go to <strong>Applications -&gt; Utilities -&gt; Terminal</strong>
+and add it.</li>
+<li>Quit and reopen the terminal, then rerun the command.</li>
+</ul>
+
+<h2 id="3-passwordless-sudo-for-the-target-account">3. Passwordless sudo for the target account</h2>
+<p>This is so the agent (and your SSH commands) can run admin tasks without a password
+prompt each time. Run this once on the target. It
+asks for the login password this one time:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nb">echo</span> <span class="s2">"&lt;user&gt; ALL=(ALL) NOPASSWD: ALL"</span> | <span class="nb">sudo tee</span> /etc/sudoers.d/&lt;user&gt;-nopasswd <span class="o">&gt;</span>/dev/null
+<span class="nb">sudo chmod </span>440 /etc/sudoers.d/&lt;user&gt;-nopasswd
+<span class="nb">sudo </span>visudo <span class="nt">-cf</span> /etc/sudoers.d/&lt;user&gt;-nopasswd   <span class="c"># validate - must print 'parsed OK'</span>
+</code></pre></div></div>
+<p>This creates a small rule file telling the Mac that <code class="language-plaintext highlighter-rouge">&lt;user&gt;</code> can run <code class="language-plaintext highlighter-rouge">sudo</code> without a
+password prompt:</p>
+<ul>
+<li><strong>line 1</strong> writes the rule into <code class="language-plaintext highlighter-rouge">/etc/sudoers.d/</code>.</li>
+<li><strong>line 2</strong> makes it read-only - sudo ignores the file otherwise.</li>
+<li><strong>line 3</strong> validates the syntax; a typo in a sudoers file can lock you out of <code class="language-plaintext highlighter-rouge">sudo</code>
+entirely, so it must print <code class="language-plaintext highlighter-rouge">parsed OK</code>.</li>
+</ul>
+<p>After this, <code class="language-plaintext highlighter-rouge">sudo</code> runs with no prompt - test with <code class="language-plaintext highlighter-rouge">sudo -n true</code>, which succeeds
+silently if passwordless sudo works.</p>
+
+<h2 id="4-find-the-targets-address-hostname-or-ip">4. Find the target’s address (hostname or IP)</h2>
+<p>You can reach the target by either a hostname or an IP. I recommend using the
+hostname: it stays the same, while the IP can change.</p>
+<p><strong>Hostname (recommended).</strong> Run on the target:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>scutil <span class="nt">--get</span> LocalHostName      <span class="c"># prints the hostname, e.g. MacBook-Pro</span>
+</code></pre></div></div>
+<p>Add <code class="language-plaintext highlighter-rouge">.local</code> to form the address: <code class="language-plaintext highlighter-rouge">&lt;target-host&gt;.local</code>. You can also read it from
+System Settings -&gt; General -&gt; Sharing, shown as <code class="language-plaintext highlighter-rouge">Local hostname</code>.</p>
+<blockquote>
+<p><strong>Give the target a unique name.</strong> Each Mac needs a <code class="language-plaintext highlighter-rouge">.local</code> name that’s unique on
+your network. If two machines share a name, the address can point to the wrong Mac.
+Make sure the target’s name is unique - rename it if needed:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nb">sudo </span>scutil <span class="nt">--set</span> LocalHostName newmacbook   <span class="c"># -&gt; newmacbook.local</span>
+</code></pre></div> </div>
+</blockquote>
+<p><strong>IP address (not recommended).</strong> Run on the target:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ipconfig getifaddr en0          <span class="c"># e.g. 192.168.1.80</span>
+</code></pre></div></div>
+<p>Note that the IP can change after a reboot or after a certain amount of time.</p>
+<p>Throughout the rest of this guide, replace <code class="language-plaintext highlighter-rouge">&lt;user&gt;</code> with the target account name and
+<code class="language-plaintext highlighter-rouge">&lt;target-host&gt;</code> with the hostname from above, so the address is
+<code class="language-plaintext highlighter-rouge">&lt;user&gt;@&lt;target-host&gt;.local</code>. You could also instead use an IP in place of
+<code class="language-plaintext highlighter-rouge">&lt;target-host&gt;.local</code>.</p>
+
+<h2 id="5-set-up-passwordless-ssh-from-the-source-mac">5. Set up passwordless SSH from the source Mac</h2>
+<p>On the source Mac, create an SSH key (skip if you already have one):</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ssh-keygen <span class="nt">-t</span> ed25519
+</code></pre></div></div>
+<p>Install your public key on the target. This asks for the target account’s login
+password once:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ssh-copy-id &lt;user&gt;@&lt;target-host&gt;.local
+</code></pre></div></div>
+<p>Test it - this should print the target username with no password prompt:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ssh &lt;user&gt;@&lt;target-host&gt;.local <span class="nb">whoami</span>
+</code></pre></div></div>
+
+<h2 id="6-keep-the-target-awake">6. Keep the target awake</h2>
+<p>By default macOS sleeps after ~10 minutes idle, even when plugged in, which takes
+it off the network. To make it never sleep, run this on the target (or over SSH from
+the source):</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nb">sudo </span>pmset <span class="nt">-c</span> <span class="nb">sleep </span>0          <span class="c"># never system-sleep while plugged in (-c = on charger)</span>
+<span class="nb">sudo </span>pmset <span class="nt">-c</span> disablesleep 1   <span class="c"># also prevents sleep with the lid closed (clamshell)</span>
+<span class="nb">sudo </span>pmset <span class="nt">-c</span> displaysleep 0   <span class="c"># keep the display on too</span>
+</code></pre></div></div>
+<p>Verify:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pmset <span class="nt">-g</span> | <span class="nb">grep</span> <span class="nt">-iE</span> <span class="s1">'sleep'</span>
+</code></pre></div></div>
+<p><code class="language-plaintext highlighter-rouge">sleep 0</code>, <code class="language-plaintext highlighter-rouge">SleepDisabled 1</code>, and <code class="language-plaintext highlighter-rouge">displaysleep 0</code> in the output confirm it worked.</p>
+<p>If the machine runs on battery sometimes, use <code class="language-plaintext highlighter-rouge">-a</code> instead of <code class="language-plaintext highlighter-rouge">-c</code> to apply to all
+power sources (at the cost of battery drain).</p>
+<p>The screen can still lock when the screen saver kicks in. Stop the screen saver
+from ever starting so it never locks on its own:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>defaults <span class="nt">-currentHost</span> write com.apple.screensaver idleTime 0
+</code></pre></div></div>
+
+<h2 id="7-clipboard-sync-over-ssh">7. Clipboard sync over SSH</h2>
+<p>macOS ships <code class="language-plaintext highlighter-rouge">pbcopy</code> (write clipboard) and <code class="language-plaintext highlighter-rouge">pbpaste</code> (read clipboard). Piped over SSH,
+they can move the clipboard between machines - encrypted, peer-to-peer, no Apple ID or
+third-party service.</p>
+<p><a href="/claude-controls-mac/clip.sh"><code class="language-plaintext highlighter-rouge">clip.sh</code></a> wraps this into one command with two subcommands, and adds image
+support on top of <code class="language-plaintext highlighter-rouge">pbcopy</code>/<code class="language-plaintext highlighter-rouge">pbpaste</code> (which are text-only). Install it as a script on your PATH
+on the source Mac, and point it at the target host with <code class="language-plaintext highlighter-rouge">IC_BOX</code> (“ic” standing for
+“isolated claude”):</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>curl <span class="nt">-fsSL</span> https://raw.githubusercontent.com/ykdojo/claude-controls-mac/main/clip.sh <span class="nt">-o</span> ~/.local/bin/clip
+<span class="nb">chmod</span> +x ~/.local/bin/clip
+<span class="nb">export </span><span class="nv">IC_BOX</span><span class="o">=</span><span class="s2">"&lt;user&gt;@&lt;target-host&gt;.local"</span>   <span class="c"># add to ~/.zshrc</span>
+</code></pre></div></div>
+<p>Usage:</p>
+<ul>
+<li><strong><code class="language-plaintext highlighter-rouge">clip send</code></strong> - this Mac’s clipboard → the target (text or image). For an image you can
+paste it straight into a Claude Code session on the target with Ctrl-V.</li>
+<li><strong><code class="language-plaintext highlighter-rouge">clip get</code></strong> - the target’s clipboard → this Mac (text or image).</li>
+</ul>
+
+<h2 id="8-install-claude-code-on-the-target-mac">8. Install Claude Code on the target Mac</h2>
+<p>Send the install command over and run it. From the source Mac you can push it straight
+to the target’s clipboard, or run it remotely. The following command installs a
+specific version, but you can also install <code class="language-plaintext highlighter-rouge">latest</code> or <code class="language-plaintext highlighter-rouge">stable</code> if you’d like:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ssh &lt;user&gt;@&lt;target-host&gt;.local <span class="s1">'curl -fsSL https://claude.ai/install.sh | bash -s -- 2.1.201'</span>
+</code></pre></div></div>
+<p>The native installer may warn that <code class="language-plaintext highlighter-rouge">~/.local/bin</code> is not on PATH. Fix it on the target by
+adding it to <code class="language-plaintext highlighter-rouge">~/.zshenv</code> (not <code class="language-plaintext highlighter-rouge">~/.zshrc</code>) - <code class="language-plaintext highlighter-rouge">.zshenv</code> is read by <em>every</em> zsh, including
+non-interactive ones:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ssh &lt;user&gt;@&lt;target-host&gt;.local <span class="s1">'echo '</span><span class="se">\'</span><span class="s1">'export PATH="$HOME/.local/bin:$PATH"'</span><span class="se">\'</span><span class="s1">' &gt;&gt; ~/.zshenv'</span>
+</code></pre></div></div>
+
+<h2 id="9-set-up-an-opinionated-claude-code-friendly-environment-optional">9. Set up an opinionated, Claude Code-friendly environment (optional)</h2>
+<p>This optional step applies a set of opinionated defaults via
+<a href="/claude-controls-mac/setup-claude-env.sh"><code class="language-plaintext highlighter-rouge">setup-claude-env.sh</code></a> - shell aliases, the DX
+plugin, <code class="language-plaintext highlighter-rouge">settings.json</code> tweaks, the GitHub CLI, and (opt-in) Playwright MCP and
+yt-dlp. Every item is toggleable; see the full list in
+<a href="/claude-controls-mac/claude-env-components.html"><code class="language-plaintext highlighter-rouge">claude-env-components.md</code></a>.</p>
+<p><strong>Interactively on the target</strong> - shows a checklist of every item (core
+pre-checked, opt-ins unchecked) so you can pick any combination. Download the
+script onto the target and run it:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ssh <span class="nt">-t</span> &lt;user&gt;@&lt;target-host&gt;.local <span class="se">\</span>
+  <span class="s1">'curl -fsSL https://raw.githubusercontent.com/ykdojo/claude-controls-mac/main/setup-claude-env.sh -o setup-claude-env.sh &amp;&amp; bash setup-claude-env.sh'</span>
+</code></pre></div></div>
+<p><strong>Non-interactively</strong> - the script goes into this mode if it detects a
+non-interactive environment or you supply at least one flag. No prompt; installs
+core only by default, or pick what you want with flags (<code class="language-plaintext highlighter-rouge">--yt-dlp</code>, <code class="language-plaintext highlighter-rouge">--playwright</code>,
+<code class="language-plaintext highlighter-rouge">--all</code>, <code class="language-plaintext highlighter-rouge">--core</code>):</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ssh &lt;user&gt;@&lt;target-host&gt;.local <span class="se">\</span>
+  <span class="s1">'curl -fsSL https://raw.githubusercontent.com/ykdojo/claude-controls-mac/main/setup-claude-env.sh -o setup-claude-env.sh &amp;&amp; bash setup-claude-env.sh --all'</span>
+</code></pre></div></div>
+<p>The script is idempotent (OK to re-run).</p>
+
+<h2 id="10-log-in-to-claude-and-github">10. Log in to Claude and GitHub</h2>
+<p>Both logins are interactive, so SSH in:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ssh &lt;user&gt;@&lt;target-host&gt;.local
+</code></pre></div></div>
+<p>Then run <code class="language-plaintext highlighter-rouge">claude</code> on the target - it drops into the login for your Anthropic
+account. Follow the prompts (a browser/device-code flow you can finish from a browser
+on your main Mac).</p>
+<p>GitHub - optional, but highly recommended so the agent can work with repos:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>gh auth login
+</code></pre></div></div>
+<p>If you haven’t installed the GitHub CLI from
+<a href="#9-set-up-an-opinionated-claude-code-friendly-environment-optional">the previous step</a>,
+make sure to do so first.</p>
+<p>I personally recommend using a separate GitHub account, not your main one, so it
+doesn’t mess up your main account.</p>
+
+<h2 id="11-computer-use-over-ssh-optional">11. Computer use over SSH (optional)</h2>
+<p>This lets an interactive <code class="language-plaintext highlighter-rouge">claude</code> session on the target see (screenshots) and control
+(mouse/keyboard) its own desktop, driven over SSH.</p>
+<p>This doesn’t work out of the box - SSH and macOS’s permission model get in the way, so the
+setup below exists to route around that.</p>
+<p><strong>Why it needs a workaround:</strong> macOS gates screen capture and input behind Screen Recording
+and Accessibility permissions that are tied to the GUI login session, so an SSH
+process can’t reach the display. Fix: a LaunchAgent keeps a <code class="language-plaintext highlighter-rouge">tmux</code> server alive <em>inside</em> the
+GUI session on a fixed socket; every <code class="language-plaintext highlighter-rouge">claude</code> session created there lands on that
+server and inherits the GUI session, so it can reach the display. You attach over SSH.</p>
+<h3 id="scriptable-setup">Scriptable setup</h3>
+<p>Run <a href="/claude-controls-mac/setup-computer-use.sh"><code class="language-plaintext highlighter-rouge">setup-computer-use.sh</code></a> on the target:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ssh <span class="nt">-t</span> &lt;user&gt;@&lt;target-host&gt;.local <span class="se">\</span>
+  <span class="s1">'curl -fsSL https://raw.githubusercontent.com/ykdojo/claude-controls-mac/main/setup-computer-use.sh -o setup-computer-use.sh &amp;&amp; bash setup-computer-use.sh'</span>
+</code></pre></div></div>
+<p>This installs the LaunchAgent (persistent <code class="language-plaintext highlighter-rouge">tmux</code> server with anchor session <code class="language-plaintext highlighter-rouge">cc</code>) and enables the
+built-in <code class="language-plaintext highlighter-rouge">computer-use</code> tool in <code class="language-plaintext highlighter-rouge">~/.claude.json</code>. Requires tmux (<code class="language-plaintext highlighter-rouge">brew install tmux</code>) and a
+Claude Pro or Max plan. Re-runnable; <code class="language-plaintext highlighter-rouge">--uninstall</code> to remove.</p>
+<h3 id="use-it-from-your-mac">Use it from your Mac</h3>
+<p>Install <a href="/claude-controls-mac/ic.sh"><code class="language-plaintext highlighter-rouge">ic.sh</code></a> (<code class="language-plaintext highlighter-rouge">ic</code> = “isolated claude”) on the source Mac:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>curl <span class="nt">-fsSL</span> https://raw.githubusercontent.com/ykdojo/claude-controls-mac/main/ic.sh <span class="nt">-o</span> ~/.local/bin/ic
+<span class="nb">chmod</span> +x ~/.local/bin/ic
+<span class="nb">echo</span> <span class="s1">'export IC_BOX="&lt;user&gt;@&lt;target-host&gt;.local"'</span> <span class="o">&gt;&gt;</span> ~/.zshrc   <span class="c"># or edit the default in the script</span>
+</code></pre></div></div>
+<p>Each <code class="language-plaintext highlighter-rouge">ic</code> spawns its own <code class="language-plaintext highlighter-rouge">claude</code> session on the box (run several at once) and attaches.
+Flags mirror <code class="language-plaintext highlighter-rouge">claude</code>, and it adds several more subcommands:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ic               <span class="c"># new claude session</span>
+ic <span class="nt">-c</span>            <span class="c"># continue the most recent conversation (forwards to: claude -c)</span>
+ic <span class="nt">-r</span>            <span class="c"># resume picker (forwards to: claude -r)</span>
+ic <span class="nt">--chrome</span>      <span class="c"># with Claude in Chrome (forwards to: claude --chrome)</span>
+ic sh            <span class="c"># a plain shell on the box, no claude (alias: ic shell)</span>
+ic rc            <span class="c"># Remote Control: drive the box from your phone (claude remote-control)</span>
+ic <span class="nb">history</span>       <span class="c"># stored conversations: count, location, recent w/ previews (alias: hist)</span>
+ic <span class="nb">ls</span>            <span class="c"># list live sessions (state, age, what's running, conversation)</span>
+ic attach &lt;<span class="nb">id</span><span class="o">&gt;</span>   <span class="c"># attach a running session (alias: ic a)</span>
+ic <span class="nb">kill</span> &lt;<span class="nb">id</span><span class="o">&gt;</span>     <span class="c"># kill a session (alias: ic k); "ic kill all" kills all</span>
+ic <span class="nt">-h</span>            <span class="c"># help</span>
+</code></pre></div></div>
+<p>All <code class="language-plaintext highlighter-rouge">ic</code> sessions run with <code class="language-plaintext highlighter-rouge">--dangerously-skip-permissions</code> (and <code class="language-plaintext highlighter-rouge">ic rc</code> uses
+<code class="language-plaintext highlighter-rouge">--permission-mode bypassPermissions</code>).</p>
+<p><strong>Copying text out:</strong> sessions run in tmux, and Terminal.app can’t receive the clipboard escape
+sequences (OSC52) that claude emits, so mouse-selecting a snippet won’t reliably reach your Mac
+clipboard. Quick workaround: <strong>Cmd-A then Cmd-C</strong> copies the whole visible screen.</p>
+<h3 id="bonus-let-your-macs-claude-drive-the-boxs-claude">Bonus: let your Mac’s Claude drive the box’s Claude</h3>
+<p>Because every <code class="language-plaintext highlighter-rouge">ic</code> session lives on the box’s tmux server at a fixed socket, a Claude Code
+session on your source Mac can prompt one directly over SSH - useful for delegating work
+to the box and checking on it, agent to agent:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># find the session (ic ls prints the ids)</span>
+ic <span class="nb">ls</span>
+
+<span class="c"># type a prompt into it, then confirm with a second Enter - with longer prompts,</span>
+<span class="c"># an Enter sent in the same burst as the text doesn't register as submit and the</span>
+<span class="c"># prompt sits in the input box (short prompts usually submit fine)</span>
+ssh &lt;user&gt;@&lt;target-host&gt;.local <span class="s2">"tmux -S /tmp/cc-tmux.sock send-keys -t &lt;session&gt; 'Switch to main and pull; PR #4 is merged.' Enter"</span>
+<span class="nb">sleep </span>2
+ssh &lt;user&gt;@&lt;target-host&gt;.local <span class="s2">"tmux -S /tmp/cc-tmux.sock send-keys -t &lt;session&gt; Enter"</span>
+
+<span class="c"># read the reply (re-run / poll until the spinner is gone)</span>
+ssh &lt;user&gt;@&lt;target-host&gt;.local <span class="s2">"tmux -S /tmp/cc-tmux.sock capture-pane -t &lt;session&gt; -p"</span> | <span class="nb">tail</span> <span class="nt">-30</span>
+</code></pre></div></div>
+<h3 id="one-time-grants-cant-be-scripted">One-time grants (can’t be scripted)</h3>
+<p>Screen Recording and Accessibility can only be granted in the GUI, and a human has to do it at
+the machine (in person or via Screen Sharing) - macOS blocks synthetic clicks on these prompts.
+On first capture you’ll also <strong>Allow</strong> a <em>“bypass the window picker”</em> prompt (recurs ~monthly).</p>
+<p><strong>The grants go on <code class="language-plaintext highlighter-rouge">tmux</code>, not <code class="language-plaintext highlighter-rouge">claude</code>.</strong> macOS attributes
+capture/control to the <em>responsible process</em> in the chain, which here is the <code class="language-plaintext highlighter-rouge">tmux</code> server
+(claude runs as its child). So:</p>
+<ol>
+<li>Grant <code class="language-plaintext highlighter-rouge">tmux</code> (<code class="language-plaintext highlighter-rouge">/usr/local/bin/tmux</code>, or <code class="language-plaintext highlighter-rouge">/opt/homebrew/bin/tmux</code> on Apple Silicon) under
+both Screen Recording and Accessibility - Screen Recording covers screenshots,
+Accessibility covers mouse/keyboard control.</li>
+<li><strong>Restart the tmux server after granting</strong> - a running process caches its permission state
+at launch, so a grant won’t take effect until the server restarts:
+<code class="language-plaintext highlighter-rouge">tmux -S /tmp/cc-tmux.sock kill-server</code> (the LaunchAgent respawns the anchor within seconds).
+claude sessions started after the restart pick up the new grant.</li>
+</ol>
+<p>To make the entries appear in System Settings in the first place, trigger a computer-use action
+(<code class="language-plaintext highlighter-rouge">ic</code>, then ask Claude to “take a screenshot”) - macOS adds <code class="language-plaintext highlighter-rouge">tmux</code> to the list (toggled off) so
+you can switch it on.</p>
+<p><strong>Full Disk Access stops the “access data from other apps” prompts.</strong> On newer macOS, tmux
+triggers a separate <em>“tmux would like to access data from other apps”</em> prompt for each app
+whose data anything inside it touches. Granting <code class="language-plaintext highlighter-rouge">tmux</code> <strong>Full Disk Access</strong> (same Privacy &amp;
+Security pane) suppresses these prompts entirely: use the <strong>+</strong> button and add the tmux
+binary (Cmd-Shift-G to type the path). Restart the tmux server afterward, as above.</p>
+
+<h2 id="12-install-a-vpn-or-any-other-app-optional">12. Install a VPN, or any other app (optional)</h2>
+<p>I personally like to run a VPN on the box so its traffic goes out separately from my
+local IP. I use Proton VPN - it has a free option and I’ve been using them for a long
+time - but of course there are other options.</p>
+<p>You can just ask the box’s Claude to do it if you finished walking through
+<a href="#11-computer-use-over-ssh-optional">the previous step</a>: <code class="language-plaintext highlighter-rouge">ic</code> in and say “install Proton VPN”. It’ll
+download and install the app. The parts it can’t do alone:</p>
+<ul>
+<li><strong>Credentials.</strong> Signing in is required even for the free tier, and that’s
+yours to enter. Send the password over securely with <code class="language-plaintext highlighter-rouge">clip send</code> from
+<a href="#7-clipboard-sync-over-ssh">step 7</a>: copy it on your Mac, run <code class="language-plaintext highlighter-rouge">clip send</code>, then paste
+into the sign-in field on the box.</li>
+<li><strong>macOS permission prompts.</strong> The first connect pops a system prompt to allow a VPN /
+network configuration (and may ask for the Mac password) - approve it at the machine.</li>
+<li><strong>Computer use for the GUI.</strong> The app is GUI-only, so driving it relies on
+<a href="#11-computer-use-over-ssh-optional">step 11</a> being set up. Once signed in, the agent
+can connect and switch servers itself.</li>
+</ul>
+<p>This general flow works not just for a VPN app - it should work for pretty much any
+other application too.</p>
+
+<h2 id="13-control-it-from-your-phone">13. Control it from your phone</h2>
+<p>Remote Control lets you drive Claude Code from your phone through the Claude app.
+There are two ways to use it:</p>
+<ul>
+<li>Run <code class="language-plaintext highlighter-rouge">/remote-control</code> (or <code class="language-plaintext highlighter-rouge">/rc</code> for short) inside an existing session and follow
+the instructions - you can then drive that same session from your phone, going
+back and forth between the two.</li>
+<li>Start a server with <code class="language-plaintext highlighter-rouge">claude remote-control</code>, which also lets you start brand new
+sessions from your phone, not just attach to one you already have open.</li>
+</ul>
+<p>If you went through <a href="#11-computer-use-over-ssh-optional">step 11</a>, <code class="language-plaintext highlighter-rouge">ic rc</code> starts
+that server for you in a way that the sessions you spawn from your phone have access
+to computer use too.</p>
+
+<h2 id="14-set-up-claude-in-chrome-optional">14. Set up Claude in Chrome (optional)</h2>
+<p>Computer use from <a href="#11-computer-use-over-ssh-optional">step 11</a> deliberately won’t
+control a browser - browsers get a restricted tier where Claude can see what’s on
+screen but can’t click or type in it. The
+<a href="https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn">Claude in Chrome extension</a>
+fills that gap with proper browser control: navigating, clicking, filling forms,
+reading console logs and network requests. And unlike Playwright MCP, it drives
+your regular Chrome profile, so the agent can use any logged-in state you set up
+on the box.</p>
+<p>It requires Chrome on the target and a direct Anthropic plan (Pro, Max, Team, or
+Enterprise).</p>
+<p>You can ask the box’s Claude to install Chrome and open the extension’s Chrome Web
+Store page. The parts it can’t do alone (do these at the machine, in person or via
+Screen Sharing):</p>
+<ul>
+<li><strong>Click “Add to Chrome”.</strong> Optionally, you can pin the extension to the toolbar
+by going to <code class="language-plaintext highlighter-rouge">chrome://extensions</code>.</li>
+<li><strong>Log into your Claude account in the extension.</strong> You can send the login info
+with <code class="language-plaintext highlighter-rouge">clip send</code> from <a href="#7-clipboard-sync-over-ssh">step 7</a>.</li>
+</ul>
+<p>Then enable it in Claude Code on the target: run <code class="language-plaintext highlighter-rouge">/chrome</code> in a session and select
+“Enabled by default” to have the browser tools in every session, or skip that and
+use <code class="language-plaintext highlighter-rouge">claude --chrome</code> per session (<a href="#use-it-from-your-mac"><code class="language-plaintext highlighter-rouge">ic --chrome</code></a> from your
+source Mac). If the connection doesn’t work, try restarting Chrome once.</p>
+<p>To make browser use efficient (element refs from the accessibility tree instead
+of coordinates, no unrequested screenshots), the environment setup from
+<a href="#9-set-up-an-opinionated-claude-code-friendly-environment-optional">step 9</a>
+adds a “Claude for Chrome” guidance section to <code class="language-plaintext highlighter-rouge">~/.claude/CLAUDE.md</code> on the
+target. If you skipped that step, re-run the script - it’s idempotent.</p>
+<blockquote>
+<p><strong>If your source Mac’s Chrome also has the extension</strong> signed into the same
+account, Claude Code can connect to either browser. It prompts you to pick when
+both are connected, but its local-machine detection can be wrong
+(<a href="https://github.com/anthropics/claude-code/issues/74667">#74667</a>). To avoid
+that, you can temporarily uninstall the extension from the source Mac’s Chrome -
+or just quit Chrome on the source while the box is working.</p>
+</blockquote>
+<p>Note that sessions spawned from your phone via
+<a href="#13-control-it-from-your-phone">step 13</a> don’t currently get the browser tools
+(<a href="https://github.com/anthropics/claude-code/issues/74671">#74671</a>) - the
+workaround is to start the session in the terminal and attach with <code class="language-plaintext highlighter-rouge">/rc</code>.</p>
+
+<h2 id="15-enable-screen-sharing-on-the-target-mac-optional">15. Enable Screen Sharing on the target Mac (optional)</h2>
+<p>This lets you see the target’s screen live from the source Mac - and take over its
+mouse and keyboard - using macOS’s built-in Screen Sharing.</p>
+<p>This has to be enabled in the GUI at the machine - since macOS 12.1 it
+<a href="https://support.apple.com/guide/remote-desktop/enable-remote-management-apd8b1c65bd/mac">can’t be enabled from the command line</a>.</p>
+<p>On the target: <strong>System Settings -&gt; General -&gt; Sharing -&gt; Screen Sharing</strong> on. If
+<strong>Remote Management</strong> is on, the Screen Sharing toggle may be hidden - turn it off
+first.</p>
+<p>Then connect from the source Mac:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>open vnc://&lt;user&gt;@&lt;target-host&gt;.local
+</code></pre></div></div>
+<p>Log in with the target account’s login password and tick <strong>Remember this password
+in my keychain</strong>.</p>
+
+<h2 id="16-access-it-from-anywhere-with-tailscale-optional">16. Access it from anywhere with Tailscale (optional)</h2>
+<p><code class="language-plaintext highlighter-rouge">.local</code> names only resolve on your LAN, so everything so far is local-network
+only (except phone control from <a href="#13-control-it-from-your-phone">step 13</a>, which
+relays through Anthropic). <a href="https://tailscale.com">Tailscale</a> fixes that: it
+connects your machines with peer-to-peer, end-to-end encrypted
+<a href="https://www.wireguard.com">WireGuard</a> tunnels, so SSH, <code class="language-plaintext highlighter-rouge">ic</code>, <code class="language-plaintext highlighter-rouge">clip</code>, and Screen
+Sharing work from any network with nothing exposed to the public internet. On
+your home network it takes a direct LAN path, so local use stays as fast as
+before. And joining the network only gives a device reachability - SSH and
+Screen Sharing still require your key or password on top.</p>
+<p>Install on the target (the Homebrew formula works headless over SSH; sign in at
+the URL the last command prints - a free account with a social login is fine):</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ssh &lt;user&gt;@&lt;target-host&gt;.local <span class="s1">'brew install tailscale'</span>
+ssh &lt;user&gt;@&lt;target-host&gt;.local <span class="s1">'sudo brew services start tailscale'</span>
+ssh &lt;user&gt;@&lt;target-host&gt;.local <span class="s1">'sudo tailscale up --operator=&lt;user&gt;'</span>
+</code></pre></div></div>
+<p>Install on the source, then open the Tailscale app and log in <strong>with the same
+account</strong> - devices only see each other within one account’s network:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>brew <span class="nb">install</span> <span class="nt">--cask</span> tailscale-app
+</code></pre></div></div>
+<p>With MagicDNS (on by default) the target is reachable by bare hostname from
+anywhere - the same address, minus <code class="language-plaintext highlighter-rouge">.local</code>. Switch <code class="language-plaintext highlighter-rouge">IC_BOX</code> in <code class="language-plaintext highlighter-rouge">~/.zshrc</code>,
+keeping the original name for reference:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nb">export </span><span class="nv">IC_BOX</span><span class="o">=</span><span class="s2">"&lt;user&gt;@&lt;target-host&gt;"</span>          <span class="c"># Tailscale - works remotely too</span>
+<span class="c"># export IC_BOX="&lt;user&gt;@&lt;target-host&gt;.local"  # original - local network only</span>
+</code></pre></div></div>
+<p>Screen Sharing works the same way: <code class="language-plaintext highlighter-rouge">open vnc://&lt;user&gt;@&lt;target-host&gt;</code>.</p>
+<p>Recommended, in the <a href="https://login.tailscale.com/admin">admin console</a>:
+<strong>device approval</strong> (Settings -&gt; Device management), so a compromised Tailscale
+login alone can’t add a device to your network, and <strong>disable key expiry</strong> on
+the target (Machines -&gt; <strong>…</strong>), so the box doesn’t drop off the network when
+its key expires after ~180 days.</p>
+<p>To confirm remote access really works, put the source Mac on a different
+network (e.g. a phone hotspot) and run <code class="language-plaintext highlighter-rouge">ic ls</code>.</p>
+</div>
+
+
+</body>
