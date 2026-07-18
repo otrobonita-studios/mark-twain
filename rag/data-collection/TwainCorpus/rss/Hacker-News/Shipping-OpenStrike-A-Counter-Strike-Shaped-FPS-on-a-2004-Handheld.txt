@@ -1,0 +1,353 @@
+← Blog
+Today we are releasing 
+OpenStrike
+ â a single-player, Counter-Strike-shaped FPS that plays the classic GoldSrc-era maps: bots, tracers, recoil, round flow, and a JSX HUD. The round rules are TypeScript. The HUD is a 
+Solid
+ app. And the whole thing holds a locked 60 FPS on a 
+2004 Sony PSP
+, shipped as one file you can drop on a Memory Stick.
+
+Native 480Ã272 output of the shipping build, shown at 2Ã â this frame and every other screenshot in this post is the PSP executable's own framebuffer, captured in the emulator our byte-exact tests run on.
+OpenStrike is open source at 
+pocket-stack/open-strike
+. It is the first game built on the Pocket runtime family â the architecture underneath 
+PocketJS
+ â and it exists to prove a claim: that "the web stack's ergonomics, without the web stack's machinery" scales past UI, to a real-time 3D game, on hardware that predates the iPhone.
+
+This post is written for people who ship JavaScript for browsers and have never touched a games console. No embedded or graphics background is assumed. It is the full story: what the machine actually is, how TypeScript ends up inside it, what a 1999 map format has to do with your bundler, how you draw anything without shaders, and where the milliseconds went.
+
+The machine in question
+
+The PSP-1000 has a single MIPS CPU core at 333 MHz. In-order execution, no speculative anything, and â this matters most for us â 
+no JIT for JavaScript
+, so every closure runs interpreted, every frame. It has 
+32 MB of RAM
+, of which user programs see 24 MB. The browser tab you are reading this in has a larger JavaScript heap than this machine has memory, total.
+
+The GPU â Sony calls it the 
+Graphics Engine
+ â predates programmable shaders. You cannot upload a vertex shader or a fragment shader; there is nothing to upload to. It is a fixed-function pipeline: it can transform triangles by a matrix, interpolate a color across each one, sample a texture with bilinear filtering, depth-test, blend â a fixed menu, configured by registers, feeding a 480Ã272 screen out of 
+2 MB of video memory
+.
+
+And there is no operating system in the sense you mean. No processes, no virtual memory, no dynamic linker, and nowhere for 
+console.log
+ to go. The whole game â Rust engine, JavaScript interpreter, the JS bundle, the 
+map
+ â links into a single executable (an 
+EBOOT.PBP
+, the PSP's 
+.exe
+), and when it runs, it is handed the machine. When it crashes, the machine crashes.
+
+That is the deploy target. Here is what we deployed.
+
+One product, two machines
+
+OpenStrike is split along a line web developers will recognize instantly â it is the native-app split, transplanted: 
+the engine is Rust, the product is JavaScript.
+
+The Rust side (
+openstrike-core
+ plus the 
+Pocket3D
+ renderer) owns everything that must never miss a frame: player movement and collision, bot AI, bullets, and drawing the world. The JavaScript side owns everything that makes it 
+this game rather than some game
+: 
+rules.ts
+ is the round flow, scoring, and the weapon and bot tuning tables; 
+hud.tsx
+ is the entire HUD â health, ammo, crosshair, score â an ordinary Solid component tree styled with Tailwind classes, running on PocketJS. The base game grants itself no privileges a mod wouldn't have: change 
+rules.ts
+ and you have made a mod.
+
+The JS engine embedded in the executable is 
+QuickJS
+ â Fabrice Bellard's full ES2023 engine that compiles to a few hundred kilobytes. QuickJS is to this PSP what V8 is to Node: the host hands it a 
+strike
+ API surface and a 
+ui
+ API surface, and the same 
+openstrike.js
+ bundle boots against them on every target.
+
+Every target â plural, and that is the release's real headline:
+
+The tick order is fixed and worth internalizing, because everything later hangs off it. Sixty times a second:
+
+every 16.7 ms                       (one vertical blank)
+
+  pad â SimInput                    buttons + analog stick
+
+  sim.tick(dt)                      movement, bots, bullets      Rust
+
+  strike.__dispatch(state, events)  one call into QuickJS        JS
+
+    ââ rules.ts reacts              queues commands
+
+    ââ hud.tsx re-renders           only the bindings that changed
+
+  drain commands â core             setPhase, configureWeaponâ¦   Rust
+
+  draw                              PVS â batches â GE
+Facts flow down as a plain state snapshot (
+hp
+, 
+ammo
+, 
+phase
+, 
+aliveBots
+, â¦) plus an event batch (
+hit
+, 
+playerDied
+, 
+roundReset
+). Intent flows up as queued commands. JavaScript is consulted exactly once per frame and can never stall the simulation â the same one-crossing-per-frame discipline PocketJS already enforced for UI, now owning a game's rules.
+
+A bundler for 1999's geometry
+
+Now the 3D part, from zero.
+
+A GoldSrc-era map â the format behind Half-Life and the original Counter-Strike â is not a soup of triangles. It is a 
+BSP
+ file: the level's polygons stored pre-organized into a 
+binary space partitioning tree
+, a 1990s data structure that recursively slices the world with planes until every position falls into a convex cell called a 
+leaf
+. The format's killer feature is the 
+PVS â the Potentially Visible Set
+. For every leaf, the file stores a precomputed, compressed bitset of every other leaf that could 
+ever
+ be visible from inside it, through any door, over any crate, at any angle. Computing it took the level designer's machine minutes, once, in 1999. Consuming it takes microseconds, forever.
+
+If you want this in web terms: the PVS is occlusion culling as a lockfile. All the expensive thinking happened offline, and the runtime just looks up the answer. Standing in the dust2 courtyard, the renderer never even considers the tunnels' geometry â not "draws it fast," but 
+never touches it
+.
+
+We kept that 1999 spirit and extended it with a modern move: 
+treat the console like a deploy target and put a compiler in front of it.
+ The PSP cannot afford to parse a BSP file, decode textures, or reshape data at load time â that costs RAM for intermediate copies and CPU we would rather spend on bots. So OpenStrike's build step runs 
+pocket3d-cook
+ on your laptop, which reads the map plus its 
+.wad
+ texture archives and emits a 
+.p3d
+: a file whose bytes are 
+exactly
+ what the PSP's GPU wants to read, in the exact layout, alignment, and byte order.
+
+"Baking" is the word for moving runtime cost to build time, and the cooker bakes aggressively:
+
+Lighting is baked into vertex colors.
+ GoldSrc maps ship 
+lightmaps
+ â little per-surface shadow textures. The GE could multitexture them, but every texture unit costs bandwidth we would rather not spend. So the cooker dices each polygon into a grid and 
+samples the lightmap into the vertices' color channel
+. The GE interpolates colors across triangles for free, so sunlight, shadow edges, and that orange dust2 glow cost literally nothing per frame. It is inlining, for light.
+
+Positions are quantized to 16-bit integers.
+ Half the memory and half the GPU-read bandwidth of floats. (This unlocked the port's favorite piece of hardware archaeology: in 3D mode the GE silently 
+normalizes
+ integer vertices â divides them by 32768 â a behavior documented nowhere. The counter-move is to scale the world back up by 32768 in the model matrix. We confirmed it by reading the emulator's source code, which on this platform is what developer documentation looks like.)
+
+Textures become CLUT8
+: 8-bit indices into a 256-color palette â 4Ã smaller than RGBA, which is how a whole map's texture set fits alongside everything else. They are resampled to power-of-two sizes (a hard GE requirement), 
+swizzled
+ â reordered into the tile pattern the GPU's texture cache wants, roughly "structure-of-arrays, for texels" â and given full mip chains (pre-shrunk versions for distant surfaces).
+
+The payoff for all this build-time obsession is the load screen we don't have: the 
+.p3d
+ is linked into the executable's read-only data, and the GE renders 
+directly from those bytes, in place
+. No file I/O, no decompression, no upload step. The one concession to hardware reality is a single cache-writeback call at boot, because the GPU reads memory behind the CPU cache's back. Level loads are instant because nothing loads.
+
+If you have used PocketJS, this is the same ideology that compiles Tailwind classes to a binary style table and bakes fonts to atlases â 
+the device never parses, it only consumes
+ â applied to an entire 3D world.
+
+The texture glow-up, or: the machine hides nothing
+
+Midway through the port we noticed the textures looked muddier than 1999 deserved, and the investigation is a nice showcase of how unforgiving â and how 
+legible
+ â this hardware is. Three independent causes, all in the pipeline above:
+
+The same crate, before and after, 3Ã crop of the PSP framebuffer. Left: nearest-neighbor resampling, round-down sizing, default mip selection. Right: bilinear palette-aware resampling, round-up sizing, â1.0 mip bias, and a 2Ã denser light grid.
+First, non-power-of-two textures (a 96Ã96 crate face, say) were being stretched to GPU-legal sizes with nearest-neighbor sampling, which duplicates texel columns in a visibly irregular rhythm. The fix is a bilinear resample â but through a 
+palette
+: sample in RGB, then re-quantize each result to the texture's own 256 colors. Second, sizing policy rounded to the 
+nearest
+ power of two, so a 320-wide texture dropped to 256 and threw away native detail; it now always rounds up (the GE's ceiling is 512). Third, the GE has no anisotropic filtering, and its automatic mip selection goes blurry on floors at glancing angles long before texel density demands it â a â1.0 LOD bias holds the sharp mip one distance ring longer, a trade every PSP-era shipped game quietly made. And while we were in there, the light-bake grid tightened from 96 world units to 32 â every other lightmap sample â so baked shadow edges snap back into place. Dust2 went from 26k to 58k vertices and the map grew 0.9 MB, which the budget absorbed without a flinch, as the next section shows.
+
+The 16.7-millisecond war
+
+At 60 FPS a frame is 16.7 ms â everything above must happen inside it, on one interpreted-JavaScript-running, 333 MHz core. Here is where the port stood after the dust settled, measured on the physical handheld over a scripted tour of dust2:
+
+A comfortable margin â but only after two wars, and the second one is the single most useful thing this project has to say to JavaScript developers.
+
+War one was not ours to win.
+ The first hardware run came in at 25 FPS, and no amount of profiling explained it, because the code was innocent: the development harness boots the console at 222 MHz, and retail speed â 333 MHz â is one syscall away. The lesson generalizes: 
+before optimizing a slow embedded target, confirm what clock it is actually running at.
+
+War two: fine-grained means fine-grained.
+ The HUD originally mirrored the per-tick state snapshot into Solid through one signal:
+
+// before: one signal carries the whole snapshot â
+
+// a fresh object every tick, so *every* binding re-runs, every frame
+
+const
+ [
+st
+, 
+setSt
+] 
+=
+ createSignal
+(
+snapshot
+());
+
+onState
+((
+s
+) 
+=>
+ setSt
+({ ...
+s
+ }));
+
+// after: one signal per field, equality-gated â
+
+// an unchanged hp/ammo/phase costs nothing
+
+const
+ [
+hp
+, 
+setHp
+] 
+=
+ createSignal
+(
+100
+);
+
+const
+ [
+ammo
+, 
+setAmmo
+] 
+=
+ createSignal
+(
+30
+);
+
+onState
+((
+s
+) 
+=>
+ { 
+setHp
+(
+s
+.
+hp
+); 
+setAmmo
+(
+s
+.
+ammo
+); 
+/* â¦ */
+ });
+On a desktop you would never notice the difference; the JIT absorbs it. On a 333 MHz interpreter the whole-snapshot version cost 
+20.6 ms of JavaScript per frame
+ â over budget before a single triangle drew â because a new object identity re-fires every binding whether its field changed or not. Splitting per field with equality gating dropped the identical HUD to 
+2.2 ms
+. Solid's reactivity model isn't a preference at this scale; it is the reason a JSX HUD is 
+possible
+ here at all. The renderer's draw output was byte-identical before and after, which is also how we could make that change fearlessly â more on that below.
+
+Memory tells the same story of contracts rather than aspirations, with the JS engine's heap living inside the same audited budget:
+
+PSP user RAM                                24.0 MB
+
+ââ executable (engine + QuickJS + JS bundle
+
+â    + the entire cooked map)                 6.2 MB
+
+ââ arena high-water (QuickJS heap, engine
+
+â    state, per-frame vertex pool)           ~4.4 MB
+
+ââ free                                     ~13 MB
+
+VRAM: framebuffers + depth                    1.4 / 2 MB
+Determinism is the debugger
+
+How do you debug a machine with no console, no debugger UI, and no screen-sharing? You make the program a 
+pure function
+ and put the leverage at build time â the same bet as the cooker, applied to behavior.
+
+OpenStrike inherits PocketJS's closed-world rules: a fixed 1/60 s timestep, no wall clocks, seeded randomness, and per-frame input that is just a button bitmask plus two analog bytes. Frame N is a pure function of the input script â so a scripted run produces 
+byte-identical framebuffers
+, every time, on any faithful executor. Our CI boots the actual shipping EBOOT in the PPSSPP emulator's deterministic software renderer, drives scripted input, and compares dumped frames 
+byte-for-byte
+ against golden PNGs. When the texture fixes above landed, the goldens named exactly which pixels changed and why; re-baselining was one command. The 60 FPS number comes from the same harness pointed at the real handheld over a USB cable, streaming per-frame timings back to the desk.
+
+Frame 507 of a scripted input tape â reproducible to the byte, which is what makes it CI evidence and a blog illustration at the same time.
+And because the HUD is a PocketJS app, the whole 
+DevTools story
+ carries over unchanged: the component inspector highlights nodes on the handheld's physical screen, 
+console.log
+ streams off the device with frame numbers attached, and pause/step freezes bots mid-stride â all over the same cable.
+
+What this actually proves
+
+The Pocket runtime family's thesis is that a 
+product
+ â gameplay rules, UI, tuning â should be a portable JavaScript artifact, while engines stay native, small, and swappable underneath. OpenStrike is the first full-size test of that thesis across a hardware gulf: the same 
+openstrike.js
+, byte for byte, runs against wgpu on a many-core laptop and against a fixed-function GPU on a 32 MB handheld, and the 
+game
+ cannot tell.
+
+The desktop build: same rules.ts, same hud.tsx, same crates â eleven times the pixels and per-pixel lightmaps, because that engine can.
+Nothing about the pattern is PSP-specific. The console is, as we said when introducing PocketJS, an honest referee: a machine that will not quietly absorb a lazy architecture. An FPS with its brains in TypeScript holding 60 FPS 
+there
+ is the existence proof; everything roomier is downhill.
+
+Play it
+
+pocket-stack/open-strike
+ â MIT. Desktop build runs with 
+cargo run -p openstrike
+; the 
+README
+ covers the PSP EBOOT, the hardware bench, and the emulator goldens.
+
+Map data is Valve's and is 
+not
+ in the repo â point the build at your own copy of the game's 
+.bsp
+/
+.wad
+ files. Any GoldSrc-era map works; the eight CS classics are the tested set.
+
+No PSP? PPSSPP runs the EBOOT beautifully. Real hardware needs custom firmware and 
+PSPLINK
+ â the same cable our DevTools ride.
+
+RUNTIMES.md
+ â the runtime-family architecture OpenStrike instantiates, if you want the ontology behind the diagram.
+
+Follow 
+@pocket_js
+ for what's next. The pocket keeps getting deeper.
