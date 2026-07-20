@@ -1,0 +1,669 @@
+🚀 85.30 GFLOPS Single‑Core FP32 GEMM on AMD Zen 3
+
+Uma exploração sistemática de otimização de multiplicação de matrizes usando AVX2/FMA em C++ intrinsics, alcançando 63,5% do pico teórico de 134,4 GFLOPS em um AMD Ryzen 5 5500.
+
+📖 Visão Geral
+
+Este repositório contém o código fonte, resultados e análise de um estudo aprofundado sobre otimização de multiplicação de matrizes (GEMM) para precisão simples (FP32) em uma única núcleo da microarquitetura 
+AMD Zen 3
+. Foram testadas 
+28 configurações distintas
+ (modelos MX01 a MX28) que combinam técnicas como:
+
+Cache blocking (tiling) em três níveis (L1, L2, L3)
+
+Register blocking (2, 4 e 8 linhas)
+
+Encadeamento de instruções FMA (chain1 a chain6)
+
+Estratégias de empacotamento (sem packing, transposição, B‑pack on‑the‑fly)
+
+Alinhamento de memória (32 bytes)
+
+Prefetching por software
+
+Stores não temporais (stream stores)
+
+O melhor modelo, 
+MX24
+, sustentou 
+85.30 GFLOPS
+, superando a implementação ingênua por um fator de 
+56,5×
+ e igualando o desempenho de bibliotecas otimizadas como AMD AOCL e OpenBLAS.
+
+🏆 Resultados Principais
+
+Modelo
+
+Descrição
+
+GFLOPS
+
+% Pico
+
+MX24
+
+4‑linhas + chain4 + B‑pack (BK=256)
+
+85.30
+
+63.5%
+
+MX22
+
+4‑linhas + chain4 + B‑pack (BK=128)
+
+84.10
+
+62.6%
+
+MX23
+
+4‑linhas + chain4 + B‑pack (BK=64)
+
+82.93
+
+61.7%
+
+MX16
+
+4‑linhas + chain4 + alinhado (sem pack)
+
+72.58
+
+54.0%
+
+MX20
+
+4‑linhas + chain4 + Bᵀ (transposta)
+
+79.21
+
+58.9%
+
+MX18
+
+4‑linhas + chain4 + prefetch
+
+79.75
+
+59.3%
+
+ℹ️ O pico teórico é calculado como 
+2 portas FMA × 8 floats × 2 ops × 4,2 GHz = 134,4 GFLOPS
+.
+
+🔬 Metodologia
+
+Técnicas de Otimização Avaliadas
+
+Cache Blocking (Tiling)
+
+BI
+, 
+BJ
+, 
+BK
+ ajustados para manter os blocos dentro das caches L1 (32 KB), L2 (512 KB) e L3 (16 MB).
+
+O melhor 
+BK
+ encontrado foi 
+256
+, que maximiza a reutilização sem estourar a L2.
+
+Register Blocking
+
+Acumuladores de 
+C
+ mantidos em registradores YMM (16 disponíveis).
+
+4 linhas
+ proporcionou o melhor equilíbrio: apesar de exigir 
+spill
+ (16 registradores extras), a reutilização de 
+A
+ compensa o custo.
+
+FMA Chaining
+
+A latência da instrução FMA no Zen 3 é de 
+4 ciclos
+. O encadeamento 
+chain4
+ (4 acumuladores independentes) esconde essa latência, atingindo utilização máxima das duas portas FMA.
+
+Empacotamento (Packing)
+
+B‑pack on‑the‑fly
+: copia blocos de 
+B
+ (BK×BJ) para um buffer contíguo, convertendo acessos não contíguos em sequenciais.
+
+Supera a transposição completa (que polui a L3) e o acesso direto (que sofre com misses de TLB).
+
+Alinhamento
+
+Alocação com 
+_mm_malloc(..., 32)
+ para uso de instruções 
+vmovaps
+ (alinhadas), trazendo ganho de ~5%.
+
+Prefetching
+
+O uso de 
+_mm_prefetch
+ 
+reduziu
+ o desempenho em ~8%, pois o hardware prefetcher do Zen 3 já é eficiente para padrões de streaming.
+
+Stores Não Temporais
+
+_mm256_stream_ps
+ foi 
+catastrófico
+ (1,24 GFLOPS), pois 
+C
+ é lido‑modificado‑escrito, e a instrução invalida a linha de cache a cada escrita.
+
+📂 Estrutura do Repositório
+
+zen3-gemm/
+├── README.md
+├── src/
+│   └── mx85.c                  # Código completo com todos os 28 modelos + benchmark
+├── docs/
+│   ├── artigo_en.tex           # Artigo científico completo (LaTeX)
+│   └── resultados/             # Logs de saída do benchmark
+│       ├── mx85_benchmark.txt
+│       └── mx85_output8.txt
+└── build/
+    └── Makefile                # (opcional) para compilação simples
+
+⚙️ Compilação e Execução
+
+Pré‑requisitos
+
+Processador
+ com suporte a AVX2 e FMA (ex: AMD Zen, Intel Haswell ou superior)
+
+Sistema operacional
+ Windows (10/11) ou Linux
+
+Compilador
+ GCC 12.2+ (MinGW‑w64 no Windows) ou equivalente com suporte a intrinsics AVX2
+
+Memória
+ suficiente para matrizes 2048×2048 (≈ 48 MB para as três matrizes)
+
+Compilar com GCC (Windows/MinGW ou Linux)
+
+No diretório 
+src/
+, execute:
+
+gcc -O3 -mavx2 -mfma -march=native -funroll-loops -frename-registers -o mx85.exe mx85.c
+
+Flags importantes:
+
+-mavx2 -mfma -march=native
+ – habilita instruções SIMD e otimiza para a CPU atual.
+
+-funroll-loops
+ – desenrola laços internos.
+
+-frename-registers
+ – melhora a alocação de registradores (reduz spills).
+
+Executar
+
+./mx85.exe
+
+O programa:
+
+Aplica afinidade de thread ao núcleo 0 (Windows) e prioridade alta.
+
+Executa cada modelo 3 vezes (warmup) + 15 vezes medidas.
+
+Gera dois arquivos de saída:
+
+mx85_benchmark.txt
+ – ranking completo e validação.
+
+mx85_validate.txt
+ – erros máximos versus implementação de referência.
+
+Personalização
+
+Para testar apenas um modelo específico, você pode modificar a função 
+main()
+ para chamar diretamente a função desejada (ex: 
+mx24(A, B, C, N)
+). Ou, para matrizes de outros tamanhos, altere a constante 
+N
+ (linha ~230).
+
+📊 Tabela Completa de Resultados
+
+Abaixo estão todos os 
+28 modelos
+ testados, com GFLOPS medidos e porcentagem do pico teórico.
+
+Pos
+
+Modelo
+
+Descrição
+
+GFLOPS
+
+% Pico
+
+1
+
+MX24
+
+4‑linhas + chain4 + B‑pack BK=256
+
+85.30
+
+63.5%
+
+2
+
+MX22
+
+4‑linhas + chain4 + B‑pack BK=128
+
+84.10
+
+62.6%
+
+3
+
+MX23
+
+4‑linhas + chain4 + B‑pack BK=64
+
+82.93
+
+61.7%
+
+4
+
+MX25
+
+4‑linhas + chain4 + B‑pack + prefetch
+
+83.15
+
+61.9%
+
+5
+
+MX20
+
+4‑linhas + chain4 + Bᵀ (transposta)
+
+79.21
+
+58.9%
+
+6
+
+MX18
+
+4‑linhas + chain4 + prefetch
+
+79.75
+
+59.3%
+
+7
+
+MX17
+
+4‑linhas + chain4 + sem pack
+
+78.80
+
+58.6%
+
+8
+
+MX16
+
+4‑linhas + chain4 + alinhado
+
+72.58
+
+54.0%
+
+9
+
+MX15
+
+4‑linhas + chain3 + B‑pack
+
+62.34
+
+46.4%
+
+10
+
+MX14
+
+4‑linhas + chain2 + B‑pack
+
+55.76
+
+41.5%
+
+11
+
+MX13
+
+2‑linhas + chain4 + B‑pack
+
+53.58
+
+39.9%
+
+12
+
+MX12
+
+2‑linhas + chain3 + B‑pack
+
+50.56
+
+37.6%
+
+13
+
+MX11
+
+4‑linhas + chain2 + alinhado
+
+47.15
+
+35.1%
+
+14
+
+MX08
+
+2‑linhas + chain4 + BK=128
+
+45.04
+
+33.5%
+
+15
+
+MX07
+
+2‑linhas + chain3 + sem Bt
+
+43.52
+
+32.4%
+
+16
+
+MX05
+
+2‑linhas + chain2 + Bt
+
+41.93
+
+31.2%
+
+17
+
+MX19
+
+4‑linhas + chain5 + alinhado
+
+42.07
+
+31.3%
+
+18
+
+MX06
+
+2‑linhas + chain1 + prefetch
+
+42.54
+
+31.7%
+
+19
+
+MX04
+
+4‑linhas + chain1 + Bt
+
+40.04
+
+29.8%
+
+20
+
+MX03
+
+2‑linhas + chain1 + Bt
+
+39.34
+
+29.3%
+
+21
+
+MX02
+
+2‑linhas + chain1 + j‑block
+
+37.60
+
+28.0%
+
+22
+
+MX01
+
+Bt + 2Dtile + 8acc (baseline)
+
+35.16
+
+26.2%
+
+23
+
+MX10
+
+4‑linhas + chain6 + Bt
+
+14.26
+
+10.6%
+
+24
+
+MX26
+
+8‑linhas + chain4 + B‑pack
+
+12.24
+
+9.1%
+
+25
+
+MX28
+
+4‑linhas + chain4 + dual16
+
+13.75
+
+10.2%
+
+26
+
+MX27
+
+4‑linhas + chain4 + C‑in‑regs
+
+9.13
+
+6.8%
+
+27
+
+MX09
+
+BI=128, BK=256 + chain4
+
+8.38
+
+6.2%
+
+28
+
+MX21
+
+4‑linhas + chain4 + stream stores
+
+1.24
+
+0.9%
+
+🔍 Análise dos Principais Fracassos
+
+Modelo
+
+Técnica
+
+GFLOPS
+
+Causa
+
+MX21
+
+Stores não temporais
+
+1.24
+
+C
+ é lido‑modificado‑escrito; cada store invalida a cache, forçando reloads da DRAM.
+
+MX26
+
+8 linhas em registradores
+
+12.24
+
+Necessita 64 registradores YMM; 48 são 
+spilled
+, dominando o tempo de execução.
+
+MX27
+
+C‑in‑regs através de k‑block
+
+9.13
+
+Mantém acumuladores vivos por muitas iterações, aumentando pressão de registradores.
+
+MX09
+
+BI=128, BK=256
+
+8.38
+
+O working set (128×256×4 = 128 KB) excede a L1, causando muitas misses.
+
+MX10
+
+Chain6
+
+14.26
+
+Cadeia longa demais; falta de registradores força spilling excessivo.
+
+🧪 Validação
+
+Todos os modelos foram validados contra uma implementação de referência (escolar 
+ijk
+). Os três melhores modelos (MX24, MX22, MX23) apresentaram 
+erro máximo absoluto = 0.0
+ (bit‑idênticos), pois a ordem de acumulação é preservada. Os demais modelos apresentaram erros da ordem de 
+1e-6
+, dentro do esperado para aritmética de ponto flutuante.
+
+📚 Como Citar
+
+Se utilizar este trabalho em suas pesquisas, por favor cite o artigo associado:
+
+@article
+{
+housl2025gemm
+,
+  
+title
+=
+{
+85.30 GFLOPS Single-Core FP32 Matrix Multiplication on AMD Zen 3
+}
+,
+  
+author
+=
+{
+Housl
+}
+,
+  
+journal
+=
+{
+arXiv preprint
+}
+,
+  
+year
+=
+{
+2025
+}
+
+}
+
+🤝 Contribuições
+
+Contribuições são bem‑vindas! Sinta‑se à vontade para abrir 
+issues
+ ou 
+pull requests
+ com melhorias, novos modelos ou adaptações para outras arquiteturas.
+
+##📄 Licença
+Este projeto está disponível sob a MIT License. Isso significa que você pode usar, copiar, modificar, mesclar, publicar, distribuir, sublicenciar e/ou vender cópias do software, desde que mantenha o aviso de direitos autorais e a permissão. Veja o arquivo LICENSE para os termos completos.
+
+##📧 Contato e Autoria
+Autor: Lucas Lima Freitag
+
+E‑mail: 
+freitag.lima@academico.ifrn.edu.br
+
+Papel: Autor
+
+Afiliação: Universidade Federal do Rio Grande do Norte (UFRN)
+
+ORCID: 0009-0006-8849-5619
+
+Divirta‑se otimizando! 🚀
+Se tiver dúvidas, sugestões ou quiser compartilhar seus próprios resultados, fique à vontade para entrar em contato

@@ -1,0 +1,463 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">🚀 85.30 GFLOPS Single‑Core FP32 GEMM on AMD Zen 3</h1></div>
+<p dir="auto"><strong>Uma exploração sistemática de otimização de multiplicação de matrizes usando AVX2/FMA em C++ intrinsics, alcançando 63,5% do pico teórico de 134,4 GFLOPS em um AMD Ryzen 5 5500.</strong></p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">📖 Visão Geral</h2></div>
+<p dir="auto">Este repositório contém o código fonte, resultados e análise de um estudo aprofundado sobre otimização de multiplicação de matrizes (GEMM) para precisão simples (FP32) em uma única núcleo da microarquitetura <strong>AMD Zen 3</strong>. Foram testadas <strong>28 configurações distintas</strong> (modelos MX01 a MX28) que combinam técnicas como:</p>
+<ul dir="auto">
+<li>Cache blocking (tiling) em três níveis (L1, L2, L3)</li>
+<li>Register blocking (2, 4 e 8 linhas)</li>
+<li>Encadeamento de instruções FMA (chain1 a chain6)</li>
+<li>Estratégias de empacotamento (sem packing, transposição, B‑pack on‑the‑fly)</li>
+<li>Alinhamento de memória (32 bytes)</li>
+<li>Prefetching por software</li>
+<li>Stores não temporais (stream stores)</li>
+</ul>
+<p dir="auto">O melhor modelo, <strong>MX24</strong>, sustentou <strong>85.30 GFLOPS</strong>, superando a implementação ingênua por um fator de <strong>56,5×</strong> e igualando o desempenho de bibliotecas otimizadas como AMD AOCL e OpenBLAS.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">🏆 Resultados Principais</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Modelo</th>
+<th>Descrição</th>
+<th>GFLOPS</th>
+<th>% Pico</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MX24</strong></td>
+<td>4‑linhas + chain4 + B‑pack (BK=256)</td>
+<td><strong>85.30</strong></td>
+<td><strong>63.5%</strong></td>
+</tr>
+<tr>
+<td>MX22</td>
+<td>4‑linhas + chain4 + B‑pack (BK=128)</td>
+<td>84.10</td>
+<td>62.6%</td>
+</tr>
+<tr>
+<td>MX23</td>
+<td>4‑linhas + chain4 + B‑pack (BK=64)</td>
+<td>82.93</td>
+<td>61.7%</td>
+</tr>
+<tr>
+<td>MX16</td>
+<td>4‑linhas + chain4 + alinhado (sem pack)</td>
+<td>72.58</td>
+<td>54.0%</td>
+</tr>
+<tr>
+<td>MX20</td>
+<td>4‑linhas + chain4 + Bᵀ (transposta)</td>
+<td>79.21</td>
+<td>58.9%</td>
+</tr>
+<tr>
+<td>MX18</td>
+<td>4‑linhas + chain4 + prefetch</td>
+<td>79.75</td>
+<td>59.3%</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<blockquote>
+<p dir="auto">ℹ️ O pico teórico é calculado como <code>2 portas FMA × 8 floats × 2 ops × 4,2 GHz = 134,4 GFLOPS</code>.</p>
+</blockquote>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">🔬 Metodologia</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Técnicas de Otimização Avaliadas</h3></div>
+<ol dir="auto">
+<li>
+<p dir="auto"><strong>Cache Blocking (Tiling)</strong></p>
+<ul dir="auto">
+<li><code>BI</code>, <code>BJ</code>, <code>BK</code> ajustados para manter os blocos dentro das caches L1 (32 KB), L2 (512 KB) e L3 (16 MB).</li>
+<li>O melhor <code>BK</code> encontrado foi <strong>256</strong>, que maximiza a reutilização sem estourar a L2.</li>
+</ul>
+</li>
+<li>
+<p dir="auto"><strong>Register Blocking</strong></p>
+<ul dir="auto">
+<li>Acumuladores de <code>C</code> mantidos em registradores YMM (16 disponíveis).</li>
+<li><strong>4 linhas</strong> proporcionou o melhor equilíbrio: apesar de exigir <em>spill</em> (16 registradores extras), a reutilização de <code>A</code> compensa o custo.</li>
+</ul>
+</li>
+<li>
+<p dir="auto"><strong>FMA Chaining</strong></p>
+<ul dir="auto">
+<li>A latência da instrução FMA no Zen 3 é de <strong>4 ciclos</strong>. O encadeamento <strong>chain4</strong> (4 acumuladores independentes) esconde essa latência, atingindo utilização máxima das duas portas FMA.</li>
+</ul>
+</li>
+<li>
+<p dir="auto"><strong>Empacotamento (Packing)</strong></p>
+<ul dir="auto">
+<li><strong>B‑pack on‑the‑fly</strong>: copia blocos de <code>B</code> (BK×BJ) para um buffer contíguo, convertendo acessos não contíguos em sequenciais.</li>
+<li>Supera a transposição completa (que polui a L3) e o acesso direto (que sofre com misses de TLB).</li>
+</ul>
+</li>
+<li>
+<p dir="auto"><strong>Alinhamento</strong></p>
+<ul dir="auto">
+<li>Alocação com <code>_mm_malloc(..., 32)</code> para uso de instruções <code>vmovaps</code> (alinhadas), trazendo ganho de ~5%.</li>
+</ul>
+</li>
+<li>
+<p dir="auto"><strong>Prefetching</strong></p>
+<ul dir="auto">
+<li>O uso de <code>_mm_prefetch</code> <strong>reduziu</strong> o desempenho em ~8%, pois o hardware prefetcher do Zen 3 já é eficiente para padrões de streaming.</li>
+</ul>
+</li>
+<li>
+<p dir="auto"><strong>Stores Não Temporais</strong></p>
+<ul dir="auto">
+<li><code>_mm256_stream_ps</code> foi <strong>catastrófico</strong> (1,24 GFLOPS), pois <code>C</code> é lido‑modificado‑escrito, e a instrução invalida a linha de cache a cada escrita.</li>
+</ul>
+</li>
+</ol>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">📂 Estrutura do Repositório</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="zen3-gemm/
+├── README.md
+├── src/
+│   └── mx85.c                  # Código completo com todos os 28 modelos + benchmark
+├── docs/
+│   ├── artigo_en.tex           # Artigo científico completo (LaTeX)
+│   └── resultados/             # Logs de saída do benchmark
+│       ├── mx85_benchmark.txt
+│       └── mx85_output8.txt
+└── build/
+    └── Makefile                # (opcional) para compilação simples"><pre class="notranslate"><code>zen3-gemm/
+├── README.md
+├── src/
+│   └── mx85.c                  # Código completo com todos os 28 modelos + benchmark
+├── docs/
+│   ├── artigo_en.tex           # Artigo científico completo (LaTeX)
+│   └── resultados/             # Logs de saída do benchmark
+│       ├── mx85_benchmark.txt
+│       └── mx85_output8.txt
+└── build/
+    └── Makefile                # (opcional) para compilação simples
+</code></pre></div>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">⚙️ Compilação e Execução</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Pré‑requisitos</h3></div>
+<ul dir="auto">
+<li><strong>Processador</strong> com suporte a AVX2 e FMA (ex: AMD Zen, Intel Haswell ou superior)</li>
+<li><strong>Sistema operacional</strong> Windows (10/11) ou Linux</li>
+<li><strong>Compilador</strong> GCC 12.2+ (MinGW‑w64 no Windows) ou equivalente com suporte a intrinsics AVX2</li>
+<li><strong>Memória</strong> suficiente para matrizes 2048×2048 (≈ 48 MB para as três matrizes)</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Compilar com GCC (Windows/MinGW ou Linux)</h3></div>
+<p dir="auto">No diretório <code>src/</code>, execute:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="gcc -O3 -mavx2 -mfma -march=native -funroll-loops -frename-registers -o mx85.exe mx85.c" dir="auto"><pre>gcc -O3 -mavx2 -mfma -march=native -funroll-loops -frename-registers -o mx85.exe mx85.c</pre></div>
+<p dir="auto"><strong>Flags importantes:</strong></p>
+<ul dir="auto">
+<li><code>-mavx2 -mfma -march=native</code> – habilita instruções SIMD e otimiza para a CPU atual.</li>
+<li><code>-funroll-loops</code> – desenrola laços internos.</li>
+<li><code>-frename-registers</code> – melhora a alocação de registradores (reduz spills).</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Executar</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="./mx85.exe" dir="auto"><pre>./mx85.exe</pre></div>
+<p dir="auto">O programa:</p>
+<ul dir="auto">
+<li>Aplica afinidade de thread ao núcleo 0 (Windows) e prioridade alta.</li>
+<li>Executa cada modelo 3 vezes (warmup) + 15 vezes medidas.</li>
+<li>Gera dois arquivos de saída:
+<ul dir="auto">
+<li><code>mx85_benchmark.txt</code> – ranking completo e validação.</li>
+<li><code>mx85_validate.txt</code> – erros máximos versus implementação de referência.</li>
+</ul>
+</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Personalização</h3></div>
+<p dir="auto">Para testar apenas um modelo específico, você pode modificar a função <code>main()</code> para chamar diretamente a função desejada (ex: <code>mx24(A, B, C, N)</code>). Ou, para matrizes de outros tamanhos, altere a constante <code>N</code> (linha ~230).</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">📊 Tabela Completa de Resultados</h2></div>
+<p dir="auto">Abaixo estão todos os <strong>28 modelos</strong> testados, com GFLOPS medidos e porcentagem do pico teórico.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Pos</th>
+<th>Modelo</th>
+<th>Descrição</th>
+<th>GFLOPS</th>
+<th>% Pico</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>MX24</td>
+<td>4‑linhas + chain4 + B‑pack BK=256</td>
+<td><strong>85.30</strong></td>
+<td>63.5%</td>
+</tr>
+<tr>
+<td>2</td>
+<td>MX22</td>
+<td>4‑linhas + chain4 + B‑pack BK=128</td>
+<td>84.10</td>
+<td>62.6%</td>
+</tr>
+<tr>
+<td>3</td>
+<td>MX23</td>
+<td>4‑linhas + chain4 + B‑pack BK=64</td>
+<td>82.93</td>
+<td>61.7%</td>
+</tr>
+<tr>
+<td>4</td>
+<td>MX25</td>
+<td>4‑linhas + chain4 + B‑pack + prefetch</td>
+<td>83.15</td>
+<td>61.9%</td>
+</tr>
+<tr>
+<td>5</td>
+<td>MX20</td>
+<td>4‑linhas + chain4 + Bᵀ (transposta)</td>
+<td>79.21</td>
+<td>58.9%</td>
+</tr>
+<tr>
+<td>6</td>
+<td>MX18</td>
+<td>4‑linhas + chain4 + prefetch</td>
+<td>79.75</td>
+<td>59.3%</td>
+</tr>
+<tr>
+<td>7</td>
+<td>MX17</td>
+<td>4‑linhas + chain4 + sem pack</td>
+<td>78.80</td>
+<td>58.6%</td>
+</tr>
+<tr>
+<td>8</td>
+<td>MX16</td>
+<td>4‑linhas + chain4 + alinhado</td>
+<td>72.58</td>
+<td>54.0%</td>
+</tr>
+<tr>
+<td>9</td>
+<td>MX15</td>
+<td>4‑linhas + chain3 + B‑pack</td>
+<td>62.34</td>
+<td>46.4%</td>
+</tr>
+<tr>
+<td>10</td>
+<td>MX14</td>
+<td>4‑linhas + chain2 + B‑pack</td>
+<td>55.76</td>
+<td>41.5%</td>
+</tr>
+<tr>
+<td>11</td>
+<td>MX13</td>
+<td>2‑linhas + chain4 + B‑pack</td>
+<td>53.58</td>
+<td>39.9%</td>
+</tr>
+<tr>
+<td>12</td>
+<td>MX12</td>
+<td>2‑linhas + chain3 + B‑pack</td>
+<td>50.56</td>
+<td>37.6%</td>
+</tr>
+<tr>
+<td>13</td>
+<td>MX11</td>
+<td>4‑linhas + chain2 + alinhado</td>
+<td>47.15</td>
+<td>35.1%</td>
+</tr>
+<tr>
+<td>14</td>
+<td>MX08</td>
+<td>2‑linhas + chain4 + BK=128</td>
+<td>45.04</td>
+<td>33.5%</td>
+</tr>
+<tr>
+<td>15</td>
+<td>MX07</td>
+<td>2‑linhas + chain3 + sem Bt</td>
+<td>43.52</td>
+<td>32.4%</td>
+</tr>
+<tr>
+<td>16</td>
+<td>MX05</td>
+<td>2‑linhas + chain2 + Bt</td>
+<td>41.93</td>
+<td>31.2%</td>
+</tr>
+<tr>
+<td>17</td>
+<td>MX19</td>
+<td>4‑linhas + chain5 + alinhado</td>
+<td>42.07</td>
+<td>31.3%</td>
+</tr>
+<tr>
+<td>18</td>
+<td>MX06</td>
+<td>2‑linhas + chain1 + prefetch</td>
+<td>42.54</td>
+<td>31.7%</td>
+</tr>
+<tr>
+<td>19</td>
+<td>MX04</td>
+<td>4‑linhas + chain1 + Bt</td>
+<td>40.04</td>
+<td>29.8%</td>
+</tr>
+<tr>
+<td>20</td>
+<td>MX03</td>
+<td>2‑linhas + chain1 + Bt</td>
+<td>39.34</td>
+<td>29.3%</td>
+</tr>
+<tr>
+<td>21</td>
+<td>MX02</td>
+<td>2‑linhas + chain1 + j‑block</td>
+<td>37.60</td>
+<td>28.0%</td>
+</tr>
+<tr>
+<td>22</td>
+<td>MX01</td>
+<td>Bt + 2Dtile + 8acc (baseline)</td>
+<td>35.16</td>
+<td>26.2%</td>
+</tr>
+<tr>
+<td>23</td>
+<td>MX10</td>
+<td>4‑linhas + chain6 + Bt</td>
+<td>14.26</td>
+<td>10.6%</td>
+</tr>
+<tr>
+<td>24</td>
+<td>MX26</td>
+<td>8‑linhas + chain4 + B‑pack</td>
+<td>12.24</td>
+<td>9.1%</td>
+</tr>
+<tr>
+<td>25</td>
+<td>MX28</td>
+<td>4‑linhas + chain4 + dual16</td>
+<td>13.75</td>
+<td>10.2%</td>
+</tr>
+<tr>
+<td>26</td>
+<td>MX27</td>
+<td>4‑linhas + chain4 + C‑in‑regs</td>
+<td>9.13</td>
+<td>6.8%</td>
+</tr>
+<tr>
+<td>27</td>
+<td>MX09</td>
+<td>BI=128, BK=256 + chain4</td>
+<td>8.38</td>
+<td>6.2%</td>
+</tr>
+<tr>
+<td>28</td>
+<td>MX21</td>
+<td>4‑linhas + chain4 + stream stores</td>
+<td>1.24</td>
+<td>0.9%</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">🔍 Análise dos Principais Fracassos</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Modelo</th>
+<th>Técnica</th>
+<th>GFLOPS</th>
+<th>Causa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MX21</strong></td>
+<td>Stores não temporais</td>
+<td>1.24</td>
+<td><code>C</code> é lido‑modificado‑escrito; cada store invalida a cache, forçando reloads da DRAM.</td>
+</tr>
+<tr>
+<td><strong>MX26</strong></td>
+<td>8 linhas em registradores</td>
+<td>12.24</td>
+<td>Necessita 64 registradores YMM; 48 são <em>spilled</em>, dominando o tempo de execução.</td>
+</tr>
+<tr>
+<td><strong>MX27</strong></td>
+<td>C‑in‑regs através de k‑block</td>
+<td>9.13</td>
+<td>Mantém acumuladores vivos por muitas iterações, aumentando pressão de registradores.</td>
+</tr>
+<tr>
+<td><strong>MX09</strong></td>
+<td>BI=128, BK=256</td>
+<td>8.38</td>
+<td>O working set (128×256×4 = 128 KB) excede a L1, causando muitas misses.</td>
+</tr>
+<tr>
+<td><strong>MX10</strong></td>
+<td>Chain6</td>
+<td>14.26</td>
+<td>Cadeia longa demais; falta de registradores força spilling excessivo.</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">🧪 Validação</h2></div>
+<p dir="auto">Todos os modelos foram validados contra uma implementação de referência (escolar <code>ijk</code>). Os três melhores modelos (MX24, MX22, MX23) apresentaram <strong>erro máximo absoluto = 0.0</strong> (bit‑idênticos), pois a ordem de acumulação é preservada. Os demais modelos apresentaram erros da ordem de <code>1e-6</code>, dentro do esperado para aritmética de ponto flutuante.</p>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">📚 Como Citar</h2></div>
+<p dir="auto">Se utilizar este trabalho em suas pesquisas, por favor cite o artigo associado:</p>
+<div class="highlight highlight-text-bibtex notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="@article{housl2025gemm,
+  title={85.30 GFLOPS Single-Core FP32 Matrix Multiplication on AMD Zen 3},
+  author={Housl},
+  journal={arXiv preprint},
+  year={2025}
+}" dir="auto"><pre><span class="pl-k">@article</span>{<span class="pl-en">housl2025gemm</span>,
+  <span class="pl-s">title</span>=<span class="pl-s"><span class="pl-pds">{</span>85.30 GFLOPS Single-Core FP32 Matrix Multiplication on AMD Zen 3<span class="pl-pds">}</span></span>,
+  <span class="pl-s">author</span>=<span class="pl-s"><span class="pl-pds">{</span>Housl<span class="pl-pds">}</span></span>,
+  <span class="pl-s">journal</span>=<span class="pl-s"><span class="pl-pds">{</span>arXiv preprint<span class="pl-pds">}</span></span>,
+  <span class="pl-s">year</span>=<span class="pl-s"><span class="pl-pds">{</span>2025<span class="pl-pds">}</span></span>
+}</pre></div>
+
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">🤝 Contribuições</h2></div>
+<p dir="auto">Contribuições são bem‑vindas! Sinta‑se à vontade para abrir <em>issues</em> ou <em>pull requests</em> com melhorias, novos modelos ou adaptações para outras arquiteturas.</p>
+
+<p dir="auto">##📄 Licença
+Este projeto está disponível sob a MIT License. Isso significa que você pode usar, copiar, modificar, mesclar, publicar, distribuir, sublicenciar e/ou vender cópias do software, desde que mantenha o aviso de direitos autorais e a permissão. Veja o arquivo LICENSE para os termos completos.</p>
+<p dir="auto">##📧 Contato e Autoria
+Autor: Lucas Lima Freitag</p>
+<p dir="auto">E‑mail: <a href="mailto:freitag.lima@academico.ifrn.edu.br">freitag.lima@academico.ifrn.edu.br</a></p>
+<p dir="auto">Papel: Autor</p>
+<p dir="auto">Afiliação: Universidade Federal do Rio Grande do Norte (UFRN)</p>
+<p dir="auto">ORCID: 0009-0006-8849-5619</p>
+<p dir="auto">Divirta‑se otimizando! 🚀
+Se tiver dúvidas, sugestões ou quiser compartilhar seus próprios resultados, fique à vontade para entrar em contato</p>
+</article>
