@@ -1,0 +1,194 @@
+<main>
+
+<p>There are 3 possible values in a digit of a ternary number.
+3 possible values, which could actually be anything.</p>
+<div class="sidescroll">
+
+</div>
+<p>I've been recently nerd-sniped<sup id="fnref:1"><a class="footnote-ref" href="#fn:1">1</a></sup> into trying to pack the ternary weights of <a href="https://arxiv.org/abs/2402.17764">BitNet b1.58</a> into something close to that theoretical ideal of <code>log(3) / log(2)</code> bits<sup id="fnref:2"><a class="footnote-ref" href="#fn:2">2</a></sup> per ternary digit.</p>
+<p>I'll be calling a "ternary digit" a "trit", like a "binary digit" is called a "bit".</p>
+<h2 class="heading" id="block-size">Block size</h2>
+<p>Since the goal of this is to allow fast <strong><em>parallel</em></strong> unpacking, blocks of trits can't be infinitely big.
+A small "block" size needs to be found, ideally one which is both efficient with information density and which is convenient on current hardware.</p>
+<p>To find a good block size, we'll need to find a power of 3 for which the next power of 2 is very close.</p>
+<div class="sidescroll">
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">trits</th>
+<th style="text-align: right;">3<sup>trits</sup></th>
+<th style="text-align: right;">bits</th>
+<th style="text-align: right;">2<sup>bits</sup></th>
+<th style="text-align: left;">bits per trit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: left;">2</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">16</td>
+<td style="text-align: left;">2</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">27</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">32</td>
+<td style="text-align: left;">1.666...</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">81</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">128</td>
+<td style="text-align: left;">1.75</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">243</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">256</td>
+<td style="text-align: left;">1.6</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>It's very fortunate that 5 trits fit quite tight into 8 bits at <code>1.6 bits</code> per trit.
+When compared to perfect packing, this is <code>99.06%</code> efficient.</p>
+<h2 class="heading" id="16-bits-per-trit">1.6 bits per trit</h2>
+<p>The basic idea with this packing scheme is simply to make a number out of the ternary digits.</p>
+<div class="sidescroll">
+<div class="codehilite"><pre><code><span class="k">def</span><span class="nf">pack_number</span><span class="p">(</span><span class="n">digits</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="n">base</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="n">number</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">for</span> <span class="n">digit</span> <span class="ow">in</span> <span class="n">digits</span><span class="p">:</span>
+      <span class="k">assert</span> <span class="n">digit</span> <span class="o">&lt;</span> <span class="n">base</span>
+
+      <span class="n">number</span> <span class="o">=</span> <span class="n">number</span> <span class="o">*</span> <span class="n">base</span>
+      <span class="n">number</span> <span class="o">=</span> <span class="n">number</span> <span class="o">+</span> <span class="n">digit</span>
+
+    <span class="k">return</span> <span class="n">number</span>
+</code></pre></div>
+</div>
+<p>Packing trits into bytes should be similar enough.</p>
+<h3 class="heading" id="fast-multiplication-unpacking">Fast multiplication unpacking</h3>
+<p>While repeated remainder and divisions can be used to extract the digits of a number, the problem with divisions and modulo is that they are not usually supported on integers in <abbr title="Single Instruction Multiple Data">SIMD</abbr> programming.</p>
+<p>A way around this is <em>obviously</em> to view numbers differently.</p>
+<p>Would it be nice if instead of extracting the least significant digit with modulo, we could extract the most significant digit with a multiplication?</p>
+<p>Fixed point numbers to the rescue!</p>
+<div class="sidescroll">
+
+</div>
+<p>Tada!</p>
+<p>Now digits can be easily extracted from the top two bits of the resulting 10-bit number when multiplying this 8-bit byte by 3.</p>
+<p>This is much more convenient than modulo when unpacking with <abbr title="Single Instruction Multiple Data">SIMD</abbr>.</p>
+<p>The only place where there are divisions in this scheme when packing trits into bytes.
+This assumes that packing is done less often than unpacking, which is very true in the context of <abbr title="Large Language Model">LLM</abbr> weights.</p>
+<div class="sidescroll">
+<div class="codehilite"><pre><code><span class="c1"># Take a list of values in -1, 0, 1 and pack them in bytes</span>
+<span class="k">def</span><span class="nf">pack_trits</span><span class="p">(</span><span class="n">digits</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">bytearray</span><span class="p">:</span>
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">digits</span><span class="p">)</span> <span class="o">%</span> <span class="mi">5</span> <span class="o">==</span> <span class="mi">0</span>  <span class="c1"># padding isn't handled here</span>
+
+    <span class="n">n_bytes</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">digits</span><span class="p">)</span> <span class="o">//</span> <span class="mi">5</span>
+    <span class="n">packed</span> <span class="o">=</span> <span class="nb">bytearray</span><span class="p">()</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_bytes</span><span class="p">):</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">5</span><span class="p">):</span>
+            <span class="n">digit</span> <span class="o">=</span> <span class="n">digits</span><span class="p">[</span><span class="mi">5</span><span class="o">*</span><span class="n">i</span> <span class="o">+</span> <span class="n">j</span><span class="p">]</span>
+            <span class="n">digit</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="n">digit</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>  <span class="c1"># clamp between -1 and 1</span>
+            <span class="n">digit</span> <span class="o">+=</span> <span class="mi">1</span>  <span class="c1"># from -1, 0, 1 to 0, 1, 2</span>
+            <span class="n">b</span> <span class="o">*=</span> <span class="mi">3</span>
+            <span class="n">b</span> <span class="o">+=</span> <span class="n">digit</span>
+
+        <span class="n">b</span> <span class="o">=</span> <span class="p">((</span><span class="n">b</span> <span class="o">*</span> <span class="mi">256</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="mi">243</span> <span class="o">-</span> <span class="mi">1</span><span class="p">))</span> <span class="o">//</span> <span class="mi">243</span>
+
+        <span class="n">packed</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">packed</span>
+</code></pre></div>
+</div>
+<p>The relevant interesting line is this one:</p>
+<div class="sidescroll">
+<div class="codehilite"><pre><code>        <span class="n">b</span> <span class="o">=</span> <span class="p">((</span><span class="n">b</span> <span class="o">*</span> <span class="mi">256</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="mi">243</span> <span class="o">-</span> <span class="mi">1</span><span class="p">))</span> <span class="o">//</span> <span class="mi">243</span>
+</code></pre></div>
+</div>
+<p>It does what is depicted in the diagram above, but multiplication is done first because these are integer operations.
+Doing a ceiling division here is necessary to cancel the off-by-one error from truncating when extracting digits later.</p>
+<p>To unpack <em>without</em> using the modulo operator:</p>
+<div class="sidescroll">
+<div class="codehilite"><pre><code><span class="k">def</span><span class="nf">unpack_trits</span><span class="p">(</span><span class="n">packed</span><span class="p">:</span> <span class="nb">bytes</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+    <span class="n">trits</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">byte</span> <span class="ow">in</span> <span class="n">packed</span><span class="p">:</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">byte</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">5</span><span class="p">):</span>
+            <span class="n">b</span> <span class="o">=</span> <span class="n">b</span> <span class="o">*</span> <span class="mi">3</span>
+            <span class="n">trit</span> <span class="o">=</span> <span class="n">b</span> <span class="o">&gt;&gt;</span> <span class="mi">8</span>
+            <span class="n">trits</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">trit</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>  <span class="c1"># 0, 1, 2 =&gt; -1, 0, 1</span>
+            <span class="n">b</span> <span class="o">=</span> <span class="n">b</span> <span class="o">&amp;</span> <span class="mh">0xFF</span>
+
+    <span class="k">return</span> <span class="n">trits</span>
+</code></pre></div>
+</div>
+<p>To convince myself that this works, I wrote a C program checking that this really is lossless:</p>
+<div class="sidescroll">
+<div class="codehilite"><pre><code><span class="cp">#include</span><span class="cpf">&lt;stdint.h&gt;</span>
+<span class="cp">#include</span><span class="cpf">&lt;stdio.h&gt;</span>
+<span class="cp">#include</span><span class="cpf">&lt;string.h&gt;</span>
+
+<span class="kt">int</span><span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span><span class="p">{</span>
+<span class="kt">char</span><span class="n">s1</span><span class="p">[</span><span class="mi">6</span><span class="p">]</span><span class="o">=</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span>
+<span class="kt">char</span><span class="n">s2</span><span class="p">[</span><span class="mi">6</span><span class="p">]</span><span class="o">=</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span>
+
+<span class="k">for</span><span class="p">(</span><span class="kt">uint8_t</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;</span><span class="mi">243</span><span class="p">;</span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="p">{</span>
+<span class="kt">uint8_t</span><span class="n">n</span><span class="o">=</span><span class="n">i</span><span class="p">;</span>
+<span class="c1">// Get the number representation in base 3</span>
+<span class="c1">// by repeatedly extracting the least significant digit with modulo</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="n">j</span><span class="o">=</span><span class="mi">5</span><span class="p">;</span><span class="n">j</span><span class="o">--</span><span class="o">&gt;</span><span class="mi">0</span><span class="p">;)</span><span class="p">{</span>
+<span class="n">s1</span><span class="p">[</span><span class="n">j</span><span class="p">]</span><span class="o">=</span><span class="p">(</span><span class="n">n</span><span class="o">%</span><span class="mi">3</span><span class="p">)</span><span class="o">+</span><span class="sc">'0'</span><span class="p">;</span>
+<span class="n">n</span><span class="o">/=</span><span class="mi">3</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="c1">// Turn that number into a fixed-point number smaller than 1</span>
+<span class="kt">uint8_t</span><span class="n">q</span><span class="o">=</span><span class="p">(((</span><span class="kt">uint16_t</span><span class="p">)</span><span class="n">i</span><span class="p">)</span><span class="o">*</span><span class="mi">256</span><span class="o">+</span><span class="p">(</span><span class="mi">243</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">/</span><span class="mi">243</span><span class="p">;</span>
+<span class="c1">// This extracts the most significant digit first</span>
+<span class="k">for</span><span class="p">(</span><span class="kt">int</span><span class="n">j</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">j</span><span class="o">&lt;</span><span class="mi">5</span><span class="p">;</span><span class="o">++</span><span class="n">j</span><span class="p">)</span><span class="p">{</span>
+<span class="kt">uint16_t</span><span class="n">m</span><span class="o">=</span><span class="n">q</span><span class="o">*</span><span class="mi">3</span><span class="p">;</span>
+<span class="n">s2</span><span class="p">[</span><span class="n">j</span><span class="p">]</span><span class="o">=</span><span class="p">(</span><span class="n">m</span><span class="o">&gt;&gt;</span><span class="mi">8</span><span class="p">)</span><span class="o">+</span><span class="sc">'0'</span><span class="p">;</span>
+<span class="n">q</span><span class="o">=</span><span class="n">m</span><span class="o">&amp;</span><span class="mh">0xFF</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="n">printf</span><span class="p">(</span><span class="s">"%s, %s: %s</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="n">s1</span><span class="p">,</span><span class="n">s2</span><span class="p">,</span><span class="n">strcmp</span><span class="p">(</span><span class="n">s1</span><span class="p">,</span><span class="n">s2</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="o">?</span><span class="s">"</span><span class="se">\033</span><span class="s">[1;32mPASS</span><span class="se">\033</span><span class="s">[0m"</span><span class="o">:</span><span class="s">"</span><span class="se">\033</span><span class="s">[1;31mFAIL</span><span class="se">\033</span><span class="s">[0m"</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="k">return</span><span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+</div>
+<p>Compile and run with:</p>
+<div class="sidescroll">
+<div class="codehilite"><pre><code><span class="gp">$ </span>gccternary-packing.c-oternary-packing
+<span class="gp">$ </span>./ternary-packing
+</code></pre></div>
+</div>
+<p>And I'm getting <code>PASS</code> for each of the 243 ternary numbers which fit in 8 bits.</p>
+<p>And this is the technique used in the ternary types in <code>llama.cpp</code> for TriLMs and BitNet b1.58, for which the pull request is <a href="https://github.com/ggml-org/llama.cpp/pull/8151">https://github.com/ggml-org/llama.cpp/pull/8151</a>, with <abbr title="Single Instruction Multiple Data">SIMD</abbr> implementations for both AVX2 and ARM NEON.</p>
+<div class="footnote">
+
+<ol>
+<li id="fn:1">
+<p>obviously referring to <a href="https://xkcd.com/356/">https://xkcd.com/356/</a>, but the initial motivation actually started from <a href="https://github.com/ggml-org/llama.cpp/pull/7931#discussion_r1640265346">this review comment I posted</a> on the initial BitNet b1.58 pull-request for <code>llama.cpp</code> <a class="footnote-backref" href="#fnref:1" title="Jump back to footnote 1 in the text">↩</a></p>
+</li>
+<li id="fn:2">
+<p><code>log(3) / log(2)</code> is also known as <code>1.584962500721156</code>. <a class="footnote-backref" href="#fnref:2" title="Jump back to footnote 2 in the text">↩</a></p>
+</li>
+</ol>
+</div>
+</main>
