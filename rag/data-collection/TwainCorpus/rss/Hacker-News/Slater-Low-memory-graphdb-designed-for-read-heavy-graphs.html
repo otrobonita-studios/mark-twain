@@ -1,0 +1,1308 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">Slater</h1></div>
+<p dir="auto"><a href="https://github.com/Hikari-Systems/slater/actions/workflows/ci.yml"></a>
+<a href="https://github.com/Hikari-Systems/slater/releases/latest"></a></p>
+<p dir="auto"><strong>Current version: <code>v0.24.1</code></strong> — <a href="https://github.com/Hikari-Systems/slater/releases">all releases</a>.</p>
+<blockquote>
+<p dir="auto"><strong>In one line:</strong> Slater serves <strong>graphs that don't fit in memory</strong> — hundreds of millions of nodes and billions of edges in low hundreds of MB of RAM — over standard <strong>Bolt</strong>, so any neo4j driver just works, with disk-native vector search sitting next to the graph, and it takes <strong>live, durable writes</strong> without giving that up. Resident memory is set by a cache budget you choose, <strong>not</strong> by the size of the graph.</p>
+</blockquote>
+
+<p dir="auto"><strong>Shortcuts</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+
+
+
+
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="left"><a href="#why-slater-exists">Why Slater exists</a></td>
+<td align="left"><a href="#reads-and-writes">Reads and writes</a></td>
+<td align="left"><a href="#what-you-get">What you get</a></td>
+<td align="left"><a href="#features">Features</a></td>
+</tr>
+<tr>
+<td align="left"><a href="#how-it-works">How it works</a></td>
+<td align="left"><a href="#the-writable-layer">The writable layer</a></td>
+<td align="left"><a href="#storage-backends-filesystem--s3--gcs">Storage backends</a></td>
+<td align="left"><a href="#mounts">Mounts</a></td>
+</tr>
+<tr>
+<td align="left"><a href="#acl">ACL</a></td>
+<td align="left"><a href="#health-check">Health check</a></td>
+<td align="left"><a href="#worked-example">Worked example</a></td>
+<td align="left"><a href="#development">Development</a></td>
+</tr>
+<tr>
+<td align="left"><a href="#performance">Performance</a></td>
+<td align="left"><a href="#license">License</a></td>
+<td align="left"><a href="/Hikari-Systems/slater/blob/main/docs/manual/README.md">📖 Full manual</a></td>
+
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Why Slater exists</h2></div>
+<p dir="auto">A <strong>graph database</strong> stores data as <em>things</em> (nodes) and the <em>relationships between them</em> (edges), with the relationships as first-class citizens. That's what you want when your questions are about connections rather than rows — "who's within three hops of this account?", "what's the full dependency chain behind this build?", "which accounts share a device, an address, and a card?" — the queries that become a swamp of recursive joins in SQL but fall out naturally in a graph.</p>
+<p dir="auto"><strong>The most common complaint about graph databases is that they don't scale past what you can hold in RAM.</strong> Many of them (eg neo4j, Memgraph, FalkorDB, etc) keep the whole graph resident: a 40 GB graph wants 40 GB of memory — <em>per instance</em>. Want a replica per region, per tenant, or per pod? Multiply the bill. And past a certain size they simply won't load: eg the 90 million node / 1.5B-edge Wikidata graph needs ~64–128 GiB resident, so the in-memory engines can't open it at all.</p>
+<p dir="auto">Slater is the rebuttal. It serves that same 90M-node graph from <strong>a few hundred MB of RAM</strong>, because it pages the graph from an on-disk image on demand instead of holding it resident — so the graph size and the memory bill are decoupled.</p>
+<p dir="auto">Slater takes the opposite approach. You compile the graph once, offline, into a content-addressed on-disk image with <code>slater-build</code>; then any number of Slater servers serve it over <strong>Bolt</strong> (so your existing neo4j drivers just work) while holding only a fixed cache budget in memory. <strong>A 4 GB graph and a 400 GB graph cost the same RAM to serve</strong> — you fan out cheap, stateless read replicas and let the store, not the heap, hold the graph.</p>
+<p dir="auto">That makes it a natural fit for knowledge graphs behind RAG, recommendation and identity graphs, dependency graphs — anything large and connected you want to query cheaply and often. Disk-native vector search lives right next to the graph, so the same engine is the retrieval layer for embeddings too.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Reads and writes</h3></div>
+<p dir="auto">Slater is a <strong>read-write</strong> graph database. You don't rebuild the whole image to correct one property, add a node, or retract an edge — you write the change directly, over Bolt, and it lands durably. The trick is that writes never tax the read path.</p>
+<p dir="auto">Writes accumulate in a <strong>log-structured-merge (LSM) layer over the immutable core</strong>: a write-ahead log and an in-memory table, spilling to immutable delta segments, folded back into a fresh core by a periodic <strong>consolidation</strong>. What that buys you:</p>
+<ul dir="auto">
+<li><strong>Reads over an unwritten graph cost exactly what they did before.</strong> An empty delta is a single predictable branch, not a merge — the read path is byte-identical whether or not the writable layer is on.</li>
+<li><strong>The read cost of a write scales with the size of the delta, not the size of the graph.</strong> Whole-graph answers — <code>count(*)</code>, the label and relationship-type marginals — stay <em>metadata reads</em> even with writes outstanding: the delta keeps its own counters, so a <code>count(*)</code> over a 91.6M-node core with half a million pending writes still answers in tens of milliseconds without touching a single block.</li>
+<li><strong>Acknowledged means durable.</strong> A single writer drains the queue and returns <code>SUCCESS</code> only after the <code>fsync</code> that covers the write. Group your writes and they're cheap — a write-<code>UNWIND</code> commits one <code>fsync</code> per batch rather than per row.</li>
+<li><strong>Business-key writes, in either dialect.</strong> <code>MERGE</code> / <code>MATCH … SET</code> / <code>DELETE</code> (and <code>CREATE</code> / <code>REMOVE</code>, detach delete, relationship writes) keyed on a node's identity property — or the equivalent ISO GQL data-modifying statements (<code>INSERT</code> / <code>SET</code> / <code>REMOVE</code> / <code>DELETE</code>), which lower onto the same path. Correct, insert, upsert and retract, over nodes and edges, addressed the way your data already is.</li>
+</ul>
+<p dir="auto">The writable layer is opt-in (<code>delta.enabled</code>); with it off, Slater serves the pure immutable core and refuses writes. See <a href="#the-writable-layer">The writable layer</a> for the full model.</p>
+<blockquote>
+<p dir="auto"><strong>On the name.</strong> Slater is named after the CIA agent in <em>Archer</em> (a great show)
+who insists on going by a single name — "Just… Slater" — and one of my favourite
+characters in it. See the
+<a href="https://archer.fandom.com/wiki/Slater" rel="nofollow">character wiki page</a>.</p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">What you get</h3></div>
+<ul dir="auto">
+<li><strong>RAM set by your cache budget, not your graph size</strong> — fan out as many read replicas as you like; the graph never has to fit in memory.</li>
+<li><strong>A drop-in for the graph</strong> — speaks Bolt, so any standard neo4j driver (JS, Python, Go…) works unchanged. It's Cypher (plus a slice of ISO GQL, reads and writes); nothing new to learn.</li>
+<li><strong>Live, durable writes</strong> — an opt-in LSM layer over the immutable core: business-key <code>MERGE</code> / <code>SET</code> / <code>DELETE</code> over nodes and edges, group-committed and <code>fsync</code>-durable, folded back into a fresh core by consolidation. Reads don't pay for it.</li>
+<li><strong>Deployment by file swap</strong> — build a new content-hashed <em>generation</em> offline, atomically flip the <code>current</code> pointer, and servers pick it up. Every block is checksummed, so a half-copied image is refused rather than served.</li>
+<li><strong>Vector search built in</strong> — disk-native approximate-nearest-neighbour (cosine, L2, or dot KNN) sits right next to your graph, for when this is the retrieval layer behind a RAG pipeline, and embeddings are writable in place — no offline rebuild to add or change a vector.</li>
+<li><strong>Locked down by design</strong> — read and write grants are independent, plus optional at-rest encryption, TLS Bolt, argon2id-hashed ACLs, and a read-only container rootfs for read replicas.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Features</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>What it means for you</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Bounded, predictable memory</strong></td>
+<td>Resident memory is capped by three cache budgets <em>you</em> set — it does <strong>not</strong> grow with graph size; you tune the performance/RAM trade-off instead of provisioning for the whole graph. A jemalloc allocator with background purge returns freed memory to the OS after heavy query bursts, so resident size falls back toward its idle floor rather than staying pinned at the post-burst high-water mark.</td>
+</tr>
+<tr>
+<td><strong>Multi-tenant out of the box</strong></td>
+<td>One server hosts many graphs with per-user read grants — multi-database isolation that most graph DBs reserve for a paid/enterprise tier.</td>
+</tr>
+<tr>
+<td><strong>Encryption at rest &amp; in transit</strong></td>
+<td>Per-block XChaCha20-Poly1305 sealing (the key is never written to disk) plus optional TLS (<code>bolt+s://</code>). GDPR-friendly by construction.</td>
+</tr>
+<tr>
+<td><strong>Tiny, dependency-light install</strong></td>
+<td>A small stripped binary on a distroless glibc base (no shell/apt) — the multi-arch (amd64/arm64) image pulls at ~22 MB, or ~12 MB for the server-only <code>slater:latest-lite</code> tag; pure-Rust TLS, no OpenSSL. Pull and run.</td>
+</tr>
+<tr>
+<td><strong>Built for periodic publish</strong></td>
+<td>Build a graph offline, serve it immutable, then atomically swap in a new version with zero downtime — ideal for data-warehouse / scheduled-refresh workloads.</td>
+</tr>
+<tr>
+<td><strong>Rugged under load</strong></td>
+<td>The server and offline builder both compile with <code>#![forbid(unsafe_code)]</code> — the engine's only <code>unsafe</code> lives in the audited jemalloc allocator crate. The core is immutable, so reads take no locks and never wait on a writer; a single writer serialises mutations behind the write path alone. No GC pauses, no data races. One bad query can't take the server down.</td>
+</tr>
+<tr>
+<td><strong>Works with your neo4j tools</strong></td>
+<td>Speaks Bolt 5.4 / 4.4 / 4.1 — use the standard neo4j drivers (JS, Python, Go, Java…), <code>cypher-shell</code>, or graph browsers unchanged.</td>
+</tr>
+<tr>
+<td><strong>Rich Cypher query surface</strong></td>
+<td>A broad read surface: <code>MATCH</code>/<code>WHERE</code>/<code>WITH</code>/<code>UNION</code>, <code>CALL {…}</code> subqueries, 70+ functions &amp; aggregations, temporal &amp; geospatial values, and regex.</td>
+</tr>
+<tr>
+<td><strong>Live, durable writes</strong></td>
+<td>An opt-in single-writer LSM layer over the immutable core (<code>delta.enabled</code>): business-key <code>MERGE</code> / <code>SET</code> / <code>DELETE</code> / <code>CREATE</code> / <code>REMOVE</code> over nodes and relationships, batched write-<code>UNWIND</code> (one <code>fsync</code> per batch), and <code>CALL slater.consolidate()</code> — group-committed, <code>fsync</code>-durable, and folded back into a fresh core by consolidation. The read path is byte-identical when the delta is empty.</td>
+</tr>
+<tr>
+<td><strong>ISO GQL, read and write</strong></td>
+<td>Speaks a subset of <strong>ISO GQL</strong> (ISO/IEC 39075) over the same Bolt connection — quantified paths, path restrictors, shortest-path selectors, label/type boolean expressions, <code>FOR</code>, <code>CAST</code>, an optional <code>GQL</code>/<code>CYPHER</code> dialect prefix — and, with the writable layer on, GQL's data-modifying statements (<code>INSERT</code> / <code>SET</code> / <code>REMOVE</code> / <code>[DETACH] DELETE</code>) lower onto the same durable write path. Cypher and GQL, reads and writes, in one engine.</td>
+</tr>
+<tr>
+<td><strong>Vectors + graph in one engine</strong></td>
+<td>Disk-native ANN vector search (Vamana + PQ; cosine / L2 / dot) for embeddings/RAG, plus graph algorithms (PageRank, BFS, betweenness, WCC…) — bounded memory even with millions of vectors. Embeddings are <strong>writable</strong> (a FreshDiskANN-style write ladder): insert / update / delete a vector, KNN-visible at once, folded into the base without a rebuild.</td>
+</tr>
+<tr>
+<td><strong>Safe on network storage</strong></td>
+<td>Every file is BLAKE3 content-hashed and verified on open; torn or half-copied images are refused, not served. Designed for NFS/remote volumes (no mmap surprises).</td>
+</tr>
+<tr>
+<td><strong>Pluggable storage backends</strong></td>
+<td>Serve the same generation format from a local filesystem, an S3 (S3-compatible) bucket, <strong>or</strong> a Google Cloud Storage bucket — publish once, fan out to stateless replicas — with an optional local-SSD cache tier in front of the object store. See <a href="#storage-backends-filesystem--s3--gcs">Storage backends</a>.</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Two binaries make up the workspace:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Binary</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>slater</code></td>
+<td>The online Bolt server (the container ENTRYPOINT): serves reads and, with <code>delta.enabled</code>, the single-writer durable write path.</td>
+</tr>
+<tr>
+<td><code>slater-build</code></td>
+<td>The offline compiler: turns a primitive-Cypher dump into an immutable, content-hashed generation directory.</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Slater splits <em>bulk building</em> from <em>serving</em>: <code>slater-build</code> does the heavy lifting
+offline — ingesting your data and compiling it into an immutable generation — so a
+cold graph is never assembled on the serving hot path. Within the server, the read
+surface answers a broad Cypher slice — pattern matching, <code>WITH</code>/<code>UNION</code>/<code>CALL {…}</code>
+subqueries, 70+ scalar &amp; aggregate functions, temporal &amp; geospatial values, graph
+algorithms (<code>algo.*</code>), and disk-native vector KNN (<code>db.idx.vector.queryNodes</code>) —
+while the writable layer's delta overlay sits <em>below</em> that surface and is zero-cost
+when empty, so reads never carry the write-side machinery. You can update a graph
+two ways: write to it live over Bolt (see <a href="#the-writable-layer">The writable layer</a>),
+or build a new generation offline and atomically swap the <code>current</code> pointer, which
+the running server picks up via its generation guard (see
+<a href="#generation-guard">Generation guard</a>).</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Documentation</h2></div>
+<p dir="auto">The complete <strong>user manual</strong> lives in <strong><a href="/Hikari-Systems/slater/blob/main/docs/manual/README.md"><code>docs/manual/</code></a></strong> —
+a feature-by-feature guide that explains, for every capability, what it is, why it
+exists, and how to use it, with worked examples you can run against a bundled
+sample graph. Start there for anything beyond this overview.</p>
+<ul dir="auto">
+<li><strong>New here?</strong> <a href="/Hikari-Systems/slater/blob/main/docs/manual/02-quickstart.md">Quickstart</a> builds and serves a
+graph in five steps.</li>
+<li><strong>Writing queries?</strong> <a href="/Hikari-Systems/slater/blob/main/docs/manual/07-querying.md">Querying</a>,
+<a href="/Hikari-Systems/slater/blob/main/docs/manual/08-functions-and-expressions.md">Functions &amp; expressions</a>,
+<a href="/Hikari-Systems/slater/blob/main/docs/manual/09-procedures-and-algorithms.md">Procedures &amp; algorithms</a>,
+<a href="/Hikari-Systems/slater/blob/main/docs/manual/10-vector-search.md">Vector search</a>,
+<a href="/Hikari-Systems/slater/blob/main/docs/manual/11-writing-data.md">Writing data</a>.</li>
+<li><strong>Building graphs?</strong> <a href="/Hikari-Systems/slater/blob/main/docs/manual/05-building-graphs.md">Building graphs</a> and the
+<a href="/Hikari-Systems/slater/blob/main/docs/manual/06-build-cli-reference.md">Build CLI reference</a>.</li>
+<li><strong>Operating Slater?</strong> <a href="/Hikari-Systems/slater/blob/main/docs/manual/13-deployment.md">Deployment</a>,
+<a href="/Hikari-Systems/slater/blob/main/docs/manual/12-storage.md">Storage</a>,
+<a href="/Hikari-Systems/slater/blob/main/docs/manual/14-configuration-reference.md">Configuration reference</a>,
+<a href="/Hikari-Systems/slater/blob/main/docs/manual/15-security.md">Security</a>,
+<a href="/Hikari-Systems/slater/blob/main/docs/manual/16-performance-tuning.md">Performance tuning</a>.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Running with Docker</h2></div>
+<p dir="auto">Slater is designed to be run as a <strong>Docker deployment</strong> — that's the expected way
+to use it. Prebuilt multi-arch images (<code>linux/amd64</code> + <code>linux/arm64</code>) are
+published to <strong>Docker Hub</strong> at
+<a href="https://hub.docker.com/r/hikarisystems/slater" rel="nofollow"><strong><code>hikarisystems/slater</code></strong></a>,
+tagged <code>:latest</code> and <code>:vX.Y.Z</code> on every release:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="docker pull hikarisystems/slater:latest" dir="auto"><pre>docker pull hikarisystems/slater:latest</pre></div>
+<p dir="auto">A Docker-command-only usage, configuration, and operations guide lives in
+<a href="/Hikari-Systems/slater/blob/main/DOCKERHUB.md"><code>DOCKERHUB.md</code></a> (and is mirrored to the Docker Hub overview page) —
+<strong>start there if you're deploying.</strong> In short:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='# Build a graph generation with the offline writer:
+docker run --rm -v slater-data:/data -v "$PWD/dumps:/dumps:ro" \
+  --entrypoint /app/slater-build hikarisystems/slater:latest \
+  --input /dumps/people.cypher --graph people --data-dir /data
+
+# Serve it over Bolt on 7687 (read-only unless `delta.enabled`):
+docker run -d --name slater -p 7687:7687 \
+  -v slater-data:/data:ro -v "$PWD/acl.json:/config/acl.json:ro" \
+  hikarisystems/slater:latest' dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Build a graph generation with the offline writer:</span>
+docker run --rm -v slater-data:/data -v <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$PWD</span>/dumps:/dumps:ro<span class="pl-pds">"</span></span> \
+  --entrypoint /app/slater-build hikarisystems/slater:latest \
+  --input /dumps/people.cypher --graph people --data-dir /data
+
+<span class="pl-c"><span class="pl-c">#</span> Serve it over Bolt on 7687 (read-only unless `delta.enabled`):</span>
+docker run -d --name slater -p 7687:7687 \
+  -v slater-data:/data:ro -v <span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$PWD</span>/acl.json:/config/acl.json:ro<span class="pl-pds">"</span></span> \
+  hikarisystems/slater:latest</pre></div>
+<p dir="auto">To build the image locally instead (e.g. for development):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Build the image (both binaries).
+docker compose build
+
+# Serve (expects generations under the slater-data volume / your /data mount).
+docker compose up slater
+
+# Build a generation with the offline writer (profile `build`):
+docker compose run --rm builder \
+  --input /dumps/people.cypher --graph people --data-dir /data" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Build the image (both binaries).</span>
+docker compose build
+
+<span class="pl-c"><span class="pl-c">#</span> Serve (expects generations under the slater-data volume / your /data mount).</span>
+docker compose up slater
+
+<span class="pl-c"><span class="pl-c">#</span> Build a generation with the offline writer (profile `build`):</span>
+docker compose run --rm builder \
+  --input /dumps/people.cypher --graph people --data-dir /data</pre></div>
+<p dir="auto">The builder stage installs <code>cmake</code>, <code>clang</code> and <code>libclang-dev</code> for the rustls
+<code>aws-lc-rs</code> backend; <code>git</code> (already in the base image) is required for the
+<code>hs-utils</code> git+tag dependency, which <code>.cargo/config.toml</code> fetches via the git CLI.</p>
+<p dir="auto">The sections below cover the on-disk format, configuration, ACLs, and a
+local (non-Docker) worked example.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How it works</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="            slater-build                         slater (Bolt server)
+   dump.cypher ──────────▶ /data/&lt;graph&gt;/&lt;uuid&gt;/ ──────────▶ neo4j driver
+   (offline, atomic)        MANIFEST.json, *.blk,            (bolt / bolt+s)
+                            range/*.isam, vector/*.{vamana,pq},
+                            current → &lt;uuid&gt;"><pre class="notranslate"><code>            slater-build                         slater (Bolt server)
+   dump.cypher ──────────▶ /data/&lt;graph&gt;/&lt;uuid&gt;/ ──────────▶ neo4j driver
+   (offline, atomic)        MANIFEST.json, *.blk,            (bolt / bolt+s)
+                            range/*.isam, vector/*.{vamana,pq},
+                            current → &lt;uuid&gt;
+</code></pre></div>
+<ul dir="auto">
+<li>A <strong>generation</strong> is one immutable directory: a <code>MANIFEST.json</code> (symbol tables,
+index descriptors, an optional encryption header), columnar block files
+(<code>node_props.blk</code>, <code>node_labels.blk</code>, <code>edge_props.blk</code>, <code>topology.csr.blk</code>,
+<code>vectors.f32.blk</code>), range indexes (<code>range/&lt;name&gt;.isam</code>), above-threshold ANN
+indexes (<code>vector/&lt;label&gt;.&lt;prop&gt;.{vamana,pq}</code>), and a <code>current</code> text pointer.</li>
+<li>Every block is zstd-compressed and BLAKE3-checksummed; with <code>--encrypt</code> each
+block is additionally sealed with XChaCha20-Poly1305 (AEAD at rest).</li>
+<li>The server opens a generation by <strong>re-hashing every file</strong> against the manifest,
+so a half-copied / truncated image — a torn copy onto the data dir, which may be
+remote/network storage — is refused rather than served.</li>
+<li>Reads flow through <strong>three bounded cache pools</strong> — a decompressed-block LRU, a
+vector-index pool (resident PQ codes + a Vamana-block LRU), and a result LRU —
+each with its own byte budget. This is what keeps RSS flat.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">The writable layer</h3></div>
+<p dir="auto">With <code>delta.enabled</code>, the immutable generation becomes the <strong>fully-compacted bottom
+level (the "core")</strong> of a small log-structured-merge tree, and live writes ride on
+top of it:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="   write (Bolt)                                    read (Bolt)
+        │                                               │
+        ▼                                               ▼
+   ┌──────────────┐  flush   ┌──────────────┐    ┌──────────────────────┐
+   │ WAL + active │ ───────▶ │  L0 delta    │    │  a query pins one    │
+   │  memtable    │          │  segments    │    │  (core, delta) view  │
+   └──────────────┘          └──────┬───────┘    │  and reads the merge │
+        (fsync = ack)               │            └──────────────────────┘
+                          consolidation │  (folds core + delta → fresh core)
+                                        ▼
+                                 ┌─────────────┐
+                                 │  new core   │  (atomic `current` swap)
+                                 └─────────────┘"><pre class="notranslate"><code>   write (Bolt)                                    read (Bolt)
+        │                                               │
+        ▼                                               ▼
+   ┌──────────────┐  flush   ┌──────────────┐    ┌──────────────────────┐
+   │ WAL + active │ ───────▶ │  L0 delta    │    │  a query pins one    │
+   │  memtable    │          │  segments    │    │  (core, delta) view  │
+   └──────────────┘          └──────┬───────┘    │  and reads the merge │
+        (fsync = ack)               │            └──────────────────────┘
+                          consolidation │  (folds core + delta → fresh core)
+                                        ▼
+                                 ┌─────────────┐
+                                 │  new core   │  (atomic `current` swap)
+                                 └─────────────┘
+</code></pre></div>
+<ul dir="auto">
+<li><strong>Durability floor — the WAL.</strong> Each mutation is serialised behind a single
+writer per graph, appended to a per-graph write-ahead log, and <code>fsync</code>ed before
+the Bolt <code>SUCCESS</code> is returned — so <em>acknowledged ⇒ durable</em>, and a torn tail is
+dropped on replay. A batched write-<code>UNWIND</code> appends its rows and commits <strong>one</strong>
+<code>fsync</code> for the whole batch. The WAL is <strong>local disk only</strong> (it is not routed
+through the storage backend), which makes a <em>writer</em> node stateful: it needs a
+durable local volume at <code>delta.walDir</code>. Read replicas stay stateless.</li>
+<li><strong>Memtable → L0 → consolidation.</strong> Writes accumulate in an in-RAM memtable
+(bounded by <code>delta.memtableBytes</code>); when it fills it flushes to an immutable L0
+delta segment. A <strong>consolidation</strong> folds <code>{core + delta}</code> into a fresh core by
+serialising the merged view back through <code>slater-build</code> and swapping <code>current</code>
+atomically — the same content-hash guard as any published generation. Trigger it
+by hand with <code>CALL slater.consolidate()</code>, automatically at <code>delta.deltaCorePercent</code>
+of the core's size (optionally gated to an off-peak <code>delta.consolidateWindow</code>), or
+let the <code>delta.deltaHardBytes</code> throttle backstop runaway growth.</li>
+<li><strong>The overlay sits below the read surface.</strong> The executor reads through a
+<code>ReadView</code> that is either the bare core (delta always empty) or a merged
+<code>(core, delta)</code> view; the engine is monomorphised over it, so an empty delta
+compiles to a single predictable branch and the read-only path is byte-identical.
+Whole-graph counters (<code>count(*)</code>, label/reltype marginals) are served from the
+delta's own live counters, so they stay metadata reads even with writes pending.</li>
+<li><strong>A query sees a stable snapshot.</strong> It pins one <code>(core, delta)</code> tuple for its
+whole life. There are no multi-statement transactions and no rollback — a write is
+a durable, business-key-addressed correction, not an OLTP transaction.</li>
+</ul>
+<p dir="auto">The exact write grammar and knobs are in the <a href="#environment--configuration">Configuration</a>
+table (<code>delta.*</code>) and the <a href="#worked-example">Worked example</a> below.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Range indexes (ISAM)</h3></div>
+<p dir="auto">A range index (<code>range/&lt;name&gt;.isam</code>, one per indexed <code>(label, property)</code>) lets a
+<code>MATCH (n:Label {prop: v})</code> or <code>WHERE n.prop &lt;op&gt; v</code> resolve to the matching node
+ids <strong>without scanning the label</strong>. It is an
+<strong><a href="https://en.wikipedia.org/wiki/ISAM" rel="nofollow">ISAM</a></strong> (Indexed Sequential Access Method)
+structure — the classic <em>static, sorted, block-structured</em> index, which is exactly
+the right shape for an immutable generation: there are no inserts to rebalance, so
+the simplicity of ISAM buys what a B-tree's mutation machinery would only
+complicate.</p>
+<ul dir="auto">
+<li>Entries <code>(value, entity_id)</code> are sorted by value and packed into the same
+zstd-compressed 256 KiB blocks as everything else.</li>
+<li>A small <strong>resident top-level</strong> holds the first key of each block (a sparse
+index). A lookup binary-searches that in-memory top level to find the <em>one</em> block
+a key can be in, reads + decompresses that block, and scans it — so an equality
+lookup is <strong>one block read</strong>, and a range scan walks the contiguous run of blocks
+it spans. (This is why a <code>meshUi</code>-indexed lookup is single-digit milliseconds
+while the same match on an unindexed property scans the whole label.)</li>
+<li>The planner picks it via <code>NodeScan::RangeEq</code> / <code>RangeRange</code>; an unindexed
+predicate falls back to a label sweep or full scan, with the executor re-checking
+every predicate either way.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Vector search (Vamana + PQ) — cosine, L2 and dot, read <em>and</em> write</h3></div>
+<p dir="auto">Vector KNN (<code>db.idx.vector.queryNodes</code>) runs over <strong>cosine, L2, or dot-product (MIPS)</strong>
+indexes. The base index is built offline with two execution paths, chosen per index by
+the <code>--ann-threshold</code> (default 50 000 vectors):</p>
+<ul dir="auto">
+<li><strong>Below the threshold — brute force.</strong> The full <code>f32</code> vectors live in
+<code>vectors.f32.blk</code>; a query scans the index's group and computes the exact distance in
+the index's metric. Simple and exact; fine when the vector set is small.</li>
+<li><strong>At or above the threshold — Vamana + PQ</strong>, the disk-native ANN path that keeps
+resident memory bounded regardless of how many vectors there are:
+<ul dir="auto">
+<li><strong><a href="https://arxiv.org/pdf/2401.11324" rel="nofollow">Vamana</a></strong> is the graph index from the
+DiskANN line of work: a single proximity graph whose edges are pruned (the
+<code>--vamana-r</code> out-degree and <code>--vamana-alpha</code> long-edge factor) so a <em>greedy
+beam search</em> — start at the medoid, repeatedly hop toward the query, keeping a
+candidate list of width <code>vectorQuery.beamWidth</code> — reaches a node's true
+neighbours in few hops, i.e. <strong>few random block reads per query</strong>. The graph
+blocks (<code>vector/&lt;label&gt;.&lt;prop&gt;.vamana</code>) are paged in through the vector cache,
+not held wholesale.</li>
+<li><strong><a href="https://medium.com/aiguys/product-quantization-k-nn-for-big-datasets-12431d764c4e" rel="nofollow">Product quantisation (PQ)</a></strong>
+compresses each vector into a short code (<code>--pq-subspaces</code> × <code>--pq-bits</code>): the
+dimensions are split into subspaces, each independently k-means-clustered, and
+the vector is stored as the tuple of nearest-centroid ids. These codes
+(<code>vector/&lt;label&gt;.&lt;prop&gt;.pq</code>) are small enough to keep <strong>resident</strong>, so the
+beam search scores candidates from RAM and only the chosen few full vectors are
+read from disk. That resident PQ set is what the <code>cache.vectorCacheBytes</code> pool
+pins.</li>
+</ul>
+</li>
+</ul>
+<p dir="auto"><strong>Writable embeddings — the vector write ladder (<a href="https://arxiv.org/abs/2105.09613" rel="nofollow">FreshDiskANN</a>-style).</strong>
+An indexed embedding is a first-class writable value. <code>SET n.embedding = vecf32([…])</code> (and <code>REMOVE</code>) lands in the
+write delta and is <strong>immediately KNN-visible with exact rank</strong>, then survives a segment
+flush, a merge, and a consolidation. A query merges up to three levels — the sealed base
+index, a sealed per-segment index, and an in-memory <strong>RW-index</strong> (a live mutable Vamana
+over the write delta) — so latency stays flat as writes accumulate rather than growing
+with the count of pending writes. A delete leaves a <em>hole</em>: the node stops being returned
+but stays a navigational waypoint until a background <strong>delete-consolidation</strong> splices it
+out of the graph, so deletes stop costing query IO. And because the on-disk graph
+addresses its neighbours by layout position rather than node id, <code>CALL slater.consolidate()</code>
+carries the Vamana <strong>by reference</strong> — hard-linked, byte-identical — and rewrites only a
+small id column, folding vector writes into the base <strong>without</strong> the O(N·R·L) graph
+rebuild. Measured numbers, with caveats, are in the <a href="/Hikari-Systems/slater/blob/main/docs/PERF-REPORT.md">performance report</a>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Storage backends (filesystem / S3 / GCS)</h2></div>
+<p dir="auto">Every generation file is opened through an <strong><code>ObjectStore</code></strong> abstraction rather
+than <code>std::fs</code> directly, so the <em>same</em> on-disk byte format — blocks, indexes,
+manifest, <code>current</code> pointer — is served unchanged from any backend; only <em>where
+the bytes come from</em> differs, never the readers, the query engine, or the
+integrity checks. The hot path is positional reads (<code>read_exact_at</code>), which map
+onto a <code>pread</code> on a local file and an HTTP byte-range request on an object store
+— Slater never mmaps, so the explicit, bounded-read model is identical
+everywhere.</p>
+<p dir="auto"><strong>Three first-class backends</strong>, selected by <code>dataBackend.kind</code>. The filesystem is
+the simple default; <strong>Amazon S3 and Google Cloud Storage are equal, fully
+supported object-store backends</strong> — the published image ships with both compiled
+in, so each is configuration-only, and a generation built once can be served from
+any of them (even migrated <code>fs</code> → S3 → GCS) without a rebuild.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th><code>dataBackend.kind</code></th>
+<th>Positional read</th>
+<th>Integrity at open</th>
+<th>Credentials</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fs</code> <em>(default)</em></td>
+<td><code>pread</code></td>
+<td>full BLAKE3 re-hash of each file</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>s3</code></td>
+<td>HTTP <code>Range</code> GET</td>
+<td>server <strong>SHA-256</strong> via <code>HEAD</code> (→ BLAKE3 body re-hash if absent)</td>
+<td>config keys, AWS chain, or IAM role</td>
+</tr>
+<tr>
+<td><code>gcs</code></td>
+<td>HTTP range read</td>
+<td>server <strong>CRC32C</strong> via <code>get_object</code> (→ BLAKE3 body re-hash if absent)</td>
+<td>ADC / Workload Identity, or service-account JSON</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Both object stores verify integrity from the <strong>checksum the store already
+computes and keeps</strong>, fetched as object metadata: <code>slater-build</code> sends the
+checksum on upload (the store validates the bytes against it and stores it), and
+the server reads it back at open and compares it to the manifest — one metadata
+request per file, no body download. It is content-grade and identical in spirit
+across S3 (SHA-256) and GCS (CRC32C). When an object carries <strong>no</strong> server-stored
+checksum (copied in out-of-band, or uploaded with a different default), the server
+<strong>re-hashes the object body against the manifest BLAKE3</strong> rather than trusting its
+byte length — a requested integrity check is never silently downgraded to a size
+comparison. Slater-published generations always carry the checksum, so they stay on
+the cheap metadata path.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Filesystem (<code>fs</code>)</h3></div>
+<p dir="auto">The default, rooted at <code>dataBackend.fs.dir</code>. The right choice for most
+deployments: a generation on a local SSD (or an NFS/EBS mount) served read-only.
+Integrity is a full BLAKE3 re-hash of every file at open.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Amazon S3 (<code>s3</code>)</h3></div>
+<p dir="auto">An S3 or S3-compatible bucket (AWS, MinIO, localstack). Credentials come <strong>first</strong>
+from config (<code>dataBackend.s3.awsAccessKey</code> / <code>awsSecretKey</code>, plus
+<code>awsSessionToken</code> for temporary STS credentials) and fall back to the standard AWS
+chain (<code>AWS_ACCESS_KEY_ID</code> / <code>AWS_SECRET_ACCESS_KEY</code> env, shared profile, or
+instance/IRSA role) when left empty.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# serve from S3 (env-var form; see the config table for every key)
+dataBackend__kind=s3
+dataBackend__s3__bucket=slater
+dataBackend__s3__region=eu-west-2
+dataBackend__s3__awsAccessKey=…        # omit to use the AWS chain / instance role
+dataBackend__s3__awsSecretKey=…
+# S3-compatible (e.g. MinIO): also set
+dataBackend__s3__endpoint=http://minio:9000
+dataBackend__s3__pathStyle=true        # required by most S3-compatible servers" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> serve from S3 (env-var form; see the config table for every key)</span>
+dataBackend__kind=s3
+dataBackend__s3__bucket=slater
+dataBackend__s3__region=eu-west-2
+dataBackend__s3__awsAccessKey=…        <span class="pl-c"><span class="pl-c">#</span> omit to use the AWS chain / instance role</span>
+dataBackend__s3__awsSecretKey=…
+<span class="pl-c"><span class="pl-c">#</span> S3-compatible (e.g. MinIO): also set</span>
+dataBackend__s3__endpoint=http://minio:9000
+dataBackend__s3__pathStyle=true        <span class="pl-c"><span class="pl-c">#</span> required by most S3-compatible servers</span></pre></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# publish a generation into the bucket (remote `current` pointer written last)
+slater-build --input people.cypher --graph people --data-dir /data \
+  --publish-s3-bucket slater --publish-s3-region eu-west-2 --publish-s3-prefix prod
+#   MinIO: add  --publish-s3-endpoint http://localhost:9000 --publish-s3-path-style" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> publish a generation into the bucket (remote `current` pointer written last)</span>
+slater-build --input people.cypher --graph people --data-dir /data \
+  --publish-s3-bucket slater --publish-s3-region eu-west-2 --publish-s3-prefix prod
+<span class="pl-c"><span class="pl-c">#</span>   MinIO: add  --publish-s3-endpoint http://localhost:9000 --publish-s3-path-style</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Google Cloud Storage (<code>gcs</code>)</h3></div>
+<p dir="auto">A GCS bucket, reached over the JSON API. Authorization is GCP-native: by default
+it resolves <strong>Application Default Credentials</strong> — GKE Workload Identity, the GCE
+metadata server, or a <code>gcloud</code> / <code>GOOGLE_APPLICATION_CREDENTIALS</code> key. Set
+<code>dataBackend.gcs.credentialsPath</code> (a service-account JSON key file) or inline
+<code>credentialsJson</code> for an explicit key. <code>dataBackend.gcs.endpoint</code> points at a
+<code>fake-gcs-server</code> emulator, and <code>dataBackend.gcs.anonymous=true</code> enables
+unauthenticated access <strong>for that emulator only</strong> — never against real GCS.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# serve from GCS (env-var form; see the config table for every key)
+dataBackend__kind=gcs
+dataBackend__gcs__bucket=slater
+dataBackend__gcs__prefix=prod
+dataBackend__gcs__credentialsPath=/secrets/sa.json   # omit for ADC / Workload Identity" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> serve from GCS (env-var form; see the config table for every key)</span>
+dataBackend__kind=gcs
+dataBackend__gcs__bucket=slater
+dataBackend__gcs__prefix=prod
+dataBackend__gcs__credentialsPath=/secrets/sa.json   <span class="pl-c"><span class="pl-c">#</span> omit for ADC / Workload Identity</span></pre></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# publish a generation into the bucket (remote `current` pointer written last)
+slater-build --input people.cypher --graph people --data-dir /data \
+  --publish-gcs-bucket slater --publish-gcs-prefix prod
+#   explicit key: add  --publish-gcs-credentials /secrets/sa.json" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> publish a generation into the bucket (remote `current` pointer written last)</span>
+slater-build --input people.cypher --graph people --data-dir /data \
+  --publish-gcs-bucket slater --publish-gcs-prefix prod
+<span class="pl-c"><span class="pl-c">#</span>   explicit key: add  --publish-gcs-credentials /secrets/sa.json</span></pre></div>
+<p dir="auto">In all cases <code>slater-build</code> writes the finished generation to <code>--data-dir</code> first
+(its local staging area) and <strong>additionally</strong> uploads it to the bucket; the remote
+<code>current</code> pointer is written last, so a serving node never sees a half-published
+generation.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">When to use an object store (S3 or GCS)</h3></div>
+<p dir="auto">Reach for <code>s3</code> or <code>gcs</code> when you want generations in durable, central object
+storage rather than on a node's disk — typically: publish once and fan out to many
+stateless, disk-less server replicas that all read the same bucket; decouple the
+build host from the serve hosts; or lean on the store's
+durability/versioning/lifecycle instead of managing volumes. The trade-off is
+latency: a cold block is a network round-trip (~10–50 ms) instead of a local read
+(~0.1 ms). Slater hides most of it with the in-memory block cache, concurrent
+read-ahead, <strong>and</strong> the optional disk cache below. If your generations already sit
+on fast local storage and you don't need the central-bucket model, <code>fs</code> is simpler
+and faster.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Local-disk block cache (object-store second tier)</h3></div>
+<p dir="auto">The in-memory <code>BlockCache</code> is deliberately small (bounded RSS is the headline
+guarantee), so on a working set larger than RAM the same blocks would be
+re-fetched from the object store on every spill. An <strong>optional local-SSD second
+cache tier</strong> fixes that: a block evicted from RAM is served from local disk
+(~0.1 ms) instead of a fresh object GET, surviving in-memory eviction and cutting
+object-store request count/cost — bringing an object-store-backed node close to
+local-filesystem performance once warm. It is <strong>opt-in</strong> for both <code>s3</code> and <code>gcs</code>,
+enabled by setting <code>dataBackend.&lt;s3|gcs&gt;.diskCacheBytes &gt; 0</code> and a writable
+<code>diskCacheDir</code>.</p>
+<ul dir="auto">
+<li>It caches the <strong>sealed</strong> bytes exactly as fetched — already compressed, and
+(for <code>--encrypt</code> generations) still AEAD-sealed — <em>below</em> decrypt/decompress.
+The cache layer never holds the encryption key and never re-encrypts, so
+at-rest status is preserved for free: an encrypted generation lands on disk
+still sealed.</li>
+<li>Writes are <strong>write-behind</strong>: a miss returns the fetched bytes to the query
+immediately, then a background thread does the disk write and LRU trim, so the
+query path never blocks on disk I/O. Eviction keeps the cache within its byte
+budget; a per-file checksum verified on every read self-heals a corrupt cache
+file to a miss (→ refetch from the object store).</li>
+<li><code>diskCacheDir</code> <strong>must point at a real writable volume — never <code>tmpfs</code></strong> (tmpfs
+is RAM and would defeat the bounded-RSS guarantee). The in-memory index that
+tracks it costs a little RAM (~tens of bytes per cached block), which counts
+against your RSS ceiling — size the directory ≫ the in-memory block cache.</li>
+<li>The tier's other RAM cost is the <strong>write-behind queue</strong>, which stages blocks on
+their way to disk. It is bounded at <code>blockCacheBytes / 8</code> (floored by
+<code>diskCacheBytes</code>) — 8 MiB at the default — and sheds rather than grows, so a
+cold scan cannot inflate it; a shed block simply refetches on its next miss.
+It needs no configuration: it scales with <code>blockCacheBytes</code>, so the disk tier
+adds no new number to the RSS budget beyond its index.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Mounts</h2></div>
+<p dir="auto">A <strong>read replica</strong> runs with a <strong>read-only root filesystem</strong> and a non-root user
+(<code>appuser:1000</code>) — everything it needs is mounted read-only. A <strong>writer</strong>
+(<code>delta.enabled</code>) additionally needs one durable, writable volume for its WAL.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Purpose</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/data</code></td>
+<td>The graph generations (<code>&lt;graph&gt;/&lt;uuid&gt;/…</code> + <code>current</code>).</td>
+<td><strong>Read-only</strong> for replicas; produced by <code>slater-build</code>. May live on remote/network storage (e.g. NFS), so reads are not assumed to be fast local-SSD latencies.</td>
+</tr>
+<tr>
+<td><code>/sandbox</code></td>
+<td>Per-environment config overlay + secrets.</td>
+<td><code>/sandbox/config.json</code> is deep-merged over the baked-in <code>config.json</code>; also holds <code>acl.json</code>, TLS PEM material, the at-rest key file.</td>
+</tr>
+<tr>
+<td><code>/tmp</code>, <code>/run</code></td>
+<td>Scratch (<code>tmpfs</code>).</td>
+<td>A read replica never writes to disk by default.</td>
+</tr>
+<tr>
+<td><em>(writer)</em> <code>delta.walDir</code></td>
+<td>The write-ahead log + L0 delta segments, when <code>delta.enabled</code>.</td>
+<td><strong>Writable</strong>, and a <strong>durable, real volume — never <code>tmpfs</code></strong> (it is the durability floor). A relative path resolves under the data dir; give a writer its own persistent volume here.</td>
+</tr>
+<tr>
+<td><em>(optional)</em> disk cache</td>
+<td>The local-disk block cache, when <code>dataBackend.s3.diskCacheBytes</code> / <code>dataBackend.gcs.diskCacheBytes &gt; 0</code>.</td>
+<td><strong>Writable</strong>, and a <strong>real volume — not <code>tmpfs</code></strong>. Used by the <code>s3</code> and <code>gcs</code> backends; see <a href="#storage-backends-filesystem--s3--gcs">Storage backends</a>.</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Environment / configuration</h2></div>
+<p dir="auto">Config is loaded by the house-standard layered loader: the baked-in <code>config.json</code>,
+then <code>/sandbox/config.json</code> deep-merged over it, then <code>KEY__sub</code> environment
+overrides (double underscore for nesting; keys match the camelCase config).</p>
+<p dir="auto">Every configuration knob — its camelCase key, the <code>KEY__sub</code> environment override, its default, and what it does — is tabulated in the <strong><a href="/Hikari-Systems/slater/blob/main/docs/manual/14-configuration-reference.md">Configuration reference</a></strong>. The most-tuned knobs are the cache budgets (<code>cache.*</code>), the query guards (<code>query.*</code>), the connection caps (<code>server.*</code>), the storage backend (<code>dataBackend.*</code>), and the writable layer (<code>delta.*</code>).</p>
+<p dir="auto"><strong>Resident memory</strong> is approximately
+<code>blockCacheBytes + vectorCacheBytes + resultCacheBytes</code> + a small fixed overhead
+(plus up to <code>degreeColumnBytes</code> for the <code>lazy</code> degree column, once the degree-sum
+<code>count(endpoint)</code> fast path is exercised), <strong>independent of graph size</strong> — that is
+the headline guarantee, exercised by the
+<code>rss_stays_bounded_under_sustained_knn_load</code> integration test. Per-connection
+buffers live <em>outside</em> the cache budgets, so the guarantee holds under adversarial
+load only because <code>server.maxConnections</code> bounds how many can exist at once.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Network posture</h3></div>
+<p dir="auto">Slater is a read replica handle; the <strong>primary</strong> connection-security control is the
+network, not the binary. Bind it to a private interface, restrict source ranges at
+the network layer (security groups / NetworkPolicy), and — if it faces anything but
+trusted clients — front it with a connection-limiting L4 proxy (HAProxy <code>maxconn</code> +
+a per-source <code>stick-table</code>, or nftables <code>connlimit</code> + <code>hashlimit</code>). That sits before
+the file descriptor is ever handed to the process, so it is the most robust limit.</p>
+<p dir="auto">The in-binary limits above (<code>maxConnections</code>, <code>maxPreAuthConnections</code>,
+<code>maxConnectionsPerIp</code>, the differential byte caps, and <code>loginTimeoutMs</code>) are
+<strong>defence-in-depth</strong>: they default on and generous so they are invisible to a
+legitimate client population, but they make the bounded-RSS guarantee hold even when
+the proxy is forgotten. See <strong><a href="/Hikari-Systems/slater/blob/main/docs/HARDENING.md"><code>docs/HARDENING.md</code></a></strong> for the full
+defensive posture, and <code>THREAT_MODEL.md</code> / <code>SECURITY_WORKLIST.md</code> for the canonical
+detail.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Generation guard</h3></div>
+<p dir="auto">Slater polls each graph's <code>current</code> pointer every <code>generationPollMs</code>
+(<strong>poll, not inotify</strong> — the data dir may be remote/network storage like NFS,
+where filesystem change events are unreliable). When it changes:</p>
+<ul dir="auto">
+<li><code>reloadStrategy=exit</code> (default): the server logs fatal and exits non-zero so the
+orchestrator restarts it cleanly against the new generation.</li>
+<li><code>reloadStrategy=swap</code>: the server opens <strong>and validates</strong> the new generation
+(same content-hash guard as boot), atomically swaps it in, and lets in-flight
+queries finish on the old one. A corrupt/incomplete new image is refused and the
+old generation keeps serving.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">ACL</h2></div>
+<p dir="auto"><code>acl.json</code> maps users to argon2id password hashes and per-graph <strong><code>read</code></strong> / <strong><code>write</code></strong>
+grants. Mint a hash (never store cleartext) with:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="slater hash-password 's3cret'        # prints a $argon2id$… string for acl.json" dir="auto"><pre>slater hash-password <span class="pl-s"><span class="pl-pds">'</span>s3cret<span class="pl-pds">'</span></span>        <span class="pl-c"><span class="pl-c">#</span> prints a $argon2id$… string for acl.json</span></pre></div>
+<p dir="auto">A starter <code>acl.json</code> ships at the repo root; its shape is:</p>
+<div class="highlight highlight-source-json notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='{
+  "users": {
+    "reporting": {
+      "passwordArgon2id": "$argon2id$v=19$m=19456,t=2,p=1$&lt;salt&gt;$&lt;hash&gt;",
+      "grants": {
+        "people": ["read"],
+        "products": ["read", "write"]
+      }
+    }
+  }
+}' dir="auto"><pre>{
+  <span class="pl-ent">"users"</span>: {
+    <span class="pl-ent">"reporting"</span>: {
+      <span class="pl-ent">"passwordArgon2id"</span>: <span class="pl-s"><span class="pl-pds">"</span>$argon2id$v=19$m=19456,t=2,p=1$&lt;salt&gt;$&lt;hash&gt;<span class="pl-pds">"</span></span>,
+      <span class="pl-ent">"grants"</span>: {
+        <span class="pl-ent">"people"</span>: [<span class="pl-s"><span class="pl-pds">"</span>read<span class="pl-pds">"</span></span>],
+        <span class="pl-ent">"products"</span>: [<span class="pl-s"><span class="pl-pds">"</span>read<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>write<span class="pl-pds">"</span></span>]
+      }
+    }
+  }
+}</pre></div>
+<ul dir="auto">
+<li>
+<p dir="auto"><strong><code>users</code></strong> — one entry per login, keyed by username.</p>
+</li>
+<li>
+<p dir="auto"><strong><code>passwordArgon2id</code></strong> — the <code>$argon2id$…</code> string from <code>slater hash-password</code>
+(never cleartext; the file itself is plain JSON and lives on shared storage).</p>
+</li>
+<li>
+<p dir="auto"><strong><code>grants</code></strong> — per-graph capability lists. Two permissions are meaningful:</p>
+<ul dir="auto">
+<li><strong><code>read</code></strong> — query the graph. A graph absent from a user's grants is invisible to them.</li>
+<li><strong><code>write</code></strong> — mutate the graph through the writable layer (<code>delta.enabled</code>): the
+<code>MERGE</code> / <code>SET</code> / <code>DELETE</code> statements and <code>CALL slater.consolidate()</code>.</li>
+</ul>
+<p dir="auto">They are <strong>independent: a <code>read</code> grant confers no write access.</strong> Turning the writable
+layer on therefore cannot promote your existing readers into writers. A writer needs
+both — <code>["read", "write"]</code> — because resolving a business key to write it is a read.
+Unrecognised permission strings are ignored (they grant nothing).</p>
+</li>
+</ul>
+<p dir="auto">Mount it read-only at the path named by <code>aclPath</code> (default <code>/config/acl.json</code>).
+The server reloads it on each generation hot-swap, and the at-rest ACL stamp is
+re-checked on every reload (see <a href="#environment--configuration"><code>requireAclStamp</code></a>).</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Health check</h2></div>
+<p dir="auto">The <code>slater</code> binary doubles as its own liveness probe: <code>slater healthcheck [host] [port]</code> performs a <strong>Bolt handshake</strong> (not an HTTP request) against the server and
+exits <code>0</code> if it negotiates a protocol version, <code>1</code> otherwise — defaulting to
+<code>localhost</code> and the configured Bolt port. This is what the container
+<code>HEALTHCHECK</code> runs, so orchestrators see a truly Bolt-ready server, not just an
+open socket:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="slater healthcheck localhost 7687    # exit 0 = healthy
+docker exec slater /app/slater healthcheck   # inside the container" dir="auto"><pre>slater healthcheck localhost 7687    <span class="pl-c"><span class="pl-c">#</span> exit 0 = healthy</span>
+docker <span class="pl-c1">exec</span> slater /app/slater healthcheck   <span class="pl-c"><span class="pl-c">#</span> inside the container</span></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">One-shot query</h2></div>
+<p dir="auto">For scripting, CI checks, and quick lookups, <code>slater query</code> mounts a graph's
+current generation, runs a single read-only Cypher query in-process, prints the
+result as a JSON object, and exits — no server, no Bolt connection. It honours
+the same config as the server (storage backend, encryption key, query budgets):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# GRAPH defaults to `defaultGraph`. Without -q, normal datestamped logging
+# (config, &quot;opened generation&quot;, …) is written to stdout alongside the result.
+slater query mygraph 'MATCH (n) RETURN count(n) AS c'
+
+# -q/--quiet ⇒ logging suppressed, so stdout is *only* the compact result JSON
+slater query mygraph -q 'MATCH (c:Company) RETURN c.ticker AS t LIMIT 3' | jq
+# {&quot;columns&quot;:[&quot;t&quot;],&quot;rows&quot;:[[&quot;AUPH&quot;],[&quot;KYMR&quot;],[&quot;MREO&quot;]]}" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> GRAPH defaults to `defaultGraph`. Without -q, normal datestamped logging</span>
+<span class="pl-c"><span class="pl-c">#</span> (config, "opened generation", …) is written to stdout alongside the result.</span>
+slater query mygraph <span class="pl-s"><span class="pl-pds">'</span>MATCH (n) RETURN count(n) AS c<span class="pl-pds">'</span></span>
+
+<span class="pl-c"><span class="pl-c">#</span> -q/--quiet ⇒ logging suppressed, so stdout is *only* the compact result JSON</span>
+slater query mygraph -q <span class="pl-s"><span class="pl-pds">'</span>MATCH (c:Company) RETURN c.ticker AS t LIMIT 3<span class="pl-pds">'</span></span> <span class="pl-k">|</span> jq
+<span class="pl-c"><span class="pl-c">#</span> {"columns":["t"],"rows":[["AUPH"],["KYMR"],["MREO"]]}</span></pre></div>
+<p dir="auto">Nodes and relationships expand to their labels/type and properties. Use <code>-q</code>
+when you want machine-parseable output (the result JSON is the only thing on
+stdout); omit it for an operator-facing run with logs. Without <code>-q</code> a
+metrics-only summary is logged after each run — e.g.</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="INFO query executed cost=2389 resultCount=10 execMs=441 limitRowCount=10"><pre class="notranslate" lang="text"><code>INFO query executed cost=2389 resultCount=10 execMs=441 limitRowCount=10
+</code></pre></div>
+<p dir="auto">carrying the query <code>cost</code> (elements charged), <code>resultCount</code>, <code>execMs</code>, and
+<code>limitRowCount</code> (only when the query specifies a <code>LIMIT</code>) — never the query text
+or any result value. Exit status is <code>0</code> on success, <code>1</code> on a parse/open/execute
+error (message on stderr).</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Export a graph (<code>slater dump</code>)</h2></div>
+<p dir="auto"><code>slater dump</code> exports a graph from a <strong>running</strong> server as business-key <code>MERGE</code>
+Cypher — the same dialect <code>slater-build</code> ingests — so a graph round-trips
+(dump → <code>slater-build</code> → new generation) for migration or text backup. Unlike
+<code>slater query</code>, it connects over <strong>Bolt</strong>, authenticates, and honours per-graph
+ACLs, so it needs no disk access to the server. The password is read from
+<code>SLATER_DUMP_PASSWORD</code> or stdin (never a flag, keeping it out of <code>ps</code>/history).</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# List the graphs the authenticated user may read.
+SLATER_DUMP_PASSWORD=pw slater dump --list -u reporting
+
+# Dump a graph to a file (identity keys inferred from range indexes).
+SLATER_DUMP_PASSWORD=pw slater dump people -u reporting -o people.cypher
+
+# Rebuild it into a fresh generation.
+slater-build --input people.cypher --graph people --data-dir ./data" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> List the graphs the authenticated user may read.</span>
+SLATER_DUMP_PASSWORD=pw slater dump --list -u reporting
+
+<span class="pl-c"><span class="pl-c">#</span> Dump a graph to a file (identity keys inferred from range indexes).</span>
+SLATER_DUMP_PASSWORD=pw slater dump people -u reporting -o people.cypher
+
+<span class="pl-c"><span class="pl-c">#</span> Rebuild it into a fresh generation.</span>
+slater-build --input people.cypher --graph people --data-dir ./data</pre></div>
+<p dir="auto">Each label's identity key is the property carried by its range index; override
+with <code>--key Label=prop</code> (repeatable) or a global <code>--pk &lt;field&gt;</code>. <code>CREATE INDEX</code>
+DDL is emitted first so the rebuild recreates the indexes. A multi-label node
+keeps <strong>every</strong> label — it is emitted as <code>MERGE (n:Ident:Other {key: v})</code>, with
+the identity label (the one supplying the business key) first and the rest
+sorted; the merge is keyed on the identity label alone, so the trailing labels
+are written onto the node without creating another one. Labels, relationship
+types and property keys containing special characters are backtick-quoted on
+emission, so unusual names round-trip faithfully and cannot inject Cypher into the
+rebuild. Vectors (and other
+values with no Cypher-literal spelling) cannot ride a <code>MERGE</code> dump and are dropped
+with a warning on stderr. Exit status is <code>0</code> on success, <code>1</code> on error.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Worked example</h2></div>
+<p dir="auto">A complete, runnable walkthrough — build a graph, serve it, connect with the neo4j <strong>JavaScript</strong> and <strong>Python</strong> drivers, and write to it — is in the manual's <strong><a href="/Hikari-Systems/slater/blob/main/docs/manual/02-quickstart.md">Quickstart</a></strong> and <strong><a href="/Hikari-Systems/slater/blob/main/docs/manual/11-writing-data.md">Writing data</a></strong> pages, using the bundled sample graph in <a href="/Hikari-Systems/slater/blob/main/docs/manual/examples"><code>docs/manual/examples/</code></a>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Development</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='export PATH="$HOME/.cargo/bin:$PATH"
+cargo build
+cargo test            # unit + the bounded-RSS headline integration test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check' dir="auto"><pre><span class="pl-k">export</span> PATH=<span class="pl-s"><span class="pl-pds">"</span><span class="pl-smi">$HOME</span>/.cargo/bin:<span class="pl-smi">$PATH</span><span class="pl-pds">"</span></span>
+cargo build
+cargo <span class="pl-c1">test</span>            <span class="pl-c"><span class="pl-c">#</span> unit + the bounded-RSS headline integration test</span>
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Object-store backends are opt-in cargo features</h3></div>
+<p dir="auto">A plain <code>cargo build</code> produces a <strong>filesystem-only</strong> binary — the <code>s3</code> and <code>gcs</code>
+backends are gated behind cargo features so the default build stays small (no AWS
+or Google SDK, no async runtime). Enable whichever you need on <strong>both</strong> <code>slater</code>
+(serve) and <code>slater-build</code> (publish):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# S3 only / GCS only / both
+cargo build -p slater -p slater-build --features s3
+cargo build -p slater -p slater-build --features gcs
+cargo build -p slater -p slater-build --features s3,gcs" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> S3 only / GCS only / both</span>
+cargo build -p slater -p slater-build --features s3
+cargo build -p slater -p slater-build --features gcs
+cargo build -p slater -p slater-build --features s3,gcs</pre></div>
+<p dir="auto">Each crate exposes matching <code>s3</code> / <code>gcs</code> features that forward to
+<code>graph-format/{s3,gcs}</code>. Requesting a backend at runtime
+(<code>dataBackend.kind=s3|gcs</code>, or <code>slater-build --publish-{s3,gcs}-*</code>) without its
+feature compiled in fails fast with a clear "built without the … feature" error.
+The <strong>published Docker image enables both</strong> (Dockerfile <code>CARGO_FEATURES</code>), so
+prebuilt images need no extra flags — this only matters when building from source.
+The integration tests are likewise gated: <code>--features s3 --test s3_minio</code>,
+<code>--features gcs --test gcs_emulator</code> (a <code>fake-gcs-server</code>), and <code>--features gcs --test gcs_real</code> (real GCS via ADC); each skips unless its <code>SLATER_*</code> env vars are
+set.</p>
+<p dir="auto">See <code>docs/PLAN.md</code>, <code>docs/PROGRESS.md</code> and <code>docs/DECISIONS.md</code> for the design,
+the milestone ledger, and the decision log.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Performance</h2></div>
+<p dir="auto">Up to six engines, one single-client suite, graphs from a 62k-node toy to <strong>Wikidata
+91.6M nodes / 1.5B edges</strong>. Each engine is <strong>measured in isolation</strong> (every other container
+stopped — RSS and latency are its own footprint). The <strong>latency tables</strong> below were
+<strong>re-measured on Slater 0.21.0</strong> (the writeable build): the small/medium graphs (MeSH, EU-AI-Act)
+freshly, and the 91.6M graph as a fresh <strong>same-box, shared-anchor</strong> slater-vs-Neo4j pass (see
+that table). The <strong>resident-memory</strong> figures carry forward from the earlier pass (measured via
+container cgroup; the read path is byte-identical with the writable layer idle). The other
+engines' numbers are the established cross-engine run (their versions/performance are unchanged).
+All figures are medians (ms) or peak resident memory (MiB). <strong>Lower is better everywhere; bold =
+best in row.</strong> slater was run on its <strong>local-filesystem (<code>fs</code>) backend</strong>; the S3 and GCS backends trade local-read
+latency for object-store round-trips (mitigated by the in-memory caches and the optional local-disk
+cache tier), so these figures characterise the engine, not a network-storage deployment.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>engine</th>
+<th>class</th>
+<th>memory bound</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>slater</strong></td>
+<td>disk-backed, paged</td>
+<td><code>query.maxIntermediate</code> caps the working set automatically</td>
+</tr>
+<tr>
+<td>Neo4j 5</td>
+<td>disk-backed, JVM</td>
+<td>~2 GiB heap + off-heap, committed regardless of query</td>
+</tr>
+<tr>
+<td>Memgraph · FalkorDB</td>
+<td>in-memory</td>
+<td>whole graph resident in RAM</td>
+</tr>
+<tr>
+<td>ArcadeDB</td>
+<td>in-memory, JVM</td>
+<td>whole graph resident; heaviest</td>
+</tr>
+<tr>
+<td>LadybugDB</td>
+<td>embedded, columnar</td>
+<td>manual buffer pool that must exceed the query</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">The three engines that <strong>page from disk</strong> — slater, Neo4j 5, and LadybugDB — load all five
+graphs. The <strong>in-memory trio</strong> (Memgraph · FalkorDB · ArcadeDB) cannot hold the 1.5B edge graph at
+all (it needs ~64–128 GiB resident), and ArcadeDB's importer can't finish it either.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Resident memory (MiB) — bounded as the graph grows ~1,500×</h3></div>
+<p dir="auto">Each figure is <strong>committed working memory</strong> — what the OS cannot reclaim. Every engine <em>except</em>
+slater holds its graph in committed anonymous memory (own heap, Neo4j's off-heap page cache, or
+a buffer pool), so its peak RSS <em>is</em> its committed footprint. slater alone serves from the
+<strong>reclaimable OS page cache</strong> of its on-disk store, so its figure is the anon working set; the
+store's page cache (evictable under pressure — slater keeps serving) is excluded, and shown as
+<em>total</em> in parentheses for the 91.6M graph. <strong>Bold = lowest.</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>graph (nodes / edges)</th>
+<th align="right">slater</th>
+<th align="right">Neo4j 5</th>
+<th align="right">Memgraph</th>
+<th align="right">FalkorDB</th>
+<th align="right">ArcadeDB</th>
+<th align="right">LadybugDB</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>pole — 62k / 106k</td>
+<td align="right"><strong>11</strong></td>
+<td align="right">746</td>
+<td align="right">114</td>
+<td align="right">140</td>
+<td align="right">1,556</td>
+<td align="right">198</td>
+</tr>
+<tr>
+<td>MeSH — 341k / 469k</td>
+<td align="right"><strong>63</strong></td>
+<td align="right">1,083</td>
+<td align="right">358</td>
+<td align="right">455</td>
+<td align="right">1,631</td>
+<td align="right">121</td>
+</tr>
+<tr>
+<td>EU-AI-Act — 21k / 45k (+55 MiB vec)</td>
+<td align="right"><strong>99</strong></td>
+<td align="right">729</td>
+<td align="right">229</td>
+<td align="right">312</td>
+<td align="right">1,948</td>
+<td align="right">286</td>
+</tr>
+<tr>
+<td>Wikidata — 91.6M / 1.5B</td>
+<td align="right"><strong>584</strong> <em>(4,595 total)</em></td>
+<td align="right">~2,900</td>
+<td align="right">cannot-load</td>
+<td align="right">cannot-load</td>
+<td align="right">cannot-load</td>
+<td align="right">~652 †</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">slater is the <strong>lowest at every scale</strong> and grows ~50× while the graph grows ~1,500× — its
+footprint tracks the <em>query working set</em>, not the graph (idle ~16–71 MiB throughout). The
+in-memory trio grows ~linearly and can't load the 1.5B graph; Neo4j commits a ~2 GiB heap
+regardless of query. († LadybugDB on the bounded shapes only — its hub / var-length /
+shortestPath traversals at 1.5B edges need its read pool raised to ≥2 GiB, vs slater's automatic
+<code>maxIntermediate</code> cap.) The build-time value→count histograms add negligible resident memory —
+a few KB for a low-cardinality indexed column, and <em>zero</em> for unique-key graphs like Wikidata
+(<code>wikidata_id</code> exceeds the histogram cardinality cap, so none is stored) — so these figures are
+unchanged by that feature.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Latency (median ms) — graph fits in RAM (MeSH, 341k / 469k)</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>shape</th>
+<th align="right">slater</th>
+<th align="right">Neo4j 5</th>
+<th align="right">Memgraph</th>
+<th align="right">FalkorDB</th>
+<th align="right">ArcadeDB</th>
+<th align="right">LadybugDB</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>count(*) all nodes</td>
+<td align="right"><strong>0.41</strong></td>
+<td align="right">15.0</td>
+<td align="right">23.8</td>
+<td align="right">16.4</td>
+<td align="right">82.0</td>
+<td align="right">2.2</td>
+</tr>
+<tr>
+<td>label count</td>
+<td align="right"><strong>0.42</strong></td>
+<td align="right">4.2</td>
+<td align="right">20.7</td>
+<td align="right">1.1</td>
+<td align="right">4.4</td>
+<td align="right">4.3</td>
+</tr>
+<tr>
+<td>indexed point lookup</td>
+<td align="right"><strong>0.43</strong></td>
+<td align="right">3.9</td>
+<td align="right">0.48</td>
+<td align="right">0.48</td>
+<td align="right">0.65</td>
+<td align="right">8.8</td>
+</tr>
+<tr>
+<td>idx-eq count</td>
+<td align="right"><strong>0.42</strong></td>
+<td align="right">4.9</td>
+<td align="right">5.0</td>
+<td align="right">2.0</td>
+<td align="right">381</td>
+<td align="right">2.5</td>
+</tr>
+<tr>
+<td>1-hop (indexed anchor)</td>
+<td align="right">1.28</td>
+<td align="right">5.8</td>
+<td align="right"><strong>1.21</strong></td>
+<td align="right">4.1</td>
+<td align="right">390</td>
+<td align="right">4.9</td>
+</tr>
+<tr>
+<td>2-hop (unanchored)</td>
+<td align="right"><strong>1.40</strong></td>
+<td align="right">5.6</td>
+<td align="right">8.5</td>
+<td align="right">16.7</td>
+<td align="right">444</td>
+<td align="right">6.4</td>
+</tr>
+<tr>
+<td>group-by / count(DISTINCT)</td>
+<td align="right"><strong>0.45</strong></td>
+<td align="right">47–51</td>
+<td align="right">63–64</td>
+<td align="right">31–39</td>
+<td align="right">411</td>
+<td align="right">5.3</td>
+</tr>
+<tr>
+<td>full-scan <code>CONTAINS</code></td>
+<td align="right"><strong>0.43</strong></td>
+<td align="right">5.4</td>
+<td align="right">24.1</td>
+<td align="right">1.7</td>
+<td align="right">16.3</td>
+<td align="right">4.1</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">slater owns the <strong>metadata / index / scan</strong> shapes (count, label, idx-eq, scan — ~0.4 ms, 10–200× the
+service engines), the <strong>indexed point lookup</strong> (0.43 ms, now edging the in-memory pair's 0.48 ms),
+the <strong>unanchored multi-hop</strong> (2-hop 1.40 ms via the relationship-type scan, fastest in the field),
+and — via a build-time value→count histogram on the indexed grouping key — the <strong>whole-label
+group-by / count(DISTINCT)</strong> (0.45 ms, ahead of LadybugDB's columnar 5.3 ms). The in-memory servers
+keep only <strong>raw 1-hop</strong> (Memgraph 1.21 ms vs slater's 1.28 ms). (pole 62k/106k looks the same:
+slater sole-fastest on count/scan ~0.4 ms, ~1.3–2.6 ms on hops.)</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Latency (median ms) — vectors (EU-AI-Act kNN, 15k × 1024-dim)</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>shape</th>
+<th align="right">slater</th>
+<th align="right">Neo4j 5</th>
+<th align="right">Memgraph</th>
+<th align="right">FalkorDB</th>
+<th align="right">LadybugDB</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>kNN top-10 Concept</td>
+<td align="right">2.9</td>
+<td align="right">8.6</td>
+<td align="right">1.9</td>
+<td align="right"><strong>1.2</strong></td>
+<td align="right">2.8</td>
+</tr>
+<tr>
+<td>kNN top-10 Chunk</td>
+<td align="right">2.4</td>
+<td align="right">5.7</td>
+<td align="right">1.9</td>
+<td align="right"><strong>1.5</strong></td>
+<td align="right">3.2</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">slater answers kNN with an <strong>exact brute-force</strong> scan (these sets are below its 50k-vector
+ANN threshold) where the others use an approximate resident HNSW — so slater's results are
+exact (recall 1.0). A SIMD distance kernel + a resident, pre-normalised vector matrix
+took Concept from ~23 → ~2.9 ms and Chunk from ~10 → ~2.4 ms, so slater now beats
+Neo4j and LadybugDB and is within ~1.4× of Memgraph, trailing only FalkorDB — while exact.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Vector write ladder — insert / update / delete without a rebuild</h3></div>
+<p dir="auto">The tables above are cross-engine <em>read</em> comparisons. The vector <strong>write</strong> path (the
+<a href="https://arxiv.org/abs/2105.09613" rel="nofollow">FreshDiskANN</a>-style write ladder over the static Vamana
+base) has no cross-engine counterpart — no other engine here does disk-native, <em>writable</em>
+ANN — so the numbers below are single-engine <strong>component</strong> benchmarks over a synthetic,
+embedding-like fixture (a low-rank manifold, dim 768, unequal norms), committed under
+<a href="/Hikari-Systems/slater/blob/main/crates/slater/benches"><code>crates/slater/benches/</code></a> and written up in full — with the
+methodology and every caveat — in <a href="/Hikari-Systems/slater/blob/main/docs/PERF-REPORT.md"><code>docs/PERF-REPORT.md</code></a>. Recall is
+always measured against an <strong>exact brute force over the live set</strong>, never one index against
+another. Scale here is representative and extrapolated only where the metric is size-linear.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>property</th>
+<th>measured</th>
+<th>why it matters</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>KNN latency vs pending writes</strong></td>
+<td>RW-index <strong>~1.5–2 ms, flat</strong> to 50k pending; the pre-index brute-forced overlay <strong>1.9 → 115 ms</strong> (linear in delta) — <strong>61× at 50k</strong></td>
+<td>query latency does <strong>not</strong> degrade as writes pile up between consolidations</td>
+</tr>
+<tr>
+<td><strong>Embedding insert</strong></td>
+<td><strong>~1.5–2 ms</strong> per vector into the live index</td>
+<td>a write is KNN-visible at once; the delta-rebuild budget is ≈ 2 ms × the delta cap</td>
+</tr>
+<tr>
+<td><strong>Delete IO at iso-recall</strong></td>
+<td><strong>2.9× fewer</strong> node-fetches per query at 67 % deleted, <strong>5.2×</strong> at 80 % (recall ≥ 0.90)</td>
+<td>a consolidated graph pays no read tax for deleted vectors</td>
+</tr>
+<tr>
+<td><strong>Consolidation, pure permutation</strong></td>
+<td><strong>O(1)</strong> — the <code>.vamana</code> is hard-linked byte-identical, only the id column is rewritten</td>
+<td>folding vector writes into the base skips the O(N·R·L) rebuild</td>
+</tr>
+<tr>
+<td><strong>Recall across the ladder</strong></td>
+<td>consolidated ≥ base for cosine, L2 and dot</td>
+<td>the write ladder <strong>preserves</strong> recall at every rung</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">The one figure that wants the dedicated perf box is the <em>slow-path</em> consolidation rewrite
+throughput — when a consolidation carries deletes or new vectors rather than a pure
+permutation, it is a sequential recompress bound by single-thread zstd and local disk, so
+the absolute MiB/s is environment-specific (the report shows the shape and explains the
+environmental range).</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Latency (median ms) — graph ≫ RAM (Wikidata 91.6M / 1.5B)</h3></div>
+<p dir="auto">The in-memory engines (Memgraph / FalkorDB / ArcadeDB) <strong>cannot load</strong> this graph at all
+(~64–128 GiB resident). Only slater and Neo4j 5 do. This is a <strong>fresh same-box, same-day pass
+against a shared, fixed anchor set</strong> — every query hits the <em>identical</em> nodes on both engines,
+so the head-to-head is apples-to-apples (a common <code>wikidata_id</code> pool of moderate-degree anchors;
+see the note below on why that matters). slater is shown at both fanouts (<code>query.maxFanout</code> 1 =
+throughput default, 8 = the latency dial that overlaps cold block reads). <strong>Bold = best in row.</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>shape</th>
+<th align="right">slater (fan 1)</th>
+<th align="right">slater (fan 8)</th>
+<th align="right">Neo4j 5</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>count(*) all nodes</td>
+<td align="right"><strong>0.41</strong></td>
+<td align="right">0.41</td>
+<td align="right">3606</td>
+</tr>
+<tr>
+<td>point lookup (indexed)</td>
+<td align="right">0.72</td>
+<td align="right"><strong>0.49</strong></td>
+<td align="right">6.3</td>
+</tr>
+<tr>
+<td>degree (1-hop count)</td>
+<td align="right"><strong>0.43</strong></td>
+<td align="right">0.44</td>
+<td align="right">6.0</td>
+</tr>
+<tr>
+<td>1-hop neighbours</td>
+<td align="right">9.8</td>
+<td align="right"><strong>4.5</strong></td>
+<td align="right">10.1</td>
+</tr>
+<tr>
+<td>2-hop</td>
+<td align="right">37</td>
+<td align="right"><strong>23</strong></td>
+<td align="right">34.5</td>
+</tr>
+<tr>
+<td>3-hop</td>
+<td align="right">32</td>
+<td align="right"><strong>25</strong></td>
+<td align="right">74</td>
+</tr>
+<tr>
+<td>var-length <code>*1..2</code> distinct</td>
+<td align="right">985</td>
+<td align="right">1056</td>
+<td align="right"><strong>47</strong></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">The honest picture: slater <strong>dominates the metadata / index shapes</strong> — <code>count(*)</code> is
+metadata-served (<strong>0.41 ms vs Neo4j's 3.6 s</strong> disk scan, ~8800×), and point-lookup / degree /
+3-hop run ~2–10× faster — is <strong>even with Neo4j on 1–2-hop</strong> (fanout 8 pulls ahead on cold reads),
+but <strong>loses <code>var-length *1..2 distinct</code> decisively (≈1 s vs Neo4j's 47 ms)</strong>: slater's
+variable-length distinct expansion is materially slower here, a real weakness worth its own
+investigation. All of that at a few hundred MB of RSS versus Neo4j's committed ~2 GiB heap.</p>
+<blockquote>
+<p dir="auto"><strong>On the anchors.</strong> These traversal numbers depend heavily on <em>which</em> nodes you start from —
+a node one link from a Wikidata mega-hub ("human", "country") has a millions-strong 2-hop
+neighbourhood, so var-length/hop cost swings by orders of magnitude with anchor choice. The
+earlier edition of this table sampled each engine's <em>own</em> "first N by scan," which is neither
+stable nor comparable; this pass fixes a single shared, degree-bounded anchor set for both
+engines. (shortestPath is omitted from this pass — between two arbitrary anchors it is
+path-existence-dependent and too high-variance to median meaningfully.)</p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Multi-hop <code>count(*)</code> — memory decoupled from result size</h3></div>
+<p dir="auto">Uncapped multi-hop <code>RETURN count(*)</code> counts <em>during</em> expansion instead of materialising
+the matched rows. Same hub anchors on the 91.6M graph, <code>maxIntermediate=20M</code>:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>3-hop count(*) @ 91.6M</th>
+<th align="right">fanout=1</th>
+<th align="right">fanout=8</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>latency / peak working set</td>
+<td align="right"><strong>554 ms / 0.66 GiB</strong></td>
+<td align="right"><strong>298 ms / 1.9 GiB</strong></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">The count holds O(1) rows. Charging is unchanged, so a mega-hub count still trips
+<code>maxIntermediate</code> on <em>compute</em> (adjacency reads), bounded as before.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Per-query parallelism (<code>maxFanout</code>)</h3></div>
+<p dir="auto">Raising <code>query.maxFanout</code> overlaps a query's <strong>cold, I/O-bound</strong> block reads across cores —
+it helps large-cold-working-set disk-bound shapes and is flat on warm shapes. On the 1.5B
+graph: shortestPath ≤6 <strong>918 → 608 ms</strong> (1.5×, largest search 6,269 → 2,350 ms, 2.7×);
+3-hop count <strong>547 → 298 ms</strong>. <code>maxFanout=1</code> is the default (throughput-oriented); <code>8</code> is the
+latency dial, at more transient worker memory.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Where slater wins / trails</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>dimension</th>
+<th>slater</th>
+<th>best of the field</th>
+<th>verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>resident memory, any scale</td>
+<td>11–584 MiB (62k → 91.6M)</td>
+<td>in-memory 1.5–2.7 GiB; can't load 1.5B</td>
+<td><strong>slater</strong></td>
+</tr>
+<tr>
+<td>count / metadata / scan</td>
+<td>~0.4 ms</td>
+<td>service engines 5–80 ms</td>
+<td><strong>slater</strong> (10–200×)</td>
+</tr>
+<tr>
+<td>indexed point lookup</td>
+<td><strong>0.43 ms</strong> (MeSH)</td>
+<td>Memgraph · FalkorDB 0.48 ms</td>
+<td><strong>slater</strong> (edges the in-memory pair)</td>
+</tr>
+<tr>
+<td>unanchored multi-hop (rows)</td>
+<td><strong>1.40 ms</strong> (MeSH 2-hop)</td>
+<td>Neo4j 5.6 ms</td>
+<td><strong>slater</strong> (relationship-type scan)</td>
+</tr>
+<tr>
+<td>aggregation (group-by / DISTINCT)</td>
+<td><strong>0.45 ms</strong></td>
+<td>LadybugDB 5 ms (columnar)</td>
+<td><strong>slater</strong> (build-time histogram)</td>
+</tr>
+<tr>
+<td>kNN</td>
+<td>2.4–2.9 ms (exact)</td>
+<td>FalkorDB <strong>1.2 ms</strong> (HNSW)</td>
+<td>beats Neo4j/Ladybug; ~1.4× off Memgraph; exact</td>
+</tr>
+<tr>
+<td>91.6M metadata / point / degree / 3-hop</td>
+<td>0.4–32 ms</td>
+<td>Neo4j 6–3,600 ms</td>
+<td><strong>slater</strong> (2–8800×)</td>
+</tr>
+<tr>
+<td>91.6M 1–2-hop</td>
+<td>4.5–23 ms (fan 8)</td>
+<td>Neo4j 10–35 ms</td>
+<td>~even</td>
+</tr>
+<tr>
+<td>91.6M var-length <code>*1..2</code> distinct</td>
+<td>~1 s</td>
+<td>Neo4j <strong>47 ms</strong></td>
+<td><strong>Neo4j</strong> (a real slater weak spot)</td>
+</tr>
+<tr>
+<td>multi-hop <code>count(*)</code> at scale</td>
+<td>0.3–0.6 GiB</td>
+<td>in-memory engines materialise the row set</td>
+<td><strong>slater</strong>, bounded</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Full per-engine tables (pole, MeSH, EU-AI-Act + the <code>blockCacheBytes</code> RAM↔latency dial,
+Wikidata 1M &amp; 91.6M) are in
+<a href="/Hikari-Systems/slater/blob/main/perf/cross-engine-hs/README.md"><code>perf/cross-engine-hs/README.md</code></a>; the fresh slater-only pass
+(both fanouts, every dataset) is in <a href="/Hikari-Systems/slater/blob/main/perf/PERF_CURRENT_STATUS.md"><code>perf/PERF_CURRENT_STATUS.md</code></a>.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Concurrency &amp; brown-out (load testing)</h3></div>
+<p dir="auto">The benchmarks above are single-client. The complementary axis — <strong>behaviour under many
+concurrent clients</strong> — has its own harness, <a href="/Hikari-Systems/slater/blob/main/perf/loadtest"><code>perf/loadtest/</code></a>: a Locust
+driver over Bolt plus a coordinator that ramps load, reads <code>CALL slater.diagnostics()</code>,
+finds the capacity knee, and names the limiter (full method in
+<a href="/Hikari-Systems/slater/blob/main/docs/LOAD-TESTING.md"><code>docs/LOAD-TESTING.md</code></a>). Headlines from a 256 MiB-cache run on the
+Wikidata-1M graph (one 16-core box):</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>result</th>
+<th>measurement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Holds to <strong>1000 concurrent clients, zero failures</strong></td>
+<td>throughput peaks ~2.5k rps; the latency knee sets in around 750 clients (p99 51 → 750 ms) — queueing under core contention, not a hard cap (single-run, WSL2)</td>
+</tr>
+<tr>
+<td>Block cache <strong>bounded and effective</strong></td>
+<td>100% hit rate, 0 evictions, 50 MB resident for a cache-fitting working set</td>
+</tr>
+<tr>
+<td>RSS held under sustained load</td>
+<td>the jemalloc allocator holds RSS to ~0.6 GB across a 100→500-client <code>wiki_cache_churn</code> ramp — cache-bound and stable, with <strong>no</strong> <code>MALLOC_*</code> tuning (the former <code>MALLOC_ARENA_MAX=2</code> + trim threshold is retired); its background purge also returns the post-burst high-water instead of leaving it pinned</td>
+</tr>
+<tr>
+<td>Aggregate memory bounded</td>
+<td>server-wide <strong><code>query.maxIntermediateGlobal</code></strong> + adjacency-charged expansion hold the <code>wiki_budget</code> 2-hop flood at 1000 clients without OOM (RSS ~0.6 GB; the guard sheds ~60% of hub queries as retryable budget errors)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Both memory issues the load test surfaced are now closed; all tracked in the load-testing doc.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">Licensed under the Apache License, Version 2.0. See <a href="/Hikari-Systems/slater/blob/main/LICENSE"><code>LICENSE</code></a> for the
+full text and <a href="/Hikari-Systems/slater/blob/main/NOTICE"><code>NOTICE</code></a> for attribution. Unless you explicitly state
+otherwise, any contribution intentionally submitted for inclusion in this work,
+as defined in the Apache 2.0 license, shall be licensed as above, without any
+additional terms or conditions.</p>
+<p dir="auto">SPDX-License-Identifier: Apache-2.0</p>
+</article>
