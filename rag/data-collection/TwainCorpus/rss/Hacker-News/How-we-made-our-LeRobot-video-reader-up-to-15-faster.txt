@@ -1,0 +1,225 @@
+Back to Blog
+Robot data is converging on LeRobot
+
+LeRobot has emerged as the dominant open format for robot learning data. But running data operations on it isn't easy: decoding frames is expensive and memory-intensive, and every step before the GPU - decoding, transforming, annotating frames - is where pipelines bog down while your GPU sits idle, whether you're running inference or training.
+
+We've been working to make that part as easy as possible. As part of that, we recently introduced a native LeRobot reader in Daft (
+Daft #7090
+). 
+daft.datasets.lerobot
+ reads a dataset straight from Hugging Face into a dataframe with one row per frame. With 
+load_video_frames
+, it decodes each camera into an image column.
+
+However, the initial version was painfully slow.
+
+The problem: one remote open per frame
+
+A LeRobot v3 dataset stores each camera's video as MP4 shards - files that pack the frames of many episodes back to back. To decode a frame, the reader opens the shard and seeks to the frame's timestamp. Opening an MP4 also means reading its index - the metadata that maps timestamps to byte positions in the file - before any seeking can happen.
+
+The original reader did all of this per row: every frame re-opened its shard, and each open re-read the index over the network. On remote datasets that came to roughly 3 seconds per frame, and total cost grew linearly with frame count - even when consecutive rows wanted neighboring frames from the same file.
+
+The fix: batch decode by shard
+
+The decode is now a 
+batch UDF
+ (
+Daft #7184
+): instead of being called once per row, the function receives 16 consecutive rows at a time, so it can plan the decode across them. For each batch it does three things.
+
+1. Group the rows by shard.
+ One pass over the batch groups the rows by the shard they point to. Each row's target time is its episode's start offset within the shard plus the frame's timestamp within the episode. The result is one list per shard, holding the row indices and target times that shard needs to serve:
+
+by_shard 
+=
+ {}
+
+# Iterate over each row; each `file` is a reference to the row's shard.
+
+for
+ i, file 
+in
+ enumerate
+(files):
+
+    abs_ts 
+=
+ from_timestamp[i] 
++
+ frame_timestamp[i]
+
+    by_shard.setdefault(file.path, []).append((i, abs_ts))
+
+Each shard is then opened once and serves all of its targets, instead of once per frame.
+
+2. Sort and cluster the targets.
+ Within a shard, targets are sorted ascending by timestamp, then walked once: a target joins the current cluster if it's within 10 seconds of the previous one, and starts a new cluster otherwise:
+
+targets 
+=
+ sorted
+(abs_timestamps, 
+key
+=lambda
+ t
+: t[
+1
+])  
+# ascending by timestamp
+
+clusters 
+=
+ [[targets[
+0
+]]]
+
+for
+ t 
+in
+ targets[
+1
+:
+]:
+
+    if
+ t[
+1
+] 
+-
+ clusters[
+-
+1
+][
+-
+1
+][
+1
+] 
+>
+ 10.0
+:  
+# seconds
+
+        clusters.append([t])
+
+    else
+:
+
+        clusters[
+-
+1
+].append(t)
+
+Why this gap? A seek restarts decoding from the preceding keyframe, so decoding straight through a small gap is cheaper than re-seeking. But a shard packs many episodes back to back, and two targets in one batch can be minutes apart - decoding through a gap that long would waste work, so anything past the threshold gets its own cluster and its own seek.
+
+3. One seek and one forward pass per cluster.
+ For each cluster, the decoder seeks once to the keyframe preceding the earliest target, then just keeps reading: every decoded frame is compared against the cluster's targets, the closest frame seen so far is kept for each, and the pass stops once it's past the last target:
+
+container.seek(earliest_target_pts, 
+backward
+=
+True
+)  
+# preceding keyframe
+
+for
+ frame 
+in
+ container.decode(stream):
+
+    ts 
+=
+ float
+(frame.pts 
+*
+ stream.time_base)
+
+    for
+ row, target 
+in
+ cluster:
+
+        # keep this frame if it's the closest to `target` seen so far
+
+        ...
+
+    if
+ ts 
+>=
+ latest_target 
++
+ tail:
+
+        break
+
+The change is Python-only, and the output is byte-identical to the old per-row decode.
+
+Results
+
+Decoding 8 frames from a remote dataset drops from 25s to 3.9s, and the cost curve goes from linear to flat:
+
+On six public LeRobot v3 datasets chosen for diversity (av1/h264/mp4v, 5-30 fps, 128×128 to 1280×720, 1-3 cameras), the batched reader is 4-13× faster:
+
+Scaling up the experiment: on a 1080p dataset (
+pepijn223/egodex-test
+), decoding all 632 frames drops 
+from 29 minutes to under 2 - 15× faster
+ - because batched cost grows with batches rather than frames:
+
+In addition, in a hand-tracking pipeline built on this reader - annotating frames with hand poses - decoding 12 remote frames and running MediaPipe hand tracking went from 44.8s to 9.8s end to end, with identical detections (
+benchmark
+):
+
+Try it
+
+import
+ time
+
+from
+ daft.datasets 
+import
+ lerobot
+
+# One row per frame; the camera is decoded into an image column.
+
+df 
+=
+ lerobot.read(
+"
+pepijn223/egodex-test
+"
+, 
+load_video_frames
+=
+"
+observation.image
+"
+)
+
+# Decodes only the 8 rows shown - one shard open.
+
+t0 
+=
+ time.perf_counter()
+
+df.show()
+
+print
+(
+f
+"
+{
+time.perf_counter() 
+-
+ t0
+:.1f
+}
+s"
+)  
+# ~7s over the network
+
+For a full annotation pipeline on top of this reader, see 
+daft-physical-ai
+. The benchmark harness and full results are in the Daft repo: 
+benchmarking/lerobot
+.
