@@ -1,0 +1,875 @@
+Beej's Bit Bucket
+
+ â¡ Tech and Programming Fun
+
+2026-07-21
+
+10 REM"_(C2SLFF4
+
+ Let's dive into 
+The Wizard's
+Castle
+ (source code)!
+
+10 REM"_(C2SLFF4
+
+That is the first line of the 80s microcomputer BASIC game 
+The Wizard's
+Castle
+ initially written for the 
+Exidy
+Sorcerer
+ platform.
+
+It's a 
+REM
+ark statement, a comment in that particular language. 
+10
+
+is the line number, if you're unfamiliar with languages that had such
+things.
+
+But the interesting part was this 
+"_(C2SLFF4
+ mess. A typo or garbage?
+No. It appears verbatim in the source code as originally published in
+
+the July, 1980 issue of 
+Recreational
+Computing
+.
+
+What the heck is it?
+
+Note: I'm going to jump back and forth between decimal (which is
+BASIC-friendly) and hex (which is programmer-friendly). Hex will be
+prefixed with 
+0x
+, suffixed with 
+h
+, or will obviously have digits A-F
+in it.
+
+Note: Thanks to Josh and Chris, my hacking buddies, for doing 
+tons
+ of
+the emulator and research work on this. It took hours, but they were
+good hours. It would have taken me 10x as long without their help.
+
+Suspicions
+
+Here's more of the source in context, but with irrelevant pieces
+removed and some spaces added:
+
+10 REM"_(C2SLFF4
+40 POKE 260,218: POKE 261,1: T = USR(0): T = PEEK(-2049)
+80 Q = RND(-(2*T+1))
+
+In BASIC, a 
+:
+ is a command separator. 
+POKE
+ writes a byte value to
+the specified memory location. 
+PEEK
+ reads from one. Sorcerer BASIC
+used signed 16-bit numbers, apparently, so address 
+-2049
+ is 65536-2049
+or 0xF7FF in hex. We'll revisit that address later.
+
+Calling the pseudo-random number generator (PRNG) 
+RND()
+ with a
+negative number 
+seeds
+ it.
+Old PRNGs liked to be seeded with odd numbers, thus the 
+2*T+1
+
+expression forcing it odd.
+
+And the 
+USR()
+ function calls a machine code routine.
+
+And line 80 is the first use of 
+T
+ after it is initialized from the
+
+PEEK()
+.
+
+The proximity of these things makes it seem like they're all related to
+seeding the PRNG. Sorcerer BASIC didn't have a 
+RANDOMIZE
+ command, so
+the only options of the day were:
+
+Ask the user to enter a random seed.
+
+Run an increment loop until the user hits a key (or some user-driven
+thing like that) and use that for the seed.
+
+Get the seed for some kind of randomish-thing from the existing
+software and/or hardware.
+
+Wizard's Castle
+ didn't do the first two. So it must be the last one.
+
+Could it be that the 
+REM
+ statement has machine code that happens to
+encode to ASCII text? The Sorcerer did use ASCII encoding.
+
+But it seems nuts that you could get useful Z80 machine code just from
+ASCII characters. Right?
+
+Nevertheless, this seemed like a reasonable-enough crazy assumption to
+run with and see what we could find.
+
+The 
+USR()
+ Function
+
+The 
+USR()
+ call is interestingâthis calls a machine code function, but
+the details are system-dependent. But luckily the Internet has 
+tons of
+technical manuals
+
+in 
+various places
+ and we were
+able to figure it out.
+
+Address 259 has a 
+JP
+ instruction (unconditional jump) to a 16-bit
+little-endian absolute address.
+
+And the 
+POKE
+s were for addresses 260 and 261. This was the
+
+trampoline
+
+for the 
+USR()
+ function. You 
+POKE
+ the address of the start of your
+machine code into addresses 260 and 261, and then run 
+USR()
+ to call
+it.
+
+40 POKE 260,218: POKE 261,1: T = USR(0): T = PEEK(-2049)
+
+Reversing them for little-endian, this means we're looking at address
+
+(1 << 8) | 218
+ which is 474. When we run 
+USR(0)
+, it jumps to the
+machine code at address 474 that should end in a 
+RET
+ instruction.
+
+The argument for 
+USR()
+ (the 
+0
+) is stored as a 4-byte float
+elsewhere in RAM so the machine code can look at it if it needs to. It
+turns out not to be relevant for this use case. Also we're assigning
+the return value from 
+USR()
+ into 
+T
+, but it's unclear to me what
+this return value is. However, it is irrelevant as we immediately
+overwrite 
+T
+ with the next assignment.
+
+So... What's at address 474?
+
+BASIC RAM
+
+ The almighty Exidy
+Sorcerer
+
+By Marcin Wichary, CC BY
+2.0
+
+When you enter a line of Sorcerer BASIC, the interpreter
+
+tokenizes
+
+it and replaces commands like 
+PRINT
+ with single byte values:
+
+PRINT
+ is tokenized to 0x97
+
+REM
+ is tokenized to 0xC3
+
+etc.
+
+And then it is stored like a 
+linked
+list
+ in memory where each
+row is a "node".
+
+The node format is:
+
+2 bytes of "next" pointer
+
+2 bytes for the line number
+
+Bytes representing the tokenized line of code
+
+1 byte of null terminator (a 0x00 byte)
+
+And the start of this linked list in RAM is at address 469 on the
+Sorcerer.
+
+Let's see the mystery line again:
+
+10 REM"_(C2SLFF4
+
+That means the node for that line consists of the following addresses
+and bytes:
+
+469  Low byte of the next pointer
+470  High byte of the next pointer
+471  Low byte of the line number
+472  High byte of the line number
+473  `REM` token (0xc3)
+474  First byte of REM text, the `"` character!!
+
+and 474 is where the 
+USR()
+ function gets us! It is literally calling
+the text of the 
+REM
+ statement as Z80 machine code!
+
+Disassembly, Attempt One
+
+Could it be true? Let's try it out!
+
+Here are the hex values for the ASCII characters:
+
+"  22
+_  5F
+(  28
+C  43
+2  32
+S  53
+L  4C
+F  46
+F  46
+4  34
+
+There's the 0x00 terminator at the end, but that's just a 
+NOP
+ in Z80,
+so we'll ignore it.
+
+Disassembling, we get:
+
+22 5F 28   LD   (285Fh),HL  ; " _ (
+43         LD   B,E         ; C  
+32 53 4C   LD   (4C53h),A   ; 2 S L
+46         LD   B,(HL)      ; F
+46         LD   B,(HL)      ; F
+34         INC  (HL)        ; 4
+
+Now, I don't want to get into the details of Z80 assembly here, but take
+my word for it that this code makes no sense. The addresses don't seem
+to point to anything in particular, who knows what 
+HL
+ has in it at the
+beginning, 
+B
+ is never read, the duplicated 
+LD B
+ is pointless, and
+there's no 
+RET
+ to get us back to BASIC.
+
+It's garbage. And running it in an emulator results in 
+Weird Things
+
+happening (like soft resets), as expected.
+
+This was a dead-end for the time being. We speculated that maybe it was
+a printing error, that the printer didn't have the glyphs for the actual
+bytes, so it substituted other ones. But that wasn't super-satisfying.
+
+The 
+PEEK(-2049)
+
+Let's switch gears, then, and continue on to the 
+PEEK
+:
+
+40 POKE 260,218: POKE 261,1: T = USR(0): T = PEEK(-2049)
+
+What's at address -2049? Unsigning this makes it equivalent to 0xF7FF.
+According to the docs, this is the last byte of memory-mapped screen
+text, representing the current character in the lower right of the
+screen.
+
+We then immediately use this value to seed the PRNG:
+
+40 [ ... ] T = PEEK(-2049)
+80 Q = RND(-(2*T+1))
+
+I'm going to use my magical powers now to look at one of your open
+terminal windows and read the character in the lower right of the
+screen. It's fuzzy, but if I concentrate... it's... yes, it's a space
+character, isn't it!
+
+Am I right? That'll be $200.
+
+Now, the space is 32, so seeding the PRNG with 
+-(2*32+1)
+ every game
+would make for bad replayability in this randomly-generated dungeon, so
+the 
+USR()
+ function 
+must
+ have something to do with it. Like it puts
+something on the screen at address 0xF7FF and then the 
+PEEK()
+ reads
+it. The screen is cleared not-long thereafter, so the player might not
+notice the blip of a character temporarily placed in the lower right.
+
+RTFM
+
+ The source code
+in its original dot-matrix glory
+
+So we had strong suspicions that all this was part of the PRNG seed
+process. If only there were some way to prove it!
+
+It was at this point that Josh noticed this line in the magazine where
+the program was published: 
+"The first remark is a machine language
+routine to simulate the RANDOM function."
+
+Sheesh. That'll teach me not to read things.
+
+In BASIC, 
+RND()
+, not 
+RANDOM
+, is the random function, used with a
+negative argument to seed the PRNG, and a positive argument to get the
+next random number, which was historically a random floating point
+result between 0 and 1.
+
+So what the author probably meant was 
+RANDOMIZE
+ which was popular in
+Microsoft BASIC for setting the random number seed to a specific value
+or prompting the user to enter one.
+
+In short, it was supposed to be doing what we thought, but the machine
+code didn't seem to be doing that at all.
+
+A Breakthrough
+
+Josh and I had been running Sorcerer emulators in
+
+MAME
+ (thanks to Josh for sharing
+the ROMs with me to get going) and Chris had another Java-based one that
+he'd gotten working.
+
+In MAME, we'd entered the 
+REM
+ statement and looked in memory, and it
+had the nonsensical bytes and machine code as disassembled, above. And
+it didn't run properly.
+
+But Chris found a tape image of the game and loaded that up in his
+emulator. And the first two lines of source looked like this:
+
+10 REM"_(C2SLFF4F4F4 
+15 REM ED 5F 28 FC 32 FF F7 C9 (in O1DA)
+
+WOW! Another(?) author has annotated the source with the hex of the
+machine code! Not only does it end in 0xC9 which is Z80 
+RET
+, but it
+has that lower-right screen corner address 0xF7FF right there!
+
+How on 
+Earth
+ does the 
+REM
+ text map to that? Things like 0xED are
+clearly non-ASCII. But wait, some of the characters are, and their
+positions match what we see in the 
+REM
+!
+
+   "
+5F _
+28 (
+   C
+32 2
+   S
+   L
+   F
+
+What actual values are there? Chris loaded the program and looked:
+
+FOR I=474 TO 489: PRINT PEEK(I): NEXT I
+ 237
+ 95
+ 40
+ 252
+ 50
+ 255
+ 247
+ 201
+ 70
+ 52
+ 70
+ 52
+ 32
+ 0
+ 18
+ 2
+READY
+
+You can see the 0x00 null terminator down there. And a hidden space at
+the end of the line. And 237 is 0xED, and 95 is 0x5F... it matches the
+line 15 comment!
+
+Let's get ready to 
+disassembbbllllllllllleeee
+! I'll convert the
+numbers to hex and go for it.
+
+ed 5f     LD A,R         " _
+28 fc     JR Z,-4        ( C
+32 ff f7  LD (F7FF),A    2 S L
+c9        RET            F
+46        LD B,(HL)      F
+34        INC (HL)       4
+46        LD B,(HL)      F
+34        INC (HL)       4
+20 00     JR NZ,0        space null
+
+Later, I'll find out that the part after the 
+RET
+ is disassembled
+incorrectly and that my annotation of which 
+REM
+ characters mapped to
+which hex values was wrong, but who cares for now! Everything is over at
+the 
+RET
+ anyway.
+
+And the code is exactly what we were looking for! Let's look at the
+first assembly instructions:
+
+LD A,R       ; copy R register to accumulator
+JR Z,-4      ; if result is 0, jump back to previous instruction
+LD (F7FF),A  ; copy accumulator into address F7FFh
+RET          ; return
+
+What's it do? The 
+R
+ register is interesting on the Z80 in that it is
+incremented every instruction fetch. Maybe? Depends on which resource
+you ask. In any case, it is incremented very, very frequently relative
+to human timescales. And the Sorcerer
+
+busy-waits
+ for input, so
+when you finally run the game, it effectively has a random-ish value in
+it.
+
+But seeding many lesser PRNGs with 
+0
+ is a bad idea (they tend to just
+produce 
+0
+ after that), so the code retries if it happens to get a 
+0
+
+in 
+R
+. But if it is non-zero, it stores that value in address 0xF7FF,
+the lower right corner of the screen! And then the 
+PEEK()
+ picks it up
+and uses it to seed the PRNG!
+
+The 
+R
+ register only increments the low 7 bits, though, meaning it can
+only be 128 different values. And we discard 
+0
+, so really this means
+on the Sorcerer, there were only 127 different randomly-generated
+dungeons that you could play. Bummer!
+
+So the glyphs we see simply aren't ASCII. Our first disassembly was
+doomed to fail because the 
+REM
+ violates the assumption that all
+listing text was ASCII.
+
+For verification, I made a new program that was just a 
+REM
+ followed by
+a bunch of spaces (to give me room to work before the null terminator).
+Then I 
+POKE
+d in the right values and got a listing.
+
+10 REM               
+POKE 474,237
+READY
+POKE 475,95
+READY
+POKE 476,40
+READY
+LIST
+
+10 REM"_(
+READY
+
+It worked! Those values gave me the 
+"_(
+ glyphs that were in the
+original source listing!
+
+Could You Type It In?
+
+The whole idea in the 80s with magazines like this was that you'd get it
+in the mail or from the newsstand and you'd painstakingly spend hours
+typing them in and getting them right.
+
+It wasn't easy. Here's another excerpt from 
+The Wizard's Castle
+:
+
+1070 IFFL=0THENPRINT:PRINT"** HEY BRIGHT ONE, YOU'RE OUT OF FLARES":GOTO620
+1080 PRINT:PRINT:FL=FL-1:A=X:B=Y:FORQ1=A-1TOA+1:X=FNB(Q1):FORQ2=B-1TOB+1:Y=FNB(Q2)
+1090 Q=FNE(PEEK(FND(Z))):POKEFND(Z),Q:PRINTI$(Q);"  ";:NEXTQ2:PRINT:PRINT:NEXTQ1:X=A:Y=B
+1100 GOSUB 3400:GOTO620
+1110 IFLF=0THENPRINT:PRINT"** YOU DON'T HAVE A LAMP, ";R$(RC):GOTO620
+1120 PRINT:PRINT"WHERE DO YOU SHINE THE LAMP (N,S,E, OR W) ";:GOSUB3290
+1130 A=X:B=Y:X=FNB(X+(O$="N")-(O$="S")):Y=FNB(Y+(O$="W")-(O$="E"))
+1140 IFA-X+B-Y=0THENPRINT:PRINT"** TURKEY! THAT'S NOT A DIRECTION":GOTO620
+
+Just pure codevomit. But those of us who typed this stuff in were pretty
+practiced at getting it right. So when we saw something like this:
+
+10 REM"_(C2SLFF4
+
+you can bet we typed it in exactly.
+
+But now we know this wouldn't have worked if you assumed those were
+ASCII-encoded glyphs.
+
+Perhaps there was some lore well-known to Sorcerer programmers where
+they knew the magic incantations to make it go.
+
+Or maybe he just wrote this to get some space to work:
+
+10 REMF4F4F4F4F4
+
+And then manually 
+POKE
+d the machine code in like I did, above, to get
+this:
+
+10 REM"_(C2SLFF4
+
+And then never mentioned how to do it, forgot about it in the excitement of
+getting it published, and out the door it went.
+
+But what is the deal with that 
+F4
+ thing? It's really bugging me.
+
+The 
+F4
+s
+
+ An F-4 Phantom. It's an
+aviation/programming pun. I hereby indemnify myself against lawsuits.
+
+In my version, we had:
+
+10 REM"_(C2SLFF4
+
+Chris's version had some extra F4s:
+
+10 REM"_(C2SLFF4F4F4 
+
+And we did a memory dump of Chris's version and got the following:
+
+237
+95
+40
+252
+50
+255
+247
+201
+70
+52
+70
+52
+32
+0
+18
+2
+
+Notice anything weird? About the 
+F4
+s? I didn't either. There are
+
+three
+ of them in the 
+REM
+, but only 
+two
+ of them in the memory dump
+(the 70,52 pairs)!
+
+And that's not allâwhere's the 
+L
+? Something's wrong. Earlier, I'd
+tried a sanity check by 
+POKE
+ing in the first three characters by hand,
+but let's try the others.
+
+I'm going to recreate the entire machine code here and see what pops up.
+
+10 REMXXXXXXXXXXXXXX
+20 FOR I=474 TO 481: READ X: POKE I,X: NEXT I
+30 DATA 237, 95, 40, 252, 50, 255, 247, 201
+
+Then I run that, and list it. I get:
+
+10 REM"_(C2SLFF4XXXXXX
+20 FOR I=474 TO 481: READ X: POKE I,X: NEXT I
+30 DATA 237, 95, 40, 252, 50, 255, 247, 201
+
+Wait! My 
+X
+s shifted right by two characters! What's up with that? You
+can't just insert characters like that. It's like there are two extra
+characters in the output. I poked eight values, but there are 10
+characters printed before the 
+X
+s!
+
+Let's dump RAM and see what's there. I'm going to annotate the output,
+butâspoilersâmy annotation is wrong:
+
+237    "
+95     _
+40     (
+252    C
+50     2
+255    S
+247    L
+201    F
+88     X â No additional Fs or 4s!
+88     X
+88     X
+88     X
+
+No 
+F
+s or 
+4
+s. It goes directly from my last 201 (in the 
+DATA
+)
+straight to a bunch of 
+X
+s (the 88s). So why do I see them in the
+listing?
+
+Let's get specific. I'm going to manually plug in the 255, the 247, and
+the 201 in the 
+REM
+ and see what we get out of it.
+
+10 REMX
+POKE 474,255
+LIST
+
+10 REMS
+
+Okay, it's the 
+S
+, as expected.
+
+POKE 474,247
+LIST
+
+10 REMLF
+
+Whoaâwhat? 
+LF
+? Two characters? And suspiciously like "linefeed", but
+who knows. But that matches the 
+REM
+!
+
+POKE 474,201
+LIST
+
+10 REMF4
+
+And there's the 
+F4
+. So the last two bytes are being printed as 
+LFF4
+.
+That's where the extra two characters are coming from in the output.
+
+So fixing my memory dump annotation, it would look like this:
+
+237    "
+95     _
+40     (
+252    C
+50     2
+255    S
+247    LF
+201    F4
+88     X
+88     X
+88     X
+88     X
+
+And now that's matching what we're seeing in the listing:
+
+10 REM"_(C2SLFF4XXXXXX
+
+But that's not all. The bytes with values 128 and just over actually map
+to BASIC keywords! Check this out:
+
+POKE 474,137
+LIST
+
+10 REMGOTO
+
+When BASIC is printing its lines, we speculate that if the high bit is
+set, it looks up the symbol name and prints that instead. The weird
+symbol names we get up higher (random-seeming) might be (again, we
+speculate) mapping into garbage past the end of that table.
+
+But wait just a second. In Chris's memory dump, there were bona fide
+ASCII 
+F
+s and 
+4
+s in there
+
+237   "
+95    _
+40    (
+252   C
+50    2
+255   S
+247   LF
+201   F4  â RET
+70    F   â what's all this, then?
+52    4
+70    F
+52    4
+32
+0
+18
+2
+
+Why were they added when they have no effect on the machine code? I
+think we'll just have to let that one go as being lost to the mists of
+time. Or maybe you can try gazing into an orb until you find the answer.
+Just don't overdo it.
+
+Wrap Up
+
+The only point of all this, since I basically knew up front it was
+seeding the PRNG, was to feed hacker curiosity. What a luxury!
+
+What did we learn?
+
+You can cram machine code into a 
+REM
+ statement on the Exidy
+Sorcerer, but don't expect a sensible print-out.
+
+The code when typed in from the magazine probably didn't work.
+
+The author likely 
+POKE
+d the machine code in directly, or perhaps the
+Sorcerer had some kind of graphics shift key that would let those
+characters be typed.
+
+We now know, with more certainty than was ever required, the answer to
+that age old question, "What the frick is that comment doing at the
+beginning of 
+The Wizard's Castle
+?"
+
+How much money did we make?
+
+$zero!
+
+Would this work on other platforms, I wonder? Or would they just freak
+out? Someone else can give it a try on the Commodore 64 or something.
+
+If you want to know more about 
+The Wizard's Castle
+ and even play this
+bit of history, I have a 
+collection of documents and
+information
+ on
+GitHub.
+
+Comments
+
+View Comments
+
+Reply
+
+Click on "View Comments" to see the comments.
+
+Blog
+
+ â¡ 
+
+beej@beej.us
+
+ â¡ 
+
+Home page
