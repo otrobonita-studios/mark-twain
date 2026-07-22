@@ -1,0 +1,218 @@
+<main><p>Nvidia doesn’t support NVLink on consumer GPUs anymore.
+The last one that had it available was the RTX 3090.</p>
+<p>Right now in April 2026, NVLink bridges are pretty expensive,
+$200-$400 depending on the exact size and whether you’re able to snipe
+one at retail. Since I have two 3090s, I wanted to test how much benefit
+NVLink actually provides for AI workloads.</p>
+<h2 id="the-tests">The Tests</h2>
+<p>I ran a few tests to measure the effect that adding NVLink would have
+on AI-related workloads:</p>
+<ul>
+<li><strong>Model Inference</strong> with layer split and tensor
+parallelism. I used llama-bench with <a href="https://huggingface.co/unsloth/Llama-3.3-70B-Instruct-GGUF">Llama
+3.3 70B</a> and <a href="https://huggingface.co/unsloth/gemma-4-31B-it-GGUF">Gemma 4
+31B</a>. Layer split does very little inter-GPU communication, while
+tensor parallel inference must sync at every layer.</li>
+<li><strong>Model Training</strong> using DDP for <a href="https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama
+1.1B</a> and FSDP for <a href="https://huggingface.co/Qwen/Qwen2.5-3B">Qwen2.5 3B</a>. DDP only
+syncs once to compute gradients at each step, while FSDP requires
+constant data transfers.</li>
+</ul>
+<p>With these, I felt I had a good mix of tests that would be affected
+to different degrees by inter-GPU bandwidth.</p>
+<h2 id="hardware">Hardware</h2>
+<table>
+<colgroup>
+
+
+</colgroup>
+<tbody>
+<tr>
+<td>CPU</td>
+<td>AMD Epyc 7532 (32 Cores, 128 PCIe lanes)</td>
+</tr>
+<tr>
+<td>Motherboard</td>
+<td>Supermicro H12SSL-i, 5 PCIe 4.0 x16 Slots</td>
+</tr>
+<tr>
+<td>RAM</td>
+<td>8 Channels, 32GB DDR4-3200, 256GB total</td>
+</tr>
+<tr>
+<td>GPU</td>
+<td>2x EVGA RTX 3090, installed directly in slots 3 &amp; 6, both
+running at full x16 bandwidth.</td>
+</tr>
+<tr>
+<td>OS</td>
+<td>Ubuntu 24.04, Nvidia driver 595</td>
+</tr>
+</tbody>
+</table>
+<h2 id="initial-results">Initial Results</h2>
+<p> </p>
+<p>The performance on all layer split tests was unaffected. For model
+inference with tensor parallelism, NVLink boosted prompt processing by
+about 30%, while token generation speed was exactly the same.</p>
+<p>Token generation speed being the same on tensor parallel runs was
+unexpected. I thought there would be a large difference since it needs
+to sync activations frequently. Although token generation speed is
+usually the headline number, I still care a lot about prompt processing
+speed since most of my usage patterns, such as coding agents, use very
+long context windows.</p>
+<p></p>
+<p>The uplift for FSDP training is huge, a nearly 3x improvement. DDP
+training was not affected at all.</p>
+<p>However, I consider this data to be somewhat misleading, as the
+non-NVLink tests were not actually measuring GPU data transfer over PCIe
+like I initially thought.</p>
+<blockquote>
+<p>In all of my subsequent test configurations, inference with layer
+split, tensor parallel token generation, and DDP training were
+completely unaffected (within 3%/noise). <strong>I will omit any more
+charts/data for those tests and show only tensor parallel prompt
+processing and FSDP training</strong>. All data available <a href="data.html">here</a>.</p>
+</blockquote>
+<h2 id="pitfalls-with-disabling-nvlink-for-tests">Pitfalls With
+Disabling NVLink For Tests</h2>
+<p>In my first test, I used <code>NCCL_P2P_DISABLE=1</code> for my
+non-NVLink test. I had also set <code>NCCL_DEBUG=INFO</code> so I could
+verify that the GPUs were using the channel I expected. I noticed lines
+at test startup like this:</p>
+<pre><code>gpu:11419:11419 [0] NCCL INFO Channel 03 : 0[0] -&gt; 1[1] via SHM/direct/direct</code></pre>
+<p>This means that instead of using P2P (Peer-to-Peer over PCIe), the
+GPUs were falling back to SHM (Shared Host Memory), which is a full
+round trip to main memory and incurs a higher performance penalty.</p>
+<p>It’s not actually possible to specifically disable NVLink while it’s
+installed and force the GPUs to use P2P. <code>NCCL_P2P_DISABLE=1</code>
+disables P2P over PCIe as well and transfers go over SHM.</p>
+<p>I reran the tests by physically unplugging the NVLink bridge.</p>
+<h2 id="shm-vs-p2p-nvidias-restrictions">SHM vs P2P, Nvidia’s
+Restrictions</h2>
+<p>Even after unplugging the NVLink bridge, NCCL was still logging that
+it was using SHM. Nvidia disables P2P entirely on consumer GPUs,
+presumably for product segmentation. This is an artificial restriction
+by Nvidia at the driver level; the RTX 3090 and other consumer GPUs are
+capable of doing it. Some clever people have figured out how to bypass
+this restriction by patching the drivers, and the solution is pretty
+easy to install: <a href="https://github.com/aikitoria/open-gpu-kernel-modules">open-gpu-kernel-modules</a>.</p>
+<p>I installed the patch and tested it again. I confirmed the NCCL log
+messages indicating that it was using P2P this time:</p>
+<pre><code>gpu:11090:11152 [1] NCCL INFO Channel 00/0 : 1[1] -&gt; 0[0] via P2P/direct pointer</code></pre>
+<h2 id="results-using-actual-p2p-communication">Results Using Actual P2P
+Communication</h2>
+<div class="img-row">
+
+
+</div>
+<p>Enabling P2P almost entirely makes up the difference between SHM and
+NVLink. Prompt processing speeds are basically identical and FSDP
+training reaches over 90% of the performance of NVLink.</p>
+<p><strong>So why would anyone drop $300 on an NVLink
+bridge?</strong></p>
+<h2 id="consumer-platforms">Consumer Platforms</h2>
+<p>NVLink doesn’t really have much of a benefit for my specific setup. I
+already have a server CPU &amp; motherboard (Epyc 7532 + Supermicro
+H12SSL-i), which comes with multiple full PCIe Gen4 x16 slots. I can
+install multiple GPUs and each of them gets full x16 bandwidth. However,
+the average consumer is probably not using a server platform at
+home.</p>
+<p>Consumer CPUs don’t have support for a lot of PCIe lanes. As a
+result, the motherboards for these CPUs don’t have many x16 slots. Some
+motherboards advertise 2 x16 slots, but what they actually mean is that
+they have two x16 <em>sized</em> slots, but only one of them has full
+x16 bandwidth. Furthermore, there’s a caveat that if you install a card
+into the second x16 sized slot, it will actually bifurcate the bandwidth
+from the main x16 slot and they will both run at x8/x8.</p>
+<p>The two most expensive consumer motherboards I could find state in
+their specs that they, in fact, only have 1 full x16-bandwidth slot and
+that using the second one will result in an x8/x8 configuration.</p>
+<table>
+<colgroup>
+
+
+</colgroup>
+<tbody>
+<tr>
+<td><a href="https://www.msi.com/Motherboard/MEG-X870E-GODLIKE-X-EDITION/Specification">MSI
+MEG X870E GODLIKE X EDITION</a></td>
+<td><a href="https://www.gigabyte.com/Motherboard/Z890-AORUS-XTREME-AI-TOP/sp">Gigabyte
+Z890 AORUS XTREME AI TOP</a></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>$1300</td>
+<td>$1000 ($1500-1800 retail)</td>
+</tr>
+</tbody>
+</table>
+<p>These products are hilariously named/marketed (<em>EXTREME AI</em>
+and <em>GODLIKE EDITION</em>), but alas, consumer CPU limitations mean
+they cannot take full advantage of multiple GPUs, which is often the
+main way to upgrade an AI workflow. They have the exact same PCIe
+capabilities as much cheaper motherboards. For example the <a href="https://www.asus.com/us/motherboards-components/motherboards/proart/proart-b650-creator/techspec/">Asus
+ProArt B650 Creator</a> retails for ~$230 and also supports x16 and
+x8/x8 modes on its 2 PCIe x16 slots.</p>
+<p>In all of these cases, an NVLink bridge completely bypasses PCIe slot
+limitations and allows the GPUs to communicate at their maximum
+bandwidth.</p>
+<p>I went into my BIOS and throttled my PCIe slots to x4 and again to x8
+to simulate what would happen in a more common consumer setup.</p>
+<p></p>
+<h2 id="performance-with-pcie-x8-and-x4">Performance with PCIe x8 and
+x4</h2>
+<p></p>
+<p>For tensor parallel inference, P2P sees a ~5% and ~15% drop at x8 and
+x4, respectively. The NVLink-based runs perform the same in all
+configurations and the SHM tests are much slower than both of the
+others.</p>
+<p></p>
+<p>Reducing PCIe lanes has a much more dramatic effect on FSDP training.
+Even the P2P driver patch starts to lose efficacy as it becomes
+restricted by PCIe bandwidth. With the P2P driver, if you were running
+on x8/x8, NVLink is about 50% faster and it doubles the training speed
+if the GPUs are on x4 bandwidth.</p>
+<h3 id="shm-bottleneck">SHM Bottleneck</h3>
+<p>One interesting observation is that the SHM results don’t degrade as
+sharply as the P2P results. The x8 and x16 results were identical in all
+tests, with only a ~5% penalty at x4 in both prompt processing and
+training. This would indicate that the bottleneck for SHM is not PCIe
+lanes, but something else on the path to main memory.</p>
+<h2 id="measuring-gpu-gpu-bandwidth-directly">Measuring GPU ↔︎ GPU
+Bandwidth Directly</h2>
+<p>To confirm each configuration while I was testing, I ran <a href="https://github.com/NVIDIA/cuda-samples/blob/master/Samples/5_Domain_Specific/p2pBandwidthLatencyTest/">p2pBandwidthLatencyTest</a>.</p>
+<p></p>
+<p>The reason for the results we saw is illustrated clearly here. NVLink
+provides the same 100GB/s bandwidth regardless of the underlying PCIe
+configuration. P2P over PCIe scales linearly with PCIe lanes, and SHM
+seems to bottleneck well below the available PCIe bandwidth.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>NVLink is worth it in certain cases for people running dual GPUs at
+home. My setup, coincidentally, is one of the narrow exceptions where it
+isn’t.</p>
+<p><strong>NVLink makes sense if all of these are true</strong></p>
+<ul>
+<li>You’re not running Linux OR not willing to apply the third-party P2P
+driver patch (I couldn’t find a Windows equivalent)</li>
+<li>You’re on a consumer platform where multiple GPUs drop PCIe to x8/x8
+or lower</li>
+<li>Your workload is FSDP training or, to a lesser degree,
+tensor-parallel prompt processing</li>
+</ul>
+<p>Bandwidth between GPUs doesn’t affect all workloads evenly. FSDP
+training saw the largest gains in my tests, especially at lower PCIe
+lane widths, while tensor-parallel prompt processing saw moderate
+improvements.</p>
+<p>It’s worth noting that my initial result with P2P disabled at the
+driver level is the experience most buyers would have out of the box.
+The patch is unofficial and Linux-only, so if you can’t or won’t apply
+it, an NVLink bridge becomes the only way to get the full benefit of
+multiple GPUs.</p>
+<p>NVLink bridges are not cheap. Do the math: instead of buying an
+NVLink bridge, you may be able to buy into a workstation (like
+Threadripper) or server (like Epyc/Xeon) platform that gives you full
+x16 lanes natively.</p></main>
