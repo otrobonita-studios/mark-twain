@@ -1,0 +1,177 @@
+I lint-scanned 36 popular MCP servers. A third of them are failing your agent.
+
+2026-07-21
+Agents
+MCP
+Engineering
+
+Your MCP server can be 100% spec-compliant and still be unusable by an agent.
+
+The Model Context Protocol spec tells you how to 
+transport
+ tools: JSON-RPC framing, capability negotiation, schema shapes. It says nothing about whether a model can actually 
+use
+ what you serve — whether it picks the right tool out of your catalog, fills the arguments correctly, or burns 8k tokens parsing your schemas on every single request.
+
+I integrate first- and third-party MCP connectors into a production AI agent for a living, and I kept seeing the same failure: servers that pass every compliance check, yet the model calls the wrong tool, hallucinates arguments, or ignores the tool entirely. The problems were never in the protocol layer. They were in the parts no one lints: descriptions, naming, schema design.
+
+So I wrote 
+mcpgrade
+ — a Lighthouse-style scorecard for MCP servers. One command, no API key, report in seconds:
+
+npx mcpgrade --stdio "npx -y your-mcp-server"
+
+Then I pointed it at 36 popular servers. It did not go great.
+
+The results
+
+Full sortable table: [
+https://tengli.dev/mcp-leaderboard.html]
+. The short version (static analysis, point-in-time snapshot; servers marked 
+(archived)
+ are unmaintained reference implementations, included because they're still widely installed and copied):
+
+Top of the class (A):
+ brave-search 
+(archived)
+, exa, google-maps 
+(archived)
+, slack 
+(archived)
+, perplexity-ask, @shopify/dev-mcp, @apify/actors-mcp-server, airbnb, figma-developer-mcp, tavily, gitlab 
+(archived)
+, elastic, shrimp-task-manager, and more — 15 of 36.
+
+Bottom of the class (D/F), 11 of 36 — and it's not hobby projects:
+ MongoDB's official server (66, with 66 errors), Notion's official server (62), Airtable (69, 66 errors), todoist-mcp-server (67, 
+110 errors
+), GitHub's archived reference server (67, 44 errors), and firecrawl-mcp at the very bottom (57, 
+134 errors
+).
+
+Two more servers (Stripe, Supabase) couldn't be scanned with dummy credentials and were excluded rather than graded.
+
+Finding 1: the ecosystem has an undocumented-parameter epidemic
+
+Almost every D/F server has a 
+descriptions score of zero
+ while its schema, naming, and token scores are fine. One rule dominates: 
+D004 — parameter has no description
+.
+
+firecrawl: 132 of its 134 errors are undocumented parameters. 
+url
+, 
+formats
+, 
+jsonOptions
+ — the model gets a name and a type, nothing else. todoist: 110. MongoDB and Airtable: 66 each.
+
+The root cause is visible in the source of nearly all of them: 
+schemas are generated from zod or OpenAPI definitions, and nobody adds 
+.describe()
+. The type system knows 
+url: string
+. The model needs to know 
+which
+ URL, in what format, with what constraints. Your schema generator is quietly stripping the single most important signal your tools have.
+
+If you take one thing from this post: open your server, count the parameters without a 
+description
+, and fix them. It's the highest-leverage hour you can spend on agent reliability.
+
+Finding 2: it's documentation discipline, not catalog size — but size makes discipline harder
+
+My first pass at this data suggested "small catalogs win": most 95+ scorers have few tools, and the 24–26 tool servers cluster at D/F. Then shrimp-task-manager scored 
+A/96 with 15 tools
+ — carefully documented, tightly named, every description distinct.
+
+So the honest version: 
+well-documented big catalogs are possible; they're just rare.
+ Every tool you add is another description to write, another name that can collide, another schema to keep tight. Discipline doesn't scale by default. (Size still taxes you either way: the full catalog is serialized into every request.)
+
+Finding 3: compliance and usability are different axes
+
+The most-updated servers aren't the most usable ones. The 
+archived
+ Slack reference server — code nobody maintains — scores A/97, because someone once documented every tool and every parameter by hand. Meanwhile several actively-developed commercial servers ship parameters with no descriptions at all.
+
+Agent usability is a 
+writing
+ problem more than an engineering problem. Compliance checkers can't measure it. That's the gap mcpgrade fills.
+
+(One hopeful counterpoint: while writing this, context7 shipped a new version that fixed all its missing parameter descriptions — jumping from C to a perfect static score. The ecosystem can move fast when the gap is visible.)
+
+Finding 4: I checked the static scores against a real model. The scary number is refusal.
+
+Static lint is a proxy, so I built 
+--eval
+: it synthesizes realistic single-step tasks (each embedding concrete values for every required parameter), shows a model the full catalog, and measures whether it picks the right tool and fills valid arguments. Calibration details and methodology: 
+docs/eval-calibration.md
+. Cost: pennies per server on a small model.
+
+Two results worth your attention:
+
+Static findings predict live confusion.
+ On well-documented servers, tool-selection accuracy was 100%. On firecrawl it dropped to 84% — and the misses land 
+exactly
+ on the naming collisions static rules flag: 
+extract
+↔
+scrape
+, 
+agent_status
+↔
+check_crawl_status
+, 
+feedback
+↔
+search_feedback
+.
+
+Big fuzzy catalogs break refusal.
+ Given deliberately out-of-scope tasks, the model correctly declined 100% of the time on small, well-documented catalogs — but only 
+50% of the time
+ on firecrawl's 26 fuzzy tools. Half the time it "found" a plausible tool and called it. In production, that's an agent doing 
+something
+ when it should do 
+nothing
+ — arguably the most dangerous failure mode there is.
+
+What "good" looks like
+
+From the top scorers, a checklist:
+
+Every tool description answers three questions: what it does, when to use it, what it returns.
+
+Every parameter has a description with format and one example value.
+
+Fixed value sets live in 
+enum
+, not in prose.
+
+required
+ is declared explicitly — even when it's empty.
+
+One naming convention, verb_object style, no generic verbs, no near-twin names.
+
+Errors name the missing/invalid parameter so the model can self-correct in one turn.
+
+Try it on your server
+
+npx mcpgrade --stdio "node ./my-server.js"   # local stdio
+npx mcpgrade https://my-server.example/mcp    # streamable HTTP
+npx mcpgrade <target> --fail-on error         # CI gate
+npx mcpgrade <target> --eval                  # live model test (BYO key; any OpenAI-compatible endpoint works)
+
+24 rules, each with a concrete fix and a rationale you're welcome to dispute in the issues — the ruleset is opinionated by design, and I'd rather have the argument in public. (How this differs from mcp-lint and other MCP QA tools — with side-by-side outputs: 
+docs/comparison.md
+.)
+
+If you maintain one of the servers above and fix your score, open a 
+rescan
+ issue — I'll happily re-run and update the table. PRs to your own servers beat arguments with my ruleset.
+
+I build production AI agent integrations at a large tech company; mcpgrade is a personal project and reflects scars from integrating dozens of MCP connectors. No affiliation with any server ranked above.
+
+← All writing

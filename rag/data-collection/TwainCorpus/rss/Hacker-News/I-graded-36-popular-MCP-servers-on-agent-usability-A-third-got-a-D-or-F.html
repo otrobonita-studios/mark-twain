@@ -1,0 +1,55 @@
+<article>
+<h1>I lint-scanned 36 popular MCP servers. A third of them are failing your agent.</h1>
+<p class="post-meta"><time datetime="2026-07-21">2026-07-21</time><span class="chips"><span class="chip">Agents</span><span class="chip">MCP</span><span class="chip">Engineering</span></span></p>
+<p>Your MCP server can be 100% spec-compliant and still be unusable by an agent.</p>
+<p>The Model Context Protocol spec tells you how to <em>transport</em> tools: JSON-RPC framing, capability negotiation, schema shapes. It says nothing about whether a model can actually <em>use</em> what you serve — whether it picks the right tool out of your catalog, fills the arguments correctly, or burns 8k tokens parsing your schemas on every single request.</p>
+<p>I integrate first- and third-party MCP connectors into a production AI agent for a living, and I kept seeing the same failure: servers that pass every compliance check, yet the model calls the wrong tool, hallucinates arguments, or ignores the tool entirely. The problems were never in the protocol layer. They were in the parts no one lints: descriptions, naming, schema design.</p>
+<p>So I wrote <a href="https://github.com/TengByte/mcpgrade">mcpgrade</a> — a Lighthouse-style scorecard for MCP servers. One command, no API key, report in seconds:</p>
+<pre><code class="language-bash">npx mcpgrade --stdio "npx -y your-mcp-server"
+</code></pre>
+<p>Then I pointed it at 36 popular servers. It did not go great.</p>
+<h2>The results</h2>
+<p>Full sortable table: [<a href="https://tengli.dev/mcp-leaderboard.html%5D">https://tengli.dev/mcp-leaderboard.html]</a>. The short version (static analysis, point-in-time snapshot; servers marked <em>(archived)</em> are unmaintained reference implementations, included because they're still widely installed and copied):</p>
+<p><strong>Top of the class (A):</strong> brave-search <em>(archived)</em>, exa, google-maps <em>(archived)</em>, slack <em>(archived)</em>, perplexity-ask, @shopify/dev-mcp, @apify/actors-mcp-server, airbnb, figma-developer-mcp, tavily, gitlab <em>(archived)</em>, elastic, shrimp-task-manager, and more — 15 of 36.</p>
+<p><strong>Bottom of the class (D/F), 11 of 36 — and it's not hobby projects:</strong> MongoDB's official server (66, with 66 errors), Notion's official server (62), Airtable (69, 66 errors), todoist-mcp-server (67, <strong>110 errors</strong>), GitHub's archived reference server (67, 44 errors), and firecrawl-mcp at the very bottom (57, <strong>134 errors</strong>).</p>
+<p>Two more servers (Stripe, Supabase) couldn't be scanned with dummy credentials and were excluded rather than graded.</p>
+<h2>Finding 1: the ecosystem has an undocumented-parameter epidemic</h2>
+<p>Almost every D/F server has a <strong>descriptions score of zero</strong> while its schema, naming, and token scores are fine. One rule dominates: <code>D004 — parameter has no description</code>.</p>
+<p>firecrawl: 132 of its 134 errors are undocumented parameters. <code>url</code>, <code>formats</code>, <code>jsonOptions</code> — the model gets a name and a type, nothing else. todoist: 110. MongoDB and Airtable: 66 each.</p>
+<p>The root cause is visible in the source of nearly all of them: <strong>schemas are generated from zod or OpenAPI definitions, and nobody adds <code>.describe()</code></strong>. The type system knows <code>url: string</code>. The model needs to know <em>which</em> URL, in what format, with what constraints. Your schema generator is quietly stripping the single most important signal your tools have.</p>
+<p>If you take one thing from this post: open your server, count the parameters without a <code>description</code>, and fix them. It's the highest-leverage hour you can spend on agent reliability.</p>
+<h2>Finding 2: it's documentation discipline, not catalog size — but size makes discipline harder</h2>
+<p>My first pass at this data suggested "small catalogs win": most 95+ scorers have few tools, and the 24–26 tool servers cluster at D/F. Then shrimp-task-manager scored <strong>A/96 with 15 tools</strong> — carefully documented, tightly named, every description distinct.</p>
+<p>So the honest version: <strong>well-documented big catalogs are possible; they're just rare.</strong> Every tool you add is another description to write, another name that can collide, another schema to keep tight. Discipline doesn't scale by default. (Size still taxes you either way: the full catalog is serialized into every request.)</p>
+<h2>Finding 3: compliance and usability are different axes</h2>
+<p>The most-updated servers aren't the most usable ones. The <em>archived</em> Slack reference server — code nobody maintains — scores A/97, because someone once documented every tool and every parameter by hand. Meanwhile several actively-developed commercial servers ship parameters with no descriptions at all.</p>
+<p>Agent usability is a <em>writing</em> problem more than an engineering problem. Compliance checkers can't measure it. That's the gap mcpgrade fills.</p>
+<p>(One hopeful counterpoint: while writing this, context7 shipped a new version that fixed all its missing parameter descriptions — jumping from C to a perfect static score. The ecosystem can move fast when the gap is visible.)</p>
+<h2>Finding 4: I checked the static scores against a real model. The scary number is refusal.</h2>
+<p>Static lint is a proxy, so I built <code>--eval</code>: it synthesizes realistic single-step tasks (each embedding concrete values for every required parameter), shows a model the full catalog, and measures whether it picks the right tool and fills valid arguments. Calibration details and methodology: <a href="https://github.com/TengByte/mcpgrade/blob/main/docs/eval-calibration.md">docs/eval-calibration.md</a>. Cost: pennies per server on a small model.</p>
+<p>Two results worth your attention:</p>
+<p><strong>Static findings predict live confusion.</strong> On well-documented servers, tool-selection accuracy was 100%. On firecrawl it dropped to 84% — and the misses land <em>exactly</em> on the naming collisions static rules flag: <code>extract</code>↔<code>scrape</code>, <code>agent_status</code>↔<code>check_crawl_status</code>, <code>feedback</code>↔<code>search_feedback</code>.</p>
+<p><strong>Big fuzzy catalogs break refusal.</strong> Given deliberately out-of-scope tasks, the model correctly declined 100% of the time on small, well-documented catalogs — but only <strong>50% of the time</strong> on firecrawl's 26 fuzzy tools. Half the time it "found" a plausible tool and called it. In production, that's an agent doing <em>something</em> when it should do <em>nothing</em> — arguably the most dangerous failure mode there is.</p>
+<h2>What "good" looks like</h2>
+<p>From the top scorers, a checklist:</p>
+<ul>
+<li>Every tool description answers three questions: what it does, when to use it, what it returns.</li>
+<li>Every parameter has a description with format and one example value.</li>
+<li>Fixed value sets live in <code>enum</code>, not in prose.</li>
+<li><code>required</code> is declared explicitly — even when it's empty.</li>
+<li>One naming convention, verb_object style, no generic verbs, no near-twin names.</li>
+<li>Errors name the missing/invalid parameter so the model can self-correct in one turn.</li>
+</ul>
+<h2>Try it on your server</h2>
+<pre><code class="language-bash">npx mcpgrade --stdio "node ./my-server.js"   # local stdio
+npx mcpgrade https://my-server.example/mcp    # streamable HTTP
+npx mcpgrade &lt;target&gt; --fail-on error         # CI gate
+npx mcpgrade &lt;target&gt; --eval                  # live model test (BYO key; any OpenAI-compatible endpoint works)
+</code></pre>
+<p>24 rules, each with a concrete fix and a rationale you're welcome to dispute in the issues — the ruleset is opinionated by design, and I'd rather have the argument in public. (How this differs from mcp-lint and other MCP QA tools — with side-by-side outputs: <a href="https://github.com/TengByte/mcpgrade/blob/main/docs/comparison.md">docs/comparison.md</a>.)</p>
+<p>If you maintain one of the servers above and fix your score, open a <code>rescan</code> issue — I'll happily re-run and update the table. PRs to your own servers beat arguments with my ruleset.</p>
+
+<p><em>I build production AI agent integrations at a large tech company; mcpgrade is a personal project and reflects scars from integrating dozens of MCP connectors. No affiliation with any server ranked above.</em></p>
+
+<p class="post-nav"><a href="/writing.html">← All writing</a></p>
+</article>
