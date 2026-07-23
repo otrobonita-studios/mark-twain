@@ -1,0 +1,1778 @@
+Did you ever want to store the Minecraft movie in Minecraft? No? Too bad, because now you can.
+
+The Idea
+
+I recently had the silly idea to convert a file into a Minecraft world. This led me down a really cool rabbit-hole, learning a ton about 3D geometry, byte layouts and Minecraft.
+
+The core idea is pretty simple: I want to take any file and be able to view it in Minecraft blocks.
+
+Along the way I also managed to convince my code that a tiny text-file is 2.3 exabytes large.
+
+Why
+
+Why not.
+
+Palette Generator
+
+The first thing you need is a lookup table. A byte can hold one of 256 values (0â255), and luckily there are way more than 256 blocks in Minecraft, so I can hand every single byte its own block. Byte 
+0
+ becomes stone, byte 
+1
+ becomes granite, all the way up to 
+255
+.
+
+A bunch of blocks carry state that changes on its own or depends on placement: wheat, carrots and other crops have an 
+age
+, water and lava have a 
+level
+. If byte 
+42
+ decoded to wheat and that wheat grew a stage, my decoder would read the wrong byte and the whole file would be in shambles.
+
+I first get the block data for 1.21.11 with 
+mcdata_rs
+, throw out anything with an 
+age
+ or 
+level
+ state (plus beds and chests, more on those later), take the first 256 blocks, and write them into a Rust file as a fixed array.
+
+( At the end of the video you can see the filter process where the blocks get filtered down to only good blocks )
+
+The code:
+
+use
+ mcdata_rs
+::
+mc_data;
+
+use
+ std
+::
+{fs, 
+path
+::
+Path
+};
+
+const
+ NAUGHTY_LIST
+:
+ &
+[
+&
+str
+] 
+=
+ &
+[
+
+    "sand"
+,
+
+    "gravel"
+,
+
+    "anvil"
+,
+
+    "dragon_egg"
+,
+
+    "scaffolding"
+,
+
+    "dripstone"
+,
+
+    "snow"
+,
+
+    "farmland"
+,
+
+    "chest"
+,
+
+    "_bed"
+,
+
+    "door"
+,
+
+    "ice"
+,
+
+    "grass_block"
+,
+
+];
+
+fn
+ main
+() {
+
+    let
+ data_1_21_11 
+=
+ mc_data
+(
+"1.21.11"
+)
+.
+expect
+(
+"Failed to download Minecraft Block Data"
+);
+
+    let
+ palette 
+=
+ data_1_21_11
+
+        .
+blocks_array
+
+        .
+iter
+()
+
+        .
+filter
+(
+|
+b
+|
+ b
+.
+bounding_box
+.
+eq
+(
+"block"
+))
+
+        .
+filter
+(
+|
+b
+|
+ {
+
+            !
+b
+.
+states
+
+                .
+iter
+()
+
+                .
+any
+(
+|
+s
+|
+ matches!
+(s
+.
+name
+.
+as_str
+(), 
+"age"
+ |
+ "level"
+ |
+ "part"
+))
+
+        })
+
+        .
+filter
+(
+|
+b
+|
+ !
+NAUGHTY_LIST
+.
+iter
+()
+.
+any
+(
+|
+g
+|
+ b
+.
+name
+.
+contains
+(g)))
+
+        .
+collect
+::
+<
+Vec
+<_>>();
+
+    let
+ names
+:
+ Vec
+<
+&
+str
+> 
+=
+ palette
+.
+iter
+()
+.
+take
+(
+256
+)
+.
+map
+(
+|
+b
+|
+ b
+.
+name
+.
+as_str
+())
+.
+collect
+();
+
+    let
+ mut
+ out 
+=
+ String
+::
+new
+();
+
+    out
+.
+push_str
+(
+"pub const PALETTE: [&str; 256] = [
+\n
+"
+);
+
+    //TODO: make this cleaner
+
+    for
+ name 
+in
+ &
+names {
+
+        out
+.
+push_str
+(
+"    
+\"
+minecraft:"
+);
+
+        out
+.
+push_str
+(name);
+
+        out
+.
+push_str
+(
+"
+\"
+,
+\n
+"
+);
+
+    }
+
+    out
+.
+push_str
+(
+"];
+\n
+"
+);
+
+    let
+ out_path 
+=
+ Path
+::
+new
+(
+env!
+(
+"CARGO_MANIFEST_DIR"
+))
+.
+join
+(
+"src/palette.rs"
+);
+
+    fs
+::
+write
+(out_path, out)
+.
+expect
+(
+"Failed to write palette"
+);
+
+    println!
+(
+"Wrote {:?} blocks to palette.rs"
+, names
+.
+len
+());
+
+}
+
+That gives me a 
+PALETTE: [&str; 256]
+, and the two functions that do the translation are pretty straightforward:
+
+pub
+ fn
+ byte_to_block
+(byte
+:
+ u8
+) 
+->
+ &
+'
+static
+ str
+ {
+
+    PALETTE
+[byte 
+as
+ usize
+]
+
+}
+
+pub
+ fn
+ block_to_byte
+(block
+:
+ &
+str
+) 
+->
+ Result
+<
+u8
+, 
+SulfurError
+> {
+
+    PALETTE
+
+        .
+iter
+()
+
+        .
+position
+(
+|
+palette_block
+|
+ *
+palette_block 
+==
+ block)
+
+        .
+map
+(
+|
+i
+|
+ {
+
+            u8
+::
+try_from
+(i)
+.
+expect
+(
+"palette has exactly 256 entries so this will never happen"
+)
+
+        })
+
+        .
+ok_or
+(
+SulfurError
+::
+BlockNotInPalette
+(block
+.
+to_string
+()))
+
+}
+
+byte_to_block
+ is just an array index, and 
+block_to_byte
+ is the reverse lookup.
+
+Doing it
+
+Now that a byte maps to a block, I need to decide 
+where
+ each block goes.
+
+We fill a 16x16 floor first, then move one block up, and once a full 16x16x16 cube is filled, jump to the next one. That 16x16x16 cube is a section, which is 4096 blocks.
+
+One section is only the start though. A Minecraft world goes from Y 
+-64
+ to Y 
+320
+, which is 384 blocks, or 24 sections stacked on top of each other. So instead of stopping after one section, I fill an entire chunk column bottom to top, all 24 sections, before moving sideways to the next chunk.
+
+A region file (
+.mca
+) is a 32x32 grid of chunks, so once you multiply it all out:
+
+32 x 32 chunks x 24 sections x 4096 blocks = ~96 MiB per region
+.
+
+pub
+ fn
+ cube_coords
+(byte_location
+:
+ usize
+) 
+->
+ silverfish
+::
+Coords
+ {
+
+    const
+ SECTION_SIZE
+:
+ usize
+ =
+ 16
+;
+
+    const
+ BLOCKS_PER_SECTION
+:
+ usize
+ =
+ SECTION_SIZE
+ *
+ SECTION_SIZE
+ *
+ SECTION_SIZE
+;
+
+    const
+ MAX_CHUNKS
+:
+ usize
+ =
+ 32
+;
+
+    const
+ SECTIONS_PER_COLUMN
+:
+ usize
+ =
+ 24
+;
+
+    const
+ MIN_Y
+:
+ i32
+ =
+ -
+64
+;
+
+    let
+ inside_section 
+=
+ byte_location 
+%
+ BLOCKS_PER_SECTION
+;
+
+    let
+ section_number 
+=
+ byte_location 
+/
+ BLOCKS_PER_SECTION
+;
+
+    let
+ x_inside 
+=
+ inside_section 
+%
+ SECTION_SIZE
+;
+
+    let
+ y_inside 
+=
+ inside_section 
+/
+ (
+SECTION_SIZE
+ *
+ SECTION_SIZE
+);
+
+    let
+ z_inside 
+=
+ (inside_section 
+/
+ SECTION_SIZE
+) 
+%
+ SECTION_SIZE
+;
+
+    let
+ layer 
+=
+ section_number 
+/
+ SECTIONS_PER_COLUMN
+;
+
+    let
+ section_x 
+=
+ layer 
+%
+ MAX_CHUNKS
+;
+
+    let
+ section_y 
+=
+ section_number 
+%
+ SECTIONS_PER_COLUMN
+;
+
+    let
+ section_z 
+=
+ (layer 
+/
+ MAX_CHUNKS
+) 
+%
+ MAX_CHUNKS
+;
+
+    let
+ x 
+=
+ u32
+::
+try_from
+(section_x 
+*
+ SECTION_SIZE
+ +
+ x_inside)
+.
+expect
+(
+"coordinate overflow"
+);
+
+    let
+ y 
+=
+
+        MIN_Y
+ +
+ i32
+::
+try_from
+(section_y 
+*
+ SECTION_SIZE
+ +
+ y_inside)
+.
+expect
+(
+"coordinate overflow"
+);
+
+    let
+ z 
+=
+ u32
+::
+try_from
+(section_z 
+*
+ SECTION_SIZE
+ +
+ z_inside)
+.
+expect
+(
+"coordinate overflow"
+);
+
+    (x, y, z)
+.
+into
+()
+
+}
+
+Maybe the tests make it easier to follow:
+
+byte 
+0
+ â 
+(0, -64, 0)
+ - very bottom of the world
+
+byte 
+1
+ â 
+(1, -64, 0)
+
+byte 
+15
+ â 
+(15, -64, 0)
+ - end of the first row
+
+byte 
+16
+ â 
+(0, -64, 1)
+ - next row back
+
+byte 
+255
+ â 
+(15, -64, 15)
+ - floor is full
+
+byte 
+256
+ â 
+(0, -63, 0)
+ - up one
+
+byte 
+4095
+ â 
+(15, -49, 15)
+ - section is full
+
+byte 
+4096
+ â 
+(0, -48, 0)
+ - next section up, still the same chunk column
+
+byte 
+4096 * 24
+ â 
+(16, -64, 0)
+ - the whole column is full (24 sections), move one chunk over
+
+byte 
+4096 * 24 * 32
+ â 
+(0, -64, 16)
+ - that row of chunks is full, wrap in z
+
+The final result looks like this:
+
+( Encoded data; my Cargo.lock to be exact )
+
+Encoding
+
+Read the file, create an empty region, write a small header (more on that below), then walk every byte, convert it to a block, and place it at its 
+cube_coords
+. Then write it to a 
+.mca
+ region file.
+
+pub
+ fn
+ file_to_region
+(
+
+    source_file
+:
+ impl
+ AsRef
+<
+Path
+>,
+
+    region_file
+:
+ impl
+ AsRef
+<
+Path
+>,
+
+) 
+->
+ Result
+<(), 
+SulfurError
+> {
+
+    let
+ source_file 
+=
+ source_file
+.
+as_ref
+();
+
+    let
+ region_file 
+=
+ region_file
+.
+as_ref
+();
+
+    if
+ !
+source_file
+.
+exists
+() {
+
+        return
+ Err
+(
+SulfurError
+::
+InputFileNotFound
+);
+
+    }
+
+    let
+ input_file 
+=
+ std
+::
+fs
+::
+read
+(source_file)
+?
+;
+
+    if
+ HEADER_SIZE
+ +
+ input_file
+.
+len
+() > 
+REGION_CAPACITY
+ {
+
+        return
+ Err
+(
+SulfurError
+::
+EncodedPayloadTooLarge
+);
+
+    }
+
+    let
+ mut
+ region 
+=
+ Region
+::
+default
+();
+
+    region
+.
+set_config
+(
+Config
+::
+new
+(
+true
+, 
+true
+, 
+Config
+::
+DEFAULT_WORLD_HEIGHT
+))
+?
+;
+
+    let
+ header 
+=
+ Header
+::
+new
+(input_file
+.
+len
+() 
+as
+ u64
+)
+.
+to_bytes
+();
+
+    for
+ (location, byte) 
+in
+ header
+.
+iter
+()
+.
+enumerate
+() {
+
+        region
+.
+set_block
+(
+cube_coords
+(location), 
+byte_to_block
+(
+*
+byte))
+?
+;
+
+    }
+
+    for
+ (byte_location, byte) 
+in
+ input_file
+.
+iter
+()
+.
+enumerate
+() {
+
+        region
+.
+set_block
+(
+
+            cube_coords
+(header
+.
+len
+() 
++
+ byte_location),
+
+            byte_to_block
+(
+*
+byte),
+
+        )
+?
+;
+
+    }
+
+    region
+.
+write_blocks
+()
+?
+;
+
+    region
+.
+write
+(
+&mut
+ std
+::
+fs
+::
+File
+::
+create
+(region_file)
+?
+)
+?
+;
+
+    Ok
+(())
+
+}
+
+Decoding
+
+Load the region, read the header blocks back into bytes to find out how big the original file was, then read exactly that many payload blocks, run each one through 
+block_to_byte
+, and stream the bytes back to disk.
+
+pub
+ fn
+ region_to_file
+(
+
+    region_file
+:
+ impl
+ AsRef
+<
+Path
+>,
+
+    output_file
+:
+ impl
+ AsRef
+<
+Path
+>,
+
+) 
+->
+ Result
+<(), 
+SulfurError
+> {
+
+    let
+ region_file 
+=
+ region_file
+.
+as_ref
+();
+
+    let
+ output_file 
+=
+ output_file
+.
+as_ref
+();
+
+    if
+ !
+region_file
+.
+exists
+() {
+
+        return
+ Err
+(
+SulfurError
+::
+InputFileNotFound
+);
+
+    }
+
+    let
+ region 
+=
+ Region
+::
+from_region
+(
+&mut
+ std
+::
+fs
+::
+File
+::
+open
+(region_file)
+?
+, (
+0
+, 
+0
+))
+?
+;
+
+    let
+ header_coords
+:
+ Vec
+<
+Coords
+> 
+=
+ (
+0
+..
+HEADER_SIZE
+)
+.
+map
+(cube_coords)
+.
+collect
+();
+
+    let
+ header_batch 
+=
+ region
+.
+get_blocks
+(
+&
+header_coords)
+?
+;
+
+    let
+ raw_header_bytes 
+=
+ header_coords
+
+        .
+iter
+()
+
+        .
+map
+(
+|
+coord
+|
+ {
+
+            let
+ block 
+=
+ header_batch
+
+                .
+get
+(
+*
+coord)
+?
+
+                .
+ok_or
+(
+SulfurError
+::
+MissingBlockAt
+(
+*
+coord))
+?
+;
+
+            block_to_byte
+(
+&
+block
+.
+name
+.
+to_str
+())
+
+        })
+
+        .
+collect
+::
+<
+Result
+<
+Vec
+<
+u8
+>, _>>()
+?
+;
+
+    let
+ (header, header_len) 
+=
+ Header
+::
+from_bytes
+(
+&
+raw_header_bytes)
+?
+;
+
+    let
+ file_size 
+=
+
+        usize
+::
+try_from
+(header
+.
+file_size)
+.
+map_err
+(
+|
+_
+|
+ SulfurError
+::
+EncodedPayloadTooLarge
+)
+?
+;
+
+    let
+ end 
+=
+ header_len
+
+        .
+checked_add
+(file_size)
+
+        .
+ok_or
+(
+SulfurError
+::
+EncodedPayloadTooLarge
+)
+?
+;
+
+    let
+ coords
+:
+ Vec
+<
+Coords
+> 
+=
+ (header_len
+..
+end)
+.
+map
+(cube_coords)
+.
+collect
+();
+
+    let
+ batch 
+=
+ region
+.
+get_blocks
+(
+&
+coords)
+?
+;
+
+    let
+ mut
+ file_buffer 
+=
+ std
+::
+io
+::
+BufWriter
+::
+new
+(
+std
+::
+fs
+::
+File
+::
+create
+(output_file)
+?
+);
+
+    for
+ coord 
+in
+ &
+coords {
+
+        let
+ block 
+=
+ batch
+
+            .
+get
+(
+*
+coord)
+?
+
+            .
+ok_or
+(
+SulfurError
+::
+MissingBlockAt
+(
+*
+coord))
+?
+;
+
+        file_buffer
+.
+write_all
+(
+&
+[
+block_to_byte
+(
+&
+block
+.
+name
+.
+to_str
+())
+?
+])
+?
+;
+
+    }
+
+    file_buffer
+.
+flush
+()
+?
+;
+
+    Ok
+(())
+
+}
+
+Mistakes I made
+
+The Flat Slab
+
+My very first version of 
+cube_coords
+ worked, but it threw away most of the world. I only ever placed blocks in a single 16-block-tall layer starting at Y 
+0
+ and spread the sections out horizontally:
+
+pub
+ fn
+ cube_coords
+(byte_location
+:
+ usize
+) 
+->
+ silverfish
+::
+Coords
+ {
+
+    const
+ SECTION_SIZE
+:
+ usize
+ =
+ 16
+;
+
+    const
+ BLOCKS_PER_SECTION
+:
+ usize
+ =
+ SECTION_SIZE
+ *
+ SECTION_SIZE
+ *
+ SECTION_SIZE
+;
+
+    const
+ BASE_Y
+:
+ usize
+ =
+ 0
+;
+
+    const
+ MAX_BLOCKS
+:
+ usize
+ =
+ 32
+;
+
+    let
+ inside_section 
+=
+ byte_location 
+%
+ BLOCKS_PER_SECTION
+;
+
+    let
+ section_number 
+=
+ byte_location 
+/
+ BLOCKS_PER_SECTION
+;
+
+    let
+ x_inside 
+=
+ inside_section 
+%
+ SECTION_SIZE
+;
+
+    let
+ y_inside 
+=
+ inside_section 
+/
+ (
+SECTION_SIZE
+ *
+ SECTION_SIZE
+);
+
+    let
+ z_inside 
+=
+ (inside_section 
+/
+ SECTION_SIZE
+) 
+%
+ SECTION_SIZE
+;
+
+    let
+ section_x 
+=
+ section_number 
+%
+ MAX_BLOCKS
+;
+
+    let
+ section_z 
+=
+ (section_number 
+/
+ MAX_BLOCKS
+) 
+%
+ MAX_BLOCKS
+;
+
+    let
+ x 
+=
+ u32
+::
+try_from
+(section_x 
+*
+ SECTION_SIZE
+ +
+ x_inside)
+.
+expect
+(
+"coordinate overflow"
+);
+
+    let
+ y 
+=
+ i32
+::
+try_from
+(
+BASE_Y
+ +
+ y_inside)
+.
+expect
+(
+"coordinate overflow"
+);
+
+    let
+ z 
+=
+ u32
+::
+try_from
+(section_z 
+*
+ SECTION_SIZE
+ +
+ z_inside)
+.
+expect
+(
+"coordinate overflow"
+);
+
+    (x, y, z)
+.
+into
+()
+
+}
+
+Because 
+y
+ never climbed past 15, every world came out as a flat 512x512 slab thatâs only 16 blocks tall. Which is about ~4 MiB per region, when a region can hold ~96 MiB.
+
+Capacity Overflow
+
+Remember that 2.3 exabytes?
+
+The issue was that I was trying to read the first 8 bytes of the 
+.mca
+ file and use that as the file size. That gave me a value of 
+2338328528344327162
+, which I then happily tried to treat as a lengthâ¦ 2.3 exabytes.
+
+The problem is that a raw region file has its own format and its own header, so the first bytes I was grabbing were never my data to begin with.
+
+The fix was to use a header:
+
+const
+ MAGIC
+:
+ [
+u8
+; 
+4
+] 
+=
+ *
+b"SULF"
+;
+
+// magic + size
+
+pub
+ const
+ HEADER_SIZE
+:
+ usize
+ =
+ 12
+;
+
+pub
+ struct
+ Header
+ {
+
+    pub
+ file_size
+:
+ u64
+,
+
+}
+
+impl
+ Header
+ {
+
+    pub
+ fn
+ new
+(file_size
+:
+ u64
+) 
+->
+ Self
+ {
+
+        Self
+ { file_size }
+
+    }
+
+    pub
+ fn
+ to_bytes
+(
+&
+self
+) 
+->
+ Vec
+<
+u8
+> {
+
+        let
+ mut
+ bytes 
+=
+ Vec
+::
+new
+();
+
+        bytes
+.
+extend
+(
+&
+MAGIC
+);
+
+        bytes
+.
+extend
+(
+&
+self
+.
+file_size
+.
+to_le_bytes
+());
+
+        bytes
+
+    }
+
+    pub
+ fn
+ from_bytes
+(bytes
+:
+ &
+[
+u8
+]) 
+->
+ Result
+<(
+Self
+, 
+usize
+), 
+SulfurError
+> {
+
+        if
+ bytes
+.
+len
+() < 
+HEADER_SIZE
+ {
+
+            return
+ Err
+(
+SulfurError
+::
+InvalidHeaderSize
+(
+HEADER_SIZE
+, bytes
+.
+len
+()));
+
+        }
+
+        if
+ bytes[
+0
+..
+4
+] 
+!=
+ MAGIC
+ {
+
+            return
+ Err
+(
+SulfurError
+::
+InvalidMagicBytes
+);
+
+        }
+
+        let
+ size_bytes 
+=
+ bytes[
+MAGIC
+.
+len
+()
+..
+HEADER_SIZE
+]
+
+            .
+try_into
+()
+
+            .
+map_err
+(
+|
+_
+|
+ SulfurError
+::
+InvalidHeaderSize
+(
+HEADER_SIZE
+, bytes
+.
+len
+()))
+?
+;
+
+        let
+ file_size 
+=
+ u64
+::
+from_le_bytes
+(size_bytes);
+
+        Ok
+((
+Self
+::
+new
+(file_size), 
+HEADER_SIZE
+))
+
+    }
+
+}
+
+Invisible Blocks
+
+Beds and double chests where invisible. Both are âmulti-blocksâ: a bed is a head and a foot, a double chest is two halves. It did not break my decoder but it just looked ugly as hell. I just added to the NAUGHTY_LIST array.
+
+Finishing Off
+
+Jeb truly was goated. (He wrote the Anvil File Format)
+
+And yes the Minecraft movie fits (downsampled into 27p).
+
+In the future I plan to add some kind of creeper/TNT protection and make it output large multi-region worlds so you can encode any file no matter how big it is.
+
+Iâve never written this kind of blog post before. If you have any improvements to share, please 
+email me
+.
+
+If you are interested in trying it yourself you can head to the repo here:
+
+https://codeberg.org/wuemeli/sulfur
+ ( donât forget to star it :)
