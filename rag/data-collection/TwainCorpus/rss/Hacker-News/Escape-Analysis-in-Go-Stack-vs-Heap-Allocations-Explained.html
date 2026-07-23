@@ -1,0 +1,293 @@
+<main id="main">
+<div class="top-page">
+<div class="container">
+<div class="top-page__row">
+<div class="top-page__head">
+<div class="top-page__hold">
+<a href="https://blog.jetbrains.com/go/">
+
+<h2 class="hidden-heading">GoLand</h2>
+</a>
+<p>The IDE for professional development in Go</p>
+</div>
+</div>
+<div class="top-page__right">
+<div class="top-page__social-wrap">
+<a class="social-opener" href="#">Follow</a>
+<ul class="social">
+<li><span>Follow:</span></li>
+<li><a aria-label="X" href="https://twitter.com/GoLandIDE" target="_blank"><i class="icon-twitter"><span class="sr-only">X</span></i> <span>X</span></a></li>
+<li><a aria-label="Youtube" href="https://www.youtube.com/playlist?list=PLQ176FUIyIUaXlyMXddbZ7TOdW2Yns4yV" target="_blank"><i class="icon-youtube"><span class="sr-only">Youtube</span></i> <span>Youtube</span></a></li>
+<li><a aria-label="RSS" href="https://blog.jetbrains.com/go/feed/" target="_blank"><i class="icon-rss-feed"><span class="sr-only">RSS</span></i> <span>RSS</span></a></li>
+<li><a aria-label="slack" href="https://gophers.slack.com/?redir=%2Farchives%2FC3FJ8M2PN#/" target="_blank"><i class="icon-slack"><span class="sr-only">slack</span></i> <span>slack</span></a></li>
+</ul>
+</div>
+<a class="btn" href="https://www.jetbrains.com/go/download/">Download</a>
+</div>
+</div>
+<div class="menu">
+
+
+</div>
+</div>
+</div>
+<section class="article-section" data-clarity-region="article">
+<div class="content js-toc-content">
+<a class="tag" href="/go/category/goland/">GoLand</a>
+<h1 id="major-updates">Escape Analysis in Go – Stack vs. Heap Allocations Explained</h1> <div class="author-post">
+<div class="author-post__info">
+<div class="author-post__info-avatars">
+
+</div>
+<div class="author-post__text">
+<div class="author-post__text-title">
+<a href="https://blog.jetbrains.com/author/dominika-stankiewicz">Dominika Stankiewicz</a>
+</div>
+
+</div>
+</div>
+</div>
+<p>One of the design choices Google made when developing Go was to abstract memory management away from developers so they could focus on what really matters – writing code. Things like escape analysis and garbage collection are thus automatic, and the Go compiler works in almost mystical ways.</p>
+<p>That’s one of the best features of Go, so long as your program works. But when memory issues arise, and you need to demystify the process to optimize it, that’s when the perspective shifts and the mystery is no longer so appealing.</p>
+<p>In this article, we’ll explain one of the most confusing performance optimization problems – escape analysis, i.e. how the compiler decides what stays on the stack, and what moves to the heap. We’ll cover what escape analysis is and how it works, what the most common escape cases are and how to inspect them, why inspections might be hard to use, and even how GoLand can perhaps help with that.</p>
+<h2 class="wp-block-heading">What is escape analysis in Go?</h2>
+<p>Escape analysis is a compiler optimization that determines whether a value can be allocated on the stack or must be moved to the heap. In other words, in Golang, the escape analysis process inspects every value your program creates to answer the question: Can this safely live on the stack, or does something outside the current function still need it after the function returns (and therefore it needs to live on the heap)?</p>
+<p>The stack is a per-goroutine region where allocations are significantly cheaper and reclaimed automatically when a function returns, so storage happens fast but is short-lived. The heap is a shared, longer-lived memory space that the garbage collector must track and clean up, so it’s more resource-intensive. Escape analysis is the bridge between the two.</p>
+<p>A value is said to “escape” when the compiler can’t prove that it’s done being used by the time the function exits, as explained in the <a href="https://go.dev/doc/gc-guide#Where_Go_Values_Live" rel="noopener" target="_blank">Go documentation</a>. For each value, it asks whether any reference to that value can outlive the function that created it. If the answer is no, the value stays on the stack. If the answer is yes – or if the compiler simply can’t prove the answer is no – the value is allocated on the heap to be safe. The classic example is returning a pointer to a local variable – the function ends, but a reference to that variable lives on, so the value can’t sit on the stack frame that’s about to be discarded. It escapes to the heap instead.</p>
+<p>It’s worth pointing out here that escape decisions are not set in stone. They can change depending on how you structure your code, <a href="https://go.dev/blog/allocation-optimizations" rel="noopener" target="_blank">the Go version you’re compiling with</a>, as well as on the environment (OS/architecture), compiler settings, and other optimization decisions like inlining. That’s why you can’t assume a value will or will not always escape in a given context – you need to check every time.</p>
+<h3 class="wp-block-heading">And why should I care?</h3>
+<p>Unlike in some other languages, in Go you don’t manually choose between stack and heap allocation the way you might with <code>malloc</code> and <code>free</code> in C. Instead, the compiler makes the call. Go also manages memory safety for you, so as to prevent escaped values from being unsafe.</p>
+<p>Many developers stop there and never bother with escape analysis. After all, the documentation says that “<a href="https://go.dev/doc/faq#stack_or_heap" rel="noopener" target="_blank">you don’t need to know</a>”, and if it works, it works, right?</p>
+<p>Having said that, you do still have agency and <em>can</em> write code in ways that influence these compiler decisions – in a good way or indeed in a bad way. That’s why an understanding of escape analysis is actually a must-have skill for any Go developer.</p>
+<h2 class="wp-block-heading">Common reasons values escape to the heap</h2>
+<p>Most of the time, when a value escapes to the heap, it’s for one of a handful of recurring reasons. Recognizing these patterns helps you read compiler output faster and tells you whether a given allocation needs investigation or is simply the best way to run your code. </p>
+<p>It’s important to note that not every escape is a problem – programs with any degree of complexity will inevitably have things living on the heap. The goal here is to recognize the patterns, not to eliminate them all.</p>
+<h3 class="wp-block-heading">Returning pointers</h3>
+<p>Returning a pointer to a local value is probably the most common cause of an escape. The value is created inside the function, but the caller holds onto a reference after the function returns, so it can’t live on the stack frame that’s being torn down.</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="golang" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">func NewUser(name string) *User {
+    u := User{Name: name} // u escapes to the heap
+    return &amp;u
+}</pre>
+<p>This is safe in Go – the compiler notices that <code>&amp;u</code> outlives <code>NewUser</code> and moves the value to the heap automatically. Whether you should care depends on context. Returning pointers is idiomatic and often the right call for API clarity and readability. The right choice depends on your API design and measured performance impact, not on a blanket rule about avoiding pointers.</p>
+<h3 class="wp-block-heading">Closures and goroutines</h3>
+<p>Captured variables will escape when a closure or goroutine may outlive the function that created them. The compiler has to assume the captured value is still reachable, so it allocates it on the heap.</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="generic" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">func process(data []byte) {
+    go func() {
+        handle(data) // data may escape: the goroutine can outlive the process
+    }()
+}</pre>
+<p>Goroutines are a frequent source of confusion here, precisely because they can keep running after the parent function has returned. From the compiler’s point of view, anything the goroutine touches might be needed indefinitely, so it plays it safe.</p>
+<h3 class="wp-block-heading">Interfaces and dynamic values</h3>
+<p>Passing a concrete value through an interface can sometimes lead to a heap allocation. This most often occurs in formatting, logging, and interface-based APIs, where values are boxed into an <code>interface{} (any)</code> before they are handled.</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="golang" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">func logValue(v int) {
+    fmt.Println(v) // v is passed as an interface and may escape
+}</pre>
+<p>However, interface use does <em>not</em> automatically cause heap allocation. Plenty of interface calls don’t allocate at all, and the compiler keeps getting better at this. Treat interfaces as something to <em>check</em> rather than avoid entirely.</p>
+<h3 class="wp-block-heading">Slices, maps, and structs</h3>
+<p>Values can escape when they’re stored inside a data structure that outlives the current function. If you put a pointer into a map, a slice, or a struct field, and that container lives longer than the function, the stored value has to live just as long.</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="generic" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">type Cache struct {
+    items map[string]*Item
+}
+
+func (c *Cache) Add(key string, it *Item) {
+    c.items[key] = it // it escapes: stored in a structure that outlives the call
+}</pre>
+<p>The relationship between the container and the value it holds is crucial here. A slice that never leaves the function may keep its contents on the stack; the same slice returned to a caller or stored in a long-lived struct will push its contents to the heap.</p>
+<h2 class="wp-block-heading">How to check escape analysis in Go</h2>
+<p>The good news is you don’t really need to remember any common reasons for escapes or guess whether a value escaped or not in a particular instant. The Go compiler flags can tell you that, and in fact, inspecting the compiler’s output is the only reliable way to know what’s happening for sure.</p>
+<p>The log covers more than just escapes, though. Alongside allocation decisions, the compiler reports inlining details and other diagnostics, so you get a fairly complete picture of the optimization choices it made for a given build. The downside is that the output isn’t precisely user-friendly or easy to navigate, but we will come back to that later.</p>
+<h3 class="wp-block-heading">How to use compiler flags</h3>
+<p>The Go compiler surfaces escape analysis information through the <code>-gcflags</code> debug flag with the <code>-m</code> option:</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="generic" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">go build -gcflags="-m" ./...</pre>
+<p>The <code>-m</code> flag asks the compiler to print its optimization decisions, including whether a value escaped. The output looks roughly like this:</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="generic" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">./user.go:6:2: moved to heap: u
+./user.go:7:9: &amp;u escapes to heap</pre>
+<p>You can pass <code>-m</code> twice (<code>-gcflags="-m -m"</code>) for more detailed reasoning, though that quickly becomes verbose. There are more flag variations, but <code>-gcflags="-m"</code> is the one you’ll probably reach for most.</p>
+<p>As you can see, the output is keyed by file, line, and column, and escape analysis can be buried among other comments. This means the real work is mapping each message back to the relevant source code so you can understand it in context.</p>
+<h3 class="wp-block-heading">Why it’s hard to work with escape analysis logs</h3>
+<p>While compiler flags are the only way to reliably see what decisions the compiler made, they are arguably not the most ergonomic one. The report may be perfectly readable when you work with a small file, but in larger projects and with daily use, it can quickly become frustrating. No wonder then that it’s a heavily underutilized feature of the Go SDK.</p>
+<p>A few common pain points have come up in our discussions with Go developers:</p>
+<ul class="wp-block-list">
+<li>The output is noisy – a real build prints escape decisions, inlining notes, and other diagnostics all in one place, and most of it isn’t what they’re looking for at the moment.</li>
+<li>Messages are hard to connect to the source – each line is tagged with a file, line, and column, but they still have to open that file and find the right spot.</li>
+<li>They have to constantly switch context – reading a message in the terminal, then jumping to the editor to see the code, then back again. This disrupts their concentration and slows the investigation.</li>
+<li>Not every escaping value is worth optimizing, but the output treats every allocation equally. Meanwhile, most of them don’t matter for performance, and it’s hard to separate signal from noise.</li>
+</ul>
+<p>None of this makes command-line escape analysis bad. It’s a genuinely powerful diagnostic that’s just not always convenient, especially when you’re trying to answer a focused question inside a large codebase. Because escape analysis has been locked behind obscure compiler flags and hard-to-parse logs, it’s become a niche practice even among experienced Go developers. That’s why our GoLand team has designed a tool that lowers the barrier to entry and bridges the gap between “powerful” and “convenient”.</p>
+<h2 class="wp-block-heading">How GoLand helps with escape analysis</h2>
+<p>The GoLand escape analysis support that arrived in the <a href="https://www.jetbrains.com/go/download/" rel="noopener" target="_blank">2026.2</a> release was built to address the pain points we’d heard from developers. Under the hood, the tool largely does what you would do manually, running the <code>go build</code> command with the <code>-gcflags="-m -m"</code> flag. (To be precise, GoLand runs <code>-gcflags="-m=2 -json=0,&lt;path&gt;"</code>, since we found that storing logs in JSON format provides a more structured and stable output).</p>
+<p>But the tool now also adds a layer that parses that raw <code>gcflags</code> output and brings it directly into the editor, so you can stay close to your code while investigating allocation decisions instead of bouncing between the terminal and your files.</p>
+<h3 class="wp-block-heading">Running the escape analysis tool</h3>
+<p>The workflow is pretty straightforward. You open the <em>Go Optimization</em> window, choose <em>Escape analysis</em>, pick a scope, and run it.</p>
+<figure class="wp-block-image size-full"></figure>
+<p>You can analyze a single file or a whole package – the file-scoped option is handy for tightly focused units of code, such as an individual AWS Lambda handler, where you only care about one function’s allocations.</p>
+<p>You can also choose which message types to show (see: <em>How to read escape messages</em>) and set environment variables for the Go process before running. The most frequently used are <a href="https://pkg.go.dev/cmd/compile#hdr-Command_Line" rel="noopener" target="_blank">compiler flags</a> (<code>goflags</code>) – on top of the standard <code>-m</code>, you might also be interested in <code>-N</code> (disables compiler optimizations) and <code>-l</code> (disables function inlining). The <a href="https://pkg.go.dev/cmd/go#hdr-Build_constraints" rel="noopener" target="_blank">values of the GOARCH and GOOS environment variables</a> can also affect your output, as some compiler decisions are target-dependent and can affect inlining, allocation decisions, and the diagnostics reported by <code>gcflags</code>.</p>
+<h3 class="wp-block-heading">Working with the output</h3>
+<p>Once the analysis finishes, you’ll find the results where they’re most useful:</p>
+<ul class="wp-block-list">
+<li><strong>In the editor</strong>: Gutter markers with escape messages appear right next to the lines they describe. If several messages belong to one line, the marker will show you the count. Also, hovering over the gutter marker will show you the compiler message and the escape flow. Hovering over a function name will show the escape results for that function, so you no longer have to match line numbers by hand.</li>
+</ul>
+<figure class="wp-block-image size-full"></figure>
+<ul class="wp-block-list">
+<li><strong>In <em>Go Optimization</em> tools</strong>: This tool window lists the results by file, function and/or category, and then message type. You can also filter the logs by message type to cut through the noise. Click on any result to jump straight to the corresponding line in the editor.</li>
+</ul>
+<figure class="wp-block-image size-full"></figure>
+<ul class="wp-block-list">
+<li><strong>Views</strong>: By default, the <em>Escape analysis</em> tool shows the output as a parsed tree. If you prefer the unprocessed output from the compiler’s command, the console output view shows it raw. Even there, the lines are clickable and take you to the right place in your code.</li>
+</ul>
+<figure class="wp-block-image size-full"></figure>
+<h3 class="wp-block-heading">Comparing files</h3>
+<p>After you make changes to your code, you can rerun the analysis and compare results in separate tabs to see whether the allocation actually moved off the heap. This is important for iterative work and making sure the changes you make actually move the needle. If you’re already used to profiling your programs, this is a natural extension of that process. And if not, you can read more on <a href="https://blog.jetbrains.com/go/2023/02/02/profiling-go-code-with-goland/">how to profile Go code with GoLand</a> to get a more detailed picture.</p>
+<h3 class="wp-block-heading">How to read escape messages</h3>
+<p>The console messages are generic. The two you’ll see most often are <code>escapes to heap</code> and <code>moved to heap</code>. Both indicate that a value couldn’t stay on the stack. Others describe inlining and parameter behavior.</p>
+<p>Treat these as the diagnostic signals that they are, not as refactoring instructions. A <code>moved to heap</code> message is just information about what the compiler did. Whether it’s worth acting on depends entirely on how that affects performance.</p>
+<p>Here are the message types that the GoLand tool surfaces and what they mean – they map directly to the compiler reports:</p>
+<figure class="wp-block-table"><table class="has-fixed-layout"><thead><tr><th><strong>Message</strong></th><th><strong>What it means</strong></th></tr></thead><tbody><tr><td><strong><em>Escape to Heap</em></strong></td><td>A value must be allocated on the heap because it’s still needed after the function returns.</td></tr><tr><td><strong><em>Moved to Heap</em></strong></td><td>The compiler couldn’t guarantee the value is no longer needed after the function returned, so it allocated it on the heap.</td></tr><tr><td><strong><em>Leak Param</em></strong></td><td>A function parameter escapes the current function and may need to stay valid after it returns.</td></tr><tr><td><strong><em>Can Inline</em></strong></td><td>A function is small and simple enough that the compiler can (but doesn’t have to) replace calls to it with its body.</td></tr><tr><td><strong><em>Inlining Call</em></strong></td><td>The compiler actually inlined a specific call.</td></tr><tr><td><strong><em>Other</em></strong></td><td>Additional compiler diagnostics related to escape and optimization decisions.</td></tr></tbody></table></figure>
+<p>To read more about this and see examples, go to the <a href="https://www.jetbrains.com/help/go/2026.2/escape-analysis.html#understand-common-escape-analysis-messages" rel="noopener" target="_blank">GoLand documentation</a>.</p>
+<h2 class="wp-block-heading">Escape analysis and performance</h2>
+<p>Escape analysis matters for performance because heap allocations aren’t free. Every value on the heap generates more work for the garbage collector to track and reclaim, and the allocation itself carries overhead that stack allocation doesn’t. If you reduce unnecessary heap allocations on a hot path, you can potentially meaningfully cut both GC pressure and latency.</p>
+<p>That said, heap allocation is normal and frequently necessary in Go. Plenty of values should live on the heap, and trying to force everything onto the stack is a losing game that hurts your code’s readability for little to no gain. Escape analysis is most valuable in specific places: hot paths, tight loops, high-throughput services, serialization and deserialization code, and latency-sensitive workflows. Outside those areas, an escaping value is usually just an escaping value. In other words, the old adage about <a href="https://wiki.c2.com/?PrematureOptimization" rel="noopener" target="_blank">premature optimization</a> applies to escape analysis like nowhere else, and you should only focus on the proverbial 3%.</p>
+<p>The single most important habit is to measure. Escape analysis tells you what the compiler decided, but it doesn’t tell you whether that decision is hurting you – only benchmarks and profiling can do that. Use escape analysis alongside benchmarks and <a href="https://blog.jetbrains.com/go/2023/02/02/profiling-go-code-with-goland/">profiling in Go</a>, and always measure before and after a change to see whether it actually helped. Escape analysis is one performance input, not a complete strategy on its own, and not every escaping value is worth a developer’s time.</p>
+<h2 class="wp-block-heading">Best practices for working with escape analysis</h2>
+<p>Finally, here’s a short, practical checklist for using escape analysis well in real projects:</p>
+<ol class="wp-block-list">
+<li>Start with measurement. Use profiling and benchmarks to find allocations that actually matter before you open the escape analysis logs. Don’t optimize unquestioningly.</li>
+<li>Focus on hot paths. Concentrate your attention on tight loops, high-throughput code, and latency-sensitive sections. Apart from these instances, escapes rarely justify the effort of avoiding them.</li>
+<li>Understand why the value escaped. Read the compiler message and the escape flow so you’re fixing the cause, not the symptom.</li>
+<li>Avoid unnecessary micro-optimizations. Treat heap allocation as a signal worth examining, not as an automatic bug to be eliminated.</li>
+<li>Protect readability and design. Don’t contort an API or sacrifice clarity to shave an allocation that doesn’t show up in your benchmarks. Maintainable code always wins over clever code.</li>
+<li>Verify your changes. Rerun the analysis and re-measure to confirm that a change did what you intended.</li>
+</ol>
+<p>You may also be interested in Go’s official <a href="https://go.dev/doc/gc-guide#Optimization_guide" rel="noopener" target="_blank"><em>Guide to the Go Garbage Collector</em></a>, which has an optimization guide for the entire GC, including how to eliminate heap allocations with escape analysis.</p>
+<h2 class="wp-block-heading">FAQ</h2>
+<h3 class="wp-block-heading">Does escape analysis improve Go app performance?</h3>
+<p>Yes and no. When speaking of escape analysis as a part of the compilation process, it was designed to ensure optimal performance by prioritizing fast allocation and reducing garbage collection pressure, both of which improve your app’s performance.</p>
+<p>However, as a developer tool, escape analysis is just a diagnostic, not an optimization that you turn on. What can improve performance is using its output to spot avoidable heap allocations on hot paths and adjusting your code accordingly. With code that isn’t performance-critical, acting on escape results usually changes nothing measurable.</p>
+<h3 class="wp-block-heading">Is escape analysis the same as profiling?</h3>
+<p>No. Profiling tells you where your program spends time or memory at runtime. Escape analysis is a compile-time snapshot of where values are allocated and why. They’re complementary: Profiling tells you where to look, and escape analysis helps you understand why the allocations are occurring in those locations.</p>
+<h3 class="wp-block-heading">Can the results of an escape analysis change between Go versions?</h3>
+<p>Yes. Escape decisions depend on the compiler, and the Go team improves its analysis and inlining over time, <a href="https://go.dev/blog/allocation-optimizations" rel="noopener" target="_blank">as they did in the 1.25 and 1.26 releases</a>. A value that escapes in one Go version may stay on the stack when using another.</p>
+<h3 class="wp-block-heading">Should developers avoid pointers to reduce heap allocations?</h3>
+<p>Not as a rule. Returning or passing pointers can cause values to escape, but pointers are idiomatic and often the clearest choice. Avoiding them everywhere harms readability and can even hurt performance if large values have to be copied. Decide based on API design and measured impact, and use escape analysis to check rather than to enforce a blanket policy.</p>
+<h3 class="wp-block-heading">Do interfaces always cause values to escape?</h3>
+<p>No. Passing values through interfaces can contribute to heap allocation in some cases – often around formatting and logging – but it doesn’t always, and the compiler keeps getting better at avoiding it. Interface boundaries are worth keeping an eye on in the compiler output, but they’re not a guaranteed source of escapes.</p>
+<h3 class="wp-block-heading">When should I care about Go escape analysis?</h3>
+<p>When you have a performance-sensitive path and evidence that allocations are part of the problem. If profiling points to allocation pressure in a hot loop, a high-throughput service, or serialization code, escape analysis helps you understand and address it. For everyday code that meets its performance goals, you can let the compiler do its job and move on as Go intended.</p>
+<div class="content__row">
+<div class="tag-list">
+<a class="tag" href="/go/tag/escape-analysis/">escape analysis</a>
+<a class="tag" href="/go/tag/performance-optimization/">performance optimization</a>
+</div>
+<ul class="social">
+<li><span>Share</span></li>
+<li><a href="https://www.facebook.com/sharer.php?u=https%3A%2F%2Fblog.jetbrains.com%2Fgo%2F2026%2F07%2F20%2Fescape-analysis%2F?facebook_en_US" rel="noopener noreferrer" target="_blank"><i class="icon-facebook"><span class="sr-only">Facebook</span></i></a></li>
+<li><a href="https://twitter.com/intent/tweet?source=https%3A%2F%2Fblog.jetbrains.com%2Fgo%2F2026%2F07%2F20%2Fescape-analysis%2F&amp;text=https%3A%2F%2Fblog.jetbrains.com%2Fgo%2F2026%2F07%2F20%2Fescape-analysis%2F&amp;via=GoLandIDE?twitter_en_US" rel="noopener noreferrer" target="_blank"><span class="sr-only">Twitter</span></a></li>
+<li><a href="http://www.linkedin.com/shareArticle?mini=true&amp;url=https%3A%2F%2Fblog.jetbrains.com%2Fgo%2F2026%2F07%2F20%2Fescape-analysis%2F?linkedin_en_US" rel="noopener noreferrer" target="_blank"><i class="icon-linkedin"><span class="sr-only">Linkedin</span></i></a></li>
+</ul>
+</div>
+<div class="content__pagination"><a class="content__pagination-prev" href="https://blog.jetbrains.com/go/2026/07/16/goland-2026-2-is-now-available/"><i class="icon-arrow-left"><span class="sr-only">Prev post</span></i> GoLand 2026.2 Is Now Available!</a></div> <div class="content__form">
+<div class="form-subscribe">
+<h4>Subscribe to GoLang Blog updates</h4>
+
+</div>
+<div class="form_massage" style="display: none"><p>Thanks, we've got you!</p></div>
+</div>
+</div>
+
+
+<div class="container comments-container">
+<div class="content">
+
+</div>
+</div>
+</section>
+<div class="section light-gray-bg">
+<div class="container">
+<div class="section__head">
+<h2>Discover more</h2>
+</div>
+<div class="row">
+<div class="col" post_id="723210">
+<a class="card img-visible" href="https://blog.jetbrains.com/go/2026/07/16/goland-2026-2-is-now-available/">
+ <div class="card__header">
+<h4>GoLand 2026.2 Is Now Available!</h4> </div>
+<div class="card__body">
+<p>GoLand 2026.2 is all about helping you understand and improve your Go applications with less effort. This release introduces the new Go Optimization tool window, bringing profiling, escape analysis, and struct optimization into a single workflow. You can now profile regular Go applications without a…</p>
+</div>
+<div class="card__footer">
+<div class="author">
+
+<div class="author__info">
+<span>Artem Pronichev</span>
+
+</div>
+</div>
+
+</div>
+</a>
+</div>
+<div class="col" post_id="708307">
+<a class="card img-visible" href="https://blog.jetbrains.com/go/2026/05/20/golang-profiling-guide/">
+ <div class="card__header">
+<h4>A Practical Guide to Profiling in Go</h4> </div>
+<div class="card__body">
+<p>Learn how to profile in Go with `pprof`. Explore CPU, memory, goroutine, block, and mutex profiling to analyze performance and optimize Go applications.</p>
+</div>
+<div class="card__footer">
+<div class="author">
+
+<div class="author__info">
+<span>Dominika Stankiewicz</span>
+
+</div>
+</div>
+
+</div>
+</a>
+</div>
+<div class="col" post_id="706355">
+<a class="card img-visible" href="https://blog.jetbrains.com/go/2026/05/11/the-goland-2026-2-early-access-program-has-started/">
+ <div class="card__header">
+<h4>The GoLand 2026.2 Early Access Program Has Started</h4> </div>
+<div class="card__body">
+<p>The Early Access Program (EAP) for GoLand 2026.2 is now open. It’s a great opportunity to try upcoming features for free and help shape the product.
+
+
+
+EAP builds give you early access to what we’re working on, so you can test new functionality in your real workflows and share feedback with the GoLa…</p>
+</div>
+<div class="card__footer">
+<div class="author">
+
+<div class="author__info">
+<span>Artem Pronichev</span>
+
+</div>
+</div>
+
+</div>
+</a>
+</div>
+<div class="col" post_id="703714">
+<a class="card img-visible" href="https://blog.jetbrains.com/go/2026/04/28/popular-golang-web-frameworks/">
+ <div class="card__header">
+<h4>Popular Go Web Frameworks: A Practical Guide for Developers</h4> </div>
+<div class="card__body">
+<p>Explore the most popular Go web frameworks – Gin, Echo, Chi, and Fiber: when to use them, what are the tradeoffs, and how they compare to net/http.</p>
+</div>
+<div class="card__footer">
+<div class="author">
+
+<div class="author__info">
+<span>Dominika Stankiewicz</span>
+
+</div>
+</div>
+
+</div>
+</a>
+</div>
+</div>
+</div>
+</div>
+</main>
