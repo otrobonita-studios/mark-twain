@@ -1,0 +1,299 @@
+<article class="post-4825 post type-post status-publish format-standard hentry category-c tag-c tag-c26 tag-pimpl" id="post-4825" itemscope="" itemtype="https://schema.org/CreativeWork">
+<div class="inside-article">
+
+<div class="entry-content" itemprop="text">
+<p class="wp-block-paragraph">PImpl (which stands for Pointer to implementation) is a programming tehnicque to remove implementation details from a class by placing them in a separate class that is accessed through an opaque pointer. Its purpose is to separate interfaces and implementations and minimize compile-time dependencies. In this article, we’ll at how the PImpl idiom is typically implemented in C++ and how C++26 simplifies its implementation.</p>
+<h2 class="wp-block-heading">Implementing with a raw pointer</h2>
+<p class="wp-block-paragraph">We can implement the Pimpl idiom using raw pointers and abiding to the Rule of Five. This is a guideline that says that when a class defines a special member function (for resource management) it should define all five of them (destructor, copy constructor, copy assignment operator, move constructor, move assignment operator).</p>
+<p class="wp-block-paragraph">To demonstrate this, we will use a widget that represents a UI element that has a label and can be clicked and on each click a counter is incremented. Therefore, a widget would have a counter and a label but these are implementation details that are hidden behind an implementation class.</p>
+<p class="wp-block-paragraph">This <code>Widget</code> class definition looks as follows:</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">#pragma once
+
+#include &lt;string&gt;
+
+class Widget 
+{
+public:
+    Widget(const std::string&amp; name);
+    ~Widget();
+
+    Widget(const Widget&amp; other);
+    Widget&amp; operator=(const Widget&amp; other);
+
+    Widget(Widget&amp;&amp; other) noexcept;
+    Widget&amp; operator=(Widget&amp;&amp; other) noexcept;
+
+    void click();
+    int  clickCount() const;
+    std::string label() const;
+
+private:
+    struct Impl;
+    Impl* pimpl_;
+};</pre>
+<p class="wp-block-paragraph">The <code>Widget::Impl</code> class is an incomplete type here. It’s forward declared and defined in the .cpp file. The <code>Widget</code> class keeps a pointer to an object of this type.</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">#include "Widget.h"
+
+struct Widget::Impl
+{
+    std::string name;
+    int         clicks = 0;
+
+    explicit Impl(std::string n) : name(std::move(n)) {}
+};
+
+Widget::Widget(const std::string&amp; name)
+    : pimpl_(new Impl(name))
+{
+}
+
+Widget::~Widget()
+{
+    delete pimpl_;
+}
+
+Widget::Widget(const Widget&amp; other)
+    : pimpl_(new Impl(*other.pimpl_))
+{
+}
+
+Widget&amp; Widget::operator=(const Widget&amp; other)
+{
+    if (this != &amp;other)
+    {
+        Impl* tmp = new Impl(*other.pimpl_);
+        delete pimpl_;
+        pimpl_ = tmp;
+    }
+    return *this;
+}
+
+Widget::Widget(Widget&amp;&amp; other) noexcept
+    : pimpl_(other.pimpl_)
+{
+    other.pimpl_ = nullptr;
+}
+
+Widget&amp; Widget::operator=(Widget&amp;&amp; other) noexcept
+{
+    if (this != &amp;other)
+    {
+        delete pimpl_;
+        pimpl_ = other.pimpl_;
+        other.pimpl_ = nullptr;
+    }
+    return *this;
+}
+
+void Widget::click()              { ++pimpl_-&gt;clicks; }
+int  Widget::clickCount() const   { return pimpl_-&gt;clicks; }
+std::string Widget::label() const { return pimpl_-&gt;name; }</pre>
+<p class="wp-block-paragraph">The <code>Widget</code> class defines all five special member functions. The move constructor and assignment operator are defined <code>noexcept</code> because they just copy/delete objects and nothing should throw. Moreover, it’s a performance issue because a container such as <code>std::vector&lt;Widget&gt;</code> will only move elements during reallocation if the move constructor is <code>noexcept</code>; otherwise it falls back to copying to preserve its strong exception guarantee.</p>
+<p class="wp-block-paragraph">The <code>Impl</code> object is created during the construction of the <code>Widget</code> and basically stores the state of the widget. The public interface methods of <code>Widget</code> use it to access the state (clicks, name).</p>
+<p class="wp-block-paragraph">A <code>Widget</code> can be used as follows:</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">#include &lt;iostream&gt;
+#include &lt;print&gt;
+
+#include "Widget.h"
+
+int main()
+{
+	Widget a("Button A");
+	a.click();
+	a.click();
+
+	std::println("clicks {}", a.clickCount()); // prints "clicks 2"
+
+	Widget b = a;
+	b.click();
+
+	std::println("clicks {}", b.clickCount()); // prints "clicks 3"
+}</pre>
+<p class="wp-block-paragraph">A problem that may seem subtle is that constness is not propagated from <code>Widget</code> to <code>Impl</code>. In a <code>const</code> method, such as <code>clickCount()</code> above, we can change the state because even if the <code>Impl</code> pointer is const, the object it points to is not. Therefore, the following would compile and produce unexpected results:</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">int  Widget::clickCount() const   { return ++pimpl_-&gt;clicks; }</pre>
+<p class="wp-block-paragraph">On the other hand, a consequence of the move semantics is that a moved-from <code>Widget</code> object has a null <code>pimpl_</code> pointer and calling any function that use the pointer is undefined behavior (UB).</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">Widget a("Button A");
+Widget b = std::move(a);
+a.click();  // undefined behavior</pre>
+<p class="wp-block-paragraph">There are several ways to address this:</p>
+<ul class="wp-block-list">
+<li>document that moved-from objects cannot be used</li>
+<li>add a check that <code>pimpl_</code> is not null everywhere before its usage</li>
+<li>provide a function that indicates whether the object is in a valid state so clients can query whether they can use the widget or not</li>
+</ul>
+<h2 class="wp-block-heading">Implementing using std::unique_ptr</h2>
+<p class="wp-block-paragraph">We can simplify the implementation by using the C++11 <code>std::unique_ptr</code> type instead of a raw pointer. This automatically manages the allocated object so we don’t have to do resource management explicitly.</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">#pragma once
+
+#include &lt;memory&gt;
+#include &lt;string&gt;
+
+class Widget 
+{
+public:
+    Widget(const std::string&amp; name);
+    ~Widget();
+    Widget(Widget&amp;&amp;) noexcept;
+    Widget&amp; operator=(Widget&amp;&amp;) noexcept;
+
+    Widget(const Widget&amp; other);
+    Widget&amp; operator=(const Widget&amp; other);
+
+    void click();
+    int  clickCount() const;
+    std::string label() const;
+
+private:
+    struct Impl;
+    std::unique_ptr&lt;Impl&gt; pimpl_;
+};
+</pre>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">#include "Widget.h"
+
+struct Widget::Impl
+{
+    std::string name;
+    int         clicks = 0;
+
+    explicit Impl(std::string n) : name(std::move(n)) {}
+};
+
+Widget::Widget(const std::string&amp; name)
+    : pimpl_(std::make_unique&lt;Impl&gt;(name)) 
+{
+}
+
+Widget::~Widget() = default;
+Widget::Widget(Widget&amp;&amp;) noexcept = default;
+Widget&amp; Widget::operator=(Widget&amp;&amp;) noexcept = default;
+
+Widget::Widget(const Widget&amp; other)
+    : pimpl_(std::make_unique&lt;Impl&gt;(*other.pimpl_))
+{
+}
+
+Widget&amp; Widget::operator=(const Widget&amp; other)
+{
+    if (this != &amp;other)
+    {
+        *pimpl_ = *other.pimpl_;
+    }
+    return *this;
+}
+
+void Widget::click()              { ++pimpl_-&gt;clicks; }
+int  Widget::clickCount() const   { return pimpl_-&gt;clicks; }
+std::string Widget::label() const { return pimpl_-&gt;name; }</pre>
+<p class="wp-block-paragraph">In this implementation, the copy constructor and copy assignment are explicitly user-defined. The destructor, move constructor, and move assignment operator are defaulted to the compiler but this must happen in the .cpp file because in the header <code>Widget::Impl</code> is an incomplete type and the <code>unique_ptr</code>‘s deleter needs to know the size of Impl.</p>
+<p class="wp-block-paragraph">Although there is no manual handling of resources anymore, the constness issue remains the same as well as the null <code>pimpl_</code> object after a move.</p>
+<h2 class="wp-block-heading">Implementing using std::indirect</h2>
+<p class="wp-block-paragraph">This is where the <code>std::indirect</code> enters the scene. This is a new vocabulary type from C++26, defined in the <code>&lt;memory&gt;</code> header. It is intended to be used for class members that are dynamically allocated but need to behave like values. It’s designed to be used instead of <code>std::unique_ptr</code> where its semantics (not copyable, does not propagate const, and can be <code>null</code>) are not appropriate. The perfect example for this is Pimpl.</p>
+<p class="wp-block-paragraph">The following snippet shows the <code>Widget</code> class implemented using <code>std::indirect</code>:</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">#pragma once
+
+#include &lt;memory&gt;
+#include &lt;string&gt;
+
+class Widget
+{
+public:
+    Widget(const std::string&amp; name);
+
+    Widget(const Widget&amp;);
+    Widget(Widget&amp;&amp;) noexcept;
+    Widget&amp; operator=(const Widget&amp;);
+    Widget&amp; operator=(Widget&amp;&amp;) noexcept;
+    ~Widget();
+
+    void click();
+    int  clickCount() const;
+    std::string label() const;
+
+private:
+    struct Impl;
+    std::indirect&lt;Impl&gt; pimpl_;
+};</pre>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">#include "widget.h"
+
+struct Widget::Impl
+{
+    std::string name;
+    int         clicks = 0;
+
+    explicit Impl(std::string n) : name(std::move(n)) {}
+};
+
+Widget::Widget(const std::string&amp; name)
+    : pimpl_(std::in_place, name) 
+{}
+
+Widget::Widget(const Widget&amp;) = default;
+Widget::Widget(Widget&amp;&amp;) noexcept = default;
+Widget&amp; Widget::operator=(const Widget&amp;) = default;
+Widget&amp; Widget::operator=(Widget&amp;&amp;) noexcept = default;
+Widget::~Widget() = default;
+
+void Widget::click()              { ++pimpl_-&gt;clicks; }
+int  Widget::clickCount() const   { return pimpl_-&gt;clicks; }
+std::string Widget::label() const { return pimpl_-&gt;name; }</pre>
+<p class="wp-block-paragraph">If we compare these implementation, we’ll see that the five special member functions are still declared in the header but they are defaulted (for compiler implementation) in the source file, where the <code>Impl</code> type is complete and known to the compiler (this is the same requirement as for <code>std::unique_ptr</code>).</p>
+<p class="wp-block-paragraph">The <code>std::indirect</code> type owns a single <code>T</code> object allocated on the heap, but behaves like a <code>T</code> member:</p>
+<ul class="wp-block-list">
+<li><strong>Deep copy</strong>: copying the <code>std::indirect&lt;T&gt;</code> object copies the owned object, so your class’s compiler-generated copy constructor just works.</li>
+<li><strong>Const propagation</strong>: through a <code>const std::indirect&lt;T&gt;</code> object, you only get const access to the <code>T</code>.</li>
+<li><strong>Never null</strong>: it always holds a value, except in the moved-from state (but features a member function called <code>valueless_after_move()</code> that lets you check the state).</li>
+</ul>
+<p class="wp-block-paragraph">Using <code>std::indirect</code> does not prevent us from having to explicitly declare and default the special member functions but does help us with propagating constness, which means the code is more robust towards accidental changes. </p>
+<p class="wp-block-paragraph">The <code>valueless_after_move()</code> is basically a replacement for null check from <code>unique_ptr</code>. For instance, we can add an assert to all the functions that use the <code>pimpl_</code> object to ensure they are not invoked after the widget has been moved.</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">void Widget::click() 
+{
+    assert(!pimpl_.valueless_after_move() &amp;&amp; "use of moved-from Widget");
+    ++pimpl_-&gt;clicks;
+}</pre>
+<p class="wp-block-paragraph">Another example of using <code>valueless_after_move()</code> is erase-remove from a vector from which we moved out objects. Here is an example:</p>
+<pre class="EnlighterJSRAW" data-enlighter-group="" data-enlighter-highlight="" data-enlighter-language="cpp" data-enlighter-linenumbers="" data-enlighter-lineoffset="" data-enlighter-theme="" data-enlighter-title="">std::vector&lt;std::indirect&lt;Widget&gt;&gt; widgets = ...;
+std::vector&lt;std::indirect&lt;Widget&gt;&gt; selected;
+
+for (auto&amp; w : widgets)
+    if (select(w))
+        selected.push_back(std::move(w));   // leaves a valueless widget behind
+
+std::erase_if(widgets, [](const auto&amp; w) {
+    return w.valueless_after_move();        // remove the dangling object
+});</pre>
+<p class="wp-block-paragraph">This is possible with <code>std::unique_ptr</code> too, but the check would be a <code>w == nullptr</code>. Therefore, it’s just a more verbose way of checking that an <code>std::indirect</code> object still holds a value or not.</p>
+<p class="wp-block-paragraph"><code>std::indirect</code> comes with a companion, <code>std::polymorphic</code>, but we will look at that in another article.</p>
+<p class="wp-block-paragraph">At the time of writing this, only GCC 16 supports <code>std::indirect</code>.</p>
+<h2 class="wp-block-heading">See also</h2>
+<ul class="wp-block-list">
+<li><a href="https://en.cppreference.com/cpp/language/pimpl" rel="noopener" target="_blank" title="">PImpl</a></li>
+<li><a href="https://learn.microsoft.com/en-us/cpp/cpp/pimpl-for-compile-time-encapsulation-modern-cpp?view=msvc-170" rel="noopener" target="_blank" title="">Pimpl For Compile-Time Encapsulation (Modern C++)</a></li>
+<li><a href="https://medium.com/@weidagang/modern-c-the-pimpl-idiom-53173b16a60a" rel="noopener" target="_blank" title="">Modern C++: The Pimpl Idiom</a></li>
+<li><a href="https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2025/p3019r14.pdf" rel="noopener" target="_blank" title="">P3019R14: indirect and polymorphic: Vocabulary Types for Composite Class Design</a></li>
+</ul>
+
+<div class="sharedaddy sd-sharing-enabled"><div class="robots-nocontent sd-block sd-social sd-social-icon-text sd-sharing"><h3 class="sd-title">Share this:</h3><div class="sd-content"><ul><li class="share-twitter"><a aria-labelledby="sharing-twitter-4825" class="share-twitter sd-button share-icon" data-shared="sharing-twitter-4825" href="https://mariusbancila.ro/blog/2026/07/23/the-pimpl-idiom-and-the-cpp26-stdindirect-type/?share=twitter" rel="nofollow noopener noreferrer" target="_blank">
+<span hidden="" id="sharing-twitter-4825">Share on X (Opens in new window)</span>
+<span>X</span>
+</a></li><li class="share-reddit"><a aria-labelledby="sharing-reddit-4825" class="share-reddit sd-button share-icon" data-shared="sharing-reddit-4825" href="https://mariusbancila.ro/blog/2026/07/23/the-pimpl-idiom-and-the-cpp26-stdindirect-type/?share=reddit" rel="nofollow noopener noreferrer" target="_blank">
+<span hidden="" id="sharing-reddit-4825">Share on Reddit (Opens in new window)</span>
+<span>Reddit</span>
+</a></li><li class="share-linkedin"><a aria-labelledby="sharing-linkedin-4825" class="share-linkedin sd-button share-icon" data-shared="sharing-linkedin-4825" href="https://mariusbancila.ro/blog/2026/07/23/the-pimpl-idiom-and-the-cpp26-stdindirect-type/?share=linkedin" rel="nofollow noopener noreferrer" target="_blank">
+<span hidden="" id="sharing-linkedin-4825">Share on LinkedIn (Opens in new window)</span>
+<span>LinkedIn</span>
+</a></li><li class="share-mastodon"><a aria-labelledby="sharing-mastodon-4825" class="share-mastodon sd-button share-icon" data-shared="sharing-mastodon-4825" href="https://mariusbancila.ro/blog/2026/07/23/the-pimpl-idiom-and-the-cpp26-stdindirect-type/?share=mastodon" rel="nofollow noopener noreferrer" target="_blank">
+<span hidden="" id="sharing-mastodon-4825">Share on Mastodon (Opens in new window)</span>
+<span>Mastodon</span>
+</a></li><li class="share-facebook"><a aria-labelledby="sharing-facebook-4825" class="share-facebook sd-button share-icon" data-shared="sharing-facebook-4825" href="https://mariusbancila.ro/blog/2026/07/23/the-pimpl-idiom-and-the-cpp26-stdindirect-type/?share=facebook" rel="nofollow noopener noreferrer" target="_blank">
+<span hidden="" id="sharing-facebook-4825">Share on Facebook (Opens in new window)</span>
+<span>Facebook</span>
+</a></li><li><a class="sharing-anchor sd-button share-more" href="#"><span>More</span></a></li></ul><div class="sharing-hidden"><div class="inner" style="display: none;"><ul><li class="share-email"><a aria-labelledby="sharing-email-4825" class="share-email sd-button share-icon" data-email-share-error-text="If you're having problems sharing via email, you might not have email set up for your browser. You may need to create a new email yourself." data-email-share-error-title="Do you have email set up?" data-email-share-nonce="b268b4cd13" data-email-share-track-url="https://mariusbancila.ro/blog/2026/07/23/the-pimpl-idiom-and-the-cpp26-stdindirect-type/?share=email" data-shared="sharing-email-4825" href="mailto:?subject=%5BShared%20Post%5D%20The%20PImpl%20idiom%20and%20the%20C%2B%2B26%20std%3A%3Aindirect%20type&amp;body=https%3A%2F%2Fmariusbancila.ro%2Fblog%2F2026%2F07%2F23%2Fthe-pimpl-idiom-and-the-cpp26-stdindirect-type%2F&amp;share=email" rel="nofollow noopener noreferrer" target="_blank">
+<span hidden="" id="sharing-email-4825">Email a link to a friend (Opens in new window)</span>
+<span>Email</span>
+</a></li><li class="share-print"><a aria-labelledby="sharing-print-4825" class="share-print sd-button share-icon" data-shared="sharing-print-4825" href="https://mariusbancila.ro/blog/2026/07/23/the-pimpl-idiom-and-the-cpp26-stdindirect-type/#print?share=print" rel="nofollow noopener noreferrer" target="_blank">
+<span hidden="" id="sharing-print-4825">Print (Opens in new window)</span>
+<span>Print</span>
+</a></li></ul></div></div></div></div></div><div class="sharedaddy sd-block sd-like jetpack-likes-widget-wrapper jetpack-likes-widget-unloaded" data-name="like-post-frame-14488873-4825-6a632f413cab4" data-src="https://widgets.wp.com/likes/?ver=16.0.1#blog_id=14488873&amp;post_id=4825&amp;origin=mariusbancila.ro&amp;obj_id=14488873-4825-6a632f413cab4" data-title="Like or Reblog" id="like-post-wrapper-14488873-4825-6a632f413cab4"><h3 class="sd-title">Like this:</h3><div class="likes-widget-placeholder post-likes-widget-placeholder" style="height: 55px;"><span class="button"><span>Like</span></span> <span class="loading"><span class="screen-reader-text">Loading…</span></span></div></div> </div>
+
+</div>
+</article>
