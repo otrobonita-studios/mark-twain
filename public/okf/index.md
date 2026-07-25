@@ -32,6 +32,7 @@ It exists so that any AI agent (or person) visiting the site can read a structur
 
 ### Corpus (the technical layer)
 - [Corpus index](/corpus/index.md) — the RAG pipeline that powers the chat.
+- [mark-twain-cli](/corpus/mark-twain-cli.md) — terminal client for the Research API.
 
 ### Site
 - [Site index](/site/index.md) — the public pages and how they map to this bundle.

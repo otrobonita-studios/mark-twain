@@ -10,3 +10,4 @@ timestamp: 2026-06-17T00:00:00Z
 - [Vector store (Qdrant)](/corpus/vector-store-qdrant.md) — where embeddings live and are searched.
 - [Embedding pipeline](/corpus/embedding-pipeline.md) — how text becomes vectors.
 - [Sources](/corpus/sources/index.md) — the three origin systems.
+- [mark-twain-cli](/corpus/mark-twain-cli.md) — terminal client for the Research API.
