@@ -1,0 +1,166 @@
+Today I am taking a look at the weird world of multicast, where packets get delivered more than once, and we route using a backwards routing table. But, once you understand how it works, a whole world of content distribution possibilities open up to you! Inspired by an old video by @TallPaulTech, I’m using live TV distribution as an example of how multicast works, and how it can potentially be a massive upgrade to your network in oddly niche use cases.
+
+Video
+⌗
+
+Prior Art
+⌗
+
+These videos / etc. were very useful to me, or I think you would like them in relation to this:
+
+Tall Paul Tech’s playlist on building an IPTV setup
+
+Tall Paul Tech’s original video on the topic
+
+Link-Local Examples
+⌗
+
+All of these will work on a local network, but if you are not doing MLD / IGMP snooping, they may cause a generally bad experience (esp. for wireless clients).
+
+Basic File (w/o transcoding)
+⌗
+
+If your clients can decode the video / audio, you can save a lot of CPU power by sending it as-is, without transcoding. So, here we will take the media, copy the audio and video tracks, mux it into an MPEG-TS transport stream, and send it
+
+#-re means realtime
+
+#-i bbb.mov is the input file (big buck bunny)
+
+#-c:v and -c:a says to copy the video and audio
+
+#-f mpegts "udp://[ff02::69@eth0]:5002?pkt_size=1200" is the mux and udp output
+
+ffmpeg -re -i bbb.mov -c:v copy -c:a copy -f mpegts 
+"udp://[ff02::69@eth0]:5001?pkt_size=1200"
+
+Basic File (w/ transcoding)
+⌗
+
+If your media is in a format that isn’t commonly supported (although if you are playing in VLC you should be able to play any format ever invented), you may need to transcode it. This example uses super basic x264 + aac, and again packs it into an MPEG-TS transport stream.
+
+#-re means realtime
+
+#-i bbb.mov is the input file (big buck bunny)
+
+#-c:v libx264 -preset veryfast -profile:v high -level 4.1 -pix_fmt yuv420p is the video transcode
+
+#-c:a aac -b:a 128k is the audio transcode
+
+#-f mpegts "udp://[ff02::69@eth0]:5002?pkt_size=1200" is the mux and udp output
+
+ffmpeg -re -i bbb.mov -c:v libx264 -preset veryfast -profile:v high -level 4.1 -pix_fmt yuv420p -c:a aac -b:a 128k -f mpegts 
+"udp://[ff02::69@eth0]:5002?pkt_size=1200"
+
+YLE TV
+⌗
+
+I’m living in Finland, so I have access to the national broadcaster YLE. Your access to this of course may not be possible in your country. But, this is an example of how I am doing it.
+
+#run yle-dl, load channel tv1, pipe to ffmpeg
+
+#yle-dl ultimately queries the yle infra for an HLS playlist, and downloads that with ffmpeg into a matroska container
+
+#ffmpeg realtime, input stdin, map streams and metadata, copy (no transcode), output mpegts, to udp
+
+yle-dl tv1 --pipe | ffmpeg -re -i - -map 
+0
+ -map_metadata 
+0
+ -c copy -f mpegts 
+"udp://[ff02::69%eth0]:5003?pkt_size=1200"
+
+Routed Multicast
+⌗
+
+For larger networks where you need to span subnets / vlans, you can use routed multicast. I’m using source-specific multicast, which is easier to work with than any-source multicast, and we get to ignore rendevous points.
+
+FRR configuration
+⌗
+
+Here’s the configuration I’m using for FRR (it’s not optimized, I’ll admit)
+
+log syslog informational
+
+interface eth0
+
+ description upstream
+
+ ipv6 pim
+
+ ipv6 pim hello 
+10
+ 
+40
+
+!
+
+interface eth1
+
+ description downstream
+
+ ipv6 pim
+
+ ipv6 mld
+
+ ipv6 mld version 
+2
+
+ ipv6 mld query-interval 
+60
+
+ ipv6 mld query-max-response-time 
+15
+
+ ipv6 mld last-member-query-interval 
+10
+
+#If doing access list below
+
+#ipv6 mld access-list mld-groups
+
+!
+
+router pim6
+
+ ssm prefix-list ssm6
+
+!
+
+ipv6 prefix-list ssm6 seq 
+5
+ permit ff3e::/16 ge 
+16
+
+!
+
+#Alternate filter on the MLD side
+
+#ipv6 access-list mld-groups seq 5  permit ipv6 any ff3e::1/128
+
+#ipv6 access-list mld-groups seq 10 permit ipv6 any ff3e::2/128
+
+#ipv6 access-list mld-groups seq 100 deny ipv6 any ff3e::/16
+
+#Filter both groups and sources
+
+#ipv6 access-list mld-groups seq 5  permit ipv6 2001:db8:1::10/128 ff3e::1/128
+
+#ipv6 access-list mld-groups seq 10 deny   ipv6 any                ff3e::/16
+
+Basic file routed
+⌗
+
+This example streams a file over multicast, but uses additional options for source-specific multicast and with the correct hop limit.
+
+You can modify any of the earlier link-local examples to work over routed multicast using these options.
+
+#-re means realtime
+
+#-i bbb.mov is the input file (big buck bunny)
+
+#-c:v and -c:a says to copy the video and audio
+
+#-f mpegts needs a hop limit now also, similar to a ttl in ipv4
+
+ffmpeg -re -i bbb.mov -c:v copy -c:a copy -f mpegts 
+"udp://[ff35::69]:5004?hops=32&pkt_size=1200"
