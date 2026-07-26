@@ -1,0 +1,83 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">Retry Storm Lab</h1></div>
+<p dir="auto"><strong>A retry is not free. See when your recovery policy becomes the outage.</strong></p>
+<p dir="auto">Retry Storm Lab is a deterministic Python simulator for partial dependency failures. It models fresh requests and retries competing for the same capacity, then compares immediate, fixed, exponential, and full-jitter backoff policies.</p>
+<p dir="auto"><a href="/telemetry-sh/retry-storm-lab/blob/main/docs/retry-storm-lab.png" rel="noopener noreferrer" target="_blank"></a></p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Why this exists</h2></div>
+<p dir="auto">Retries improve reliability when failures are brief and spare capacity exists. During a sustained partial outage, synchronized clients can instead amplify demand, starve fresh requests, and keep a recovering service overloaded.</p>
+<p dir="auto">The simulator makes that feedback loop visible:</p>
+<ul dir="auto">
+<li>Generate a steady stream of fresh requests.</li>
+<li>Reduce successful capacity during a configurable failure window.</li>
+<li>Reschedule failed and over-capacity attempts using the selected policy.</li>
+<li>Measure amplification, peak demand, abandoned requests, and recovery time.</li>
+<li>Compare all four policies against the exact same scenario and random seed.</li>
+</ul>
+<p dir="auto">This is an intentionally small queueing model, not a production capacity planner. It omits network latency distributions, client timeouts, autoscaling, circuit breakers, and correlated downstream failures. Its job is to make retry dynamics easy to inspect and discuss.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Run the interactive lab</h2></div>
+<p dir="auto">Python 3.11 or newer is required.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+streamlit run app.py" dir="auto"><pre>python -m venv .venv
+<span class="pl-c1">source</span> .venv/bin/activate
+pip install -e <span class="pl-c1">.</span>
+streamlit run app.py</pre></div>
+<p dir="auto">Open <code>http://localhost:8501</code>, choose a preset, and adjust the workload from the sidebar.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Use the CLI</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='retry-storm-lab --preset "Rate-limit spiral" --compare
+retry-storm-lab --preset "Slow recovery" --policy full_jitter --json' dir="auto"><pre>retry-storm-lab --preset <span class="pl-s"><span class="pl-pds">"</span>Rate-limit spiral<span class="pl-pds">"</span></span> --compare
+retry-storm-lab --preset <span class="pl-s"><span class="pl-pds">"</span>Slow recovery<span class="pl-pds">"</span></span> --policy full_jitter --json</pre></div>
+<p dir="auto">Example comparison:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="immediate    amplification=1.11x peak=2720 rps success=97.2% recovery=1s
+fixed        amplification=1.08x peak=1600 rps success=99.9% recovery=3s
+exponential  amplification=1.07x peak=1600 rps success=100.0% recovery=3s
+full_jitter  amplification=1.10x peak=1651 rps success=99.9% recovery=3s"><pre class="notranslate" lang="text"><code>immediate    amplification=1.11x peak=2720 rps success=97.2% recovery=1s
+fixed        amplification=1.08x peak=1600 rps success=99.9% recovery=3s
+exponential  amplification=1.07x peak=1600 rps success=100.0% recovery=3s
+full_jitter  amplification=1.10x peak=1651 rps success=99.9% recovery=3s
+</code></pre></div>
+<p dir="auto">Exact values depend on the selected preset and seed.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Use the simulation engine</h2></div>
+<div class="highlight highlight-source-python notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="from retry_storm_lab import BackoffPolicy, SimulationConfig, simulate
+
+result = simulate(
+    SimulationConfig(
+        baseline_rps=800,
+        server_capacity_rps=1_000,
+        outage_failure_percent=80,
+        policy=BackoffPolicy.FULL_JITTER,
+    )
+)
+
+print(result.amplification_factor)
+print(result.peak_rps)
+print(result.recovery_seconds)" dir="auto"><pre><span class="pl-k">from</span> <span class="pl-s1">retry_storm_lab</span> <span class="pl-k">import</span> <span class="pl-v">BackoffPolicy</span>, <span class="pl-v">SimulationConfig</span>, <span class="pl-s1">simulate</span>
+
+<span class="pl-s1">result</span> <span class="pl-c1">=</span> <span class="pl-en">simulate</span>(
+    <span class="pl-en">SimulationConfig</span>(
+        <span class="pl-s1">baseline_rps</span><span class="pl-c1">=</span><span class="pl-c1">800</span>,
+        <span class="pl-s1">server_capacity_rps</span><span class="pl-c1">=</span><span class="pl-c1">1_000</span>,
+        <span class="pl-s1">outage_failure_percent</span><span class="pl-c1">=</span><span class="pl-c1">80</span>,
+        <span class="pl-s1">policy</span><span class="pl-c1">=</span><span class="pl-v">BackoffPolicy</span>.<span class="pl-c1">FULL_JITTER</span>,
+    )
+)
+
+<span class="pl-en">print</span>(<span class="pl-s1">result</span>.<span class="pl-c1">amplification_factor</span>)
+<span class="pl-en">print</span>(<span class="pl-s1">result</span>.<span class="pl-c1">peak_rps</span>)
+<span class="pl-en">print</span>(<span class="pl-s1">result</span>.<span class="pl-c1">recovery_seconds</span>)</pre></div>
+<p dir="auto">The engine uses aggregate 100 ms buckets. Full jitter distributes retries individually with a seeded pseudo-random generator, so the same configuration always produces the same result.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Optional aggregate telemetry</h2></div>
+<p dir="auto">The lab works entirely offline. To record aggregate usage bands with <a href="https://telemetry.sh" rel="nofollow">Telemetry</a>, install the optional dependency and provide a project API key:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="pip install -e '.[telemetry]'
+export TELEMETRY_API_KEY=your_project_api_key
+streamlit run app.py" dir="auto"><pre>pip install -e <span class="pl-s"><span class="pl-pds">'</span>.[telemetry]<span class="pl-pds">'</span></span>
+<span class="pl-k">export</span> TELEMETRY_API_KEY=your_project_api_key
+streamlit run app.py</pre></div>
+<p dir="auto">Only the selected policy, broad capacity/amplification bands, and whether the run recovered are sent. Raw workload values and timeline data are not logged.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Development</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="python -m unittest discover -s tests -v
+python -m compileall app.py retry_storm_lab" dir="auto"><pre>python -m unittest discover -s tests -v
+python -m compileall app.py retry_storm_lab</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">MIT</p>
+</article>
