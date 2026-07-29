@@ -1,0 +1,234 @@
+About
+
+Who we are
+
+Our expertise
+
+Our work
+
+Open Source
+
+Our ecosystem
+
+Services
+
+Guide
+
+Train
+
+Build
+
+Integrate
+
+Optimize
+
+Maintain
+
+Industries
+
+Automotive
+
+Digital TV
+
+Silicon
+
+OEM
+
+VR/AR
+
+News & Blog
+
+Careers
+
+Contact
+
+About
+
+Services
+
+Industries
+
+News & Blog
+
+Careers
+
+Contact
+
++44 (0)1223 362967
+
++1 514 667 2499
+
+contact@collabora.com
+
+Home
+News & Blog
+News
+
+Cracking Windows Open: Porting RADV to WIN32
+
+Louis-Francis Ratté-Boulianne 
+July 28, 2026
+
+Share this post:
+
+Reading time: 
+
+RADV is the open source Mesa Vulkan driver for AMD GPUs. Over the years, it has become a cornerstone of the Linux graphics stack. It has now effectively become the de facto Vulkan driver for AMD hardware on Linux. AMD even discontinued their PAL-based (Platform Abstraction Library) alternative in its favor, consolidating their open-source efforts around Mesa.
+
+On Windows however, AMD users are still served only by the proprietary driver. But 
+don't panic
+, we have a solution: porting RADV to Windows, bringing the same open source Vulkan implementation that has proven itself on Linux to them. It's such an improbable proposition that we might actually get there faster than light (spoiler alert: that's going to be a little slower).
+
+An open source Vulkan driver on Windows opens up a number of possibilities: a shared codebase across platforms, easier debugging and experimentation, faster turnaround on fixes, and a path for the community (e.g., game developers) to report problems or contribute improvements that benefit everyone regardless of operating system.
+
+From first triangle...
+
+This effort builds directly on the groundwork laid by Faith Ekstrand, who first explored the feasibility of running RADV on Windows and presented her findings at XDC 2024. We strongly suggest you go watch the 
+talk
+, but here is a quick summary.
+
+A central theme of her talk is that since Windows 10, the WDDM2 interface provides a much better foundation for a third-party driver than what came before. It defines a clear model for how a user-mode driver (UMD) interacts with the operating system and the kernel-mode driver (KMD).
+
+However, there is of course a significant catch: many D3DKMT calls can carry 
+private driver data
+ - opaque, vendor-specific blobs whose contents are entirely up to the driver. This means the UMD and KMD remain tightly coupled and that this interface is totally undocumented.
+
+To work around this, Faith created the 
+wddm2-pdd-re
+ tool to log the WDDM2 calls and the private data content for some D3D12 applications. Using this approach, she was able to reverse engineer enough of the private interface — querying adapter info, allocating buffers, creating queues, and submitting commands — to get RADV to submit work to the proprietary kernel driver. And ultimately she was even able to get a rotating 3D model displayed on her screen in all its glory.
+
+...to first game
+
+Where Faith's work established that this could be done, this project picked up the thread. The goal was to improve upon it to make it more flexible (support for different hardware by reducing hard-coded values), more portable (breaking free of WSL with native Windows support), and far more stable (no longer crashing after two minutes of deqp-vk testing).
+
+We improved command stream handling and synchronization and added support for, among others, sparse bindings, tessellation and task shaders, and dynamic querying of GPU properties. It is still not conformant (even though the success rate has dramatically increased), but the real highlight is being able to run our first game with RADV: 
+Counter-Strike 2
+. Anyone can try it by switching the renderer with the 
+-vulkan
+ argument.
+
+...through darkness
+
+Like any port and/or reverse-engineering project, it brought some challenges:
+
+New generation is so oversensitive: We were experimenting on Gen 11 hardware (RX 7900 XT) while Faith was working with a 10th Gen GPU (RX 7800 XT). We weren't able to replicate Faith's results for quite a while, due to architecture changes between these two generations. The main problem was that it would hang as soon as we tried to do anything more complicated than clearing a surface to a hard-coded color. Unfortunately, with no tools to debug such hangs on Windows, this forced us to improve the tooling to reduce discrepancies with the proprietary driver as much as possible. We upgraded the reverse-engineering utility into a full WDDM2 logging layer, able to analyze any application run with the official Vulkan driver, and added support to dump the command streams, registers, and shader code.
+
+Compilers are not playing nice: Mesa is developed primarily against GCC and Clang, and its code base relies on a number of assumptions that don't stand when compiling with MSVC. For instance, MSVC doesn't agree with the other compilers on how to handle enums: it can interpret a value as signed and limit them to 32-bit values, which can result in quite surprising behaviors.
+
+I've heard you liked opaque blobs: So let's put opaque data inside your opaque API call - 
+D3DKMTEscape
+. WDDM2 has the possibility of vendor-specific hooks through that method, where the entire content is completely up to the vendor. There is no defined structure, and the only limitation is that it shouldn't replicate something for an existing "standardized" call. Fortunately for us, it looks like we can safely ignore those for now, as they seem to focus on advanced features such as multi-GPU rendering.
+
+...and beyond
+
+The biggest open question for making this production-ready is the interface to the proprietary kernel driver. Developing our own KMD is not really an option, so we need to communicate with AMD's. Right now, doing so relies on reverse-engineered knowledge of private data structures — which is inherently fragile. To make matters worse, the UMD and KMD ship together as a matched pair with no backward-compatibility guarantee, so these structures can change between driver versions with no notice.
+
+For RADV to become genuinely stable and maintainable on Windows, we need one of:
+
+A 
+stable, documented interface
+ to the proprietary kernel-mode driver, or
+
+A 
+shim library
+ that mediates communication with the KMD through the private data channel, giving us a stable surface to build against even as the underlying blobs evolve.
+
+There is also significant work remaining on 
+presentation
+. While Jesse Natalie did some work on WSI for Windows (in the context of the Dozen driver), RADV currently only supports the slower CPU path for presentation. More work is needed to enable the use of DXGI swapchains to improve performance, but that requires being able to import an image from D3D12 (more opaque metadata, hurrah!). Even more work would be required to achieve zero-copy swaps, the pinnacle of graphics pipelines. It could potentially lead to a 3x performance gain for applications that are not GPU-bound. Accomplishing that last step would also require direct involvement from AMD and probably Microsoft (as there are some limitations related to image sharing). There are precedents to that kind of quality-of-life improvements for open-source projects, so there is hope!
+
+We hope this work demonstrates the value of an open Vulkan driver on Windows and helps motivate everybody involved to work toward that stable foundation. For anyone interested, the work is currently sitting in 
+this branch
+.
+
+Thanks also to Valve for sponsoring this phase of our work to bring open drivers to Windows.
+
+Related Posts
+
+Improvements to Mesa video decoding for Panfrost
+
+Mesa 25.2 brings new hardware support for Nouveau users
+
+PanVK now supports Vulkan 1.4
+
+Related Posts
+
+Improvements to Mesa video decoding for Panfrost
+
+Mesa 25.2 brings new hardware support for Nouveau users
+
+PanVK now supports Vulkan 1.4
+
+Search the newsroom
+
+Latest News & Events
+
+Cracking Windows Open: Porting RADV to WIN32
+
+28/07/2026
+
+RADV’s experimental Windows port brings Mesa’s open source Vulkan driver for AMD GPUs closer to running real workloads, while highlighting…
+
+Building an Arch Linux aarch64 port for Holo Core
+
+17/07/2026
+
+The Holo Core aarch64 preview provides early binaries, sources, and containers for an Arch Linux-based aarch64 port, backed by tooling and…
+
+Weston 16: HDR-ready, improved debugging, and DRM backend features
+
+16/07/2026
+
+Weston 16 expands HDR and color management support, improves Perfetto debugging and DRM backend performance, and adds new protocol and renderer…
+
+About Collabora
+
+Whether writing a line of code or shaping a longer-term strategic software development plan, we'll help  you navigate the ever-evolving world of Open Source.
+
+한국어 버전의 Collabora.com 보기
+
+Acesse Collabora.com em Português
+
+Learn more
+
+Who we are
+
+Services
+
+Our expertise
+
+Industries
+
+Our work
+
+Careers
+
+Open Source
+
+Collabora on LinkedIn
+
+Collabora on YouTube
+
+Collabora on Mastodon
+
+Collabora on Bluesky
+
+Collabora on Facebook
+
+Collabora RSS Feed
+
++44 1223 362967
+
++1 514 667 2499
+
+contact@collabora.com
+
+Our website only uses a strictly necessary session cookie provided by our CMS system. To find out more please 
+follow this link
+.
+
+Collabora Limited © 2005-2026. All rights reserved. 
+Privacy Notice
+. 
+Sitemap
+.
