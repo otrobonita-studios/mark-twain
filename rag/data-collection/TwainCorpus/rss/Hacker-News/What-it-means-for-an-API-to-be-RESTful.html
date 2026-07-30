@@ -1,0 +1,350 @@
+<article class="container container--article blog-single h-entry">
+
+
+<div class="blog-single__content e-content">
+<p>I am sorry, but you do not know what a RESTful API is. I know you are a seasoned developer who has integrated APIs of all kinds, and you may even have dozens in production across multiple languages. But all of that only proves you have followed the industry's good practices and read immeasurable lines of documentation, which is good. However, none of it certifies your knowledge of RESTful. Don't panic! You are not alone. Most developers I know could not define it, implement it or point out its strengths either. That is why in this article I am going to explain its virtues with examples that are easy to understand. And you may well never look at an API the same way again once you finish reading. You have been warned!</p>
+<p>API RESTful is often used as a synonym for REST API (Representational State Transfer), and the nuance matters. REST is not an HTTP interface: it is an architectural style, defined by Roy Fielding in his doctoral dissertation (2000), that imposes constraints:</p>
+<ul>
+<li>Client-server architecture: The client and the server must be separated.</li>
+<li>Stateless: Each client request to the server must contain all the information needed to understand and process the request. In other words, the server will not keep information about the client's state between requests.</li>
+<li>Cacheable: Responses must be explicitly marked as cacheable or non-cacheable.</li>
+<li>Layered system: The architecture can be composed of layers, where each layer has a specific function and they are isolated from each other.</li>
+<li>Uniform interface: Communication between the client and the server must be predictable, with a well-defined pattern.</li>
+<li>Code on demand (optional): The server can send executable code to the client, such as JavaScript scripts, to extend the client's functionality.</li>
+</ul>
+<p>In other words, REST is a set of architectural principles for serving resources, usually over HTTP. It is so ingrained in web development, and so standardized, that it feels strange when we do not see it.</p>
+<p>And here comes the uncomfortable part: strictly speaking, REST already includes everything you are about to read in this article. Hypermedia is part of the uniform interface constraint, and "RESTful" is simply the adjective, "conforming to REST". What has happened is that popular usage has been degrading "REST" until it means "HTTP API that returns JSON", so much so that Fielding himself published a famous article in 2008, <a href="https://roy.gbiv.com/untangled/2008/rest-apis-must-be-hypertext-driven" rel="noopener noreferrer" target="_blank">REST APIs must be hypertext-driven</a>, complaining that we call REST any RPC dressed up in HTTP. The <a href="https://martinfowler.com/articles/richardsonMaturityModel.html" rel="noopener noreferrer" target="_blank">Richardson Maturity Model</a> put numbers on that distance: level 0, a single RPC-style endpoint; level 1, resources with their own URI; level 2, HTTP verbs and status codes used properly; level 3, hypermedia. The vast majority of the "REST" APIs you consume every day stay at level 2.</p>
+<p>In this article I will use RESTful to refer to that level 3, the one Fielding demands. The goal is to turn an API into a predictable, standardized and self-descriptive interface. With just the base URL, the client will be able to explore every resource, without resorting to external documentation. In addition, we will have the flexibility to change routes without affecting the client, or even play with several communication protocols.</p>
+<p>But first there is a concept you must know: HATEOAS (Hypermedia as the Engine of Application State). This concept is fundamental to understanding how a RESTful API can be self-descriptive and navigable.</p>
+<h2 class="blog-single__content-title" id="blog-single-content__title--hateoas-hypermedia-as-the-engine-of-application-state">HATEOAS (Hypermedia as the Engine of Application State)</h2>
+<p>Hypermedia is one of the key characteristics of RESTful: it allows clients to dynamically discover resources through links provided in the responses. They usually live under the <code>_links</code> parent.</p>
+<pre class="highlight"><code class="language-json">{
+    "id": 123,
+    "name": "John Doe",
+    "_links": {
+        "self": {
+            "href": "/users/123",
+            "method": "GET"
+        },
+        "update": {
+            "href": "/users/123",
+            "method": "PUT"
+        },
+        "delete": {
+            "href": "/users/123",
+            "method": "DELETE"
+        },
+        "friends": {
+            "href": "/users/123/friends",
+            "method": "GET"
+        },
+        "posts": {
+            "href": "/users/123/posts",
+            "method": "GET"
+        },
+        "search": {
+            "href": "/search/?query={query}",
+            "method": "GET",
+            "templated": true
+        }
+    }
+}</code></pre>
+<p>Thanks to this, clients can navigate the API by parsing and following the links to reach the information they need, similar to how you would browse the internet. Furthermore, since you jump between relative routes (<code>href</code>) using their names as identifiers (the object key), the backend could change the addresses without affecting the client. It is very powerful because the client is not tied to a fixed route structure; it moves between nodes.</p>
+<p>Notice the use of <code>templated: true</code> in the last link. It indicates that the <code>href</code> contains a URI template (following RFC 6570) that must be filled in with specific values before use. It is an elegant way to discover parameterized endpoints. For example, the client could replace <code>{query}</code> with "restful api" to search for related content.</p>
+<p>An honest note before we continue: the <code>_links</code> convention comes from <a href="https://stateless.co/hal_specification.html" rel="noopener noreferrer" target="_blank">HAL</a> (Hypertext Application Language), but HAL does not define the <code>method</code> field; its links only contemplate properties such as <code>href</code>, <code>templated</code>, <code>type</code> or <code>title</code>. I add it because in practice it helps the API be self-descriptive, and it is a common extension. If you need actions with formalized methods and fields, look at <a href="https://github.com/kevinswiber/siren" rel="noopener noreferrer" target="_blank">Siren</a>; if you prefer pure HAL, omit <code>method</code> and trust the protocol's conventions (rule 2).</p>
+<p>Not every resource needs hypermedia, only the relevant ones with the right context. For example, it would make no sense to include links to a shopping cart in a blog article, but it would be interesting for an article to include the link to the author, the comments or related articles.</p>
+<p>Now that we understand the importance of HATEOAS, let's look at the rules a RESTful API must follow.</p>
+<h2 class="blog-single__content-title" id="blog-single-content__title--the-6-rules-of-a-restful-api">The 6 rules of a RESTful API</h2>
+<p>I am not making these rules up: they are the six conditions Fielding lists in the article I mentioned earlier, adapted here with examples.</p>
+<h3 class="blog-single__content-title" id="blog-single-content__title--1-dont-depend-on-a-single-protocol">1. Don't depend on a single protocol</h3>
+<p>Use resource identifiers (URIs) to define resources. In other words, instead of using a URL (<code>http://example.com/api/users/123</code>), use a URI that indicates its location and ignores the protocol (<code>/users/123</code>). This way you could use others such as WebSocket, MQTT, NNTP, RPC, etc. Of course you can use HTTP, but you must not depend only on it. For example, if your API is designed to work exclusively over HTTP, it would not be strictly RESTful.</p>
+<h3 class="blog-single__content-title" id="blog-single-content__title--2-dont-change-the-protocol">2. Don't change the protocol</h3>
+<p>Don't reinvent the wheel. Don't get creative with protocols. For example, if you use HTTP, follow the conventions: GET to fetch resources, POST to create, PUT to replace, PATCH for partial updates and DELETE to remove. Use the proper HTTP response statuses: 200 OK, 201 Created, 204 No Content, 400 Bad Request, 404 Not Found, etc. Using MQTT? Use the proper commands and statuses.</p>
+<h3 class="blog-single__content-title" id="blog-single-content__title--3-focus-on-media-types-not-uris">3. Focus on media types, not URIs</h3>
+<p>Instead of documenting each URI externally, you must make your API describe the media types it handles. It is the most misunderstood rule of the six, and for Fielding it is where almost all the descriptive effort should go. The idea: instead of publishing a list of routes (what we usually call "the documentation"), you define and document your media types (for example <code>application/vnd.myshop.product+json</code>), that is, what the fields of each representation mean and how its links are processed. The client decides what to do based on the <code>Content-Type</code> it receives, not on the URI it called. URIs become interchangeable details.</p>
+<p>For example, the resource for a user with little information could be:</p>
+<pre class="highlight"><code class="language-json">{
+    "id": 123,
+    "name": "John Doe",
+    "_links": {
+        "self": "/users/123",
+        "friends": "/users/123/friends",
+        "lastInvoice": "/users/123/invoice/last"
+    }
+}</code></pre>
+<p>While the resource for a user with more information could be:</p>
+<pre class="highlight"><code class="language-json">{
+    "id": 123,
+    "name": "John Doe",
+    "_links": {
+        "self": {
+            "href": "/users/123",
+            "method": "GET",
+            "type": "application/json"
+        },
+        "friends": {
+            "href": "/users/123/friends",
+            "method": "GET",
+            "type": "text/csv"
+        },
+        "lastInvoice": {
+            "href": "/users/123/invoice/last",
+            "method": "GET",
+            "type": "application/pdf"
+        }
+    }
+}</code></pre>
+<h3 class="blog-single__content-title" id="blog-single-content__title--4-dont-assume-uri-structures">4. Don't assume URI structures</h3>
+<p>You must not store or reuse URI structures in the client. An API could change them without notice, and your client would obviously stop working. Instead, parse the links and follow the relative identifiers (<code>rel</code>).</p>
+<p>A resource can have the following structure:</p>
+<pre class="highlight"><code class="language-json">{
+    "id": 987,
+    "name": "Totoro plush",
+    "price": 19.99,
+    "_links": {
+        "self": {
+            "href": "/products/987",
+            "method": "GET"
+        },
+        "addToCart": {
+            "href": "/cart/add/987",
+            "method": "POST"
+        },
+        "reviews": {
+            "href": "/products/987/reviews",
+            "method": "GET"
+        }
+    }
+}</code></pre>
+<p>And the next day:</p>
+<pre class="highlight"><code class="language-json">{
+    "id": 987,
+    "name": "Totoro plush",
+    "price": 19.99,
+    "_links": {
+        "self": {
+            "href": "/shop/item/987",
+            "method": "GET"
+        },
+        "addToCart": {
+            "href": "/shop/cart/987",
+            "method": "POST"
+        },
+        "reviews": {
+            "href": "/shop/item/987/reviews",
+            "method": "GET"
+        }
+    }
+}</code></pre>
+<h3 class="blog-single__content-title" id="blog-single-content__title--5-avoid-resource-types">5. Avoid resource "types"</h3>
+<p>Don't expose the hierarchy, permissions or types of resources in the API. The client neither cares nor should know. For example, you should not have a <code>/users/admin/123</code> or <code>/users/guest/123</code> resource. Instead, use the links to define the actions that can be performed on the resource.</p>
+<h3 class="blog-single__content-title" id="blog-single-content__title--6-start-with-a-bookmark-root-resource-and-let-the-client-explore">6. Start with a bookmark (root resource) and let the client explore</h3>
+<p>Clients must start with a root URL (or bookmark), and from there they will navigate your API-verse.</p>
+<pre class="highlight"><code class="language-json">{
+    "message": "Welcome to my RESTful API",
+    "_links": {
+        "users": {
+            "href": "/users",
+            "method": "GET"
+        },
+        "products": {
+            "href": "/products",
+            "method": "GET"
+        },
+        "orders": {
+            "href": "/orders",
+            "method": "GET"
+        },
+        "search": {
+            "href": "/search/?query={query}&amp;page={page}",
+            "method": "GET",
+            "templated": true
+        },
+        "user-by-id": {
+            "href": "/users/{user_id}",
+            "method": "GET",
+            "templated": true
+        },
+        "product-search": {
+            "href": "/products/search/?name={name}&amp;category={category}",
+            "method": "GET",
+            "templated": true
+        }
+    }
+}</code></pre>
+<p>Notice that several links use <code>templated: true</code>, the URI templates we saw in the HATEOAS section: the client discovers even the parameterized endpoints without leaving the response.</p>
+<p>You now have a general idea of how to build a RESTful API. Between the REST principles, the RESTful API rules and the HATEOAS concept, you will be able to build a solid API.</p>
+<h2 class="blog-single__content-title" id="blog-single-content__title--faq">FAQ</h2>
+<h3 class="blog-single__content-title" id="blog-single-content__title--how-do-i-indicate-the-version-of-the-api-or-endpoint">How do I indicate the version of the API or endpoint?</h3>
+<p>The most common approach is to include the version in the URL, for example: <code>/api/v1/users</code>. However, if you want to follow the RESTful rules, you should take the version out of the URI. The most recommended option is to negotiate it with the <code>Accept</code> header using the structure <code>application/vnd.example.v1+json</code>, where <code>example</code> is the name of your API and <code>v1</code> is the version.</p>
+<p>For example, my API is called <code>dream</code> and the latest version is <code>2.1</code>, so the header would be: <code>Accept: application/vnd.dream.v2.1+json</code>.</p>
+<p>Another simpler option, although less recommended, is to use a custom header such as <code>Api-Version</code>, where the value would be <code>2.1</code>. That said, avoid the classic <code>X-</code> prefix (<code>X-API-Version</code>): it has been discouraged since 2012 by <a href="https://www.rfc-editor.org/rfc/rfc6648" rel="noopener noreferrer" target="_blank">RFC 6648</a>.</p>
+<h3 class="blog-single__content-title" id="blog-single-content__title--how-do-i-handle-pagination">How do I handle pagination?</h3>
+<p>You will need to include metadata in the response to indicate the pagination with <code>meta</code>.</p>
+<p>A pagination example could be:</p>
+<pre class="highlight"><code class="language-json">{
+    "data": [...],
+    "meta": {
+        "total": 150,
+        "page": 1,
+        "perPage": 10,
+        "hasNext": true,
+        "hasPrevious": false
+    },
+    "_links": {
+        "self": {"href": "/api/items?page=1", "method": "GET"},
+        "next": {"href": "/api/items?page=2", "method": "GET"},
+        "first": {"href": "/api/items?page=1", "method": "GET"},
+        "last": {"href": "/api/items?page=15", "method": "GET"}
+    }
+}</code></pre>
+<p>Where:</p>
+<ul>
+<li><code>total</code>: Total number of available items. Not on the current page, but in the whole collection.</li>
+<li><code>page</code>: Current page number. It can never be 0 or negative.</li>
+<li><code>perPage</code>: Number of items per page.</li>
+<li><code>hasNext</code>: Indicates whether there are more pages available.</li>
+<li><code>hasPrevious</code>: Indicates whether there are previous pages available.</li>
+<li><code>_links</code>: Links to navigate the pagination, such as <code>next</code>, <code>previous</code>, <code>first</code>, <code>last</code> and <code>self</code>. When a link does not apply (there is no previous page on the first page), it is omitted, not set to <code>null</code>: that is how HAL does it and it avoids ambiguity for the client.</li>
+</ul>
+<p>You can also use templates to let the client specify the page number:</p>
+<pre class="highlight"><code class="language-json">{
+    "_links": {
+        "page": {
+            "href": "/api/items?page={page}&amp;perPage={perPage}",
+            "method": "GET",
+            "templated": true
+        }
+    }
+}</code></pre>
+<h3 class="blog-single__content-title" id="blog-single-content__title--how-do-i-handle-errors">How do I handle errors?</h3>
+<p>Here there is a standard, although few people know it: <a href="https://www.rfc-editor.org/rfc/rfc9457" rel="noopener noreferrer" target="_blank">RFC 9457</a> (Problem Details for HTTP APIs, which updates RFC 7807 from 2016). It defines the <code>application/problem+json</code> media type with five fields: <code>type</code> (a URI identifying the problem category), <code>title</code> (a short, stable summary), <code>status</code> (the HTTP status code), <code>detail</code> (an explanation of this specific occurrence) and <code>instance</code> (the URI of the affected resource). And it allows you to add your own extension fields.</p>
+<p>For example, a response with a <code>404 Not Found</code> status and the <code>Content-Type: application/problem+json</code> header would carry this body:</p>
+<pre class="highlight"><code class="language-json">{
+    "type": "https://example.com/errors/article-not-found",
+    "title": "Article not found",
+    "status": 404,
+    "detail": "There is no article with id c9bb4e4a",
+    "instance": "/api/blog/c9bb4e4a"
+}</code></pre>
+<p>If you are starting an API from scratch, my advice is to use Problem Details: it is the standard and your clients will thank you. In my projects I use my own convention (<code>type</code>, <code>errors</code>, <code>data</code> and <code>meta</code>) that integrates with the response structure of my use cases; if you are curious, I explain it in <a href="/blog/c8838a2b/implementing-clean-architecture-in-python/">Implementing Clean Architecture in Python</a>.</p>
+<h2 class="blog-single__content-title" id="blog-single-content__title--conclusions">Conclusions</h2>
+<p>A true RESTful API, the one Fielding described, is not an evolution of REST: it is complete REST, the level 3 of the Richardson Maturity Model that almost nobody reaches. While popular usage stops at resources, verbs and status codes, hypermedia adds what turns an API into a self-descriptive and navigable interface.</p>
+<p>For errors you already have a standard, RFC 9457: use it and your clients will always know what to expect.</p>
+<p>In short, a well-implemented RESTful API does not just transfer data; it takes the client by the hand through all of its resources, creating an experience that is intuitive and resilient to change. Which is essential for a long-term project.</p>
+<h2 class="blog-single__content-title" id="blog-single-content__title--sources">Sources</h2>
+<p>If you want to keep digging into the topic, here are some recommended sources:</p>
+<ul>
+<li><a href="https://ics.uci.edu/~fielding/pubs/dissertation/top.htm" rel="noopener noreferrer" target="_blank">Roy Fielding's Dissertation</a></li>
+<li><a href="https://roy.gbiv.com/untangled/2008/rest-apis-must-be-hypertext-driven" rel="noopener noreferrer" target="_blank">REST APIs must be hypertext-driven</a> by Roy Fielding.</li>
+<li><a href="https://martinfowler.com/articles/richardsonMaturityModel.html" rel="noopener noreferrer" target="_blank">Richardson Maturity Model</a> by Martin Fowler.</li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc9457" rel="noopener noreferrer" target="_blank">RFC 9457: Problem Details for HTTP APIs</a></li>
+<li><a href="https://stateless.co/hal_specification.html" rel="noopener noreferrer" target="_blank">HAL - Hypertext Application Language</a></li>
+<li><a href="https://restfulapi.net/rest-architectural-constraints/" rel="noopener noreferrer" target="_blank">REST Architectural Constraints</a> by Lokesh Gupta.</li>
+</ul>
+<p>It would also be interesting to read more about HAL and JSON-LD, since they are formats that make it easier to implement HATEOAS and the self-description of RESTful APIs.</p>
+</div>
+<ul class="ul-reset blog-single-titles__ul">
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--hateoas-hypermedia-as-the-engine-of-application-state">HATEOAS (Hypermedia as the Engine of Application State)</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--the-6-rules-of-a-restful-api">The 6 rules of a RESTful API</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--1-dont-depend-on-a-single-protocol">1. Don't depend on a single protocol</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--2-dont-change-the-protocol">2. Don't change the protocol</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--3-focus-on-media-types-not-uris">3. Focus on media types, not URIs</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--4-dont-assume-uri-structures">4. Don't assume URI structures</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--5-avoid-resource-types">5. Avoid resource "types"</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--6-start-with-a-bookmark-root-resource-and-let-the-client-explore">6. Start with a bookmark (root resource) and let the client explore</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--faq">FAQ</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--how-do-i-indicate-the-version-of-the-api-or-endpoint">How do I indicate the version of the API or endpoint?</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--how-do-i-handle-pagination">How do I handle pagination?</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--how-do-i-handle-errors">How do I handle errors?</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--conclusions">Conclusions</a>
+</li>
+<li class="blog-single-titles__item">
+<a class="blog-single-titles__link" href="#blog-single-content__title--sources">Sources</a>
+</li>
+</ul>
+<section class="license blog-single__license">
+<p class="license__text">This work is under a <a class="link" href="https://creativecommons.org/licenses/by-nc-nd/4.0/" target="_blank">Attribution-NonCommercial-NoDerivatives 4.0 International license.</a></p>
+
+</section>
+
+<section class="newsletter blog-single__newsletter">
+<h2 class="newsletter__title">Do you want to read what I never publish?</h2>
+<p class="newsletter__text">
+	I send what does not fit in the articles: full configurations, messy notes and whatever I am testing right now. No spam, no sales funnels.
+    </p>
+<p class="newsletter__text">
+	Send an email to <a class="link" href="mailto:newsletter@andros.dev?subject=SUBSCRIBE">newsletter@andros.dev</a> with the subject <strong>SUBSCRIBE</strong> and you are in.
+    </p>
+<div class="newsletter__button">
+<a class="button button--primary" href="mailto:newsletter@andros.dev?subject=SUBSCRIBE">Subscribe by email</a>
+</div>
+<p class="newsletter__note">To unsubscribe, send <a class="link" href="mailto:newsletter@andros.dev?subject=UNSUBSCRIBE">UNSUBSCRIBE</a> to the same address.</p>
+</section>
+<section class="donation blog-single__donation">
+<h2 class="donation__title">Will you buy me a coffee?</h2>
+<p class="donation__text">This is how I keep writing without ads or paywalls.</p>
+<div class="donation__button">
+
+<div class="btn-container">
+<a class="kofi-button" href="https://ko-fi.com/W7W02LB83" target="_blank" title="Support me on ko-fi.com">
+<span class="kofitext">Sure, it's on me!</span>
+</a>
+</div>
+</div>
+</section>
+<section class="comments blog-single__comments" id="comments">
+<h2 class="comments__title">Comments</h2>
+<!-- List -->
+<section class="comments__list">
+<div class="comments__cta" id="comment-cta">
+<button class="button button--primary comments__button-leave-a-comment" data-action="click-&gt;page#run" data-id="9761fd2e" data-liveview-function="show_comment_email" data-type="article">Leave a comment</button>
+</div>
+<p class="comments__empty" id="comments__empty">There are no comments yet.</p>
+</section>
+</section>
+<section class="webmentions blog-single__webmentions" id="webmentions">
+<details class="webmentions__details">
+<summary class="webmentions__summary">
+
+		2 mentions from other sites
+	    </summary>
+<ul class="ul-reset webmentions__list">
+<li class="webmentions__item">
+<a class="link webmentions__link" href="https://news.ycombinator.com/item?id=49108966" rel="nofollow ugc noopener" target="_blank" title="https://news.ycombinator.com/item?id=49108966">news.ycombinator.com</a>
+<time class="webmentions__date" datetime="2026-07-30T15:21:18.842737+02:00">July 30, 2026</time>
+</li>
+<li class="webmentions__item">
+<a class="link webmentions__link" href="https://lemmy.bestiver.se/post/1257487" rel="nofollow ugc noopener" target="_blank" title="https://lemmy.bestiver.se/post/1257487">lemmy.bestiver.se</a>
+<time class="webmentions__date" datetime="2026-07-30T15:20:06.104285+02:00">July 30, 2026</time>
+</li>
+</ul>
+</details>
+</section>
+
+</article>
