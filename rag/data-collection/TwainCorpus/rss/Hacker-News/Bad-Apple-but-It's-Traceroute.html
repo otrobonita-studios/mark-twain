@@ -1,0 +1,110 @@
+<article><h1>Bad Apple!! but it's traceroute</h1>
+<p>As a follow-up to
+<a href="https://jssfr.de/2026-07-25-messing-with-traceroute.html">my post about how to make traceroute tools show arbitrary content</a>
+and inspired by
+<a href="https://www.youtube.com/watch?v=zcGdKK_cQbE">the release of another Bad Apple cover the other day</a>
+I simply <a href="#why">had to</a>.</p>
+<video aria-label='Video showing a split of three windows. The lower segment is split in two parts. The right hand side shows the shadow art music video "Bad Apple!!". The left hand side show packet capture output of ICMPv6 frames, the lines rushing through the window in very fast pace. The upper partition shows a traceroute tool displaying 12 hops. The pattern of numbers in the IPv6 addresses of the first 11 hops resemble the music video image in the lower right corner. The last hop constantly shows "play.bad.apple.invalid".' controls="" width="100%">
+
+
+</video>
+<p>Of course, I'm
+<a href="https://www.youtube.com/watch?v=Od02Xse4axY">not the first one to do this</a>.
+That couldn't stop me though.</p>
+<h2 id="how-it-works">How it works</h2>
+<p>In the post I linked above, I had demonstrated how to inject fake hops into
+traceroute output.</p>
+<p>Using <a href="https://wiki.nftables.org/wiki-nftables/index.php/Math_operations">the <code>numgen</code> feature of nftables</a>,
+we can make the hops vary every time an ICMPv6 packet is generated.
+<code>numgen</code> gets us either random numbers or a monotonic counter. With a counter,
+we can easily make each hop return a different IPv6 address each time a
+response packet is generated. Using
+<a href="http://localhost:8002/2026-07-25-messing-with-traceroute.html#setting-up-a-playground">the playground from the other post</a>:</p>
+<pre><code class="language-bash">ip netns exec tracemess nft -f - &lt;&lt;EOF
+destroy table inet tracemess
+
+table inet tracemess {
+    chain prerouting {
+        type filter hook prerouting priority raw;
+        ip6 daddr fd00::1 ip6 hoplimit 1 reject with icmpv6 admin-prohibited;
+    }
+
+    chain postrouting {
+        type filter hook postrouting priority raw;
+        icmpv6 type destination-unreachable icmpv6 code admin-prohibited ip6 saddr fd00::1 @th,120,8 1 ip6 saddr set numgen inc mod 3 map { 0: fd00::2, 1: fd00::3, 2: fd00::4 } icmpv6 type set 3 icmpv6 code set 0 accept;
+    }
+}
+EOF
+</code></pre>
+<p>Two other things were needed to make this happen. First of all, we need to
+disable the kernel's rate limit (by default, 1/s) for ICMPv6 egress
+using <code>sysctl net.ipv6.icmp.ratelimit=0</code>, otherwise the party will be over
+really quick.</p>
+<p>The second problem is that <code>mtr</code> will normally show multiple addresses for each
+hop, because that indicates that multiple different paths are in use for a
+packet and that is normally useful information. In this case, however, that's
+rather annoying:</p>
+<div class="figure"></div>
+<p>In order to fix that, we have to apply a one-line patch<sup id="fnref:i-like-mtr"><a class="footnote-ref" href="#fn:i-like-mtr">1</a></sup> to
+mtr<sup id="fnref:max-paths"><a class="footnote-ref" href="#fn:max-paths">2</a></sup>:</p>
+<pre><code class="language-diff">diff --git a/ui/net.c b/ui/net.c
+index c0cbf28..7c52710 100644
+--- a/ui/net.c
++++ b/ui/net.c
+@@ -266,6 +266,7 @@ static void net_process_ping(
+                 break; /* Found first vacant position */
+             }
+         }
++        i = 0;
+
+         if (found == 0 &amp;&amp; i &lt; MAX_PATH) {
+             memcpy(&amp;nh-&gt;addrs[i], &amp;addrcopy, sockaddr_addr_size(sourcesockaddr));
+</code></pre>
+<p>With all this in place, I used ffmpeg to resample the video to
+8 frames-per-second (which equates an interval of 125 ms between frames) and
+export scaled-down (to 30x11 pixels) individual frames to PNG files. I
+then wrote a python script to read the image files and convert them into an
+nftables ruleset to generate the corresponding ICMPv6 responses.</p>
+<p>That results in a bit over a megabyte of nftables rules, but it's definitely
+worth it.</p>
+<h2 id="why">Why?</h2>
+<p>The
+<a href="https://www.youtube.com/watch?v=i41KoE0iMYU">shadow art Bad Apple music video</a>
+has become the benchmark for hacked displays, for
+<a href="https://www.youtube.com/watch?v=A__lP5Vtdug">a very loose definition of "display"</a>,
+similar to how <a href="https://canitrundoom.org/">running Doom (the 1993 video game)</a>
+has become the benchmark of gaining code execution on a new hardware platform.
+I suspect the reason for that is that, due to its shadow art style, the video
+can be rendered even on "displays" which only have one bit per pixel (on/off).</p>
+<p>There is
+<a href="https://www.reddit.com/r/ItPlaysBadApple/">a subreddit dedicated</a> to
+showing off the kinds of devices people have gotten Bad Apple to display on.
+My favourite would at this point be
+<a href="https://www.youtube.com/watch?v=lI8jfwCPBJM">this hack abusing a HD47780-compatible character LCD</a>,
+simply because I enjoy hacking these devices, too<sup id="fnref:close-second"><a class="footnote-ref" href="#fn:close-second">3</a></sup>. There's also
+more than
+<a href="https://www.youtube.com/watch?v=fu4RvH0W3mg">one compilation video showing multiple versions</a>.</p>
+<p>Considering that … I simply had no choice, did I?</p>
+<div class="box accent"><p>Comments are welcome in the <a href="https://zombofant.net/@jssfr/116991231175179589">Fediverse thread for this post</a>.</p></div>
+<div class="footnote">
+
+<ol>
+<li id="fn:i-like-mtr">
+<p>Instead of patching <code>mtr</code>, one could also use a shell loop
+ wrapped around <code>traceroute</code>. That doesn't need patching, but is barely
+ less cheating than the one-line patch to <code>mtr</code>. <a class="footnote-backref" href="#fnref:i-like-mtr" title="Jump back to footnote 1 in the text">↩</a></p>
+</li>
+<li id="fn:max-paths">
+<p><code>mtr</code> <em>does</em> allow to limit the number of addresses shown
+ per-hop (the <code>-E</code> flag), but it then always displays the first address.
+ That means we get a freeze-frame of the first frame of the video ☹️. <a class="footnote-backref" href="#fnref:max-paths" title="Jump back to footnote 2 in the text">↩</a></p>
+</li>
+<li id="fn:close-second">
+<p>Though I cannot decide whether
+ <a href="https://www.youtube.com/watch?v=IKXDyKWXBhk">this thing where people redrew the video on a shared online canvas</a>
+ or <a href="https://www.youtube.com/watch?v=7aTXxsQ5few">this thing with an autostereogram</a>
+ should be second place in my personal ranking. <a class="footnote-backref" href="#fnref:close-second" title="Jump back to footnote 3 in the text">↩</a></p>
+</li>
+</ol>
+</div>
+</article>
