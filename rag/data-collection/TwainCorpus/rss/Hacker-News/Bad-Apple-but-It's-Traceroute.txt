@@ -1,0 +1,169 @@
+Bad Apple!! but it's traceroute
+
+As a follow-up to
+
+my post about how to make traceroute tools show arbitrary content
+
+and inspired by
+
+the release of another Bad Apple cover the other day
+
+I simply 
+had to
+.
+
+Of course, I'm
+
+not the first one to do this
+.
+That couldn't stop me though.
+
+How it works
+
+In the post I linked above, I had demonstrated how to inject fake hops into
+traceroute output.
+
+Using 
+the 
+numgen
+ feature of nftables
+,
+we can make the hops vary every time an ICMPv6 packet is generated.
+
+numgen
+ gets us either random numbers or a monotonic counter. With a counter,
+we can easily make each hop return a different IPv6 address each time a
+response packet is generated. Using
+
+the playground from the other post
+:
+
+ip netns exec tracemess nft -f - <<EOF
+destroy table inet tracemess
+
+table inet tracemess {
+    chain prerouting {
+        type filter hook prerouting priority raw;
+        ip6 daddr fd00::1 ip6 hoplimit 1 reject with icmpv6 admin-prohibited;
+    }
+
+    chain postrouting {
+        type filter hook postrouting priority raw;
+        icmpv6 type destination-unreachable icmpv6 code admin-prohibited ip6 saddr fd00::1 @th,120,8 1 ip6 saddr set numgen inc mod 3 map { 0: fd00::2, 1: fd00::3, 2: fd00::4 } icmpv6 type set 3 icmpv6 code set 0 accept;
+    }
+}
+EOF
+
+Two other things were needed to make this happen. First of all, we need to
+disable the kernel's rate limit (by default, 1/s) for ICMPv6 egress
+using 
+sysctl net.ipv6.icmp.ratelimit=0
+, otherwise the party will be over
+really quick.
+
+The second problem is that 
+mtr
+ will normally show multiple addresses for each
+hop, because that indicates that multiple different paths are in use for a
+packet and that is normally useful information. In this case, however, that's
+rather annoying:
+
+In order to fix that, we have to apply a one-line patch
+1
+ to
+mtr
+2
+:
+
+diff --git a/ui/net.c b/ui/net.c
+index c0cbf28..7c52710 100644
+--- a/ui/net.c
++++ b/ui/net.c
+@@ -266,6 +266,7 @@ static void net_process_ping(
+                 break; /* Found first vacant position */
+             }
+         }
++        i = 0;
+
+         if (found == 0 && i < MAX_PATH) {
+             memcpy(&nh->addrs[i], &addrcopy, sockaddr_addr_size(sourcesockaddr));
+
+With all this in place, I used ffmpeg to resample the video to
+8 frames-per-second (which equates an interval of 125 ms between frames) and
+export scaled-down (to 30x11 pixels) individual frames to PNG files. I
+then wrote a python script to read the image files and convert them into an
+nftables ruleset to generate the corresponding ICMPv6 responses.
+
+That results in a bit over a megabyte of nftables rules, but it's definitely
+worth it.
+
+Why?
+
+The
+
+shadow art Bad Apple music video
+
+has become the benchmark for hacked displays, for
+
+a very loose definition of "display"
+,
+similar to how 
+running Doom (the 1993 video game)
+
+has become the benchmark of gaining code execution on a new hardware platform.
+I suspect the reason for that is that, due to its shadow art style, the video
+can be rendered even on "displays" which only have one bit per pixel (on/off).
+
+There is
+
+a subreddit dedicated
+ to
+showing off the kinds of devices people have gotten Bad Apple to display on.
+My favourite would at this point be
+
+this hack abusing a HD47780-compatible character LCD
+,
+simply because I enjoy hacking these devices, too
+3
+. There's also
+more than
+
+one compilation video showing multiple versions
+.
+
+Considering that … I simply had no choice, did I?
+
+Comments are welcome in the 
+Fediverse thread for this post
+.
+
+Instead of patching 
+mtr
+, one could also use a shell loop
+ wrapped around 
+traceroute
+. That doesn't need patching, but is barely
+ less cheating than the one-line patch to 
+mtr
+. 
+↩
+
+mtr
+ 
+does
+ allow to limit the number of addresses shown
+ per-hop (the 
+-E
+ flag), but it then always displays the first address.
+ That means we get a freeze-frame of the first frame of the video ☹️. 
+↩
+
+Though I cannot decide whether
+ 
+this thing where people redrew the video on a shared online canvas
+
+ or 
+this thing with an autostereogram
+
+ should be second place in my personal ranking. 
+↩

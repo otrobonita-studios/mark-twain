@@ -1,0 +1,176 @@
+<main class="go2895638826"><div><!--$s-->
+<div class="go4218048843"><span class="go819755289">Written on <time datetime="2026-07-24">July 24, 2026</time></span></div>
+<h1>Making Referential Stability a Type</h1>
+<p>If you've worked on a (P)React codebase of any real size, you've had the referential stability
+conversation more times than you'd like. Someone adds a <code>useMemo</code>, someone else adds a <code>useCallback</code>,
+an exhaustive-deps warning gets silenced, and we all hope that the prop passed to the next component is stable.
+The code is usually correct, but we don't have all the guarantees for this implicit stability.</p>
+<p>I've spent more hours than I want to admit chasing a re-render or effect execution that came down to a new array literal
+being handed to a memoized child. The type declared <code>Item[]</code>, a prop typed as
+<code>Item[]</code> tells me about the shape of the type and what's <em>inside</em> that shape but nothing about whether I get a stable
+array on the next render.</p>
+<p>So I've been playing with a small idea: what if the intention of referential stability was part of the type.</p>
+<h2>The type</h2>
+<p>The whole thing hangs on a private phantom brand:</p>
+<pre><code class="hljs language-ts"><span class="hljs-keyword">declare</span> <span class="hljs-keyword">const</span> <span class="hljs-attr">stableBrand</span>: unique <span class="hljs-built_in">symbol</span>
+
+<span class="hljs-keyword">type</span> <span class="hljs-title class_">Stable</span>&lt;T&gt; = T <span class="hljs-keyword">extends</span> <span class="hljs-built_in">object</span> ? T &amp; { <span class="hljs-keyword">readonly</span> [stableBrand]: <span class="hljs-literal">true</span> } : T
+</code></pre>
+<p>Objects, arrays and functions get branded. Primitives pass straight through, because React and Preact already
+compare those by value, a <code>string</code> is always "stable enough".</p>
+
+<p>The <code>unique symbol</code> is doing the work here, if I'd used a string key like <code>_stable: true</code>,
+any object that happened to have that shape would satisfy the brand by accident, and someone <em>would</em>
+write <code>{ _stable: true }</code> eventually. A <code>unique symbol</code> that never leaves the package can't be
+reproduced by structural assignment from application code. You can name <code>Stable&lt;T&gt;</code>, you just can't
+forge one.</p>
+<p>That gives a prop the ability to describe more than its data:</p>
+<pre><code class="hljs language-ts"><span class="hljs-keyword">type</span> <span class="hljs-title class_">ItemListProps</span> = {
+  <span class="hljs-attr">items</span>: <span class="hljs-title class_">Stable</span>&lt;<span class="hljs-title class_">Item</span>[]&gt;
+  <span class="hljs-attr">onSelect</span>: <span class="hljs-title class_">Stable</span>&lt;<span class="hljs-function">(<span class="hljs-params"><span class="hljs-attr">id</span>: <span class="hljs-built_in">string</span></span>) =&gt;</span> <span class="hljs-built_in">void</span>&gt;
+  <span class="hljs-attr">title</span>: <span class="hljs-built_in">string</span>
+}
+</code></pre>
+<p>The array and the callback are references constructed with a stable intention, so they carry
+the brand. And now an array built inline is the wrong type:</p>
+<pre><code class="hljs language-tsx">&lt;<span class="hljs-title class_">ItemList</span>
+  items={items.<span class="hljs-title function_">filter</span>(isVisible)}
+  onSelect={<span class="hljs-function">(<span class="hljs-params">id</span>) =&gt;</span> <span class="hljs-title function_">select</span>(id)}
+  title=<span class="hljs-string">"Visible items"</span>
+/&gt;
+</code></pre>
+<p>The component boundary pushes the requirement back onto the caller, which is exactly where it should be.</p>
+<p>This is also the half of <code>memo()</code> and <code>PureComponent</code> we forget about. You wrap a component in <code>memo</code>,
+and assume it won't re-render without value changes, however the stability of complex types isn't a guarantee
+and can cause this optimization to be nullified.</p>
+<h2>Keep the hooks, replace the import</h2>
+<p>My first attempt at producing these proofs used module augmentation. You import the package for its
+side effect, it augments React's hook types, and <code>useMemo</code> starts branding its result when every
+dependency is stable.</p>
+<p>It half works, and the half that doesn't is worth understanding, because it's the part that sounded
+weird to me too until I dug into <em>why</em>.</p>
+<p>Module augmentation lets you <em>add</em> overloads to a declaration. It never lets you remove or replace the
+ones <code>@types/react</code> ships. After augmenting, <code>useMemo</code> has two overloads living side by
+side: the strict <code>(factory, deps: StableDeps) =&gt; Stable&lt;T&gt;</code>, and React's original
+<code>(factory, deps: DependencyList) =&gt; T</code>. TypeScript tries the strict one first, and when every
+dependency carries proof, great, you get <code>Stable&lt;T&gt;</code>. But the moment one dependency doesn't, the strict
+overload stops matching and resolution quietly falls through to React's original, which happily accepts
+any <code>DependencyList</code>:</p>
+<pre><code class="hljs language-ts"><span class="hljs-keyword">const</span> unstable = {}
+<span class="hljs-keyword">const</span> value = <span class="hljs-title function_">useMemo</span>(<span class="hljs-function">() =&gt;</span> ({ <span class="hljs-attr">answer</span>: <span class="hljs-number">42</span> }), [unstable])
+<span class="hljs-comment">// no error. value is just { answer: number }, unbranded</span>
+</code></pre>
+<p>There's no error at the dependency list, which is the place I wanted one. The proof simply
+doesn't get produced. So I stopped fighting it. The strict path is a separate entry point:</p>
+<pre><code class="hljs language-ts"><span class="hljs-keyword">import</span> { useCallback, useEffect, useMemo } <span class="hljs-keyword">from</span> <span class="hljs-string">'stableref/react'</span>
+</code></pre>
+<p>These are the real React hooks at runtime, exposed under stricter type declarations. The dependency tuple
+is inferred, and each unproven element is replaced with an actionable string literal in the expected type.
+Because this entry does not include React's permissive overload, there is nothing to fall back to and a raw
+reference fails at the dependency where it was written:</p>
+<pre><code class="hljs language-ts"><span class="hljs-keyword">const</span> stableFilter = <span class="hljs-title function_">useCallback</span>(filter, [query])
+
+<span class="hljs-title function_">useMemo</span>(<span class="hljs-function">() =&gt;</span> source.<span class="hljs-title function_">filter</span>(stableFilter), [source, stableFilter])
+<span class="hljs-comment">// Stable&lt;Item[]&gt;</span>
+
+<span class="hljs-title function_">useMemo</span>(<span class="hljs-function">() =&gt;</span> source.<span class="hljs-title function_">filter</span>(rawFilter), [source, rawFilter])
+<span class="hljs-comment">//                                                 ^ type error</span>
+
+<span class="hljs-title function_">useEffect</span>(syncSelection, [selection, page])
+<span class="hljs-comment">//                                   ^ type error when page is an unproven object</span>
+</code></pre>
+<p>The package does not ship the augmentation mode. Silently losing the proof is too easy to mistake for actual
+enforcement. Importing from <code>stableref/react</code> makes a bad dependency list fail where you wrote it,
+instead of somewhere further downstream.</p>
+<h2>Bless the sources React already guarantees</h2>
+<p>Not every stable reference comes out of a <code>useMemo</code>. React hands you a few for free, and the types can
+just say so:</p>
+<pre><code class="hljs language-ts"><span class="hljs-keyword">const</span> [state, setState] = <span class="hljs-title function_">useState</span>(initialState)
+<span class="hljs-comment">// state:    Stable&lt;State&gt;</span>
+<span class="hljs-comment">// setState: Stable&lt;Dispatch&lt;SetStateAction&lt;State&gt;&gt;&gt;</span>
+
+<span class="hljs-keyword">const</span> element = useRef&lt;<span class="hljs-title class_">HTMLElement</span> | <span class="hljs-literal">null</span>&gt;(<span class="hljs-literal">null</span>)
+<span class="hljs-comment">// element: Stable&lt;RefObject&lt;HTMLElement | null&gt;&gt;</span>
+</code></pre>
+<p><code>Stable&lt;State&gt;</code> deserves a small clarification, because it reads like a lie at first. It does <em>not</em> mean
+the state can never change. It means React won't manufacture a new identity for state that didn't
+change. A real state transition should still invalidate a memo and re-run an effect, that's the whole
+point of state. The brand is about identity, not immutability.</p>
+<p>The initializer closures don't need proof either, they aren't dependency lists:</p>
+<pre><code class="hljs language-ts"><span class="hljs-keyword">const</span> [state] = <span class="hljs-title function_">useState</span>(<span class="hljs-function">() =&gt;</span> <span class="hljs-title function_">buildInitialState</span>(props))
+<span class="hljs-keyword">const</span> [reduced] = <span class="hljs-title function_">useReducer</span>(reducer, props, createInitialState)
+</code></pre>
+<p>React only calls those to produce the initial value. The contract brands the resulting state and
+dispatcher, it doesn't care whether the initialization closure was itself stable, so I don't ask for
+that.</p>
+<p>For module-scope values that are stable by construction, there's a tiny identity helper:</p>
+<pre><code class="hljs language-ts"><span class="hljs-keyword">export</span> <span class="hljs-keyword">const</span> <span class="hljs-variable constant_">EMPTY_ITEMS</span> = <span class="hljs-title function_">stable</span>([] <span class="hljs-keyword">as</span> <span class="hljs-title class_">Item</span>[])
+</code></pre>
+<p>At runtime <code>stable()</code> returns the value untouched, it's <code>x =&gt; x</code>. The useful part is the proof, not the
+function, keep it at module scope where the claim is actually true.</p>
+<h2>Context is where this pays off fast</h2>
+<p>An inline context value is one of the easiest ways to quietly make a whole subtree do work it didn't
+need to:</p>
+<pre><code class="hljs language-tsx">&lt;<span class="hljs-title class_">ThemeContext</span>.<span class="hljs-property">Provider</span> value={{ theme, setTheme }}&gt;
+  {children}
+&lt;/<span class="hljs-title class_">ThemeContext</span>.<span class="hljs-property">Provider</span>&gt;
+</code></pre>
+<p><code>createStableContext</code> moves that requirement onto the provider. It is framework-specific, so it comes from
+the React entry rather than the package root:</p>
+<pre><code class="hljs language-ts"><span class="hljs-keyword">import</span> { createStableContext } <span class="hljs-keyword">from</span> <span class="hljs-string">'stableref/react'</span>
+
+<span class="hljs-keyword">const</span> <span class="hljs-title class_">ThemeContext</span> = createStableContext&lt;<span class="hljs-title class_">ThemeValue</span> | <span class="hljs-literal">null</span>&gt;(<span class="hljs-literal">null</span>)
+</code></pre>
+<p>Now the provider only accepts a <code>Stable&lt;ThemeValue&gt;</code>. The place that owns the value also owns the job
+of memoizing it, and a consumer buried deep in the tree never has to know how that value got assembled.
+It just gets the contract. That's the boundary I want out of types, the knowledge stays where the
+responsibility is.</p>
+<h2>Preact</h2>
+<p>Same idea, separate entry point, because of course I wasn't going to leave Preact out:</p>
+<pre><code class="hljs language-ts"><span class="hljs-keyword">import</span> { useEffect, useMemo, <span class="hljs-keyword">type</span> <span class="hljs-title class_">Stable</span> } <span class="hljs-keyword">from</span> <span class="hljs-string">'stableref/preact'</span>
+</code></pre>
+<p>These keep the original <code>preact/hooks</code> references and apply the same strict dependency signatures. The
+proof belongs to the value contract, it was never really about which rendering library you happened to
+pick.</p>
+<h2>What this doesn't solve</h2>
+<p>A determined developer can always write:</p>
+<pre><code class="hljs language-ts">value <span class="hljs-keyword">as</span> <span class="hljs-title class_">Stable</span>&lt;<span class="hljs-keyword">typeof</span> value&gt;
+</code></pre>
+<p>No brand survives a cast, and that's true for basically every guarantee we model in TypeScript. I'm not
+shipping an ESLint plugin for it, an assertion stays an explicit escape hatch that review and
+conventions have to keep an eye on. <code>stable()</code> is the same kind of promise, so don't sprinkle it around
+to shut the compiler up.</p>
+<p>The React Compiler is the other thing people bring up, doesn't it make manual memoization obsolete? For
+a lot of cases, yeah. But I don't think it makes this idea pointless, because the two answer different
+questions. The compiler asks "can I preserve this identity automatically". <code>Stable&lt;T&gt;</code> says "another
+component can use this identity as an optimization contract". One is an implementation detail that lives
+in the build, the other is a contract that lives in the type graph where callers can see it.</p>
+<h2>Type errors as guardrails for agents</h2>
+<p>A lot of React gets written by coding agents now, and handing an inline array to a memoized child is
+exactly the kind of thing they do all day. It reads fine, it runs fine, and it quietly does more work
+than it should, which is about the worst category of bug to catch by eye. An agent can't see a
+re-render it never rendered, but it can absolutely respond to a type error, that's the feedback loop it
+already runs on.</p>
+<p>Which is why the error itself is worth some effort. When a dependency isn't proven, the strict hooks
+don't fail it against a bare <code>never</code>, they map it to a string that spells out the fix:</p>
+<pre><code class="hljs language-ts"><span class="hljs-title function_">useMemo</span>(<span class="hljs-function">() =&gt;</span> source.<span class="hljs-title function_">filter</span>(rawFilter), [source, rawFilter])
+<span class="hljs-comment">// Type '(item: Item) =&gt; boolean' is not assignable to type</span>
+<span class="hljs-comment">// 'This dependency is not Stable&lt;T&gt;: memoize it with useMemo/useCallback,</span>
+<span class="hljs-comment">//  source it from useState, depend on a useRef container rather than its mutable</span>
+<span class="hljs-comment">//  current value, or wrap a module-scope constant with stable().'</span>
+</code></pre>
+<p>The instruction rides along in the diagnostic and the caret lands on the exact dependency. A human
+reads it in their editor, an agent reads it out of <code>tsc</code>, and neither is left staring at "not
+assignable to never" trying to guess what the type system wanted. The check moves from "hope someone
+notices in review" to "the build stays red until the props are stable", which is the only kind of
+guardrail that holds up when code is being generated faster than anyone can read it.</p>
+<h2>The broader idea</h2>
+<p>The part I actually care about is bigger than memoization.</p>
+<p>We're forever hauling around properties the type system <em>could</em> carry but that we leave behind as
+comments, lint rules, and tribal knowledge instead. Referential stability is one of them, but it's not
+the only one. Once it's proof-carrying, a component can ask for it, a hook can hand it over, and a
+context can keep it intact across the whole subtree.</p>
+<p>The runtime work was already happening, we were already calling <code>useMemo</code>. The piece that was missing
+was letting the guarantee survive past the line where it was made.</p>
+<p>I've been packaging this up as <a href="https://github.com/JoviDeCroock/stableref"><code>stableref</code></a>. It's an
+experiment more than a library at this point, so I'd love to hear where it breaks for you.</p><!--/$s--></div></main>

@@ -1,0 +1,155 @@
+<article>
+<h1 class="text-3xl font-bold mb-4">Your Recursion Is Lying to You</h1>
+<div class="flex items-center space-x-4 text-sm text-gray-500 mb-6">
+<time datetime="2026-05-09T00:00:00.000Z">Sat May 09 2026</time>
+<span class="text-gray-300">•</span>
+<div class="flex flex-wrap gap-2">
+<div class="flex items-center rounded-full bg-teal-500 text-white dark:bg-teal-400/10 dark:text-teal-300 px-3 py-1 text-xs font-medium leading-5">tutorials</div>
+<div class="flex items-center rounded-full bg-teal-500 text-white dark:bg-teal-400/10 dark:text-teal-300 px-3 py-1 text-xs font-medium leading-5">javascript</div>
+<div class="flex items-center rounded-full bg-teal-500 text-white dark:bg-teal-400/10 dark:text-teal-300 px-3 py-1 text-xs font-medium leading-5">... is lying to you</div>
+</div>
+</div>
+<div class="prose dark:prose-invert max-w-none">
+<p><em>Featured in <a href="https://nodeweekly.com/issues/624">Node Weekly #624</a></em> and <a href="https://javascriptweekly.com/issues/788">Javascript Weekly - 2026-06-02</a>*</p>
+<p><a href="https://developer.mozilla.org/en-US/docs/Glossary/Recursion">Recursion</a> is one of those ideas developers learn early and trust for years. If the recursive step is simple and the base case is correct, the code feels clean and safe.</p>
+<p>It is elegant for a reason: many problems are naturally recursive, and the code often mirrors how we explain the logic out loud. For tree walks, nested structures, and divide-and-conquer patterns, recursion can be easier to read than explicit loops.</p>
+<p>The catch is physical limits. Even with a correct base case and sound logic, each recursive call still consumes stack space. At some depth, you crash with stack overflow.</p>
+<p>If you read <a href="/posts/2026-03-28-Your-Debounce-Is-Lying-to-You/">Your Debounce Is Lying to You</a> and <a href="/posts/2026-03-31-Your-Throttling-Is-Lying-to-You/">Your Throttling Is Lying to You</a>, this is the recursion version of the same pattern: elegant abstraction, hidden operational edge. Even dependency management can lie to you, as explored in <a href="/posts/2026-06-11-Your-Package-Manager-Is-Lying-to-You/">Your Package Manager Is Lying to You</a>. For a different category of silent failure, <a href="/posts/2026-07-21-Your-JS-Date-Is-Lying-to-You/">Your JS Date Is Lying to You</a> covers the parsing, mutation, and timezone traps built into the JavaScript Date API.</p>
+<h2 id="problem-setup%3A-recursion-hits-the-wall" tabindex="-1"><a class="header-anchor" href="#problem-setup%3A-recursion-hits-the-wall">Problem Setup: Recursion Hits The Wall</a></h2>
+<p>You can run everything below directly in a browser console. Let's start simple: a recursive sum of all integers from 1 to n.</p>
+<pre class="language-js"><code class="language-js"><span class="token keyword">function</span> <span class="token function">sum</span><span class="token punctuation">(</span><span class="token parameter">n</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+  <span class="token keyword">if</span> <span class="token punctuation">(</span>n <span class="token operator">===</span> <span class="token number">0</span><span class="token punctuation">)</span> <span class="token keyword">return</span> <span class="token number">0</span><span class="token punctuation">;</span>
+  <span class="token keyword">return</span> n <span class="token operator">+</span> <span class="token function">sum</span><span class="token punctuation">(</span>n <span class="token operator">-</span> <span class="token number">1</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+
+<span class="token function">sum</span><span class="token punctuation">(</span><span class="token number">10</span><span class="token punctuation">)</span><span class="token punctuation">;</span> <span class="token comment">// 55</span>
+</code></pre>
+<p>Now push a big input:</p>
+<pre class="language-js"><code class="language-js"><span class="token function">sum</span><span class="token punctuation">(</span><span class="token number">100000</span><span class="token punctuation">)</span><span class="token punctuation">;</span> <span class="token comment">// RangeError or InternalError: too much recursion in most JS runtimes</span>
+</code></pre>
+<p>What just happened? The function is logically correct, but each call to <code>sum</code> stays on the stack until the one below it returns. At depth 100,000 the runtime runs out of stack space and throws. It has nothing to do with the result being wrong, it is purely a physical limit on how many nested frames the runtime can hold at once.</p>
+<h2 id="the-tail-recursion-rescue-story" tabindex="-1"><a class="header-anchor" href="#the-tail-recursion-rescue-story">The Tail Recursion Rescue Story</a></h2>
+<p>The usual next step is <a href="https://en.wikipedia.org/wiki/Tail_call">tail call optimization</a>. The idea is simple: make the recursive call the last thing the function does, so the runtime can reuse the same frame instead of pushing a new one.</p>
+<p>Note that <code>sum</code> is <strong>not</strong> tail-recursive, even though the recursive call appears on the last line. After <code>sum(n - 1)</code> returns, there is still pending work: the result must be added to <code>n</code>. <strong>A call is only in tail position when its return value is forwarded immediately, with no pending computation afterward</strong>.</p>
+<p>The tail-recursive version moves that pending state into an accumulator:</p>
+<pre class="language-js"><code class="language-js"><span class="token keyword">function</span> <span class="token function">sumTR</span><span class="token punctuation">(</span><span class="token parameter">n<span class="token punctuation">,</span> acc <span class="token operator">=</span> <span class="token number">0</span></span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+  <span class="token keyword">if</span> <span class="token punctuation">(</span>n <span class="token operator">===</span> <span class="token number">0</span><span class="token punctuation">)</span> <span class="token keyword">return</span> acc<span class="token punctuation">;</span>
+  <span class="token keyword">return</span> <span class="token function">sumTR</span><span class="token punctuation">(</span>n <span class="token operator">-</span> <span class="token number">1</span><span class="token punctuation">,</span> acc <span class="token operator">+</span> n<span class="token punctuation">)</span><span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+
+<span class="token function">sumTR</span><span class="token punctuation">(</span><span class="token number">10</span><span class="token punctuation">)</span><span class="token punctuation">;</span> <span class="token comment">// 55</span>
+</code></pre>
+<p>Here <code>sumTR(...)</code> is the very last thing that happens — no pending <code>+</code>, no pending anything. The running total lives in <code>acc</code>, not in waiting stack frames. In theory, a runtime that implements TCO can execute this in constant stack space regardless of depth.</p>
+<p>Now repeat the same stress input:</p>
+<pre class="language-js"><code class="language-js"><span class="token function">sumTR</span><span class="token punctuation">(</span><span class="token number">100000</span><span class="token punctuation">)</span><span class="token punctuation">;</span> <span class="token comment">// may still throw RangeError!</span>
+</code></pre>
+<p>Even with correct tail-recursive structure, many JavaScript runtimes still allocate a new stack frame per call and throw at large depth. This surprises developers who expect TCO to be a universal guarantee. <a href="https://262.ecma-international.org/6.0/#sec-tail-position-calls">ECMAScript 2015</a> formally specified proper tail calls in strict mode, but most engines never adopted the feature consistently. Some shipped it and then walked it back due to performance regressions. Others never implemented it at all. The result is that you cannot assume tail recursion is stack-safe in production JavaScript, even if the code is correctly structured for TCO.</p>
+<h2 id="a-note-on-fibonacci" tabindex="-1"><a class="header-anchor" href="#a-note-on-fibonacci">A Note on Fibonacci</a></h2>
+<p><a href="https://en.wikipedia.org/wiki/Fibonacci_number">Fibonacci</a> is the go-to recursion textbook example and it does run into stack limits too, but it carries a second problem that makes it even worse: <strong>exponential time complexity</strong>.</p>
+<pre class="language-js"><code class="language-js"><span class="token keyword">function</span> <span class="token function">fib</span><span class="token punctuation">(</span><span class="token parameter">n</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+  <span class="token keyword">if</span> <span class="token punctuation">(</span>n <span class="token operator">&lt;=</span> <span class="token number">1</span><span class="token punctuation">)</span> <span class="token keyword">return</span> n<span class="token punctuation">;</span>
+  <span class="token keyword">return</span> <span class="token function">fib</span><span class="token punctuation">(</span>n <span class="token operator">-</span> <span class="token number">1</span><span class="token punctuation">)</span> <span class="token operator">+</span> <span class="token function">fib</span><span class="token punctuation">(</span>n <span class="token operator">-</span> <span class="token number">2</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+</code></pre>
+<p>Each call branches into two more calls, so the total number of calls grows as O(2ⁿ). <code>fib(30)</code> already makes over a million calls; <code>fib(50)</code> is in the tens of billions. In a browser this freezes the tab long before any stack limit is reached, which makes the failure mode look identical to a stack overflow but have a completely different root cause.</p>
+<p>The tail-recursive version of Fibonacci:</p>
+<pre class="language-js"><code class="language-js"><span class="token keyword">function</span> <span class="token function">fibTR</span><span class="token punctuation">(</span><span class="token parameter">n<span class="token punctuation">,</span> a <span class="token operator">=</span> <span class="token number">0</span><span class="token punctuation">,</span> b <span class="token operator">=</span> <span class="token number">1</span></span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+  <span class="token keyword">if</span> <span class="token punctuation">(</span>n <span class="token operator">===</span> <span class="token number">0</span><span class="token punctuation">)</span> <span class="token keyword">return</span> a<span class="token punctuation">;</span>
+  <span class="token keyword">if</span> <span class="token punctuation">(</span>n <span class="token operator">===</span> <span class="token number">1</span><span class="token punctuation">)</span> <span class="token keyword">return</span> b<span class="token punctuation">;</span>
+  <span class="token keyword">return</span> <span class="token function">fibTR</span><span class="token punctuation">(</span>n <span class="token operator">-</span> <span class="token number">1</span><span class="token punctuation">,</span> b<span class="token punctuation">,</span> a <span class="token operator">+</span> b<span class="token punctuation">)</span><span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+</code></pre>
+<p>This version runs in linear time, but it still risks stack overflow at large <code>n</code> due to the same TCO uncertainty. The exponential version is a red herring for this discussion because it fails for a completely different reason: stack overflow and exponential blowup are two separate problems. They look the same from the outside (the page hangs or crashes) but require completely different fixes.</p>
+<h2 id="runtime-reality-(at-the-time-of-writing)" tabindex="-1"><a class="header-anchor" href="#runtime-reality-(at-the-time-of-writing)">Runtime Reality (At The Time Of Writing)</a></h2>
+<p>At the time of writing (May 2026), proper tail-call optimization support is not something you can count on across JavaScript runtimes.</p>
+<table>
+<thead>
+<tr>
+<th>Runtime</th>
+<th>Engine</th>
+<th>Proper Tail Calls You Can Rely On?</th>
+<th>Practical Take</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Chrome</td>
+<td>V8</td>
+<td>No</td>
+<td>Do not expect stack-safe tail recursion.</td>
+</tr>
+<tr>
+<td>Node.js</td>
+<td>V8</td>
+<td>No</td>
+<td>Tail-recursive code can still overflow.</td>
+</tr>
+<tr>
+<td>Deno</td>
+<td>V8</td>
+<td>No</td>
+<td>Same operational expectation as Node/Chrome.</td>
+</tr>
+<tr>
+<td>Firefox</td>
+<td>SpiderMonkey</td>
+<td>No</td>
+<td>Do not treat tail recursion as a safety guarantee.</td>
+</tr>
+<tr>
+<td>Safari</td>
+<td>JavaScriptCore</td>
+<td>Inconsistent — JSC has shipped and walked back TCO across versions</td>
+<td>Do not rely on it; behavior has varied enough across releases that it is not a stable guarantee.</td>
+</tr>
+<tr>
+<td>Bun</td>
+<td>JavaScriptCore-based</td>
+<td>Engine-dependent, not a cross-runtime guarantee</td>
+<td>Verify on exact version; do not assume universal behavior.</td>
+</tr>
+</tbody>
+</table>
+<p>The key point is portability. Tail recursion is a property of function structure, while stack reuse is a property of runtime implementation. Even if one engine behaves better in one version, production JavaScript usually spans multiple targets, and correctness should not depend on optimizer-specific behavior. A function can be perfectly tail-recursive in shape and still consume stack per call in the environments your users actually run.</p>
+<h2 id="better-patterns-for-production-code" tabindex="-1"><a class="header-anchor" href="#better-patterns-for-production-code">Better Patterns for Production Code</a></h2>
+<p>Every recursive function can be rewritten iteratively, and that is usually the safest choice in production when input depth can grow. Iteration does not rely on runtime optimizations for stack safety, because it does not consume stack frames per step. This does not mean giving up the recursive mental model. You can still write code that is conceptually recursive but uses an explicit stack or a <em>trampoline</em> to manage control flow without hitting physical limits.</p>
+<pre class="language-js"><code class="language-js"><span class="token keyword">function</span> <span class="token function">sumIter</span><span class="token punctuation">(</span><span class="token parameter">n</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+  <span class="token keyword">let</span> acc <span class="token operator">=</span> <span class="token number">0</span><span class="token punctuation">;</span>
+  <span class="token keyword">for</span> <span class="token punctuation">(</span><span class="token keyword">let</span> i <span class="token operator">=</span> n<span class="token punctuation">;</span> i <span class="token operator">&gt;</span> <span class="token number">0</span><span class="token punctuation">;</span> i<span class="token operator">--</span><span class="token punctuation">)</span> acc <span class="token operator">+=</span> i<span class="token punctuation">;</span>
+  <span class="token keyword">return</span> acc<span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+
+<span class="token function">sumIter</span><span class="token punctuation">(</span><span class="token number">1000000</span><span class="token punctuation">)</span><span class="token punctuation">;</span> <span class="token comment">// no recursive stack growth</span>
+</code></pre>
+<h2 id="the-trampoline-pattern" tabindex="-1"><a class="header-anchor" href="#the-trampoline-pattern">The Trampoline Pattern</a></h2>
+<p>If you want to keep the recursive structure for readability but need to avoid stack growth, you can use a trampoline: a loop that repeatedly calls a function that returns either a final result or another function to call.</p>
+<pre class="language-js"><code class="language-js"><span class="token keyword">function</span> <span class="token function">trampoline</span><span class="token punctuation">(</span><span class="token parameter">fn</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+  <span class="token keyword">let</span> result <span class="token operator">=</span> fn<span class="token punctuation">;</span>
+  <span class="token keyword">while</span> <span class="token punctuation">(</span><span class="token keyword">typeof</span> result <span class="token operator">===</span> <span class="token string">'function'</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+    result <span class="token operator">=</span> <span class="token function">result</span><span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+  <span class="token punctuation">}</span>
+  <span class="token keyword">return</span> result<span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+
+<span class="token keyword">function</span> <span class="token function">sumTrampoline</span><span class="token punctuation">(</span><span class="token parameter">n<span class="token punctuation">,</span> acc <span class="token operator">=</span> <span class="token number">0</span></span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+  <span class="token keyword">if</span> <span class="token punctuation">(</span>n <span class="token operator">===</span> <span class="token number">0</span><span class="token punctuation">)</span> <span class="token keyword">return</span> acc<span class="token punctuation">;</span>
+  <span class="token keyword">return</span> <span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token operator">=&gt;</span> <span class="token function">sumTrampoline</span><span class="token punctuation">(</span>n <span class="token operator">-</span> <span class="token number">1</span><span class="token punctuation">,</span> acc <span class="token operator">+</span> n<span class="token punctuation">)</span><span class="token punctuation">;</span>
+<span class="token punctuation">}</span>
+
+<span class="token function">trampoline</span><span class="token punctuation">(</span><span class="token punctuation">(</span><span class="token punctuation">)</span> <span class="token operator">=&gt;</span> <span class="token function">sumTrampoline</span><span class="token punctuation">(</span><span class="token number">100000</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span> <span class="token comment">// no stack overflow, still tail-recursive in spirit</span>
+</code></pre>
+<p>Trampolines trade stack safety for additional function allocations and dispatch overhead, so they are most useful when preserving recursive structure matters more than raw performance.</p>
+<p>This approach scales in a way that does not depend on runtime tail-call behavior, which is exactly what you want when input depth can grow. If recursive structure improves readability for a particular problem, these techniques let you keep that mental model with explicit tradeoffs instead of implicit runtime assumptions.</p>
+<p>A useful rule of thumb is to keep recursion for small, bounded depths that you control, and <strong>switch to iterative control flow as soon as depth is user-driven, data-driven, or operationally uncertain</strong>. For hot paths, benchmark both styles, but do not base correctness on assumed TCO.</p>
+<h2 id="practical-checklist" tabindex="-1"><a class="header-anchor" href="#practical-checklist">Practical Checklist</a></h2>
+<ul>
+<li>Never assume TCO in JavaScript for production-critical paths.</li>
+<li>Test with realistic upper bounds, not toy input sizes.</li>
+<li>Favor iterative implementations when depth can grow.</li>
+<li>Treat recursion as a readability tool, not a stack-safety guarantee.</li>
+</ul>
+<h2 id="conclusion" tabindex="-1"><a class="header-anchor" href="#conclusion">Conclusion</a></h2>
+<p>Recursion itself is not the enemy, unverified runtime assumptions are. Tail-recursive shape does not automatically make JavaScript stack-safe, and that gap is where many "works on my machine" surprises come from in production.</p>
+<p>Use recursion where it improves clarity and depth is genuinely bounded. When depth can grow or input is outside your control, prefer iterative designs that make stack behavior explicit and portable.</p>
+</div>
+</article>

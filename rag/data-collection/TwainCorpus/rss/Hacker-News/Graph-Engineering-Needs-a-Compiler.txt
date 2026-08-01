@@ -1,0 +1,633 @@
+AI can generate components faster than humans can understand their combined execution. Graphs make the application structure visible. A compiler can turn that structure into a deterministic orchestrator.
+
+AI coding has created a strange inversion: writing code is becoming cheap, while understanding what all that code will do together is becoming expensive.
+
+An LLM can add a handler, connect an API, introduce a queue, implement a retry, update some state and call another service in minutes. Each change can look perfectly reasonable when read on its own.
+
+The problem appears when those reasonable pieces interact.
+
+The real behaviour of an application is rarely contained in one method. It emerges from the order in which callbacks, listeners, timers, queues, retries, lifecycle hooks and state changes combine.
+
+An LLM can now generate this orchestration faster than a human can reconstruct the execution model it is creating.
+
+This is one reason 
+graph engineering
+ is attracting attention. 
+LangChain
+ recently used the term to describe constructing agentic systems as graphs containing deterministic code, model calls, tools and complete agents. The graph constrains the paths the system may follow instead of leaving every decision to an LLM.
+
+That is an important improvement â but making the graph visible is only half the solution. The other half is deciding exactly how the graph executes.
+
+AI writes locally. Systems execute globally.
+
+LLMs are often very good at implementing local behaviour.
+
+Suppose an application receives a trade and must:
+
+Update position
+      â
+Recalculate risk
+      â
+Publish the result
+
+An LLM might generate:
+
+updatePosition(trade);
+publishPosition();
+recalculateRisk();
+
+Every method call is valid, the code is readable, and the implementation may compile and pass many tests. But the global ordering is wrong.
+
+Nothing in those method signatures tells the compiler that risk must be recalculated before the position is published. That requirement exists somewhere outside the code: in an architecture document, in a test, in a comment, or in the mind of an experienced developer.
+
+The dangerous AI-generated code is not usually obvious nonsense. It is 
+locally plausible code that subtly violates a global invariant
+.
+
+The problem compounds over time. One prompt introduces retries. Another moves work onto an executor. A third adds metrics. A fourth supports another event type.
+
+Each change may be reasonable in isolation while changing:
+
+execution order;
+
+state visibility;
+
+reentrancy;
+
+failure handling;
+
+completion semantics;
+
+replay behaviour.
+
+The application gradually develops an execution model that no personâand no single promptâever explicitly designed.
+
+The loop is not the villain
+
+A small loop can be perfectly deterministic:
+
+while
+ (running) {
+    
+Event
+ 
+event
+ 
+=
+ queue.take();
+
+    updateState(event);
+    calculateRisk();
+    publishResult();
+}
+
+Given the same initial state and the same ordered inputs, this loop can produce the same result every time.
+
+The problem is not that loops are inherently unpredictable. The problem is that real applications rarely remain one loop.
+
+Over time, 
+updateState
+ publishes another event. A listener receives it. A timer refreshes reference data. A retry schedules more work. A framework invokes a lifecycle method. A callback observes some state before another callback has finished updating it.
+
+The original loop has not disappeared. It has become distributed throughout the application:
+
+Event loop
+   âââ listener
+   â      âââ callback
+   â             âââ queue
+   âââ scheduled task
+   âââ retry handler
+   âââ asynchronous publisher
+
+Someone still has to understand the complete sequence.
+
+In a conventional project, that person is often a senior developer who has accumulated an unwritten model of the system over several years.
+
+In an AI-generated project, we risk asking an LLM to become that global coordination engineer. That is a poor division of responsibility.
+
+Graph engineering makes the application model visible
+
+A graph replaces implicit control flow with explicit relationships:
+
+Trade
+  â
+Position
+  â
+Risk
+  â
+Policy
+  â
+Route
+
+The graph says that risk depends on the updated position, policy depends on risk, and routing depends on the policy decision.
+
+That is easier to inspect than equivalent behaviour spread across queues, callbacks and listeners.
+
+It is also a natural model for systems that combine ordinary code with probabilistic components:
+
+Request
+   â
+Classification agent
+   â
+Policy validation
+   â
+Human approval
+   â
+Approved action
+
+The classification agent may remain probabilistic. The surrounding graph constrains where the model can operate and what must happen before an external action is permitted.
+
+Current agent graph frameworks generally make this graph explicit: nodes perform work, while edges or routing definitions determine what happens next. 
+Microsoftâs Agent Framework
+, for example, describes workflows as directed graphs of executors and edges; 
+LangGraph
+ similarly uses nodes, state and transitions to define an agent workflow.
+
+This is much better than hiding the workflow inside a large agent loop, but it still leaves an important problem: someone must author the orchestration.
+
+The graph is not the orchestrator
+
+Consider a simple diamond:
+
+        A
+       / \
+      B   C
+       \ /
+        D
+
+The topology tells us that B and C depend on A, and D depends on B and C.
+
+The diagram alone does not necessarily answer:
+
+Does B run before C?
+
+May B and C run concurrently?
+
+When do their state changes become visible?
+
+Should D run if B produced no change?
+
+What happens if C emits another event?
+
+Is that event handled immediately or queued?
+
+What happens when B fails?
+
+When does end-of-cycle cleanup occur?
+
+Can D observe a partially completed update?
+
+Workflow runtimes answer these questions through their execution semantics and the graph definition supplied by the author. That is entirely appropriate when routes must remain dynamic. But it means the global coordination plan is still authored software.
+
+In applications whose components already express structural dependencies, an explicit workflow can also duplicate relationships that exist elsewhere in the program. Even when there is no literal duplication, someone still has to construct and maintain the global routing and lifecycle plan.
+
+Fluxtion asks a narrower question:
+
+When the component graph is closed and its local event semantics are known, how much of the global coordinator can a compiler derive?
+
+Inferred orchestration
+
+This is the approach I have been exploring through 
+Fluxtion
+.
+
+I did not arrive at this problem through agent frameworks. Fluxtion grew out of electronic-trading systems, where event order, latency, replay and the ability to reconstruct a decision were production requirements. The recent rise of AI-generated software has made the same coordination problem much more general.
+
+Fluxtion treats orchestration as a compiler problem.
+
+None of the ingredients is unprecedented. Jane Streetâs 
+Incremental
+ maintains a dependency graph and recomputes the affected portion when inputs change; its graph may also change at runtime. 
+Dagger
+ uses compile-time graph analysis to generate Java that constructs and wires dependencies, while Dagger Producers extends that approach to dependent asynchronous computations. Fluxtion applies related ideas to a different layer: repeated event coordination across a closed graph of stateful business components, including event-specific dispatch, change and trigger propagation, lifecycle, reentrancy, audit and replay, specialised into a standalone Java processor.
+
+Developers write ordinary Java components containing local state and behaviour. References between those components form an object graph. Annotations and interfaces declare event-handling and lifecycle semantics. Depending on the authoring style, the topology may be expressed through Java object references, a fluent DSL or Spring wiring â the important point is not that every graph originates identically; it is that the author declares the structure once rather than separately implementing its runtime coordinator.
+
+Once the complete graph is known, the compiler analyses it and derives the orchestration.
+
+Java components
++ dependencies
++ event semantics
+        â
+Closed object graph
+        â
+Execution inference
+        â
+Compiled orchestrator
+        â
+Generated Java
+
+Fluxtion calls the compiler technique 
+execution inference
+. The programming model it enables is 
+inferred orchestration
+: developers define components, dependencies and local event semantics, while the compiler derives and emits the global dispatcher.
+
+Execution inference does not guess the developerâs intentions from method names or comments. It derives the consequences of explicit structure that already exists: object references, event handlers, trigger methods, lifecycle callbacks, sinks and exported services.
+
+From that structure, Fluxtion derives:
+
+which components are affected by each event;
+
+their valid topological execution order;
+
+when changes should propagate;
+
+when trigger methods become eligible;
+
+lifecycle and cleanup ordering;
+
+audit-hook placement;
+
+queued reentrant event handling.
+
+âInferredâ does not mean that the compiler guesses intent or that developers declare nothing. A component still states its local role: that it handles a particular event, triggers after an upstream change, participates in lifecycle processing or exports a service. What the developer does not write is the global coordination program â the complete route, execution order, change-propagation plan, lifecycle sequence and reentrancy behaviour. Execution inference derives that global program from the closed graph and its local declarations.
+
+It then generates the runtime dispatcher as 
+ordinary Java source
+.
+
+The orchestration is 
+compiled rather than separately authored
+.
+
+A small example
+
+Imagine three stateful components:
+
+final
+ 
+class
+ 
+Position
+ {
+
+@OnEventHandler
+
+public
+ 
+boolean
+ 
+onTrade
+(Trade trade)
+ {
+        
+// Update local position state.
+
+// Return true if downstream calculations are affected.
+
+return
+ positionChanged;
+    }
+}
+
+final
+ 
+class
+ 
+Risk
+ {
+
+private
+ 
+final
+ Position position;
+
+    Risk(Position position) {
+        
+this
+.position = position;
+    }
+
+@OnTrigger
+
+public
+ 
+boolean
+ 
+recalculate
+()
+ {
+        
+// Recalculate using the updated position.
+
+return
+ riskChanged;
+    }
+}
+
+final
+ 
+class
+ 
+TradeGate
+ {
+
+private
+ 
+final
+ Risk risk;
+
+    TradeGate(Risk risk) {
+        
+this
+.risk = risk;
+    }
+
+@OnTrigger
+
+public
+ 
+boolean
+ 
+evaluate
+()
+ {
+        
+// Decide whether trading remains permitted.
+
+return
+ gateChanged;
+    }
+}
+
+The object references express the dependency structure:
+
+Trade
+  â
+Position
+  â
+Risk
+  â
+TradeGate
+
+There is no separate master loop that must manually call every component in the correct order.
+
+There is also no second edge list duplicating the same relationships.
+
+Once these objects form a closed graph, execution inference can generate an event-specific dispatcher conceptually resembling:
+
+public
+ 
+void
+ 
+onEvent
+(Trade trade)
+ {
+    
+boolean
+ 
+positionChanged
+ 
+=
+ position.onTrade(trade);
+
+if
+ (positionChanged) {
+        
+boolean
+ 
+riskChanged
+ 
+=
+ risk.recalculate();
+
+if
+ (riskChanged) {
+            tradeGate.evaluate();
+        }
+    }
+
+    afterEvent();
+}
+
+The real generated processor handles more sophisticated propagation, convergent paths, triggering and lifecycle behaviour, but the principle is the same:
+
+Developers define local behaviour and structural dependency. The compiler generates global coordination.
+
+The output is a 
+compiled orchestrator
+ â by which I mean the generated Java dispatcher that encodes the event schedule, change propagation, lifecycle and reentrancy rules for this particular graph.
+
+Why a compiled orchestrator matters
+
+One source of structural truth
+
+In an explicitly orchestrated system, the domain objects and the workflow metadata may both represent dependencies.
+
+With inferred orchestration, those dependencies are the compiler input.
+
+Changing an object relationship changes the graph that is analysed. The orchestration is regenerated from that graph rather than repaired separately.
+
+This reduces the opportunity for the application model and orchestration model to drift apart.
+
+Deterministic execution within a defined boundary
+
+A compiler can calculate a stable execution schedule from the closed graph.
+
+Given the same:
+
+generated processor version;
+
+initial state;
+
+ordered input events;
+
+configuration;
+
+clock values;
+
+external responses;
+
+the same handlers can be invoked in the same order.
+
+That qualification matters. Compilation does not make networks, humans, databases or LLMs deterministic. Determinism always exists within a declared boundary.
+
+Inside that boundary, ordering is encoded in the generated schedule rather than emerging from listener-registration order, framework callback timing or an LLM recreating the control flow in another file.
+
+An inspectable runtime artefact
+
+The orchestrator is generated source code.
+
+It can be read in an IDE, committed, compared between versions and stepped through with an ordinary debugger.
+
+The graph can also be exported and inspected.
+
+That gives a reviewer three related views of the system:
+
+Declared components
+        â
+Inferred graph
+        â
+Generated execution code
+
+The generated code is not merely an optimisation detail. It is an executable description of how the graph will run.
+
+Replay and audit
+
+When dispatch order and audit points are generated from the same graph, replay becomes a structural capability rather than an afterthought.
+
+A recorded sequence of inputs can be sent through the same processor version to reproduce a decision path.
+
+The system can record which nodes were reached, which state changed and which downstream actions were triggered.
+
+This is particularly valuable when the software is making operational, financial or safety-related decisions.
+
+Specialised execution
+
+A general graph runtime must retain machinery for many possible graphs.
+
+A compiled orchestrator only needs to execute one known graph.
+
+It can generate event-specific paths, call components directly and avoid repeatedly interpreting generic routing metadata. It can also avoid visiting unaffected parts of the graph when an upstream value has not changed.
+
+Fluxtion generates a 
+flat, specialised dispatcher
+ from a topologically ordered plan rather than walking a generic reactive graph for every event.
+
+Performance is not the main argument here, but it is a natural consequence of specialising the coordination layer.
+
+A safer division of labour for AI
+
+An LLM can still write the wrong business rule.
+
+It can still choose the wrong component or declare the wrong dependency.
+
+A compiler cannot manufacture requirements that were never expressed.
+
+But execution inference narrows the responsibility given to the model.
+
+Instead of asking the LLM to generate:
+
+the components;
+
+the dependencies;
+
+the routing layer;
+
+the scheduling behaviour;
+
+the lifecycle coordination;
+
+the audit plumbing;
+
+we can ask it to produce components, rules and explicit relationships.
+
+The compiler then derives a consistent orchestrator from that structure.
+
+Errors become visible structural claims rather than accidental interactions hidden across callbacks.
+
+Probabilistic islands in a deterministic sea
+
+A compiled graph does not make an LLM deterministic â nor should it pretend to.
+
+A model call may return a different answer. A human may make a different decision. An API may fail. Inputs may arrive in a different order.
+
+The useful distinction is between the parts that are intended to reason and the parts that are intended to enforce.
+
+Request
+  â
+Approved context construction
+  â
+LLM
+  â
+Schema validation
+  â
+Policy checks
+  â
+Human approval when required
+  â
+Permitted action
+
+The LLM remains a probabilistic node.
+
+The surrounding system can deterministically control:
+
+which information the model receives;
+
+which tools it may request;
+
+how its output is validated;
+
+which policies apply;
+
+when human approval is mandatory;
+
+which external actions are permitted;
+
+what evidence is retained.
+
+A useful design principle is:
+
+Keep probabilistic reasoning in explicit islands. Compile the deterministic sea around them.
+
+Dynamic agent graph runtimes remain valuable for long-running work, runtime-created paths, checkpointing, human interaction and model-directed delegation. 
+LangGraph
+, for example, deliberately supports both constrained graph paths and more dynamic agent behaviour.
+
+The two approaches can compose:
+
+Dynamic agent workflow
+          â
+Compiled policy and control graph
+          â
+Operational systems
+
+Interpret the parts that must remain dynamic.
+
+Compile the parts that should not improvise.
+
+The compiler idea is old. The pressure is new.
+
+Fluxtion sits at the intersection of established ideas rather than claiming a new primitive. Incremental-computation systems restrict work to affected subgraphs; compile-time dependency-injection systems generate inspectable wiring; synchronous dataflow languages such as 
+Lustre
+ statically schedule closed graphs.
+
+Fluxtion applies those ideas to repeated event coordination across ordinary stateful Java components: event-specific dispatch, change and trigger propagation, lifecycle, reentrancy, audit and replay, specialised into a generated dispatcher.
+
+What has changed is the economic context. For most of software history, writing code was expensive, and it was reasonable for developers to spend substantial effort manually constructing the coordination layer around it. AI is making code generation cheap; understanding and trusting the combined behaviour of that code is not.
+
+Graph engineering makes the application structure explicit. Execution inference makes the deterministic coordination explicit.
+
+See it run
+
+The 
+Fluxtion Playground
+ requires no installation, account or API key. You can edit Java, generate the processor, inspect the inferred graph and generated source, run events and step through the audit trail from the browser.
+
+For examples that use hosted source generation, the graph definition is sent to Fluxtionâs build-time generator and the generated Java is returned to the playground. The hosted generator is the commercial part of the production toolchain; the generated source belongs to the project and the resulting processor runs on the open runtime with no cloud call or API key.
+
+Open the accept/reject example in the Fluxtion Playground.
+ It models a payment-authorisation flow with guarded approval and decline branches. Each branch fans out to independent actions and then converges on a final decision. Inspect 
+AcceptRejectProcessor.java
+ beside the inferred graph, run events and step through the audit trail for each decision.
+
+The two compiler artefacts side by side: the inferred GraphML graph and generated Java orchestrator, including guard checks, dirty-state propagation and audit hooks derived from the component graph. Click to view full size.
+
+The 
+code-generation examples
+ show the same deterministic dispatcher produced from several authoring styles, while the 
+inferred orchestration
+ and 
+execution inference
+ pages describe the programming model and compiler technique in more detail.
+
+From generated code to generated systems
+
+Graph engineering is an important response to AI-generated software.
+
+It moves system structure out of hidden control flow and into something humans and machines can inspect.
+
+But graph engineering should not always stop at drawing a graph and handing it to a generic runtime.
+
+Where topology is genuinely dynamic, runtime orchestration is appropriate.
+
+Where the graph is closed, stable and operationally important, its coordination can become compiler output.
+
+That changes the role of the developerâand of the LLM. They define the components, the local behaviour, and the dependencies and constraints. The compiler derives the execution paths, lifecycle and coordination.
+
+Graph engineering makes the application model visible. Execution inference turns that model into a compiled orchestrator.
+
+AI should help us describe and build the machine.
+
+The compiler should generate the orchestrator.

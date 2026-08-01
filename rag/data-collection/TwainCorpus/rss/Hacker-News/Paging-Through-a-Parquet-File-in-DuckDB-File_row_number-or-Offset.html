@@ -1,0 +1,383 @@
+<article class="max-w-(--width-article) mx-auto px-4 sm:px-6 lg:px-8 py-12" data-pagefind-body=""><!-- Post header --><!-- Featured image --><!-- Post content --><div class="prose">
+<p>I had a large Parquet file and a service that had to hand back its contents. Returning
+twenty million rows can easily exceed the maximum size of an API response, and whatever you
+are deployed on has a ceiling:
+<a href="https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html">Lambda gives you 6 MB</a>
+for a synchronous request or response, and
+<a href="https://docs.cloud.google.com/run/quotas">Cloud Run caps an HTTP/1 response at 32 MiB</a>
+unless you stream it. Even without a platform limit, the client has to hold what you send.</p>
+<p>So the contents go back a page at a time and the caller keeps asking until it has
+everything. What shapes everything else is that <strong>each request has to stand on its own</strong>.
+With several workers behind a load balancer there is no server-side position to resume from,
+so “the next page” has to be reconstructible from the request itself, by any worker, every
+time.</p>
+<p>The obvious way to write that is <a href="https://duckdb.org/docs/stable/sql/query_syntax/limit"><code>LIMIT</code> and <code>OFFSET</code></a>,
+and the worry is that <code>OFFSET 19000000</code> has to count past nineteen million rows to find your
+page, which would make a full pass through the file quadratic. DuckDB’s
+<a href="https://duckdb.org/docs/stable/data/parquet/overview"><code>read_parquet</code></a> has a
+<code>file_row_number</code> option that hands you each row’s physical position, so I could filter on
+a row range instead. The contract stays the same, since the client still sends back
+something small and the server rebuilds the page from it, but nothing gets counted.</p>
+<p class="pullquote">I expected to prove that <code>OFFSET</code> re-reads everything in front of your page. It doesn't, and what turned out to matter wasn't speed at all.</p>
+<h2 id="the-short-version">The short version</h2>
+<p>On a 20-million-row file with 163 row groups, the row-range version finished <strong>2.53x
+faster</strong> than <code>OFFSET</code> across the whole file. That held in 37 out of 37 runs.</p>
+<pre class="astro-code astro-code-themes vitesse-light vitesse-dark" data-language="sql" style="background-color:#ffffff;--shiki-dark-bg:#121212;color:#393a34;--shiki-dark:#dbd7caee; overflow-x: auto;" tabindex="0"><code><span class="line"><span style="color:#A0ADA0;--shiki-dark:#758575DD">-- instead of LIMIT $n OFFSET $offset</span></span>
+<span class="line"><span style="color:#1E754F;--shiki-dark:#4D9375">SELECT</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> id, k, </span><span style="color:#1E754F;--shiki-dark:#4D9375">name</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">, category, </span><span style="color:#1E754F;--shiki-dark:#4D9375">value</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">, payload, ts</span></span>
+<span class="line"><span style="color:#1E754F;--shiki-dark:#4D9375">FROM</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> read_parquet($</span><span style="color:#AB5959;--shiki-dark:#CB7676">path</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">, file_row_number </span><span style="color:#AB5959;--shiki-dark:#CB7676">=&gt;</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> true)</span></span>
+<span class="line"><span style="color:#1E754F;--shiki-dark:#4D9375">WHERE</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> file_row_number </span><span style="color:#AB5959;--shiki-dark:#CB7676">&gt;=</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> $lo </span><span style="color:#1E754F;--shiki-dark:#4D9375">AND</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> file_row_number </span><span style="color:#AB5959;--shiki-dark:#CB7676">&lt;</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> $hi</span></span></code></pre>
+<p>That row range is doing something specific. Parquet files are stored as a sequence of
+blocks called row groups, and DuckDB can work out from the file’s footer which blocks a
+given range of row numbers lives in. Everything before your page gets skipped without ever
+being decompressed:</p>
+<figure class="pqviz">
+
+<figcaption>The gold path is your predicate. It arrives at the blocks holding your rows without touching the ones in front of them — which is why the cost of a page doesn't grow as you page deeper.</figcaption>
+</figure>
+<p>Two caveats before you go anywhere with that number. It depends entirely on your file
+having many row groups. Speed is also the weaker of the two arguments for a row range; the
+stronger one is worse than a performance problem.</p>
+<h2 id="how-many-row-groups-does-your-file-have">How many row groups does your file have?</h2>
+<p>DuckDB skips work one <a href="https://parquet.apache.org/docs/file-format/">row group</a> at a time.
+A Parquet file written as a single enormous row group has nothing to skip, so none of this
+helps. Check before you plan around it, using
+<a href="https://duckdb.org/docs/stable/data/parquet/metadata"><code>parquet_metadata</code></a>:</p>
+<pre class="astro-code astro-code-themes vitesse-light vitesse-dark" data-language="sql" style="background-color:#ffffff;--shiki-dark-bg:#121212;color:#393a34;--shiki-dark:#dbd7caee; overflow-x: auto;" tabindex="0"><code><span class="line"><span style="color:#1E754F;--shiki-dark:#4D9375">SELECT</span><span style="color:#998418;--shiki-dark:#B8A965"> count</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">(</span><span style="color:#1E754F;--shiki-dark:#4D9375">DISTINCT</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> row_group_id) </span><span style="color:#1E754F;--shiki-dark:#4D9375">AS</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> row_groups,</span></span>
+<span class="line"><span style="color:#998418;--shiki-dark:#B8A965">       min</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">(row_group_num_rows)      </span><span style="color:#1E754F;--shiki-dark:#4D9375">AS</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> smallest,</span></span>
+<span class="line"><span style="color:#998418;--shiki-dark:#B8A965">       max</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">(row_group_num_rows)      </span><span style="color:#1E754F;--shiki-dark:#4D9375">AS</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> largest</span></span>
+<span class="line"><span style="color:#1E754F;--shiki-dark:#4D9375">FROM</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> parquet_metadata(</span><span style="color:#B5695977;--shiki-dark:#C98A7D77">'</span><span style="color:#B56959;--shiki-dark:#C98A7D">yourfile.parquet</span><span style="color:#B5695977;--shiki-dark:#C98A7D77">'</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">);</span></span></code></pre>
+<p>Get back <code>1</code> and you can stop reading. To see how much this matters I wrote the same two
+million rows twice, identical schema and data, changing only <code>ROW_GROUP_SIZE</code>:</p>
+<figure class="pqviz">
+<div class="pq-title">More row groups, bigger win</div>
+<div class="pq-sub">The same 2 million rows written two ways, plus the big file for reference. Dotted line is a tie.</div>
+<div class="pqg">
+<div class="pqg-row">
+<div class="pqg-lab">1 row group<span class="pqg-note">2M rows</span></div>
+<div class="pqg-track"><div class="pqg-val">1.25×</div></div>
+</div>
+<div class="pqg-row">
+<div class="pqg-lab">17 row groups<span class="pqg-note">2M rows</span></div>
+<div class="pqg-track"><div class="pqg-val">1.75×</div></div>
+</div>
+<div class="pqg-row">
+<div class="pqg-lab">163 row groups<span class="pqg-note">20M rows</span></div>
+<div class="pqg-track"><div class="pqg-val">2.53×</div></div>
+</div>
+</div>
+<figcaption>The 1-vs-17 pair is the honest comparison: identical data, only <code>ROW_GROUP_SIZE</code> changed. The 163 bar is from the bigger file, so read it as “the trend keeps going,” not as a third point on one curve.</figcaption>
+</figure>
+<p>At one row group the win drops to 1.25x. It doesn’t vanish, because DuckDB also discards
+rows in batches of 2,048 <em>within</em> a row group, so a narrow window still reads less than
+the whole group. You just lose most of the benefit.</p>
+<p>The more interesting number in that chart is the clock rather than the ratio. The same work
+goes from 0.49 s to 2.12 s, and <strong>both</strong> approaches slow down by three to four times. If you
+control the writer, fix that before you optimize anything else. DuckDB’s own writer defaults
+to 122,880 rows per group, which is fine. Plenty of other tools are not, and DuckDB’s
+<a href="https://duckdb.org/docs/stable/guides/performance/file_formats">file format performance guide</a>
+has its own notes on picking a size.</p>
+<p class="pullquote">One giant row group is a bad idea no matter which query you write.</p>
+<h2 id="what-duckdb-actually-does-with-your-offset">What DuckDB actually does with your OFFSET</h2>
+<p>Here’s where my quadratic assumption fell over. Run <code>EXPLAIN</code> on a paging query and you
+get something unexpected:</p>
+<pre class="astro-code astro-code-themes vitesse-light vitesse-dark" data-language="plaintext" style="background-color:#ffffff;--shiki-dark-bg:#121212;color:#393a34;--shiki-dark:#dbd7caee; overflow-x: auto;" tabindex="0"><code><span class="line"><span>HASH_JOIN  (SEMI)</span></span>
+<span class="line"><span>  on file_index      = file_index</span></span>
+<span class="line"><span> and file_row_number = file_row_number</span></span>
+<span class="line"><span>  ├─ READ_PARQUET   id, k, name, ...</span></span>
+<span class="line"><span>  └─ STREAMING_LIMIT</span></span>
+<span class="line"><span>       └─ READ_PARQUET</span></span></code></pre>
+<p>DuckDB rewrites your <code>OFFSET</code> into a row-number lookup and semi-joins it back against the
+data. It reaches for <code>file_row_number</code> on your behalf, and it skips row groups the same
+way the hand-written version does. Paging with <code>OFFSET</code> is not quadratic. You pay instead
+for the extra pass that works out which row numbers you asked for, and that pass gets more
+expensive the deeper you page.</p>
+<p class="pullquote">You are already using <code>file_row_number</code> whether you typed it or not. The only question is whether you control it.</p>
+<p>My first attempt at measuring this assumed the quadratic model, timed 40 pages, and fitted
+a slope to extrapolate the rest. The slope came out <strong>negative</strong>. A negative slope says the
+model is broken, not the machine, so I threw out the extrapolation and measured all 163
+pages directly.</p>
+<p><strong>The rewrite has a cliff.</strong> It only fires when the <code>LIMIT</code> is 1,000,000 rows or fewer.
+That’s a flat row count rather than a fraction of the file, identical on a 500k-row file and
+a 20-million-row one. Ask for 1,000,000 rows and you get the rewrite; ask for 1,000,001 and
+it’s gone, and now you really are decompressing everything in front of your page. Adding
+any <code>WHERE</code> clause turns it off too. With million-row pages the gap between the two
+approaches opened up to roughly 5-6x.</p>
+<p>That number is a constant in the optimizer,
+<a href="https://github.com/duckdb/duckdb/blob/main/src/optimizer/late_materialization.cpp"><code>LIMIT_MAX_VAL</code></a>,
+but it isn’t the whole story. There’s also a setting, <code>late_materialization_max_rows</code>, and
+the effective cutoff is whichever of the two is larger:</p>
+<table><thead><tr><th><code>late_materialization_max_rows</code></th><th>rewrite fires up to</th></tr></thead><tbody><tr><td>50 (the default)</td><td>1,000,000 rows</td></tr><tr><td>200,000</td><td>1,000,000 rows</td></tr><tr><td>2,000,000</td><td>2,000,000 rows</td></tr></tbody></table>
+<p>So raising it below a million does nothing, and raising it above a million moves the cliff.
+If you genuinely need million-plus pages and want to keep using <code>OFFSET</code>, that’s the knob.
+I’d still rather write the row range and not depend on an optimizer rewrite I can’t see
+from the query text.</p>
+<p>I also wanted to prove the row-group skipping rather than infer it from a stopwatch, so I
+wrote 128 bytes of garbage into the middle of row group 0 to make it undecodable. A full
+scan of the file blew up, as did a page <em>inside</em> row group 0. A page over row group 100 came
+back byte-for-byte correct. It never touched the broken bytes.</p>
+<h2 id="the-part-that-should-worry-you">The part that should worry you</h2>
+<p><code>LIMIT</code>/<code>OFFSET</code> has no <code>ORDER BY</code>, so it makes no promise about <em>which</em> rows you get. It
+behaves today because DuckDB
+<a href="https://duckdb.org/docs/stable/sql/dialect/order_preservation">preserves insertion order</a>
+by default. That’s a documented
+<a href="https://duckdb.org/docs/stable/configuration/overview">performance knob</a>, and people turn
+it off.</p>
+<p>So I turned it off, ran more than one thread, and paged through the whole file. Both runs
+handed back exactly 20,000,000 rows:</p>
+<table><thead><tr><th>run</th><th>rows missing</th><th>rows duplicated</th><th>max copies</th></tr></thead><tbody><tr><td>1</td><td><strong>6,131,712</strong></td><td>4,943,872</td><td>5</td></tr><tr><td>2</td><td><strong>6,408,192</strong></td><td>5,221,632</td><td>5</td></tr></tbody></table>
+<p>Some rows never appear, others appear five times, and it lands differently on every run.
+Nothing raises an error.</p>
+<p class="pullquote">The row count is perfect. About 30% of the data is not.</p>
+<p><strong>So don’t validate an export by counting rows.</strong> A count can’t see this, because the drops
+and the duplicates cancel each other out. Six million rows go missing, five million get sent
+twice, and the total still lands on exactly 20,000,000.</p>
+<p>Hash the rows instead. The <a href="https://query.farm/duckdb_extension_crypto">crypto extension</a>
+has <code>crypto_hash_agg</code>, which digests a whole result set into one value:</p>
+<pre class="astro-code astro-code-themes vitesse-light vitesse-dark" data-language="sql" style="background-color:#ffffff;--shiki-dark-bg:#121212;color:#393a34;--shiki-dark:#dbd7caee; overflow-x: auto;" tabindex="0"><code><span class="line"><span style="color:#393A34;--shiki-dark:#DBD7CAEE">INSTALL crypto </span><span style="color:#1E754F;--shiki-dark:#4D9375">FROM</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> community;</span></span>
+<span class="line"><span style="color:#1E754F;--shiki-dark:#4D9375">LOAD</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> crypto;</span></span>
+
+<span class="line"><span style="color:#1E754F;--shiki-dark:#4D9375">SELECT</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> crypto_hash_agg(</span></span>
+<span class="line"><span style="color:#B5695977;--shiki-dark:#C98A7D77">         '</span><span style="color:#B56959;--shiki-dark:#C98A7D">blake3</span><span style="color:#B5695977;--shiki-dark:#C98A7D77">'</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">,</span></span>
+<span class="line"><span style="color:#1E754F;--shiki-dark:#4D9375">         hash</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">((id, k, </span><span style="color:#1E754F;--shiki-dark:#4D9375">name</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">, ts))</span></span>
+<span class="line"><span style="color:#1E754F;--shiki-dark:#4D9375">         ORDER BY</span><span style="color:#1E754F;--shiki-dark:#4D9375"> hash</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">((id, k, </span><span style="color:#1E754F;--shiki-dark:#4D9375">name</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">, ts)))</span></span>
+<span class="line"><span style="color:#1E754F;--shiki-dark:#4D9375">FROM</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE"> read_parquet(</span><span style="color:#B5695977;--shiki-dark:#C98A7D77">'</span><span style="color:#B56959;--shiki-dark:#C98A7D">data.parquet</span><span style="color:#B5695977;--shiki-dark:#C98A7D77">'</span><span style="color:#393A34;--shiki-dark:#DBD7CAEE">);</span></span></code></pre>
+<p>Digest the file, digest what the client received, compare two hex strings. Both come out
+<code>94894c4eef00ea72...</code> here, and one missing or doubled row changes it.</p>
+<p>Wrapping the row in <code>hash()</code> first runs 2.8x faster than casting it to text, 1.4 s against
+4.0 s over 20 million rows, since blake3 then gets eight bytes per row instead of a
+formatted string. <code>hash()</code> is 64-bit, so two genuinely different rows collide about once in
+90,000 files this size, which is fine for an integrity check.</p>
+<p>The <code>ORDER BY</code> inside the aggregate is required, and the extension errors if you leave it
+out. Sorting there is what makes the digest a function of the row multiset rather than of
+arrival order, so pages can come back in any order and still agree.</p>
+<p>This is what caught the bug. Row counts sailed straight past it.</p>
+<p>The corruption needs both conditions: insertion order off <em>and</em> more than one thread.
+Single-threaded, <code>OFFSET</code> paging is fine. The combination is narrow enough that you might
+never hit it, which is what makes it unpleasant. You are one settings change away from
+silently corrupting an export, and nothing in the query text says so.</p>
+<p><code>file_row_number</code> can’t do this. A row’s position in the file is a fact about the file, so
+<code>[lo, hi)</code> ranges tile it exactly regardless of thread count or settings. I ran all four
+combinations of threads and insertion order rather than assume.</p>
+<p>One related trap I did get wrong at first. Row order <em>inside</em> a page is also unguaranteed,
+and any page spanning more than one row group comes back shuffled under those same settings.
+My first test said everything was fine, because I’d only tested single-row-group pages, which
+can’t reorder: they only ever get one thread. If order within a page matters to you, add
+<code>ORDER BY file_row_number</code> (about 26% slower at 122,880-row pages, 42% at million-row pages,
+and it buffers the whole page) or return the column and let the client sort.</p>
+<h2 id="how-deep-your-users-page-changes-the-answer">How deep your users page changes the answer</h2>
+<p>2.53x assumes every page gets read exactly once. Real traffic rarely looks like that, and
+the two approaches have completely different shapes. <code>file_row_number</code> costs the same on
+page 1 as page 163. <code>OFFSET</code> climbs about a quarter of a millisecond per page, all the way
+down.</p>
+<figure class="pqviz">
+<div class="pq-title">Where your users are matters</div>
+<div class="pq-sub">Same file, same two queries. Only which pages get read changes.</div>
+<div class="pqg">
+<div class="pqg-row">
+<div class="pqg-lab">first page only</div>
+<div class="pqg-track"><div class="pqg-val">1.77×</div></div>
+</div>
+<div class="pqg-row">
+<div class="pqg-lab">first 10 pages</div>
+<div class="pqg-track"><div class="pqg-val">1.80×</div></div>
+</div>
+<div class="pqg-row">
+<div class="pqg-lab">first 25% of pages</div>
+<div class="pqg-track"><div class="pqg-val">1.93×</div></div>
+</div>
+<div class="pqg-row">
+<div class="pqg-lab strong">uniform over all pages</div>
+<div class="pqg-track"><div class="pqg-val">2.43×</div></div>
+</div>
+<div class="pqg-row">
+<div class="pqg-lab">last 25% of pages</div>
+<div class="pqg-track"><div class="pqg-val">2.91×</div></div>
+</div>
+<div class="pqg-row">
+<div class="pqg-lab">last page only</div>
+<div class="pqg-track"><div class="pqg-val">3.07×</div></div>
+</div>
+</div>
+<figcaption>Front page only, about 1.8×. Drain the whole file and it is 2.43×. Down at the deep end, 3.07×. The problem for an API is not the average — it is that <code>OFFSET</code> gets slower the further someone goes.</figcaption>
+</figure>
+<p>If most people load the first page and leave, you get the small number; drain the file and
+you get the big one. Either way, the shape matters more than the ratio: <code>OFFSET</code> gets slower
+the further a user goes, which is backwards from what you want out of pagination.</p>
+<h2 id="page-size-and-a-prediction-i-got-wrong">Page size, and a prediction I got wrong</h2>
+<p>I assumed sloppy page sizes would wreck this, since a page that straddles a row-group
+boundary makes DuckDB decompress two groups to serve one page. So I swept page sizes from
+30,000 to 122,880 rows:</p>
+<table><thead><tr><th>rows/page</th><th>pages</th><th>row range</th><th>OFFSET</th><th>faster</th></tr></thead><tbody><tr><td>122,880</td><td>163</td><td>4.01 s</td><td>9.70 s</td><td><strong>2.45x</strong></td></tr><tr><td>100,000</td><td>200</td><td>4.02 s</td><td>9.44 s</td><td><strong>2.27x</strong></td></tr><tr><td>61,440</td><td>326</td><td>5.02 s</td><td>13.02 s</td><td><strong>2.56x</strong></td></tr><tr><td>50,000</td><td>400</td><td>6.46 s</td><td>15.95 s</td><td><strong>2.44x</strong></td></tr><tr><td>30,000</td><td>667</td><td>10.33 s</td><td>24.77 s</td><td><strong>2.68x</strong></td></tr></tbody></table>
+<p>The ratio holds between 2.27x and 2.68x no matter what I picked, because a badly sized page
+costs <em>both</em> queries more. What it wrecks is your absolute latency: 122,880-row pages do
+the file in 4.01 s, 30,000-row pages take 10.33 s for exactly the same 20 million rows.</p>
+<p>Two things I had wrong here. First, alignment is the wrong idea: what matters is page size
+against row-group size. A 61,440-row page never straddles a boundary, since it divides
+122,880 evenly, and it <em>still</em> reads a whole 122,880-row group to give you half of it. Only
+a page equal to the row-group size reads exactly what it needs.</p>
+<p>Second, I predicted the cost from the footer arithmetic instead of measuring it. The
+arithmetic said 100,000-row pages should cost 2.2x extra. On the clock they cost nothing
+measurable. That 2,048-row filter is doing more work than the footer math knows about.</p>
+<p class="pullquote">Predicting cost from the file footer is not the same as measuring it. I did the first and believed it.</p>
+<p>Get your page boundaries from <code>parquet_metadata()</code> and match them to row groups. Don’t
+compute them as <code>page * 122880</code>. The last row group in my file holds 93,440 rows, and
+anything written by Spark or Arrow sizes row groups by bytes, so the counts vary.</p>
+<h2 id="what-the-stateless-requirement-costs-you">What the stateless requirement costs you</h2>
+<p>The framing at the top ruled out anything that keeps state between requests, and that
+decision has a price. Here is the same 20 million rows read every way I tried:</p>
+<table><thead><tr><th>approach</th><th>wall clock</th></tr></thead><tbody><tr><td>pyarrow <code>read_row_group(n)</code></td><td><strong>0.42 s</strong></td></tr><tr><td>pyarrow <code>iter_batches</code></td><td>0.43 s</td></tr><tr><td>DuckDB <code>to_arrow_reader</code> (one streaming query)</td><td>1.94 s</td></tr><tr><td><code>WHERE id &gt;= ? AND id &lt; ?</code> (sorted column)</td><td>2.85 s</td></tr><tr><td><code>file_row_number</code>, page = row group</td><td>2.90 s</td></tr><tr><td><code>LIMIT</code> / <code>OFFSET</code></td><td>7.05 s</td></tr></tbody></table>
+<p>A single streaming query with DuckDB’s
+<a href="https://duckdb.org/docs/stable/clients/python/relational_api"><code>to_arrow_reader</code></a> reads the
+file once instead of 163 times, so it comes in 1.5x faster than the best paged approach.
+<a href="https://arrow.apache.org/docs/python/generated/pyarrow.parquet.ParquetFile.html">pyarrow’s <code>ParquetFile</code></a>
+is faster still, and it can address a row group by index directly, which DuckDB has no syntax
+for.</p>
+<p><strong>Paging is a 1.5x tax against streaming and a 7x tax against just handing over the file.</strong>
+That is what a stateless endpoint costs, and for an API it is usually worth paying: you get
+resumability, bounded memory at both ends, and any worker can serve any request. It is still
+a real number, so if the size ceiling is the <em>only</em> reason you’re paging, check two things
+before you build the loop:</p>
+<ul>
+<li><strong>Can the response stream?</strong> Chunked transfer encoding, or an Arrow IPC stream over a
+single long-lived response, gets you one request and one scan. Read the ceiling that
+forced you into paging before you accept it: Cloud Run’s 32 MiB applies
+<a href="https://docs.cloud.google.com/run/quotas">only if you are not using <code>Transfer-Encoding: chunked</code></a>,
+and Lambda’s 6 MB becomes uncapped for the first 6 MB under
+<a href="https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html">response streaming</a>.
+These are usually limits on a buffered body, not on total bytes.</li>
+<li><strong>Can the client read the file itself?</strong> A presigned URL and thirty seconds of pyarrow
+beats anything on this list, and takes your service out of the data path completely.</li>
+</ul>
+<p>If neither is available, page. For a public REST API, usually neither is. The advantage
+survives real concurrency: with separate worker processes rather than threads,
+<code>file_row_number</code> stayed 2.24x to 2.37x ahead from one worker up to sixteen.</p>
+<p>There is one other option. If your table has a sorted key, plain <code>WHERE id &gt;= ? AND id &lt; ?</code>
+tied <code>file_row_number</code> at 2.85 s. Row-group statistics on a sorted column prune just as well,
+and a cursor on a real key survives the file being rewritten, which a row number does not.
+That only works if the column is genuinely clustered. Mine was perfectly sorted because I
+generated it, which is not a property real data owes you.</p>
+<h2 id="how-i-measured-it">How I measured it</h2>
+<p>A single page read takes 15-30 ms and moves around by 6-9% run to run, which is too noisy to
+hang an argument on. So the unit is one complete trip through all 163 pages, timed 40 times
+with the first 3 thrown away. The two queries take turns in random order inside each round
+and are compared against each other within that round, so a busy moment on the machine hits
+both.</p>
+<p>The part that convinced me was racing <code>file_row_number</code> against <em>itself</em> as a control. If
+the harness were inventing differences, that would show a gap too. It came out at 1.05x.</p>
+<figure class="pqviz">
+<div class="pq-title">Every round, both comparisons</div>
+<div class="pq-sub">37 rounds. Gold is <code>OFFSET</code> divided by <code>file_row_number</code> in the same round. Green is <code>file_row_number</code> raced against itself.</div>
+<div class="pqs">
+<div class="pqs-grid" style="bottom:25.0%"><span>1×</span></div>
+<div class="pqs-grid" style="bottom:50.0%"><span>2×</span></div>
+<div class="pqs-grid" style="bottom:75.0%"><span>3×</span></div>
+<div class="pqs-grid" style="bottom:100.0%"><span>4×</span></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</div>
+<div class="pqs-x"><span>round 1</span><span>round 37</span></div>
+<figcaption>Individual rounds are messy in both arms — gold runs 1.54× to 3.64×, and even the control wandered from 0.83× to 2.14×. That is why the headline number comes from all the rounds together rather than any one of them.</figcaption>
+</figure>
+<p>An earlier version of this analysis reported a much tighter error bar, and it was wrong. I
+had bootstrapped a median over 15 runs, which can’t land anywhere except on one of the 15
+numbers you already have, so the neat-looking interval was decoration. I’d also described a
+confidence interval on a median as a “noise floor,” which it isn’t. The run-to-run wobble is
+around 5%, not the 1.5% I first claimed. More rounds and an honest spread fixed it. The
+answer barely moved, from 2.52x to 2.53x, but the old error bars weren’t worth the ink.</p>
+<h2 id="what-id-do">What I’d do</h2>
+<p>Use <code>file_row_number</code> with page boundaries pulled from <code>parquet_metadata()</code> and matched to
+row groups. Confirm your row-group count first, because on a single-row-group file none of
+this buys you much. Keep the <code>LIMIT</code> under a million if you ever fall back to <code>OFFSET</code>.
+Before writing the loop at all, check whether your response can stream: the ceiling that
+forces paging is often on the buffered body, not the total bytes.</p>
+<p>The 2.53x is not why I’d reach for it. <code>OFFSET</code> will hand you a plausible-looking result set
+with 30% of the rows wrong, and the only thing standing between you and that is a performance
+setting somebody might flip.</p>
+<h2 id="further-reading">Further reading</h2>
+<ul>
+<li><a href="https://duckdb.org/docs/stable/data/parquet/overview">Reading Parquet files</a>: every
+<code>read_parquet</code> option, including <code>file_row_number</code></li>
+<li><a href="https://duckdb.org/docs/stable/data/parquet/metadata">Parquet metadata functions</a>:
+<code>parquet_metadata</code>, which is where your page boundaries should come from</li>
+<li><a href="https://duckdb.org/docs/stable/sql/dialect/order_preservation">Order preservation</a>: what
+DuckDB does and does not promise about row order</li>
+<li><a href="https://duckdb.org/docs/stable/configuration/overview">Configuration reference</a>:
+<code>preserve_insertion_order</code>, <code>late_materialization_max_rows</code>, <code>parquet_metadata_cache</code></li>
+<li><a href="https://duckdb.org/docs/stable/guides/performance/file_formats">Performance guide: file formats</a>:
+row group sizing from the other direction, as a writer</li>
+<li><a href="https://parquet.apache.org/docs/file-format/">Parquet file format</a>: what a row group
+actually is, if the term is new</li>
+</ul></div><!-- Tags --><!-- Related posts --><section class="mt-10 pt-8 border-t border-surface-300 dark:border-surface-800 max-w-prose"><h2 class="label mb-3 pb-1.5 border-b border-surface-900 dark:border-surface-100">Related reading</h2><div class="grid sm:grid-cols-3 border-l border-surface-200 dark:border-surface-800"><a class="group block px-3 py-3 border-r border-b sm:border-b-0 border-surface-200 dark:border-surface-800 hover:bg-surface-100/60 dark:hover:bg-surface-900/40 transition-colors" href="/blog/geosilo-vs-geoarrow-byte-stream-split-geometry-compression"><span class="label block text-claret-500 dark:text-claret-300 mb-1.5">Data Engineering</span><h3 class="font-display font-bold text-[0.98rem] leading-snug text-surface-800 dark:text-surface-200 group-hover:text-primary-600 dark:group-hover:text-primary-400 line-clamp-3">GeoSilo vs GeoArrow + Byte Stream Split: Two Approaches to Geometry Compression</h3><time class="label block mt-1.5 tnum" datetime="2026-04-08T00:00:00.000Z">Apr 8, 2026</time></a><a class="group block px-3 py-3 border-r border-b sm:border-b-0 border-surface-200 dark:border-surface-800 hover:bg-surface-100/60 dark:hover:bg-surface-900/40 transition-colors" href="/blog/linkedin-2025-07-25-just-published-a-new-benchmark-report-for-airport-our-duckdb"><span class="label block text-claret-500 dark:text-claret-300 mb-1.5">Short Updates</span><h3 class="font-display font-bold text-[0.98rem] leading-snug text-surface-800 dark:text-surface-200 group-hover:text-primary-600 dark:group-hover:text-primary-400 line-clamp-3">Just published a new benchmark report for Airport, our DuckDB extension that uses Apache Arrow...</h3><time class="label block mt-1.5 tnum" datetime="2025-07-25T00:00:00.000Z">Jul 25, 2025</time></a><a class="group block px-3 py-3 border-r border-b sm:border-b-0 border-surface-200 dark:border-surface-800 hover:bg-surface-100/60 dark:hover:bg-surface-900/40 transition-colors" href="/blog/duckdb-extension-distribution-gap"><span class="label block text-claret-500 dark:text-claret-300 mb-1.5">DuckDB</span><h3 class="font-display font-bold text-[0.98rem] leading-snug text-surface-800 dark:text-surface-200 group-hover:text-primary-600 dark:group-hover:text-primary-400 line-clamp-3">A DuckDB Release Isn't a Distribution</h3><time class="label block mt-1.5 tnum" datetime="2026-07-27T00:00:00.000Z">Jul 27, 2026</time></a></div></section><!-- Prev/Next navigation --></article>

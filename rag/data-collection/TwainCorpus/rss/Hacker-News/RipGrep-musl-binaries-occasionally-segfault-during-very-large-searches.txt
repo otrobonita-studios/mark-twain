@@ -1,0 +1,163 @@
+BurntSushi
+
+/
+
+ripgrep
+
+Public
+
+        Uh oh!
+
+There was an error while loading. 
+Please reload this page
+.
+
+Notifications
+
+You must be signed in to change notification settings
+
+Fork
+    
+2.7k
+
+          Star
+
+66.8k
+
+x86_64-unknown-linux-musl binaries occasionally segfault during very-large searches
+ 
+#3494
+New issue
+Copy link
+New issue
+Copy link
+Open
+Open
+x86_64-unknown-linux-musl binaries occasionally segfault during very-large searches
+#3494
+Copy link
+Description
+dfoxfranke
+opened 
+on Jul 26, 2026
+Issue body actions
+Please tick this box to confirm you have reviewed the above.
+
+ I have a different issue.
+
+What version of ripgrep are you using?
+
+ripgrep 15.2.0 (rev 
+e89fff8
+)
+
+features:+pcre2
+
+simd(compile):+SSE2,-SSSE3,-AVX2
+
+simd(runtime):+SSE2,+SSSE3,+AVX2
+
+PCRE2 10.45 is available (JIT is available)
+
+How did you install ripgrep?
+
+I originally encountered this bug in the 
+rg
+ bundled with OpenAI Codex. That binary is byte-for-byte identical with the one in 
+https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz
+ and I've reproduced the bug from that independently of any Codex dependency. For the analysis below, I built rg-15.2 with debug symbols included by way of 
+CROSS_CONTAINER_ENGINE=podman CARGO_PROFILE_RELEASE_DEBUG=true ~/.cargo/bin/cross build --release --target x86_64-unknown-linux-musl
+.
+
+What operating system are you using ripgrep on?
+
+OpenSUSE Tumbleweed Linux x86_64
+
+Describe your bug.
+
+Ripgrep built for x86_64-unknown-linux-musl occasionally crashes with a SIGSEGV when searching very-large trees at a high degree of concurrency. The crashing line is an integrity assertion regarding heap metadata inside MUSL's mallocng, in a 
+calloc
+ call made from 
+opendir
+. The complete backtrace is below.
+
+What are the steps to reproduce the behavior?
+
+Having a sufficiently large search tree seems to be essential for reproduction. Run the attached 
+generate_repro_tree.py
+. This is an LLM-written program which produces a tree full of random files which mimic the statistics of the repo in which I originally encountered the bug. It will produce a tree containing roughly 20GiB of data across 1.8M files.
+
+Then from the root of that tree, run 
+rg
+ in a loop, searching for some arbitrary literal string that isn't present in the tree: 
+while true; do rg tnoheueunotshisnthukoethnsueothnsiuothonesuioseuinth; done
+. On my 24-core system, having enough free RAM for the search tree to fit in the kernel's block cache, it typically takes about a minute for the SIGSEGV to appear.
+
+What is the actual behavior?
+
+I get a coredump with the following backtrace:
+
+#0  get_meta () at ../src_musl/src/malloc/mallocng/meta.h:141
+#1  __malloc_allzerop () at ../src_musl/src/malloc/mallocng/malloc.c:384
+#2  0x00007f71f8381b2d in calloc () at ../src_musl/src/malloc/calloc.c:41
+#3  0x00007f71f83810f4 in opendir () at ../src_musl/src/dirent/opendir.c:15
+#4  0x00007f71f835c133 in std::sys::fs::unix::readdir::{closure#0} () at library/std/src/sys/fs/unix.rs:2081
+#5  std::sys::helpers::small_c_string::run_with_cstr_stack<*mut libc::unix::DIR> () at library/std/src/sys/helpers/small_c_string.rs:48
+#6  std::sys::helpers::small_c_string::run_with_cstr<*mut libc::unix::DIR> () at library/std/src/sys/helpers/small_c_string.rs:28
+#7  std::sys::helpers::small_c_string::run_path_with_cstr<*mut libc::unix::DIR> () at library/std/src/sys/helpers/small_c_string.rs:18
+#8  std::sys::fs::unix::readdir () at library/std/src/sys/fs/unix.rs:2081
+#9  std::sys::fs::read_dir () at library/std/src/sys/fs/mod.rs:68
+#10 0x00007f71f8206b5c in std::fs::read_dir<&std::path::Path> (path=...)
+    at /home/dfranke/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/fs.rs:3265
+#11 ignore::walk::Work::read_dir (self=0x7f71f5bfeb20) at crates/ignore/src/walk.rs:1551
+#12 ignore::walk::Worker::run_one (self=0x7f71f5bfef08, work=...) at crates/ignore/src/walk.rs:1749
+#13 ignore::walk::Worker::run (self=...) at crates/ignore/src/walk.rs:1697
+#14 0x00007f71f821c866 in ignore::walk::{impl#15}::visit::{closure#0}::{closure#1}::{closure#0} () at crates/ignore/src/walk.rs:1463
+#15 std::sys::backtrace::__rust_begin_short_backtrace<ignore::walk::{impl#15}::visit::{closure#0}::{closure#1}::{closure_env#0}, ()> (f=...)
+    at /home/dfranke/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:166
+#16 0x00007f71f8224596 in std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure#0}<ignore::walk::{impl#15}::visit::{closure#0}::{closure#1}::{closure_env#0}, ()>
+    () at /home/dfranke/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:70
+#17 core::panic::unwind_safe::{impl#23}::call_once<(), std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<ignore::walk::{impl#15}::visit::{closure#0}::{closure#1}::{closure_env#0}, ()>> (self=...)
+    at /home/dfranke/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:275
+#18 std::panicking::catch_unwind::do_call<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<ignore::walk::{impl#15}::visit::{closure#0}::{closure#1}::{closure_env#0}, ()>>, ()> (data=<error reading variable: Cannot access memory at address 0x0>)
+    at /home/dfranke/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:581
+#19 std::panicking::catch_unwind<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<ignore::walk::{impl#15}::visit::{closure#0}::{closure#1}::{closure_env#0}, ()>>> (f=...)
+    at /home/dfranke/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:544
+#20 std::panic::catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<ignore::walk::{impl#15}::visit::{closure#0}::{closure#1}::{closure_env#0}, ()>>, ()> (f=...)
+    at /home/dfranke/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:359
+#21 std::thread::lifecycle::spawn_unchecked::{closure#1}<ignore::walk::{impl#15}::visit::{closure#0}::{closure#1}::{closure_env#0}, ()> ()
+    at /home/dfranke/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:68
+#22 core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::{closure_env#1}<ignore::walk::{impl#15}::visit::{closure#0}::{closure#1}::{closure_env#0}, ()>, ()> () at /home/dfranke/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250
+#23 0x00007f71f8361fcf in alloc::boxed::{impl#31}::call_once<(), (dyn core::ops::function::FnOnce<(), Output=()> + core::marker::Send), alloc::alloc::Global> ()
+    at library/alloc/src/boxed.rs:2275
+#24 std::sys::thread::unix::{impl#2}::new::thread_start () at library/std/src/sys/thread/unix.rs:118
+#25 0x00007f71f8388788 in start () at ../src_musl/src/thread/pthread_create.c:207
+#26 0x00007f71f8389e6c in __clone () at ../src_musl/src/thread/x86_64/clone.s:22
+
+Here is the 
+core dump
+ and the 
+corresponding rg binary
+ which produced it.
+
+What is the expected behavior?
+
+Not a segfault.
+Reactions are currently unavailable
+Metadata
+Metadata
+Assignees
+No one assigned
+Labels
+No labels
+No labels
+Projects
+No projects
+Milestone
+No milestone
+Relationships
+None yet
+Development
+No branches or pull requests
+Issue actions
+Open in GitHub Copilot app

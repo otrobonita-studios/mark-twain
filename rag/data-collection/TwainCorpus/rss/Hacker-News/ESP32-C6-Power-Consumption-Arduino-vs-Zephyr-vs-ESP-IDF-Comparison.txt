@@ -1,0 +1,225 @@
+ESP32-C6 power consumption: Arduino vs Zephyr vs ESP-IDF comparison        
+
+                    ESP32-C6 power consumption: Arduino vs Zephyr vs ESP-IDF comparison        
+
+Created: July 1, 2026
+Updated: July 3, 2026
+
+Introduction 
+
+The rapid evolution of the Internet of Things has shifted the focus from mere connectivity to energy sustainability. Microcontrollers such as the 
+ESP32-C6
+ [1], featuring a modern RISC-V architecture and advanced wireless capabilities (Wi-Fi 6, Thread, BLE), are increasingly deployed in edge-computing scenarios where battery replacement is impractical. While hardware efficiency is frequently prioritized during the design phase, the software abstraction layer provided by the SDK plays a critical role in the final energy footprint of a device [2]. 
+
+A poorly optimized software layer can negate the low-power benefits of modern silicon by keeping peripherals active, mismanaging clock scaling, or introducing unnecessary processor wake-ups. This paper presents the initial ESP32-C6 power consumption analysis of the ESP32-C6 operating under three popular frameworks: Arduino (prioritizing ease of use), Zephyr RTOS (prioritizing industrial portability), and ESP-IDF (prioritizing native hardware access). 
+
+Experimental setup and methodology 
+
+Hardware and measurement architecture 
+
+To ensure a fair and reproducible comparison, a standardized testing pipeline was implemented. The Device Under Test (DUT) is an ESP32-C6 Development Board, powered at a constant 3.6V by the 
+Otii Ace power profiler
+. Data were captured across four synchronized channels: Main Current, Main Power, Main Voltage, and UART RX. 
+
+Fig. 1. Device under test (DUT) connection with Otii Ace and UART synchronization
+
+The testing protocol relies on a tiered baseline approach to isolate SDK overhead from user code: 
+
+Empty Scenario: A “blank” firmware (an infinite empty loop) to observe the default SDK background activity and baseline clock state. 
+
+Reference Scenario:
+ A minimal firmware that executes only UART 
+STR
+ and 
+END
+ commands to identify the energy cost of UART synchronization. 
+
+Active Workloads:
+ Basic operations representing common edge-computing tasks: External LED Blink (GPIO management), CRC8 Calculation (sensor data validation), and Floating-point Multiplication (sensor calibration and basic analytics). 
+
+Note: Wi-Fi and BLE radios were not actively initialized during any of the test scenarios. This information is important for understanding the background current draw, especially in the Empty Scenario results explained below.
+
+Automated measurement engine 
+
+To eliminate human error in measurement timing, a custom automation framework was developed in Python utilizing the 
+Otii TCP API
+ [3]. Each active workload was executed for 5 independent iterations. Each iteration lasted 60 seconds to provide a statistically significant sample size, followed by a 20-second power-off cool-down to prevent thermal drift. 
+
+The engine performs real-time margin cropping using Steady-State isolation to discard boot-up current spikes. The valid dataset timeline is calculated as: 
+
+𝑇𝑣𝑎𝑙𝑖𝑑=[𝑇𝑠𝑡𝑎𝑟𝑡+𝑡𝑏𝑒𝑓𝑜𝑟𝑒,𝑇𝑒𝑛𝑑−𝑡𝑎𝑓𝑡𝑒𝑟]
+T
+v
+a
+l
+i
+d
+=
+[
+T
+s
+t
+a
+r
+t
++
+t
+b
+e
+f
+o
+r
+e
+,
+T
+e
+n
+d
+−
+t
+a
+f
+t
+e
+r
+]
+
+High-resolution samples are exported as NumPy Binary Files (.npy) to preserve floating-point precision, while logs are timestamp-synchronized to the power domain for event correlation. 
+
+Zero-optimization policy and toolchains 
+
+A strict “Out-of-The-Box” (OOTB) policy was enforced. No manual changes were made to compiler flags, linker scripts, or power management configurations beyond the standard templates. This methodology reflects the default vendor-supplied experience. 
+
+It is important to note that this OOTB policy means that light-sleep, deep-sleep, and RTC-only wake modes were not enabled during testing. The reported current values reflect each SDK’s default awake/idle behavior, not the ESP32-C6’s lowest power state. To reach microampere-level power consumption, you need to enable power-saving modes. This comparison did not include that extra optimization step.
+
+Reviewing the compilation artifacts revealed critical differences in the default toolchains utilized by each environment: 
+
+ESP-IDF (v5.5 Master):
+ Utilizes GCC 14.2.0 with 
+-O3
+ (Optimize for Performance). 
+
+Arduino (Core v3.3.5):
+ Utilizes GCC 12.2.0 with 
+-Os
+ (Optimize for Size). 
+
+Zephyr RTOS (v4.3.99):
+ Utilizes GCC 12.2.0 via West with the 
+-Os
+ flag. 
+
+Results: Common workloads and ESP32-C6 power consumption
+
+The following table and subsequent chart summarize the average current consumption across all tested scenarios. 
+
+Comparative Current Consumption (Average mA)
+
+Scenario
+ 
+ESP-IDF
+ 
+Arduino
+ 
+Zephyr
+ 
+Empty (Baseline) 
+24.77
+ 
+33.57 
+31.53 
+Reference (UART) 
+24.75
+ 
+25.63 
+34.77 
+LED Blink 
+25.50 
+25.35
+*
+28.31 
+CRC8 Calculation 
+24.77
+ 
+25.35 
+27.57 
+Float Multiply 
+24.77
+ 
+25.79**
+27.56 
+
+* 
+Note: Arduino showed marginally lower consumption than ESP-IDF in the Blink test, likely due to its 
+-Os
+ compiler optimizations generating tighter instruction loops for simple GPIO wrappers.
+ 
+** 
+Note: Value heavily influenced by a software exception (Stack Overflow).
+
+Technical discussion and code analysis 
+
+The native advantage: ESP-IDF 
+
+The results confirm that ESP-IDF provides the most consistent power profile. Across computational workloads (CRC8 and Float), consumption remained stable at approximately 24.77 mA. The combination of native FreeRTOS 
+vTaskDelay
+, superior peripheral clock gating, and the advanced GCC 14.2.0 compiler allows the core to execute instructions faster (via 
+-O3
+) and return to idle states more efficiently than the abstracted SDKs. 
+
+Arduino’s “Empty” anomaly 
+
+A significant observation is Arduino’s Empty Scenario (33.57 mA), which consumes  35% more current than its active workloads ( 25.3 mA). This counter-intuitive behavior suggests that Arduino’s 
+init()
+ sequence leaves background services (such as the radio stack or specific high-speed clocks) in an active waiting state unless explicitly managed by user code. It highlights that an idle loop in Arduino is energetically detrimental. 
+
+Zephyr’s RTOS abstraction tax 
+
+Zephyr maintains a consistently higher baseline across all active tests (+2 to +3 mA compared to IDF). This is the current consumption cost of hardware abstraction and a highly modular RTOS scheduler. While Zephyr offers unparalleled portability across different silicon vendors, developers must account for an approximate 10-12% reduction in battery life for simple, single-task workloads compared to native development. 
+
+The 49-second crash: Software robustness as energy efficiency 
+
+During the Arduino Floating-point test, a consistent system failure was captured. Across all 5 iterations, the system triggered a Stack Overflow consistently between 49.38 s and 49.41 s. 
+
+Fig. 3. Stack overflow event at 49.416 s captured during the Float test.
+
+By correlating the UART timestamp with the power profiles, current spikes were observed immediately prior to the crash. A Root Cause Analysis (RCA) of the Arduino code revealed two critical developer errors: 
+
+Format String Misuse:
+ Using Serial1.write(“%.4f”, result); instead of a formatted output function, leading to undefined pointer arithmetic on the stack. 
+
+Missing Return Statement:
+ A non-void function lacking a return statement, causing progressive stack frame degradation. 
+
+This event demonstrates that software bugs are not just functional failures; they are energetic events. The exception-handling routines prevented the System on Chip (SoC) from maintaining its nominal execution current, proving that code stability is a strict prerequisite for “Green Computing”. This suggests that power profiling can serve as a side-channel for detecting software instability. 
+
+Conclusion
+
+This work presented the results of comprehensive test cases of common workloads on the ESP32-C6. The results show that the software abstraction layer heavily dictates energy efficiency. 
+ESP-IDF
+ is the definitive leader in stability and low power out-of-the-box. 
+Arduino
+ offers excellent active efficiency but requires cautious coding to avoid hidden background consumption and stack instability. 
+Zephyr RTOS
+ is the most power-hungry of the three, trading milliamperes for multi-platform architectural elegance. Additionally, the results suggest that power profiling may act as a side-channel mechanism for detecting software instability, opening new avenues for combined energy and security analysis. 
+
+REFERENCES
+
+[1] Espressif Systems, “ESP32-C6 Series Datasheet,” v1.2. [Online]. Available: 
+https://www.espressif.com/
+[2] C. Gomez et al., “Energy Efficiency in the Internet of Things: A Review,” 
+IEEE Communications Surveys & Tutorials
+.
+[3] Qoitech, “Otii Automation Toolbox (Python API).” [Online]. Available: 
+https://github.com/qoitech/otii-tcp-client-python
+
+Guest Author – Kevin Leon
+
+Embedded systems researcher specializing in low-level firmware development, hardware exploitation, and space systems security. His work focuses on identifying and analyzing practical attack surfaces in satellite subsystems, embedded radios, and constrained IoT devices.
+LinkedIn
+ | 
+GitHub
+
+                    Sign up for more technical articles        
+
+A monthly dose of articles, tips & tricks, and know-how – everything you need to extend battery life in embedded electronics and IoT.

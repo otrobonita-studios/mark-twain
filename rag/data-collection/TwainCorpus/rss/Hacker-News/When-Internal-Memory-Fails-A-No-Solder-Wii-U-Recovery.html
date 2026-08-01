@@ -1,0 +1,223 @@
+<article class="site-post h-entry zoomable">
+
+<div class="trix-content e-content">
+<action-text-attachment alt="" caption="" content-type="image/png" filename="Screenshot 2026-07-28 at 9.58.27 AM.png" filesize="3035939" height="1024" presentation="gallery" previewable="true" sgid="eyJfcmFpbHMiOnsiZGF0YSI6ImdpZDovL3Bpa2EvQWN0aXZlU3RvcmFnZTo6QmxvYi8xNjUwMjI_ZXhwaXJlc19pbiIsInB1ciI6ImF0dGFjaGFibGUifX0=--4018510c11f0a61942fa9e0cabb6229a9da59380" url="https://pika.page/rails/active_storage/blobs/redirect/eyJfcmFpbHMiOnsiZGF0YSI6MTY1MDIyLCJwdXIiOiJibG9iX2lkIn19--c74c272cb6f90905f67de3f29781dd595e9f8375/Screenshot%202026-07-28%20at%209.58.27%E2%80%AFAM.png" width="1836"><figure class="attachment attachment--preview attachment--png">
+
+</figure></action-text-attachment><p>It was just another hot Sunday at smol HQ. My wife and I were playing games with the family during our biweekly FaceTime game night, and as we were getting ready to end the call, my brother-in-law chimed in.</p>
+<p>“Oh yeah, before we get off the call, I’m gonna throw away the Wii U. Anyone have any protests before I throw it out? Five… four…”</p>
+<p>My sister-in-law immediately responded, “What? No! What’s wrong with it?”</p>
+<p>“I don’t know. It just doesn’t play games anymore. It gives me some kind of error.”</p>
+<p>“Aw man, I have sentimental value tied to it. But if it doesn’t work, I guess throw it away.”</p>
+<p>I don’t know what came over me. The last time I had seriously dabbled with exploits and low-level recovery was when I spent months trying to revive a bricked M1 Max MacBook Pro. Several companies and repair shops had told me that getting through the problem was impossible, but after months of working at it, I finally got the machine running again on New Year’s Day 2024. I am still using it today, and it continues to run strong.</p>
+<p>Imposter syndrome still pokes at me almost every week, but my love for computers, technology, and machine learning keeps me at my computer with absolute glee, wondering what new thing I might discover next. Since recovering the M1, however, I had not felt particularly called toward that kind of project again. Maybe it was the heat from not having air conditioning in the house. Maybe it was my ego. Or maybe it was just the particular kind of cheekiness I felt that weekend, the urge to fuck around and find out.</p>
+<p>After a minute, I spoke up.</p>
+<p>“Don’t throw it away. I’ll get it up and running.”</p>
+<p>They were stunned and immediately asked how. I told them I had absolutely no idea, but I would try. The youngest of the bunch said it sounded like I was making empty promises. I assured them I was not, although by that point I was mostly just more determined to get the Wii U running for this ungrateful bunch.</p>
+<h2 id="the-starting-point">
+The Starting Point</h2>
+<p>When the Wii U was finally in my hands, I powered it on and found it in a familiar but frustrating state. It would power on, display the Wii U logo, and remain there indefinitely. At this stage, it was not safe to assume one specific cause because a logo hang is only a symptom, not a diagnosis.</p>
+<p>I already had a Raspberry Pi Pico configured for UDPIH, the USB Host Stack exploit used to load recovery tools on a Wii U that cannot boot normally. Before attempting to repair anything, I needed to confirm that the recovery path itself was functioning. The official Pico payload produced the expected behavior, and when required recovery files were missing, the console responded in a way that suggested the exploit was still reaching it. Once <code>recovery_menu</code> was placed on the SD card, the Wii U power LED turned purple, confirming that the recovery payload was running.</p>
+<p>That was the first meaningful breakthrough. The console was not completely unreachable, and UDPIH gave me a way to interact with it even though the normal operating system could not finish booting.</p>
+<h2 id="the-recovery-menu-worked-but-the-display-did-not">
+The Recovery Menu Worked, but the Display Did Not</h2>
+<p>The next obstacle was video output. The standard <code>recovery_menu</code> build appeared to run, as confirmed by the purple LED, but the television continued displaying the stale Wii U logo. The recovery code was executing, yet the display was not updating. I also tested a display-initializing build called <code>recovery_menu_dc_init</code>, which produced output, but the image was badly distorted on the displays available to me.</p>
+<p>This created the possibility that some recovery operations would need to be performed blindly. That was not something I wanted to approach casually. A single incorrect menu selection could make an already damaged console worse, so I avoided broad or destructive recovery-menu operations and used only narrow, known sequences when necessary. The display problem shaped the rest of the recovery strategy because I needed an approach that did not depend upon being able to see every menu clearly.</p>
+<h2 id="coldboot-eco-mode-and-region-settings">
+Coldboot, ECO Mode, and Region Settings</h2>
+<p>At first, the failure did not look like a straightforward storage problem. Earlier logs contained references to the ECO Process title:</p>
+<pre><code class="language-plaintext-pika-default">0005001010066000</code></pre>
+<p>They also referenced:</p>
+<pre><code class="language-plaintext-pika-default">eco_process.rpx</code></pre>
+<p>This mattered because a Wii U can fail to boot if the wrong title is configured as the coldboot title, or if the system attempts to launch a special process instead of the normal Wii U Menu. Region settings were another possible cause because a mismatch between the console’s product area, game area, and installed system titles can also create serious boot problems.</p>
+<p>The region information showed:</p>
+<pre><code class="language-plaintext-pika-default">Product area: 0x2
+Game area:    0x2</code></pre>
+<p>Those values matched a USA console. Later, the MLC rebuild tool confirmed the same result:</p>
+<pre><code class="language-plaintext-pika-default">Region already matches (P:2, G:2, C:2).</code></pre>
+<p>I also attempted coldboot-related recovery and ECO-related cleanup. Those steps did not ultimately repair the console, but they were not wasted effort. They allowed me to rule out several plausible causes without making broad or destructive changes. Much of troubleshooting is not immediately finding the answer, but narrowing the problem while avoiding the creation of new ones.</p>
+<h2 id="the-breakthrough-mlc-media-errors">
+The Breakthrough: MLC Media Errors</h2>
+<p>The decisive evidence came from a fresh system log. After the coldboot and ECO work, the console was attempting to launch the correct USA Wii U Menu:</p>
+<pre><code class="language-plaintext-pika-default">MCP: Master title 0005001010040100 os 000500101000400a from mlc01 flags 0004</code></pre>
+<p>The title:</p>
+<pre><code class="language-plaintext-pika-default">0005001010040100</code></pre>
+<p>is the USA Wii U Menu. This was important because it showed that the console was no longer primarily failing because it was trying to boot the wrong title. It had reached the correct menu, but something was preventing that menu from loading successfully.</p>
+<p>Immediately afterward, the log showed serious read failures from the MLC:</p>
+<pre><code class="language-plaintext-pika-default">FSA: ### MEDIA ERROR ###, dev:mlc01, err:-2228230, cmd:11, path:(null)</code></pre>
+<p>It also showed failed reads of required shared font files:</p>
+<pre><code class="language-plaintext-pika-default">failed to read file /vol/storage_mlc01/sys/title/0005001b/10042400/content/CafeCn.ttf, err -196673</code></pre>
+<p>and:</p>
+<pre><code class="language-plaintext-pika-default">failed to read file /vol/storage_mlc01/sys/title/0005001b/10042400/content/CafeTw.ttf, err -196673</code></pre>
+<p>The most revealing line identified the storage manufacturer and showed a low-level read error:</p>
+<pre><code class="language-plaintext-pika-default">mdblk: err=-131099, mid=0x90, prv=0x5c, pnm=[HYNIX ]</code></pre>
+<p>This changed the diagnosis. The problem was not simply one missing font or one damaged system title. The console was reporting media errors from <code>mlc01</code>, the Wii U’s internal MLC storage, and the device involved was a Hynix eMMC chip.</p>
+<p>At that point, continuing to replace individual files would have been the wrong strategy. If the internal storage could no longer read data reliably, repairing one file might only move the failure somewhere else. The console could fail on a font during one boot, another system title during the next, and a save directory after that. The real problem was that the system could no longer depend on its internal MLC.</p>
+<h2 id="choosing-isfshax-and-rednand">
+Choosing ISFShax and redNAND</h2>
+<p>The symptoms matched the Wii U community’s no-solder recovery method closely. The console was stuck at the Wii U logo, the logs showed Hynix eMMC read errors, UDPIH remained functional, and the system was damaged without being completely unreachable.</p>
+<p>Hardware-based repair methods also exist, including NAND-AID and MLC2SD-style replacements. Those approaches can produce a more stock-like result because they physically replace or redirect the failing eMMC path. For this recovery, however, the no-solder ISFShax redNAND method was suitable because I still had working access through UDPIH and could install an early boot environment.</p>
+<p>ISFShax allows the console to load minute before the normal Wii U operating system fully starts. minute can then patch IOSU and redirect storage access. In this case, the goal was to redirect only the MLC to a dedicated partition on the SD card while leaving the SLC and SLCCMPT on the console.</p>
+<p>The underlying idea is fairly simple even though the implementation is technical: instead of continuing to ask the failing Hynix eMMC for the Wii U’s internal storage data, the system would read from and write to a replacement MLC partition on the SD card.</p>
+<h2 id="backups-before-changes">
+Backups Before Changes</h2>
+<p>Before modifying the SD card, I backed up its useful contents. The first attempt encountered a macOS permissions issue involving <code>.Trashes</code>, but that directory was not important to the recovery, so I adjusted the process and copied only the useful logs, payloads, and recovery files.</p>
+<p>I then downloaded the official ISFShax bundle. The extracted files included the components required for the UDPIH-to-minute installation path:</p>
+<pre><code class="language-plaintext-pika-default">recovery_menu
+boot1now.img
+fw.img
+ios.img
+superblock.img
+superblock.img.sha
+wiiu/ios_plugins/00core.ipx
+wiiu/ios_plugins/5isfshax.ipx</code></pre>
+<p>Once those files were copied to the SD card, the console was ready for the first ISFShax installation attempt.</p>
+<h2 id="avoiding-blind-navigation">
+Avoiding Blind Navigation</h2>
+<p>Because video output had been unreliable, I did not want the installation to depend on navigating minute visually. Instead, I created a temporary <code>minute.ini</code> configuration that automatically selected menu entry 7:</p>
+<pre><code class="language-plaintext-pika-default">[boot]
+autoboot=7
+autoboot_timeout=1</code></pre>
+<p>In minute, entry 7 was:</p>
+<pre><code class="language-plaintext-pika-default">Boot 'ios.img'</code></pre>
+<p>That entry launched the ISFShax installer. Configuring autoboot reduced the amount of blind interaction required and gave me greater confidence that the intended installer would be selected. The only remaining manual step was the confirmation sequence.</p>
+<blockquote>
+<h2 id="a-note-before-continuing">
+<span class="text-color-red">A Note Before Continuing</span>
+</h2>
+<p>This article documents the recovery of one family-owned console with the owner’s permission. It is not a universal repair guide, and the process described below modifies the Wii U’s boot environment. A mistake can permanently damage the console or destroy its data. Anyone attempting a similar recovery should consult the current documentation for each project, preserve all console-specific backups, and use only software they are legally authorized to access.</p>
+</blockquote>
+<h2 id="installing-isfshax">
+Installing ISFShax</h2>
+<p>With the SD card inserted and UDPIH triggered through the Pico, I waited for the power LED to turn purple. I then entered the installer confirmation sequence:</p>
+<pre><code class="language-plaintext-pika-default">EJECT
+EJECT
+EJECT
+POWER
+EJECT
+EJECT
+EJECT</code></pre>
+<p>The Wii U powered off after the sequence completed, which was the expected behavior and suggested that the installation had finished successfully. I returned the SD card to the Mac and immediately removed the temporary <code>autoboot=7</code> configuration so the installer would not be launched again by accident.</p>
+<p>Installing ISFShax modifies SLC superblocks. Although the community tools are designed to perform the process safely, there was no reason to risk an unnecessary repeat installation.</p>
+<h2 id="upword-onward">
+Upword &amp; Onward</h2>
+<p>After removing the installer configuration, I inserted the SD card again and powered on the Wii U normally without the Pico. This time, minute appeared clearly on the display.</p>
+<p>That confirmed several things at once: ISFShax had installed successfully, the console could now reach an early boot environment without UDPIH, and I had visible access to the backup and boot tools required for the next stage. With that foothold established, the highest priority was preserving the console’s unique recovery keys before making any larger storage changes.</p>
+<h2 id="dumping-otp-and-seeprom">
+Dumping OTP and SEEPROM</h2>
+<p>From minute, I selected:</p>
+<pre><code class="language-plaintext-pika-default">Backup and Restore</code></pre>
+<p>and then:</p>
+<pre><code class="language-plaintext-pika-default">Dump SEEPROM &amp; OTP</code></pre>
+<p>This produced three console-specific files:</p>
+<pre><code class="language-plaintext-pika-default">otp.bin
+seeprom.bin
+seeprom_decrypted.bin</code></pre>
+<p>I verified their sizes:</p>
+<pre><code class="language-plaintext-pika-default">otp.bin:                1024 bytes
+seeprom.bin:             512 bytes
+seeprom_decrypted.bin:   512 bytes</code></pre>
+<p>These files are important for certain advanced recovery operations, so I stored multiple copies in dedicated local backup directories. At this point, I had both early boot control and the console’s unique recovery information preserved.</p>
+<h2 id="downloading-the-correct-system-titles">
+Downloading the Correct System Titles</h2>
+<p>Rebuilding the MLC required the official system titles for the console’s region. Because this was a USA unit, I downloaded the USA MLC title set using the Darwin ARM64 build of <code>MLCRestorerDownloader</code>.</p>
+<p>The utility was interactive rather than behaving like a typical command-line application. After testing its menu, I determined that the input sequence for the USA MLC titles was:</p>
+<pre><code class="language-plaintext-pika-default">1
+2</code></pre>
+<p>The download produced 52 title folders, matching the expected count for the USA title set. That gave me confidence that the source files needed for the rebuild were complete.</p>
+<p>I also downloaded:</p>
+<pre><code class="language-plaintext-pika-default">wafel_setup_mlc.ipx</code></pre>
+<p>This plugin performs the initial MLC setup during the first redNAND boot. It installs the titles from <code>wafel_install</code>, prepares the system for its initial launch, flushes the relevant storage, and deletes itself once the setup has finished. That self-deleting behavior prevents the rebuild process from running again on every future boot.</p>
+<h2 id="repartitioning-the-sd-card">
+Repartitioning the SD Card</h2>
+<p>The 32GB microSD card needed to serve two purposes, so I repartitioned it using an MBR layout. The first partition was a FAT32 partition of approximately 4GB for minute, ISFShax, plugins, configuration files, and setup files. The remaining space, approximately 27GB, became the redNAND partition that would act as replacement MLC storage.</p>
+<p>This process erased the card, which is why the earlier backups were essential. A 32GB card is sufficient for the rebuilt operating system, saves, updates, and lighter use, although it leaves less room for digital games and may not offer the same endurance as a larger high-endurance card. For the immediate recovery, it was enough.</p>
+<h2 id="configuring-the-mlc-rebuild">
+Configuring the MLC Rebuild</h2>
+<p>After repartitioning the card, I restored the necessary ISFShax and minute files to the FAT32 partition. The 52 USA MLC title folders were copied to:</p>
+<pre><code class="language-plaintext-pika-default">sd:/wafel_install/</code></pre>
+<p>The setup plugin was placed in:</p>
+<pre><code class="language-plaintext-pika-default">sd:/wiiu/ios_plugins/wafel_setup_mlc.ipx</code></pre>
+<p>The normal boot plugins remained in place:</p>
+<pre><code class="language-plaintext-pika-default">00core.ipx
+5isfshax.ipx</code></pre>
+<p>I then created:</p>
+<pre><code class="language-plaintext-pika-default">sd:/minute/rednand.ini</code></pre>
+<p>with the following configuration:</p>
+<pre><code class="language-plaintext-pika-default">[partitions]
+slccmpt=false
+slc=false
+mlc=true
+
+[scfm]
+disable=true
+allow_sys=false
+
+[disable_encryption]
+mlc=false
+
+[sys_mount]
+mlc=false</code></pre>
+<p>This configuration redirected only the MLC to the SD card, leaving the SLC and SLCCMPT untouched. That matched the diagnosis because the failure involved the MLC and internal eMMC rather than the other storage areas.</p>
+<p>I also created:</p>
+<pre><code class="language-plaintext-pika-default">sd:/minute/minute.ini</code></pre>
+<p>with:</p>
+<pre><code class="language-plaintext-pika-default">[boot]
+autoboot=2
+autoboot_timeout=1</code></pre>
+<p>minute menu entry 2 was:</p>
+<pre><code class="language-plaintext-pika-default">Patch (sd) and boot IOS redNAND</code></pre>
+<p>On the next boot, minute would automatically start redNAND. Because <code>wafel_setup_mlc.ipx</code> was present, that first redNAND boot would also initialize and rebuild the replacement MLC.</p>
+<h2 id="cleaning-macos-metadata-files">
+Cleaning macOS Metadata Files</h2>
+<p>After copying the files, macOS created several <code>._*</code> AppleDouble metadata files on the FAT32 partition. These are normally harmless on a Mac, but console recovery environments may interpret them as additional files, so I removed them before returning the card to the Wii U.</p>
+<p>The usual <code>dot_clean</code> command encountered permission problems involving <code>.Spotlight-V100</code>, so I used a targeted cleanup that removed only files matching:</p>
+<pre><code class="language-plaintext-pika-default">._*</code></pre>
+<p>Once the cleanup was complete, I confirmed that the expected 52 title folders and the correct plugin files were still present. It was a small detail, but low-level recovery work often depends upon exactly these kinds of details being handled correctly.</p>
+<h2 id="running-the-rebuild">
+Running the Rebuild</h2>
+<p>I inserted the prepared SD card into the Wii U and powered it on normally. The Pico was no longer needed, and there was no need to press any buttons because the console booted through ISFShax and minute before automatically entering the redNAND setup process.</p>
+<p>The power LED began blinking blue while the setup plugin installed the system titles. I allowed the process to continue until the blinking stopped and the LED became solid blue, which suggested that the rebuild had completed. I then powered off the console and returned the SD card to the Mac so I could verify the results before attempting a normal boot.</p>
+<h2 id="verifying-the-results">
+Verifying the Results</h2>
+<p>The rebuild created the following log:</p>
+<pre><code class="language-plaintext-pika-default">sd:/wafel_setup_mlc.log</code></pre>
+<p>The title installations returned:</p>
+<pre><code class="language-plaintext-pika-default">00000000</code></pre>
+<p>The final lines were especially important:</p>
+<pre><code class="language-plaintext-pika-default">Flush MLC: 0
+Region already matches (P:2, G:2, C:2).
+SetInitialLaunch 0: 1
+Flush SLC: 0
+Delete plugin: 0</code></pre>
+<p>These results confirmed that the replacement MLC had flushed successfully, the region matched the installed titles, initial setup had been enabled, the SLC flush had succeeded, and the setup plugin had deleted itself.</p>
+<p>I also inspected:</p>
+<pre><code class="language-plaintext-pika-default">sd:/wiiu/ios_plugins/</code></pre>
+<p>and confirmed that:</p>
+<pre><code class="language-plaintext-pika-default">wafel_setup_mlc.ipx</code></pre>
+<p>was gone. Only the normal boot plugins remained:</p>
+<pre><code class="language-plaintext-pika-default">00core.ipx
+5isfshax.ipx</code></pre>
+<p>This was exactly what I wanted to see. The setup plugin had completed its work, removed itself, and left the SD card ready for normal redNAND booting.</p>
+<h2 id="the-final-boot">
+The Final Boot</h2>
+<p>I safely ejected the SD card, inserted it into the Wii U, and powered on the console normally. This time, instead of freezing at the Wii U logo, it reached the official initial setup screen:</p>
+<pre><code class="language-plaintext-pika-default">Turn the Wii U GamePad on, and then press the SYNC Button on the Wii U console.</code></pre>
+<p>That screen was the final confirmation that the recovery had worked. The console was now booting through ISFShax and minute into a clean, rebuilt, SD-backed MLC environment.</p>
+<h2 id="what-the-recovery-accomplished">
+What the Recovery Accomplished</h2>
+<p>By the end of the process, I had confirmed that Pico and UDPIH access worked, diagnosed the failure as Hynix eMMC and MLC media errors, ruled out region mismatch and an incorrect Wii U Menu title, installed ISFShax, gained a reliable minute boot environment, preserved the console’s OTP and SEEPROM, downloaded the correct USA system titles, configured an MLC-only redNAND, rebuilt the system onto SD-backed storage, verified the rebuild through its logs, and booted into the official initial setup screen.</p>
+<p>The original Hynix eMMC remains unreliable. I did not physically repair or replace the chip. Instead, I replaced its role by redirecting MLC access to a partition on the SD card, which is why the card must remain inserted for the console to function.</p>
+<h2 id="what-this-means-going-forward">
+What This Means Going Forward</h2>
+<p>The console is functional again, but it is not stock. It now uses an ISFShax redNAND configuration, and the SD card has become part of the internal storage system. The card must remain inserted and should be dedicated to this Wii U. The FAT32 recovery files should not be casually removed, while macOS may not recognize or mount the redNAND partition at all, which is expected. The OTP and SEEPROM backups should also be preserved permanently.</p>
+<p>The current 32GB card is acceptable for the operating system, updates, saves, and lighter use. A larger high-endurance card may be preferable for heavier use, while USB storage can provide additional space for a larger digital library. A soldered NAND-AID or MLC2SD-style repair also remains an option if I eventually want a more hardware-native solution, but for a no-solder recovery using the equipment already available, the result was successful.</p>
+<h2 id="lessons-learned">
+Lessons Learned</h2>
+<p>The largest lesson was that a Wii U logo hang should not be treated as one known problem. The same frozen screen can conceal several very different failures, and the logs were what prevented me from continuing to chase coldboot settings, damaged saves, or isolated system files after the actual storage problem became visible.</p>
+<p>Low-level media errors also changed the repair strategy completely. Once the internal eMMC could no longer be trusted, the goal was no longer to replace one unreadable file. The goal was to stop depending on the failing storage device altogether.</p>
+<p>The process was also shaped by practical details that seemed minor until they blocked progress. The unreliable display required careful use of autoboot configurations, macOS metadata files had to be removed from the FAT32 partition, the SD card needed to be repartitioned correctly, and the console-specific keys had to be preserved before making destructive changes. None of those steps were especially dramatic, but every one of them mattered.</p>
+<p>Most of all, the recovery demonstrated the value of community-built preservation tools. UDPIH provided access to a console that could not boot normally, ISFShax created an early boot foothold, minute provided control and backup capabilities, Stroopwafel and redNAND made it possible to redirect storage, and <code>MLCRestorerDownloader</code> with <code>wafel_setup_mlc</code> provided a practical path for rebuilding the MLC.</p>
+<p>The Wii U began the day frozen at its logo, with logs showing Hynix eMMC media errors and failed reads from internal storage. It ended the day at the official initial setup screen. The repair required caution, backups, community knowledge, and several changes in direction, but the console is booting again.</p>
+</div>
+
+</article>

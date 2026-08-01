@@ -1,0 +1,235 @@
+Switching clouds? Get up to $10K in credits + hands-on help. 
+Apply now
+Company
+July 29, 2026
+Company
+Infrastructure Patterns for Agentic Applications
+Jacob Prall
+July 29, 2026
+Jacob Prall
+Most teams start building agents the same way they build any other web feature: wrap the model in a route handler, parse the request, and wait for the response.
+
+This is fine for a demo. It's also the first thing to break in production.
+
+Agents are long-running, stateful, and non-deterministic. They call tools, wait for external APIs, branch into subtasks, hit rate limits, and crash halfway through multi-step sequences. If your agent is tied to a single HTTP request, you've coupled your application's reliability to the wall-clock time of a non-deterministic loop.
+
+Moving past the demo means breaking that coupling. This post walks through the three core patterns teams use to turn fragile agent scripts into scalable, resilient production systems.
+
+The Nature of Agents
+
+At the core of an agent is a loop: receive a goal, 
+decide what to do next
+, call a model or tool, observe the result, update state, repeat until done. That loop has a few properties that make it hostile to naive web architectures.
+
+Agents are long-running.
+ A normal API request should finish quickly. Agents often don't, somtimes taking hours or even days to complete.
+
+Agents are stateful.
+ A run isn't one function call. It's a goal, a plan, tool calls and outputs, retries, errors, decisions, and a final output. If the process crashes, you need to know what already happened. If not, you either lose progress or rerun work blindly. Neither is great, especially for long-running agents.
+
+Agents are non-deterministic.
+ Traditional workflow code says:
+
+Agent code says:
+
+The model chooses the next action at runtime, which makes recovery, replay, and debugging much harder.
+
+A run may take three steps or thirty. It may fan out across several tools, wait for a human, produce large intermediate artifacts, or stop early. Infrastructure has to set boundaries around that unpredictability with timeouts, budgets, checkpoints, approvals, and explicit termination conditions.
+
+Taken together, these properties mean agents need more than model calls wrapped in application code. They need architecture that decouples runs from requests, and infrastructure that preserves progress, records decisions, controls side effects, and manages artifacts separately from model context.
+
+Pattern: Web-Queue-Worker
+
+The first production pattern is to stop running the whole agent inside the web request. A request is the wrong lifetime for an agent run. It should create a durable run record, enqueue the work, and return immediately.
+
+That gives the application a simple boundary:
+
+The API enqueues the job. The queue stores the job durably. The worker executes the job. The database records progress.
+
+The client gets a run ID immediately. The agent runs somewhere else. The user checks status, subscribes to updates, or receives a callback when the run completes.
+
+A queue is a durable buffer between the thing that creates work and the thing that performs it. This is the default starting point when runs are longer than a normal request, tasks are mostly independent, and you need worker scaling, retries, or burst absorption.
+
+The trap:
+ a queue knows a job exists, but it doesn't know the logical process that job belongs to. One background job is fine. Twenty dependent steps, three retries, two branches, and a human approval pause is not something a queue manages for you. You'll build that logic yourself. As we'll see later, that's where workflow engines come in.
+
+Reliability: Safe Retries and Partial Failure
+
+Moving work to a queue solves the lifetime problem. It does not solve for durability of execution.
+
+Most production queues are 
+at-least-once
+: a job may run more than once. That's a deliberate tradeoff to avoid losing work, and your code has to survive it. Once an agent can call tools, write records, send messages, or provisions resources, retry behavior becomes part of the application’s correctness model.
+
+Two disciplines matter most. Idempotency answers what happens when a single step runs twice. Compensation answers what happens when a run stops partway through a sequence of steps. Retries make the first a requirement. Permanent failures make the second necessary for production. Agents that touch remote services needs both.
+
+Idempotency: Surviving a Step That Runs Twice
+
+Bad worker code assumes no crash between steps:
+
+Better code creates an 
+idempotency boundary
+:
+
+For agents, every side-effecting tool call needs the same treatment: check for a completed record before calling the tool, upsert a "running" record, call the tool, mark it complete.
+
+Retry is not a recovery strategy unless the retried operation is safe.
+
+Compensation: Surviving a Run That Stops Halfway
+
+Consider an agent that completes three of five steps:
+
+it charges a card,
+
+provisions a resource,
+
+and sends a confirmation email.
+
+Then step four then fails permanently. None of the first three steps can be rolled back with a database transaction, since a charge is not undone by deleting a database row; the money has already moved. Restarting the run from step one would recharge the card and resend the email, recreating the exact duplicate-side-effect problem idempotency was meant to prevent.
+
+Distributed systems have a standard answer to this: the 
+saga pattern
+. For every side-effecting action an agent can take, define a compensating action that reverses the effect. A charge is reversed with a refund. An email is reversed with a correction message. When a run fails permanently, the orchestrator walks the completed steps in reverse order and runs their compensations.
+
+Compensations must be idempotent in the same way forward actions are.  Compensations can also fail on their own; a refund API can be unavailable just as easily as a charge API. A compensation chain needs a bounded retry, a dead-letter path for compensations that will not complete, and a manual escape hatch. Without these, a failed run can end up half-undone instead of half-done, which is not an improvement.
+
+Compensation is not always the right response to a partial failure. If four of five parallel sub-orders succeeded and one failed, completing the four and dropping the fifth is often the better outcome. This avoids unwinding work that succeeded. Compensation is worth building when partial success is unacceptable, not as a default response to any failure.
+
+Idempotency covers a step that runs twice. Compensation covers a run that stops halfway through. Both are required whether the run is executed by a simple worker or by a workflow engine.
+
+A queue distributes work, but it does not remember the shape of a run. It knows that a job exists. It does not know that step three depends on step two, that a human approval is pending, that two branches need to join before synthesis, or that compensation should run if the final step fails.
+
+Pattern: Workflows
+
+Once the hard part is no longer 
+where should this job run?
+ but 
+what should happen next, given what already happened?
+, you have moved from queueing into orchestration.
+
+A workflow engine provides that orchestration layer. It stores the 
+history
+ of a run: which steps started, completed, failed, retried, timed out, or waited for external input. In a workflow, a crash doesn't mean starting over.
+
+Every workflow system divides the code into the same two roles: a 
+coordinator
+ that decides what happens next, and 
+steps
+ that do the actual work — model calls, tool executions, record writes. The names vary from engine to engine, but the division of responsibility is the concept that matters: decisions live in one layer, effects live in the other.
+
+The coordinator has one hard rule: given the same history, it must always make the same decisions. This is because of how recovery works. After a crash, the engine rebuilds a run by re-executing the decision logic from the top, substituting recorded results for work that already completed. Replay only lands in the same place if the code decides the same way every time. So anything that could answer differently on a second pass — a model call, the current time, a random number, a call to an external service — belongs in a step, where the result is recorded the first time it runs and read back from history ever after. A stray clock read inside the coordinator, and a resumed run silently diverges from its own history. Durable execution tells you where a run was when it crashed. It does not remove the need for idempotency, because steps can still run more than once. This is why a workflow engine is the natural home for compensation logic: it already tracks which steps completed, which is the record a saga needs to walk backward.
+
+Scaling Workflows: Fan-Out, Fan-In, and Contention
+
+Workflows become especially useful when a run branches. Fan-out is the common shape: a 
+lead agent
+ breaks a goal into independent subtasks, sends each to a worker or subagent, and then synthesizes the results.
+
+This buys parallelism and fresh context windows, which is useful for research, document analysis, and other breadth-first work. But the hard part is not dispatching the workers. It is coordinating the fan-in: what happens if one branch fails, how many failures are tolerable, whether to synthesize partial results, and how to avoid waiting forever. A queue can run the workers. A workflow decides what happens next.
+
+Fan-out is worth using when subtasks are independent, mostly read-only, and parallelizable. It works poorly when subtasks are tightly coupled or need to share state that keeps changing. Adding agents also adds cost and coordination overhead, so the question of how many agents to use matters more than the mechanics of spawning them.
+
+Fan-out also introduces contention. A system can work with three parallel subagents and fail at eleven, even when there is plenty of aggregate provider capacity. Uncoordinated calls can collide on the same rate limit, exhaust the same connection pool, or retry at the same time. Treat providers, databases, and model APIs as shared resources: cap concurrency, use token buckets where needed, and back off when the shared resource pushes back.
+
+Putting Patterns Together: Workflow + Queue
+
+At scale, a workflow coordinates the process and a queue distributes execution. They are not competitors; they operate at different layers.
+
+Two details carry the weight here. 
+Promise.allSettled
+ keeps one failed branch from poisoning the entire fan-in, and the success threshold makes the partial-failure policy explicit: the workflow, not the queue, decides whether the run can proceed with what came back.
+
+This is the mature pattern for high-scale agentic systems: durable process state, multiple worker pools, rate-limited dispatch, audibility. The cost is real operational complexity. You now have an API plane, an orchestration plane, and an execution plane. This is worth it when the workload demands it.
+
+Making It Concrete
+
+The patterns above are platform-agnostic. You can assemble them from any queue, any workflow engine, and any worker fleet. The question is how much of that assembly you want to own and operate.
+
+On Render, the answer is almost none of it. Your web service is the API; 
+Render Workflows
+ is everything else. You define tasks as plain TypeScript or Python functions, and the platform provides the queue, the workers, the retries, the isolation, and per-run observability. There is no queue to provision, no worker fleet to keep warm, and no orchestrator cluster to operate.
+
+The agent, as tasks
+
+Take a concrete agent: given a goal like 
+“summarize how our top three competitors price their enterprise tiers,”
+ it plans, searches, reads, and synthesizes a brief. Written as workflow code, it is exactly the loop from the start of this post — a coordinator that decides, and steps that act:
+
+Three things to notice:
+
+This is the entire execution plane.
+ There is no queue client, no message schema, no polling loop, no worker registration. Three 
+task()
+ wrappers replace the API → Queue → Worker plumbing from the first pattern. When 
+runAgent
+ calls 
+decide(...)
+ or 
+executeAction(...)
+, that is not a local function call — because the functions are wrapped in 
+task()
+, each call starts a chained task run on its own on-demand instance, with its own retry policy and its own compute profile. 
+Promise.all
+ is the fan-out; the platform handles dispatch, isolation, and retry.
+
+The loop is the agent.
+ The coordinator doesn’t execute a fixed plan. Each pass through the loop decides again, given everything that has already happened — so actions can run in sequence across iterations, in parallel within one, and the run terminates when the model decides it is done (bounded by the task’s timeout).
+
+One agent run is one tree of task runs.
+ The run of 
+runAgent
+ is the root; every 
+decide
+ and 
+executeAction
+ run chains off it. Render tracks the whole tree — status, retries, logs per run — so “what did the agent do?” is a question the dashboard can answer. If your application needs its own record, store the root run’s ID and go from there.
+
+Triggering a run
+
+Starting an agent run, from your web service or anywhere else, is 
+one SDK call
+:
+
+startTask is the enqueue. The platform stores the work durably, dispatches it, and exposes its status — the entire boundary from the first pattern, in one call. (If the caller wants to block until completion, runTask does that instead; for an API request boundary, startTask is the right fit.)
+
+Composing further
+
+Workflows is the center of gravity, but the rest of the platform composes in when a run needs more. A 
+Cron Job
+ calling 
+startTask
+ gives you scheduled agents. 
+Key Value
+ gives you token buckets when parallel runs contend on a shared rate limit. 
+Postgres
+ holds large artifacts, so tasks pass IDs instead of payloads — state that must outlive a run goes in a store; state that must not leak between runs dies with the container. None of this is required to get started; each is one primitive, added when the workload demands it.
+
+What this doesn't solve (yet)
+
+Workflows removes queue and worker plumbing. Today, it does not remove application-level correctness work: idempotency, compensation, artifact storage, trace propagation, approval boundaries, cost controls, and rate limits are still yours to build with the patterns in this post.
+
+That boundary is moving, though. Much of this list is exactly where Workflows is headed: stronger durability guarantees, first-class idempotency, and human-in-the-loop primitives like native approval gates are all on the roadmap. The patterns in this post will stay the same, but expect more of them to ship as platform features instead of application code you maintain.
+
+Workflows
+ are now in Beta, with current limitations around supported languages, scheduling, Blueprint support, and HIPAA-compatible hosts.
+
+What no platform can remove is the design burden of orchestration. You still have to decide where state lives, where retries are safe, where approval happens, and how a run is traced end to end. The platform's job is to make those decisions cheap to implement, not to make them for you.
+
+Conclusion
+
+The next generation of agentic applications will be built like distributed systems, whether the underlying infrastructure is hand-rolled or managed.
+
+Remember that a queue asks: 
+where should this work run?
+ A workflow asks: 
+what should happen next, given what has already happened?
+ An agent asks: 
+what should I do next to accomplish the goal?
+
+Render Workflows can make the execution layer simpler. It can start task runs, queue them, retry them, and show their status. But the application still owns the semantics of the run: what counts as progress, which side effects are safe to retry, where artifacts live, when a human must approve, and how partial failure is repaired.
+
+That is the real boundary. Infrastructure moves work. Workflows preserve progress. Agents choose actions. Reliable agentic applications come from keeping those responsibilities separate, even when the platform makes them easy to deploy together.
+
+Render Workflows are in Beta. If you want to run these patterns without building the infrastructure behind them, start with the 
+Workflows docs
+.
