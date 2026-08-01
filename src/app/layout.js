@@ -40,6 +40,20 @@ export default function RootLayout({ children }) {
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400;1,700&family=Inter:wght@300;400;600;700&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Special+Elite&family=IM+Fell+DW+Pica:ital@0;1&display=swap" rel="stylesheet" />
+        <script dangerouslySetInnerHTML={{ __html: `
+          (function() {
+            const apiBase = "${process.env.NEXT_PUBLIC_API_URL || ''}";
+            if (apiBase) {
+              const originalFetch = window.fetch;
+              window.fetch = function (input, init) {
+                if (typeof input === 'string' && input.startsWith('/api/')) {
+                  return originalFetch(apiBase + input, init);
+                }
+                return originalFetch(input, init);
+              };
+            }
+          })();
+        `}} />
       </head>
       <body>
         <Navigation />
