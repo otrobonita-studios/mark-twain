@@ -47,17 +47,28 @@ async function searchQdrant(embedding) {
   return data.result || [];
 }
 
+// Allow the static Hugging Face Space (and other frontends) to call this API cross-origin.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: corsHeaders });
+}
+
 export async function POST(request) {
   try {
     const { message, history, style, tone, simplify, excerpt, historyAware } = await request.json();
 
     if (!message || typeof message !== 'string') {
-      return NextResponse.json({ error: 'Message is required and must be a string' }, { status: 400 });
+      return NextResponse.json({ error: 'Message is required and must be a string' }, { status: 400, headers: corsHeaders });
     }
 
     const geminiApiKey = (process.env.GEMINI_API_KEY || "").trim();
     if (!geminiApiKey) {
-      return NextResponse.json({ error: 'GEMINI_API_KEY is not configured in environment variables' }, { status: 500 });
+      return NextResponse.json({ error: 'GEMINI_API_KEY is not configured in environment variables' }, { status: 500, headers: corsHeaders });
     }
 
     // 1. Generate Query Embedding
@@ -207,10 +218,10 @@ Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyIn
       response: textResponse,
       sources: sources,
       translation: translation
-    });
+    }, { headers: corsHeaders });
 
   } catch (error) {
     console.error("Chat API error:", error);
-    return NextResponse.json({ error: error.message || 'An internal server error occurred' }, { status: 500 });
+    return NextResponse.json({ error: error.message || 'An internal server error occurred' }, { status: 500, headers: corsHeaders });
   }
 }
