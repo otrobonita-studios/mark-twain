@@ -1,0 +1,1338 @@
+<main class="main" id="content">
+<p>
+i want to keep my data for my entire life. modern hardware should be advanced
+enough to support this, but the real world invariably rears its ugly head
+whenever discussions of "forever" come up, anywhere. <i>nothing</i> is forever.
+\(P[\text{the world ends tomorrow}] &gt; 0\), after all. my entire life (and
+possibly the lives of another generation or two) should be sufficient for my
+purposes.
+</p>
+
+<p>
+<i>note:</i> this is a redone version of an analysis that i did for work a while
+back. i was operating ~200 <span style="font-size: smaller">TB</span> of networked storage at the time for both <sc>ml</sc> use
+(storing models) and government-inspected record-keeping, hence the desire to be
+able to prove some measure of reliablility. unfortunately i left before i could
+properly implement any of it. :(
+</p>
+<div class="outline-2" id="outline-container-.background">
+<h2 id=".background">background</h2>
+<div class="outline-text-2" id="text-org5c0f88b">
+<p>
+i'm building a <sc>nas</sc>.<span class="sidenote left-note"><small>
+"i would never have guessed that, nausicaa!"
+</small></span>
+</p>
+<p>
+not just a <a href="https://en.wikipedia.org/wiki/Non-RAID_drive_architectures#JBOD"><sc>jbod</sc></a>, though: as the introductory paragraph asserted, i would like to
+be able to <i>rely</i> on it. i intend for it to be a repository of beloved photos,
+memorialized text conversations, hoarded computer backups, and irreplaceable tax
+documents, which means that it should have an acceptably low chance of
+forgetting anything — say 1 in 10<sup>4</sup> — over its working lifespan. that working
+lifespan is also, most likely, the rest of <i>my</i> lifespan, which is about half a
+century at the time of this writing.
+</p>
+<p>
+this necessitates redundancy: i can't rely on a single storage device because <a href="#.practice.numerical-results">it
+<i>will</i> fail</a> (\(P \approx 1\)) in 50 years. because i'm impatient (and i've done a
+similar analysis before), i decided to go ahead and order four 8 <span style="font-size: smaller">TB</span> drives, <i>then</i>
+write this post.<span class="margin-note right-note"><small>
+if you're from the future, hello! this was in 2026, when
+<sc>ai</sc> was king and storage was <i>extremely</i> expensive.
+</small></span>
+</p>
+<p>
+all i need to do is figure out, for the most reliable architecture i can build,
+just how reliable it really is.
+</p>
+</div>
+<div class="outline-3" id="outline-container-.background.architecture">
+<h3 id=".background.architecture">architecture</h3>
+<div class="outline-text-3" id="text-org26c7d0e">
+<p>
+my planned architecture for the <sc>nas</sc> is this, for low \(P[\text{data loss}]\):
+</p>
+<ul class="org-ul">
+<li>set up the four drives in two groups of two, each <code>btrfs</code> RAID1,</li>
+<li>store one group at my father's house several states away, and</li>
+<li>automatically synchronize the local copy with the remote copy.</li>
+</ul>
+<p>
+<span class="margin-note left-note"><small>
+really important note if you're doing this yourself: use <sc>raid</sc>1 (or
+<sc>raid1c3/4</sc>) instead of <sc>dup</sc> if you can, as the latter will
+dutifully duplicate blocks but can put <i>both</i> copies on the <i>same</i> device, which
+doesn't protect against drive failure. i'd only use <sc>dup</sc> if… i'm not sure,
+actually. maybe email me if you have a use case.
+</small></span>
+</p>
+<p>
+the nice thing about <code>btrfs</code><span class="sidenote right-note"><small>
+as well as <code>zfs</code>, if that's more your speed. next-gen filesystems
+generally have this as a feature, because we've all started to accept that
+storage is fallible and data on a computer matters to us.
+</small></span> for this is that it checksums each data block
+(which appear to be 16 <span style="font-size: smaller">KiB</span> per <a href="https://btrfs.readthedocs.io/en/latest/mkfs.btrfs.html">the docs</a>) and will auto-repair corrupt blocks on
+read, so long as there is a good copy of that block somewhere! this means that
+if we have drives in <sc>raid</sc>1 — each block exists on two separate devices — we
+protect against any single drive failure <i>and</i> against any single block
+corruption.
+</p>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.background.SMART-monitoring--failure-policy">
+<h3 id=".background.SMART-monitoring--failure-policy"><sc>smart</sc> monitoring <i>&amp;</i> failure policy</h3>
+<div class="outline-text-3" id="text-orgefc44ba">
+<p>
+i'd be a fool to ignore the built-in monitoring systems that the drives have if
+i care about redundancy, so: in the event of a <sc>nas</sc> problem, either a full-on
+drive failure or a rapid accumulation of <sc>smart</sc> errors, i will replace the
+offending drive and resilver. <code>btrfs replace</code> with <code>-r</code> is the way to do this from
+<sc>raid</sc> redundancy data alone, and would be what i would use if a drive fully
+failed.
+</p>
+</div>
+</div>
+</div>
+<div class="outline-2" id="outline-container-.where-your-bits-go-when-they-die">
+<h2 id=".where-your-bits-go-when-they-die">where your bits go when they die</h2>
+<div class="outline-text-2" id="text-org84c9644">
+<p>
+there are two<span class="margin-note left-note"><small>
+well, there are <i>at least</i> two ways hard drives can make you
+sad. i'm not claiming omniscience.
+</small></span> ways hard drives can make you sad:
+</p>
+<ul class="org-ul">
+<li>they can die, or</li>
+<li>they can forget what you told them.</li>
+</ul>
+<p>
+if a drive dies, you lose everything it held. the only option is to replace it
+and rebuild that data from redundant copies (which you hopefully have). if a
+drive has an error on read, you lose all data in that disk sector (typically 512
+<span style="font-size: smaller">B</span>). this is known in the literature as a latent sector error, or <sc>lse</sc>; it's also
+known in datasheets as an unrecoverable read error, or <sc>ure</sc>.<span class="margin-note right-note"><small>
+a note on <sc>ure</sc>s:
+drive datasheets will give a number for these like "1 in 10<sup>15</sup>", but this
+number notably lacks <i>units</i> most of the time. claude and i agree that the most
+likely unit for this is "sector errors per bit read" — which incidentally
+makes drive manufacturers look as good as possible.
+</small></span> this is far from death,
+even for that sector: drives actively remap bad sectors while in operation, so a
+drive which experiences an <sc>lse</sc> will continue to function (but see below).
+</p>
+<p>
+to figure out the appropriate mathematical model for \(P[data loss]\), we have
+to understand the shape of these two failure modes. on to reading!
+</p>
+</div>
+<div class="outline-3" id="outline-container-.where-your-bits-go-when-they-die.disk-failure">
+<h3 id=".where-your-bits-go-when-they-die.disk-failure">disk failure</h3>
+<div class="outline-text-3" id="text-org4c21e6f">
+<p>
+when people talk about reliability engineering (read: equipment failure at large
+enough scale that you measure via statistics), they speak of the "bathtub
+curve:"
+</p>
+<figure id="orgb1c3515">
+
+<figcaption>the classic bathtub curve. this is <i>wrong for drive failure rates.</i></figcaption>
+</figure>
+<p>
+the idea is that most hardware failure is due to either manufacturing/<sc>qa</sc> issues
+(which tend to show up early), random events (which occur at a relatively
+constant rate), or equipment failure due to long-term wear and tear (which tends
+to show up late).<span class="sidenote left-note"><small>
+interestingly, human mortality (at least in the <sc>us</sc>) also follows a curve
+like this: see the "Death probability" column in <a href="https://www.ssa.gov/oact/STATS/table4c6.html">the SSA's actuarial life table</a>,
+which lists a minimum \(P[\text{death}]\) at ages 8 <i>&amp;</i> 9 for 2023.
+of course, humans aren't known for staying within datasheet
+specifications… but as it turns out, neither are hard drives.
+</small></span>
+</p>
+<p>
+this curve is becoming increasingly less correct for modern hard drives.  it was
+accurate-ish in the aughts, but <a href="https://www.backblaze.com/blog/are-hard-drives-getting-better-lets-revisit-the-bathtub-curve/">backblaze's october 2025 post</a> on annualized
+failure rates gives this graph, which is notably <i>not</i> a bathtub:
+</p>
+<figure id="org3513fbd">
+
+<figcaption>backblaze's 2025 annualized failure rate curve. note that this is a histogram of how old drives were when they failed and is thus not <i>exactly</i> the same type of curve as the above bathtub, but <i>also</i> note that their 2013 data clearly formed a bathtub.</figcaption>
+</figure>
+<p>
+backblaze interprets this changing curve shape to mean that hard drives
+reliability has improved over the past decade or so, as well as to mean that the
+nature of failure has changed: annual failure rates (<sc>afr</sc>) are roughly constant
+with respect to drive age these days. (<a href="https://www.backblaze.com/blog/backblaze-drive-stats-for-2025/">their 2025 wrapup</a> cites around 1.4% <sc>afr</sc>
+for their drives <i>&amp;</i> workload, though this varies everywhere from 0.2% to 6.3% <sc>afr</sc>
+depending on model and manufacturer.) <a href="https://www.usenix.org/legacy/event/fast07/tech/full_papers/pinheiro/pinheiro_html/index.html">pinheiro, weber, <i>&amp;</i> barroso</a><span class="sidenote right-note"><small>
+one other point from their paper that's notable: while "some <sc>smart</sc>
+parameters (scan errors, reallocation counts, offline reallocation counts, and
+probational counts) have a large impact on failure probability," many failed
+drives had zero <sc>smart</sc> errors at all, meaning internal drive diagnostics can't be
+fully trusted as a warning. given that some drives apparently reported
+temperatures "hotter than the surface of the sun," this seem like a pretty safe
+bet.
+</small></span>  note in their
+<sc>usenix</sc> paper that <sc>afr</sc> is not super strongly correlated to workload, either,
+which is super weird to me but will make the math easier.
+</p>
+<p>
+that variability worries me: it indicates that true <sc>afr</sc> for a given drive model
+can be derived only through measurement, and i don't have that data for the
+drives i chose. we'll have to make do.
+</p>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.where-your-bits-go-when-they-die.sector-failure">
+<h3 id=".where-your-bits-go-when-they-die.sector-failure">sector failure</h3>
+<div class="outline-text-3" id="text-org2abf952">
+<p>
+let's look at the other way you can lose data: a sector goes bad.
+</p>
+<p>
+<a href="https://dl.acm.org/doi/epdf/10.1145/1269899.1254917">bairavasundaram et. al.'s analysis</a> (published in sigmetrics in 2007) details
+what the single-sector failure situation looked like in, well, 2007.
+they observed that the conditional probability of an <sc>lse</sc> given that an <sc>lse</sc> had
+already occurred is significantly greater than the prior probability of an <sc>lse</sc>
+for a given disk — disks with one error tended to develop more.
+</p>
+<p>
+according to <a href="https://www.usenix.org/legacy/event/fast10/tech/full_papers/schroeder.pdf">schroeder, damouras, <i>&amp;</i> gill</a>, <sc>lse</sc>s are mostly clustered in time
+(â¥55% of drives had all their errors within 2 weeks of each other) and space
+("20-60% of errors have a neighbor within… less than 10 sectors[.]"). most
+drives (~90%) in their dataset only saw one <sc>lse</sc> per "error burst," defined by
+them as a set of errors in contiguous block space, with the length of the burst
+following a Pareto distribution. in section 3.5 of their analysis, they note
+that <sc>lse</sc> rates do not change depending on the number of reads or writes a drive
+has had, which is <i>really</i> weird. together with the <sc>afr</sc> not depending on drive
+workload, it appears that drives fail at a relatively constant speed <i>with
+respect to time</i>, which is not at all what i would have expected going into this.
+what the hell is going on in there!?
+</p>
+<p>
+in summary, if we have one <sc>lse</sc>, we'll likely have more, nearby in both space and
+time. since i have a policy of replacing drives when they start to go really
+bad, i'll care mostly about the space implication.
+</p>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.where-your-bits-go-when-they-die.my-drives-specifically">
+<h3 id=".where-your-bits-go-when-they-die.my-drives-specifically">my drives specifically</h3>
+<div class="outline-text-3" id="text-org314e58b">
+<p>
+annoyingly, <i>none</i> of these analyses seem to yield information on "how accurate
+are the datasheet specs relative to reality."  it seems to me that the best way
+to determine the prior odds of either disk or sector failure is simply to take
+some recent data and estimate, so i'll do that.
+</p>
+<p>
+i'm using seagate <sc>st8000vnz04/n004</sc> drives, which according to
+<a href="https://www.seagate.com/www-content/datasheets/pdfs/ironwolf-12tb-emea-DS1904-20-2111GB-en_GB.pdf">their datasheet</a> have a non-recoverable read error rate of 1 in 10<sup>15</sup>
+(sectors/bit), a mean time between failures of 10<sup>6</sup> hours, 8760 power-on hours,
+and a 3-year warranty (big whoop).
+</p>
+<p>
+since i didn't find a whole lot of recent failure probabilities — or ways to
+describe them — in the literature, i had opus 4.7 pull the most recent
+backblaze dataset (2025, as of this writing) and examine drive models similar to
+the one i would be using.<span class="margin-note left-note"><small>
+opus and i had a lot of back-and-forth about what
+exactly to look at in the data — we eventually settled on new <sc>smart</sc> 198 events
+as a proxy for <sc>lse</sc>s.
+</small></span> granted, these are enterprise drives, but schroeder et al.
+note that they "find no significant difference in the statistical properties of
+<sc>lse</sc>s in nearline drives versus enterprise class drives," though <sc>afr</sc> may not
+transfer.  i'm also not working these things in a datacenter environment, but
+given the independence of workload, temperature, and error/failure rate, all
+these results should be taken with a very large grain of salt. i'd mostly like
+to get within a few orders of magnitude.
+</p>
+<p>
+<sc>afr</sc> rates for the drives most similar to mine (the <sc>st8000dm</sc> <i>&amp;</i>
+<sc>st8000nm</sc> models, both 8 <span style="font-size: smaller">TB</span> drives, one desktop and one
+enterprise) were in the 2–3.5% range, per the little guy's analysis. since
+pinheiro et al. reported a first-year <sc>afr</sc> of around 2% back in 2007 and
+backblaze reports end-of-life failure rates dropping and overall <sc>afr</sc> leveling
+off, 3.5% <sc>afr</sc> would appear to be a conservative upper bound for my use case,
+with 2.5% <sc>afr</sc> more typical.
+</p>
+<p>
+3–5% of the drives had a new <sc>lse</sc> occur within the dataset's year of
+observation. schroeder et al.'s report that that 90–98% of error bursts consist
+of only one bad sector does <i>not</i> appear to apply here: the distribution of sector
+counts for a given event looks something like this instead (for 512 <span style="font-size: smaller">B</span> sectors):
+</p>
+<table>
+<colgroup>
+
+
+</colgroup>
+<thead>
+<tr>
+<th class="org-right" scope="col">sector count</th>
+<th class="org-right" scope="col">probability</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="org-right">6–20</td>
+<td class="org-right">81%</td>
+</tr>
+<tr>
+<td class="org-right">21-100</td>
+<td class="org-right">15%</td>
+</tr>
+<tr>
+<td class="org-right">101-500</td>
+<td class="org-right">2.5%</td>
+</tr>
+<tr>
+<td class="org-right">500+</td>
+<td class="org-right">1.5%</td>
+</tr>
+</tbody>
+</table>
+<p>
+opus noted that the most common occurrence was an 8-sector failure, which it
+theorized corresponded to a single 4 <span style="font-size: smaller">KiB</span> <i>on-disk</i> sector. this seems like a
+reasonable explanation, but i don't really care about the mechanics. i have a
+bucketed <sc>pmf</sc>, which is pretty much all i could hope for.
+</p>
+</div>
+<div class="outline-4" id="outline-container-.where-your-bits-go-when-they-die.my-drives-specifically.workload-estimation">
+<h4 id=".where-your-bits-go-when-they-die.my-drives-specifically.workload-estimation">workload estimation</h4>
+<div class="outline-text-4" id="text-org0a0e811">
+<p>
+i don't really need this for the analysis i'm doing, but if i ever want to
+calculate my data loss expectation, i will, so i'll leave it here.
+</p>
+<p>
+my workload consists of storing my own stuff, listening to music, and watching
+the occasional film. let's see:
+</p>
+<ul class="org-ul">
+<li>my home diretory uses 100 GB on this machine, and i'd like to run nightly
+backups, each of which might change an average of 1 GB of data (maybe, we're
+going conservative here);</li>
+<li>large film files are around 100 GB and i might watch one or two of those a
+week; and</li>
+<li><a href="https://support.spotify.com/us/article/audio-quality/">lossless spotify streaming</a> is apparently equivalent to a 24-bit 44.1 kHz FLAC,
+and my last wrapped indicated i listened to in neighborhood of 50 kilominutes
+per year of music.</li>
+</ul>
+<p>
+most of my rate estimates here are in the units of years, which means i will
+read about
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc"><span class="org-constant">1</span> GB<span class="org-builtin">/</span>day <span class="org-builtin">+</span> <span class="org-constant">100</span> GB<span class="org-builtin">/</span>month <span class="org-builtin">+</span> (<span class="org-constant">24</span> bit <span class="org-builtin">*</span> <span class="org-constant">44.1</span> kHz <span class="org-builtin">*</span> <span class="org-constant">50</span> kmin)<span class="org-builtin">/</span>year <span class="org-keyword">to</span> bit<span class="org-builtin">/</span>year
+</pre>
+</div>
+<pre class="example">
+1.56972E13 bits/a_j
+</pre>
+<p>
+1.5 Ã 10<sup>13</sup> bits per year. also, i have a <span class="as-attr">partner</span>. call it 3 Ã 10<sup>13</sup> bits per year.
+</p>
+</div>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.where-your-bits-go-when-they-die.on-bitrot--scrubbing">
+<h3 id=".where-your-bits-go-when-they-die.on-bitrot--scrubbing">on bitrot <i>&amp;</i> scrubbing</h3>
+<div class="outline-text-3" id="text-orgebef4b1">
+<p>
+many sources state that you should scrub NASes, particularly checksummed ones,
+so that any bad sectors will be caught and corrected before you have to
+resilver.<span class="margin-note right-note"><small>
+something i find funny about scrubbing: if you look <i>only</i> at the
+datasheet for a hard drive, it gives a <sc>ure</sc> rate in terms of sector errors per
+bits read (see above). this would imply that regular scrubbing for an array of
+disks should <i>increase</i> the error rate, as you're reading more data per unit time!
+hard drive manufacturers are really on something.
+</small></span> one of the reasons given for
+this (aside from ordinary write errors) is bitrot — magnetic domains on the
+drive slowly flipping, or <sc>ssd</sc> sectors slowly losing charge.
+</p>
+<p>
+i have found conflicting reports as to whether bitrot is a significant
+occurrence on modern magnetic media. <a href="https://www.naa.gov.au/information-management/storing-and-preserving-information/preserving-information/preserving-magnetic-media?">the australian government</a> alleges that
+temperature fluctuation is important, but they mostly talk about magnetic tapes.
+do we know how fast — or by what mechanism — data on modern magnetic hard
+disks decays? (if you know, email me!) without this knowledge, scrubbing has
+unspecified efficacy, as it really only matters if the data has some nonzero
+chance of changing once laid down.<span class="margin-note left-note"><small>
+one thing that's sitting in the back of
+my mind here is that <sc>lse</sc>s are observed constant with respect to <i>time</i>, not use.
+this might mean that magnetic domain decay, if it occurs at a constant rate for
+a given sector, is the <i>primary</i> way that data is lost on <sc>hdd</sc>s? it wouldn't
+explain everything, but it is a thought.
+</small></span>
+</p>
+<p>
+however! what regular scrubbing <i>can</i> ensure is that, should you <i>lose</i> a disk
+in the array, the other \(N - 1\) drives are known to have had at least one
+successful read from all the lost sectors. given that schroeder et al. noted
+that <sc>lse</sc> rate is not correlated to either reads or writes, and <sc>lse</sc>s appear to be
+caused by <i>events</i> (given their spatial <i>&amp;</i> temporal locality), it stands to reason
+that <sc>lse</sc>s are caused by the drive heads in some manner. it seems prudent, then,
+to reduce the number of times the drive head travels over a given area, but <i>also</i>
+ensure that data was at least <i>written</i> correctly. this implies, ideally, a single
+disk scrub of the area just written, with a rewrite <i>&amp;</i> scrub afterwards, and none
+further.
+</p>
+<p>
+i don't really know what the best policy here is, frankly, aside from inter-disk
+redundancy. if there <i>are</i> errors, though, i'd rather know about them sooner
+rather than later. readback immediately after writing, along with a periodic
+(monthly, say) scrub of the entire <sc>nas</sc> feels like a decent trade-off for peace
+of mind, but its efficacy lies mostly in that it ensures data was written
+correctly the first time rather than simply ensuring the data remains
+uncorrupted.
+</p>
+</div>
+</div>
+</div>
+<div class="outline-2" id="outline-container-.theory">
+<h2 id=".theory">theory</h2>
+<div class="outline-text-2" id="text-org17d5337">
+<p>
+now that i have a <sc>nas</sc> architecture <i>and</i> i have an idea of the underlying
+distributions, i can figure out what the failure probabilities are. i hope.
+probability is hard; if you're rusty (like i was), i'd recommend reading the
+<a href="#.appendix">appendix</a>.
+</p>
+</div>
+<div class="outline-3" id="outline-container-.theory.Ptextwe-lose-anything-at-all">
+<h3 id=".theory.Ptextwe-lose-anything-at-all">\(P[\text{we lose anything at all}]\)</h3>
+<div class="outline-text-3" id="text-orgb929b9c">
+<p>
+given our two failure modes of whole-disk failure or single-sector failure, (and
+given a <sc>nas</sc> comprised of \(N\) drives), we will lose data when
+</p>
+<ol class="org-ol">
+<li>a single drive fails, and when we go to rebuild, the remaining drives
+experience data loss, or</li>
+<li>all N drives develop an LSE in the same sector at some point.</li>
+</ol>
+<p>
+the second case covers an auto-repair failure: if every drive has an <sc>lse</sc> in the
+same place, we have no good data left to rebuild with, so that block is well and
+truly lost. the first case covers a resilvering of one drive, and is recursive:
+if every drive is a mirror, then losing one effectively leaves us with a <sc>nas</sc> of
+size \(N - 1\), which we can apply the same math to.
+</p>
+<p>
+i will assume that a given array will only experience data loss once: after the
+first moment of loss, the array is toast and we have to rebuild it. since
+failure rates, as discussed above, are relatively constant with drive age these
+days, i will ignore drive age completely. it also stands to reason that events
+on different physical drives are more or less independent, so \(P[A \cap B] = P[A]\
+P[B]\). finally, though these probabilities <i>don't</i> depend on drive age, they <i>do</i>
+depend on the working life of the array: we <i>really</i> want to know \(P[\text{data
+ loss with}\ N\ \text{drives over a lifespan}\ L]\). thus,
+</p>
+
+\begin{equation}
+	\begin{split}
+		 &amp; P[\text{we lose anything at all}]                                                 \\[1em]
+		 &amp; P[\text{data loss}\ (N, T)]                                                       \\[1em]
+		 &amp; = P[\text{one drive of}\ N\ \text{fails in}\ T \cap\ \text{data loss}\ (N - 1, R) \\[1em]
+		 &amp; \qquad \cup\ N\ \text{drives develop the same LSE in}\ T]                         \\
+	\end{split}
+\end{equation}
+
+<p>
+where \(R\) denotes the time it takes us to perform a resilver (say two
+weeks<span class="sidenote right-note"><small>
+this is not crazy; i figure most of the time spent responding to a
+failure will be in procuring a new drive, not the actual resilver, and time is
+what matters here!
+</small></span>) and \(N &gt; 0\). note that \(P[\text{data loss}](N = 0, \_) = 1\),
+because zero drives cannot hold any data whatsoever.<span class="sidenote left-note"><small>
+<a href="https://tom7.org/harder/">unless you're tom7</a>, of course.
+</small></span> this means we need to
+work out only two probabilities to get the failure chance for this <sc>nas</sc>:
+</p>
+<ul class="org-ul">
+<li>\(P[\text{one drive of}\ k\ \text{fails in}\ t]\) and</li>
+<li>\(P[k\ \text{drives develop the same LSE in}\ t]\).</li>
+</ul>
+</div>
+<div class="outline-4" id="outline-container-.theory.Ptextwe-lose-anything-at-all.Ptextone-drive-of-k-textfails-in-t">
+<h4 id=".theory.Ptextwe-lose-anything-at-all.Ptextone-drive-of-k-textfails-in-t">\(P[\text{one drive of}\ k\ \text{fails in}\ t]\)</h4>
+<div class="outline-text-4" id="text-orgf417bf8">
+<p>
+the probability of any single drive failing is dependent on its <sc>afr</sc>, and is
+easiest to calculate in reverse: find the odds that <i>every</i> drive in the <sc>nas</sc> will
+survive over its working life, then subtract that from 1. since the probability
+of each drive failure is independent, we have \(P[D_1 \cap D_2\ \text{survive}] =
+P[D_1\ \text{survives}] \cdot P[D_2\ \text{survives}]\), so
+</p>
+
+\begin{equation}
+	\begin{split}
+		 &amp; P[\text{one drive of}\ k\ \text{fails in}\ t]      \\
+		 &amp; = 1 - P[\text{all}\ k\ \text{drives live for}\ t], \\
+		 &amp; = 1 - P[\text{a drive lives for }\ t]^k.           \\
+	\end{split}
+\end{equation}
+
+<p>
+since <sc>afr</sc> is relatively constant for drives and drive failure basically happens
+instantly, it's reasonable to model whole-disk failure as a Poisson process:
+discrete events happening in time at a constant rate. (this shape of process
+shows up a lot — think radioactive decay, shot noise, <sc>http</sc> requests, …) a
+Poisson process has one parameter, \(\lambda\), which denotes the expected number of
+those discrete events that happen during one "time unit;" for this blog post,
+the most natural time unit is 1 year, as most of the numbers i have are
+annualized. for drive failure, \(\lambda\) is equal to the <sc>afr</sc>, as that's the fraction
+of drives we expect to fail yearly.
+</p>
+<p>
+since we want to know the probability that a drive survives for \(t\) years, we
+need to know how likely it is that the drive's eventual failure will come <i>after</i>
+\(t\) years have passed. the time-to-first-event probability of a Poisson
+process is given by the <a href="https://en.wikipedia.org/wiki/Exponential_distribution">exponential distribution</a>, which has <sc>pdf</sc>
+</p>
+
+\begin{equation}
+	f(t; \lambda) = \lambda e^{-\lambda t},\ t &gt; 0.
+\end{equation}
+
+<p>
+to figure out the probability we want, we just integrate this over the time
+range we're interested in — in this case, everything <i>after</i> \(t\):
+</p>
+
+\begin{equation}
+	\begin{split}
+		 &amp; P[\text{a drive lives for}\ t]             \\
+		 &amp; = \int_t^\infty \lambda e^{-\lambda t}\ dt \\
+		 &amp; = \left.-e^{-\lambda t}\right|_t^\infty    \\
+		 &amp; = -e^{-\infty} + e^{-\lambda t}            \\
+		 &amp; = e^{-\lambda t}                           \\
+		 &amp; = \exp\left(-\text{AFR} \cdot t\right)     \\
+	\end{split}
+\end{equation}
+
+<p>
+all together, we have
+</p>
+
+\begin{equation}
+\label{9458878c7de3cec957e0d4fc9a465e2e}
+	\begin{split}
+		 &amp; P[\text{one drive of}\ k\ \text{fails in}\ t]      \\
+		 &amp; = 1 - \exp\left(-\text{AFR} \cdot t\right)^k       \\
+		 &amp; = 1 - \exp\left(-\text{AFR} \cdot k \cdot t\right) \\
+	\end{split}
+\end{equation}
+
+<p>
+you may recall we plan on using \eqref{9458878c7de3cec957e0d4fc9a465e2e} to describe failure
+over both the working life of the <sc>nas</sc> \(L\) and the rebuild time \(R\), which
+have wildly different projected workloads. the justification for <i>this</i> use is
+that <sc>afr</sc> is relatively independent of workload, so we shouldn't expect our
+drives to have a markedly higher chance of failing during resilvering merely
+because they are performing a resilver.
+</p>
+</div>
+</div>
+<div class="outline-4" id="outline-container-.theory.Ptextwe-lose-anything-at-all.Pk-textdrives-develop-the-same-LSE-in-t">
+<h4 id=".theory.Ptextwe-lose-anything-at-all.Pk-textdrives-develop-the-same-LSE-in-t">\(P[k\ \text{drives develop the same LSE in}\ t]\)</h4>
+<div class="outline-text-4" id="text-org40583e1">
+<p>
+this one's more interesting, because <sc>lse</sc>s are not independent of each other like
+drive failures are! they are most likely to occur in groups, temporally and
+spatially close to each other (see <a href="#.where-your-bits-go-when-they-die.my-drives-specifically">above</a> for the approximate distribution).
+thus, if we encounter <i>one</i> <sc>lse</sc> on a given drive, we have a decent chance of
+having have <i>more</i> nearby. hence, we have to take the <sc>pmf</sc> into account when
+determining how bad data corruption via <sc>lse</sc> is.
+</p>
+
+\begin{equation}
+\label{1411fb31d54e13e11aea72b812891307}
+	\begin{split}
+		 &amp; P[k\ \text{drives develop the same LSE in}\ t]                                                                                 \\[0.7em]
+		 &amp; = P[\text{one drive develops an LSE in}\ t]                                                                                    \\
+		 &amp; \qquad \cdot \sum_{m = 1}^\infty P[m\ \text{LSEs}\ |\ 1\ \text{LSE}] \cdot P[\text{the rest share}\ \geq 1\ \text{of the}\ m], \\
+	\end{split}
+\end{equation}
+
+<p>
+with, if <sc>lse</sc> events are also Poisson-like,
+</p>
+\begin{equation}
+	P[\text{one drive develops an LSE in}\ t] = 1 - \exp\left(-\text{LSE rate} \cdot t\right). \\
+\end{equation}
+
+<p>
+that last probability in \eqref{1411fb31d54e13e11aea72b812891307}, \(P[\text{the
+ rest share}\ \geq 1\ \text{of the}\ m]\), is the tricky one. because those \(m\)
+<sc>lse</sc>s are clustered, if one of the other drives in the array has an <sc>lse</sc> in or
+nearby those \(m\), it has an elevated chance of <i>more</i> nearby. so maybe we need
+to multiply the probabilities together per bad sector, per given configuration
+of bad sectors on the first drive, maybe with some \(E[\text{something}]\)
+bullshit in here somewhere…
+</p>
+<p>
+i claim that this is hard to think about.
+</p>
+<p>
+the thing that stymied me for a while in this analysis was: i wanted to get an
+estimate of the probability of a given <sc>lse</sc> configuration, so that i could
+estimate the probability of all drives sharing a given <sc>lse</sc>, but i didn't have
+that probability — all i had from the papers and my data was an estimate of
+how likely an <sc>lse</sc> was given that there was another one nearby. in other words, i
+had an estimate of \(P[\text{LSE at}\ s_1\ |\ \text{LSE at}\ s_2]\) for some
+disk sectors \(s_1, s_2\), but what i <i>really</i> wanted was \(P[\text{LSEs at}\ S]\)
+for some subset \(S\) of all possible disk sectors \(D\).
+</p>
+<p>
+so: how do we get \(P[S], S \subset D\) from \(P[s], P[s_1 | s_2], \forall s, s_1, s_2 \in D\
+\)?
+</p>
+<p>
+…you can't. i spent a while trying to do this before realizing it had some
+real similarity to the problem of reconstructing the full <sc>pdf</sc> of a random vector
+from its elementwise expected value <i>&amp;</i> autocorrelation, which i couldn't find a
+way to do and suspect is not possible, as well as reconstruction of a
+probability distribution from its moments alone, which is, well, <a href="https://en.wikipedia.org/wiki/Moment_problem">the moment
+problem</a>… so i asked claude if this was feasible and it came up with a
+counterexample for \(N = 3\) that shot to hell any hope i had of a strategy. in
+short, you can't get \(P[S]\) from \(P[s]\) <i>&amp;</i> \(P[s_1 | s_2]\) because it's
+hopelessly underconstrained.
+</p>
+<p>
+since there's massive uncertainty about even the quantities i would take as
+<i>givens</i> for that problem, i figured my best bet was to come up with a
+justifiable approach to the whole thing and run with it.
+</p>
+<p>
+i decided i would figure that the empirical prior probability of <sc>lse</sc>s in a given
+sector would take the higher-order correlations into account enough for an
+estimate, and treat the probability of additional bad sectors on other drives as
+independent of each other. i think this should yield a conservative estimate, as
+we effectively double-count a bunch of cases in which drives have more than one
+<sc>lse</sc> in the range under consideration… but i'm not totally sure about this! it
+passes the vibe check, i suppose. we'll rely on \(P[m\ \text{LSEs}\ |\ 1\
+\text{LSE}]\) to do most of the probabalistic heavy lifting, and merely
+construct something plausible for the rest of the expression.
+</p>
+<p>
+i will also use a real useful bit of the earlier analysis: since <i>most</i> <sc>lse</sc>s were
+of the form "we drop one 4 <span style="font-size: smaller">KiB</span> on-disk sector only," and <code>btrfs</code> blocks are 16 <span style="font-size: smaller">KiB</span>
+large, i can do the analysis with a sector granularity of 16 <span style="font-size: smaller">KiB</span> and come <i>much</i>
+closer to correct! a 16 <span style="font-size: smaller">KiB</span> block is 32 Ã 512 <span style="font-size: smaller">B</span> sectors, which (given the <sc>pmf</sc>
+estimation for <sc>lse</sc>s for my drives) gives a new <sc>lse</sc> <sc>pmf</sc>, based on blocks, as
+follows:
+</p>
+<table>
+<colgroup>
+
+
+</colgroup>
+<thead>
+<tr>
+<th class="org-right" scope="col">16 KiB sector count</th>
+<th class="org-right" scope="col">probability</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="org-right">1</td>
+<td class="org-right">81%</td>
+</tr>
+<tr>
+<td class="org-right">2–3</td>
+<td class="org-right">15%</td>
+</tr>
+<tr>
+<td class="org-right">4+</td>
+<td class="org-right">4%</td>
+</tr>
+</tbody>
+</table>
+<p>
+now the math. for each bad sector on the drive that had a failure, we want to
+know the probability that, for at least one of those sectors, all the remaining
+drives have also failed on that sector:
+</p>
+
+\begin{equation}
+	\begin{split}
+		 &amp; P[\text{the rest share}\ \geq 1\ \text{of the}\ m]     \\
+		 &amp; = P[k - 1\ \text{drives share one of}\ m\ \text{LSEs}] \\
+	\end{split}
+\end{equation}
+
+<p>
+or, in other words, the dual of the probability that <i>every</i> other drive saved at
+least one of those sectors from corruption:
+</p>
+
+\begin{equation}
+	\begin{split}
+		 &amp; P[\text{the rest share}\ \geq 1\ \text{of the}\ m]             \\
+		 &amp; = P[k - 1\ \text{drives share one of}\ m\ \text{LSEs}]         \\
+		 &amp; = 1 - P[k - 1\ \text{drives share none of}\ m\ \text{LSEs}]    \\
+		 &amp; \approx 1 - P[k - 1\ \text{drives do not share a given LSE}]^m \\
+	\end{split}
+\end{equation}
+
+<p>
+the last deduction is only approximate, because <sc>lse</sc>s on a given drive are not
+independent of each other. however, since we increased the definition of
+"sector" to a larger size and the analysis is prohibitively difficult if we take
+this into account, we assume they are independent.
+</p>
+<p>
+that last probability, of at least one drive being able to salvage a given <sc>lse</sc>,
+we can calculate exactly:
+</p>
+
+\begin{equation}
+	\begin{split}
+		 &amp; P[k - 1\ \text{drives do not share a given LSE}]      \\
+		 &amp; = 1 - P[k - 1\ \text{drives share a given LSE}]       \\
+		 &amp; = 1 - P[\text{a given drive has a given LSE}]^{k - 1} \\
+	\end{split}
+\end{equation}
+
+<p>
+the prior odds that you'll get an <sc>lse</sc> for a given sector, \(P[\text{a given
+ drive has a given LSE}]\), is worth looking into, because this is where things
+ like bitrot and regular scrubs come into play. intuitively, more regular
+ scrubbing should decrease this chance, because the drive will only have been
+ able to accumulate <sc>lse</sc>s since the last scrub on the <sc>nas</sc>. except that <sc>lse</sc> rate
+ is empirically mostly constant with time and isn't really correlated with
+ workload, so as a first blush approximation, we could just say
+</p>
+
+\begin{equation}
+	\begin{split}
+		 &amp; \text{worst-case expected LSEs per sector}                                                                           \\
+		 &amp; \qquad = \text{empirical LSE rate} \times \text{rebuild time} \times \frac{\text{sector size}}{\text{drive size}}. \\
+	\end{split}
+\end{equation}
+
+<p>
+as for the manner in which <sc>lse</sc>s occur: the distribution of error burst size is
+roughly ~Pareto, but the rate at which <i>bursts</i> occur is an annoying
+distribution… though, for our purposes, "is there an <sc>lse</sc> in this sector when
+we go to read it" is kind of just a <a href="https://en.wikipedia.org/wiki/Bernoulli_distribution">Bernoulli random variable</a> measured when we
+do a rebuild, so
+</p>
+
+\begin{equation}
+	\begin{split}
+		 &amp; P[\text{a given drive has a given LSE}]            \\
+		 &amp; \approx \text{worst-case expected LSEs per sector} \\
+	\end{split}
+\end{equation}
+</div>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.theory.Etexthow-much-data-well-lose">
+<h3 id=".theory.Etexthow-much-data-well-lose"><span class="todo &lt;sc&gt;todo&lt;/sc&gt;"><sc>todo</sc></span> \(E[\text{how much data we'll lose}]\)</h3>
+<div class="outline-text-3" id="text-orga2f2a0f">
+<p>
+i'll only do this analysis if people bug me asking for it, because i consider
+all my data sacred and i've failed in some way if i ever lose any of it. also, i
+barely have enough information to do the analysis i <i>am</i> doing. maybe we go
+complain to snoooogle and ask them to do more drive research.
+</p>
+</div>
+</div>
+</div>
+<div class="outline-2" id="outline-container-.practice">
+<h2 id=".practice">practice</h2>
+<div class="outline-text-2" id="text-org77a8548">
+<p>
+enough math. it's time for <i>numbers</i>.
+</p>
+</div>
+<div class="outline-3" id="outline-container-.practice.implementation">
+<h3 id=".practice.implementation">implementation</h3>
+<div class="outline-text-3" id="text-org6685cdf">
+<p>
+i'm going to implement everything i wrote up above in reverse order, in, of all
+things, <code>qalc</code>.<span class="margin-note right-note"><small>
+this is not vanilla <code>qalc</code> syntax — the <code>...</code> is a line
+continuation stolen from <sc>matlab</sc> / <code>octave</code>, which i abuse here to make things more
+readable.
+</small></span> this is not totally insane, since it has really nice unit support and
+proper cancellation of units is a good check that we got all the math right!
+</p>
+<p>
+for my first trick, i'll set up the parameters for the <sc>nas</sc>:
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc"><span class="linenr">1</span>drives <span class="org-builtin">=</span> <span class="org-constant">4</span>
+<span class="linenr">2</span>drive_size <span class="org-builtin">=</span> <span class="org-constant">8</span> TB
+<span class="linenr">3</span>sector_size <span class="org-builtin">=</span> <span class="org-constant">16</span> KiB
+<span class="linenr">4</span>rebuild_time <span class="org-builtin">=</span> <span class="org-constant">2</span> week
+</pre>
+</div>
+<p>
+then the estimated probabilities of failure and <sc>lse</sc> count:
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc"><span class="linenr"> 5</span>afr <span class="org-builtin">=</span> <span class="org-constant">0</span>.035<span class="org-builtin">/</span>year
+<span class="linenr"> 6</span>lse_rate <span class="org-builtin">=</span> <span class="org-constant">0</span>.05<span class="org-builtin">/</span>year
+<span class="linenr"> 7</span>
+<span class="linenr"> 8</span>P_a_given_drive_has_a_given_LSE <span class="org-builtin">=</span> ...
+<span class="linenr"> 9</span>    lse_rate <span class="org-builtin">*</span> rebuild_time <span class="org-builtin">*</span> sector_size <span class="org-builtin">/</span> drive_size
+<span class="linenr">10</span>
+<span class="linenr">11</span><span class="org-comment-delimiter"># </span><span class="org-comment">approximates the heavy-tail distribution for 16 KiB sectors
+<span class="linenr">12</span></span>P_m_LSEs_given_one_LSE_table <span class="org-builtin">=</span> [<span class="org-constant">0.81</span> <span class="org-constant">0.08</span> <span class="org-constant">0.07</span> <span class="org-constant">0.04</span>]
+<span class="linenr">13</span>
+<span class="linenr">14</span><span class="org-comment-delimiter"># </span><span class="org-comment">\x := m
+<span class="linenr">15</span></span><span class="org-keyword">function</span> P_m_LSEs_given_one_LSE ...
+<span class="linenr">16</span>    element(P_m_LSEs_given_one_LSE_table, \x)
+</pre>
+</div>
+<p>
+we'll then need the functions for calculating data loss due to <sc>lse</sc>s:
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc"><span class="linenr">17</span><span class="org-comment-delimiter"># </span><span class="org-comment">\x := k
+<span class="linenr">18</span></span><span class="org-keyword">function</span> P_k_drives_do_not_share_a_given_LSE ...
+<span class="linenr">19</span>    <span class="org-constant">1</span> <span class="org-builtin">-</span> P_a_given_drive_has_a_given_LSE<span class="org-builtin">^</span>\x
+<span class="linenr">20</span>
+<span class="linenr">21</span><span class="org-comment-delimiter"># </span><span class="org-comment">\x := k, \y := m
+<span class="linenr">22</span></span><span class="org-keyword">function</span> P_k_drives_share_at_least_one_of_m_LSEs ...
+<span class="linenr">23</span>    <span class="org-constant">1</span> <span class="org-builtin">-</span> P_k_drives_do_not_share_a_given_LSE(\x)<span class="org-builtin">^</span>\y
+<span class="linenr">24</span>
+<span class="linenr">25</span><span class="org-comment-delimiter"># </span><span class="org-comment">\x := t
+<span class="linenr">26</span></span><span class="org-keyword">function</span> P_one_drive_develops_an_LSE_in_t ...
+<span class="linenr">27</span>    <span class="org-constant">1</span> <span class="org-builtin">-</span> <span class="org-function-name">exp</span>(<span class="org-builtin">-</span>lse_rate <span class="org-builtin">*</span> \x)
+<span class="linenr">28</span>
+<span class="linenr">29</span><span class="org-comment-delimiter"># </span><span class="org-comment">\x := k, \y := t
+<span class="linenr">30</span></span><span class="org-keyword">function</span> P_k_drives_develop_the_same_LSE_in_t ...
+<span class="linenr">31</span>    P_one_drive_develops_an_LSE_in_t(\y) ...
+<span class="linenr">32</span>    <span class="org-builtin">*</span> <span class="org-function-name">sum</span>(...
+<span class="linenr">33</span>        P_m_LSEs_given_one_LSE(\m) ...
+<span class="linenr">34</span>            <span class="org-builtin">*</span> P_k_drives_share_at_least_one_of_m_LSEs(\x <span class="org-builtin">-</span> <span class="org-constant">1</span>, \m), ...
+<span class="linenr">35</span>        <span class="org-constant">1</span>, <span class="org-constant">4</span>, \m ...
+<span class="linenr">36</span>    )
+</pre>
+</div>
+<p>
+next, the functions for calculating data loss due to drive failure:
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc"><span class="linenr">37</span><span class="org-comment-delimiter"># </span><span class="org-comment">\x := k, \y := t
+<span class="linenr">38</span></span><span class="org-keyword">function</span> P_one_drive_of_k_fails_in_t ...
+<span class="linenr">39</span>    <span class="org-constant">1</span> <span class="org-builtin">-</span> <span class="org-function-name">exp</span>(<span class="org-builtin">-</span>afr <span class="org-builtin">*</span> \x <span class="org-builtin">*</span> \y)
+<span class="linenr">40</span>
+<span class="linenr">41</span><span class="org-comment-delimiter"># </span><span class="org-comment">and that's it, actually</span>
+</pre>
+</div>
+<p>
+and, finally, we can put all of them together:
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc"><span class="linenr">42</span><span class="org-comment-delimiter"># </span><span class="org-comment">calculates the OR of two probabilities, assuming they're for independent
+<span class="linenr">43</span></span><span class="org-comment-delimiter"># </span><span class="org-comment">events
+<span class="linenr">44</span></span><span class="org-keyword">function</span> independent_or \x <span class="org-builtin">+</span> \y <span class="org-builtin">-</span> \x <span class="org-builtin">*</span> \y
+<span class="linenr">45</span>
+<span class="linenr">46</span><span class="org-comment-delimiter"># </span><span class="org-comment">\x := N, \y := T
+<span class="linenr">47</span></span><span class="org-keyword">function</span> P_data_loss_N_T ...
+<span class="linenr">48</span>    <span class="org-function-name">if</span>(...
+<span class="linenr">49</span>        \x <span class="org-builtin">==</span> <span class="org-constant">0</span>, <span class="org-constant">1</span>, ...
+<span class="linenr">50</span>        independent_or(...
+<span class="linenr">51</span>            P_one_drive_of_k_fails_in_t(\x, \y) ...
+<span class="linenr">52</span>                <span class="org-builtin">*</span> P_data_loss_N_T(\x <span class="org-builtin">-</span> <span class="org-constant">1</span>, rebuild_time), ...
+<span class="linenr">53</span>            P_k_drives_develop_the_same_LSE_in_t(\x, \y) ...
+<span class="linenr">54</span>        ) ...
+<span class="linenr">55</span>    )
+</pre>
+</div>
+<p>
+then, two quick tests. the following functions should evaluate to approximately
+the <sc>afr</sc> and the <sc>lse</sc> rate, respectively (though not exactly — we're treating
+these as continuous processes rather than the geometric distribution implied in
+these annualized rates):
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc">P_one_drive_of_k_fails_in_t(<span class="org-constant">1</span>, <span class="org-constant">1</span> year)
+P_k_drives_develop_the_same_LSE_in_t(<span class="org-constant">1</span>, <span class="org-constant">1</span> year)
+</pre>
+</div>
+<pre class="example">
+0.03439458374
+0.04877057550
+</pre>
+<p>
+and they do (3.5% and 5% chance, as set above). let's give it a go!
+</p>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.practice.numerical-results">
+<h3 id=".practice.numerical-results">numerical results</h3>
+<div class="outline-text-3" id="text-org122f0ea">
+<p>
+now that we have an implementation, we can finally answer the question: what are
+the odds i lose data, for some number of drives mirrored over some lifespan?
+</p>
+<p>
+first: a demonstration of why we need redundancy. <i>with the above assumptions
+about <sc>lse</sc> rate and <sc>afr</sc></i>, the probability that we will lose data on a given hard
+drive within a year with no redundancy is
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc">P_data_loss_N_T(<span class="org-constant">1</span>, <span class="org-constant">1</span> year)
+</pre>
+</div>
+<pre class="example">
+0.08148771560
+</pre>
+<p>
+about 0.08, which is terrifyingly high. so high, in fact, that i question some
+of the assumptions that i made earlier: we just don't think of hard drives as
+that unreliable! but it's a good indication that what we have here is a
+pessimistic estimate.
+</p>
+<p>
+over the projected lifespan of the <sc>nas</sc>, things look much worse:
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc">P_data_loss_N_T(<span class="org-constant">1</span>, <span class="org-constant">50</span> year)
+</pre>
+</div>
+<pre class="example">
+0.9857357661
+</pre>
+<p>
+<a href="#.background">as i asserted above</a>, a single-drive <sc>nas</sc> <i>will</i> lose data over a 50-year span with
+\(P \approx 1\).<span class="sidenote left-note"><small>
+the first time i ran these calculations i wound up computing a
+probability of just over 3, which was obviously wrong. my mistake there was
+treating data loss due to drive failure and data loss due to <sc>lse</sc>s as mutually
+exclusive, which implies one would sum their probabilities, and both
+probabilities <i>independently</i> approach 1… anyway, <sc>or</sc>-ing them as independent
+events seems a better model here.
+</small></span>
+</p>
+<p>
+let's include just <i>one</i> redundant disk and see how that changes the picture:
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc">P_data_loss_N_T(<span class="org-constant">2</span>, <span class="org-constant">50</span> year)
+</pre>
+</div>
+<pre class="example">
+0.003154516520
+</pre>
+<p>
+holy fucking shit. probability of failure dropped by a factor of about 300. this
+makes sense, though, if you think about it: <i>both</i> disks have to fail at the <i>same</i>
+time to lose data, which are independent events, so we should expect some crazy
+exponential dropoff with more redundancy! to further the point:
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc">P_data_loss_N_T(<span class="org-constant">3</span>, <span class="org-constant">50</span> year)
+P_data_loss_N_T(<span class="org-constant">4</span>, <span class="org-constant">50</span> year)
+</pre>
+</div>
+<pre class="example">
+0.000008669974909
+0.00000003497518876
+</pre>
+<p>
+fantastically better results the more redundancy we have. in fact,
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc">P_data_loss_N_T(<span class="org-constant">1</span>, <span class="org-constant">50</span> year) <span class="org-builtin">/</span> P_data_loss_N_T(<span class="org-constant">2</span>, <span class="org-constant">50</span> year)
+P_data_loss_N_T(<span class="org-constant">2</span>, <span class="org-constant">50</span> year) <span class="org-builtin">/</span> P_data_loss_N_T(<span class="org-constant">3</span>, <span class="org-constant">50</span> year)
+P_data_loss_N_T(<span class="org-constant">3</span>, <span class="org-constant">50</span> year) <span class="org-builtin">/</span> P_data_loss_N_T(<span class="org-constant">4</span>, <span class="org-constant">50</span> year)
+</pre>
+</div>
+<pre class="example">
+312.4839448
+363.8437888
+247.8892957
+</pre>
+<p>
+a very rough estimate for failure probability is
+</p>
+
+\begin{equation}
+\label{8fe61ebba61a610190e98646ef0c3799}
+	P[\text{data loss over 50 years}](N) \approx \left(\frac{1}{300}\right)^{N - 1},\ N \leq 4.
+\end{equation}
+
+<p>
+note that this doesn't really hold up after four redundant drives (the ratio
+starts to drop), but each additional drive is best seen as a <i>multiplicative</i>
+improvement!
+</p>
+<p>
+anyway, for four drives (which best models the <sc>nas</sc> i'm building), even with
+conservative estimates, i have better than a one in
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc"><span class="org-constant">10</span> <span class="org-builtin">^</span> <span class="org-function-name">floor</span>(<span class="org-function-name">log10</span>(<span class="org-constant">1</span> <span class="org-builtin">/</span> P_data_loss_N_T(<span class="org-constant">4</span>, <span class="org-constant">50</span> year)))
+</pre>
+</div>
+<pre class="example">
+10000000
+</pre>
+<p>
+ten <i>million</i> chance of data loss due to drive failure.
+</p>
+</div>
+</div>
+</div>
+<div class="outline-2" id="outline-container-.conclusions">
+<h2 id=".conclusions">conclusions</h2>
+<div class="outline-text-2" id="text-orgdedd2ce">
+<p>
+probability is hard.
+</p>
+<p>
+if you skipped here from the start, i would refer you to the <a href="#.practice.numerical-results">numerical results</a>
+section and equation \eqref{8fe61ebba61a610190e98646ef0c3799}, which basically say the following:
+</p>
+<ul class="org-ul">
+<li>if you rely only on a single hard drive, you <i>will</i> lose data, and</li>
+<li>the single best thing you can do to preserve your data is add redundancy.</li>
+</ul>
+<p>
+this post was a <i>long</i> time in the making as i worked and reworked the math, and
+i'm <i>still</i> not sure i'm right.<span class="margin-note right-note"><small>
+if you're a real live person reading this,
+<a href="mailto:web@khz.ac">send me an email!</a> i don't care what's in it, it's just nice to hear from
+people. gives me motivation to keep doing this, you know.
+</small></span> but i think i'm
+close… close enough that i'll put some words on the internet, at least.
+</p>
+<p>
+anyway, my drives should be here today. time to build this thing for real!
+</p>
+</div>
+</div>
+<div class="outline-2" id="outline-container-.appendix">
+<h2 id=".appendix">appendix</h2>
+<div class="outline-text-2" id="text-org2b57fd8">
+<p>
+because this post wasn't long enough already. this is mostly a probability
+refresher, though i probably stuck some epistemic commentary in here too. this
+will also be pretty informal — if you want formal definitions of all of these
+things, go read a textbook.
+</p>
+</div>
+<div class="outline-3" id="outline-container-.appendix.basic-definitions--formulae">
+<h3 id=".appendix.basic-definitions--formulae">basic definitions <i>&amp;</i> formulae</h3>
+<div class="outline-text-3" id="text-org08486d3">
+<p>
+so: when i say \(P[\text{something}]\), what does that mean?
+</p>
+<p>
+this \(P[\dots]\) operator measures the <b>probability</b> of an <b>event</b>. an event \(A\) in
+this context is some subset of a set \(S\) of "all possible things that can
+happen" — for example, if our entire universe is a single roll of an ordinary
+<span style="font-size: smaller">D</span>6, \(S_1 = \{1, 2, 3, 4, 5, 6\}.\) events, such as "we roll greater than a 3,"
+map on to subsets — say \(A = \{4, 5, 6\} \subset S_1\). the probability of an event
+is just the measure of that event over the measure of the space:
+</p>
+
+\begin{equation*}
+	P[A] = \frac{|A|}{|S|} = \frac{3}{6} = \frac{1}{2}.
+\end{equation*}
+
+<p>
+note that \(P[S_1] = 1\) — the probability of the universe of possibilities is
+a certainty. also note that this implies \(P[\text{anything}] \in [0, 1]\) — all
+probabilities are between zero and one, zero being "won't" happen, one being
+"will" happen.<span class="sidenote left-note"><small>
+i put these in quotes because a probability of zero is <i>not</i> the same as an
+impossibility once you start dealing with infinite sets. we'll see that later.
+</small></span>
+</p>
+<p>
+if i want to speak about multiple events, i can do so using the usual set
+relation operators: union \(\cup\) for logical <sc>or</sc>, intersection \(\cap\) for logical
+<sc>and</sc>, set-subtract \(\setminus\) for one-but-not-the-other, and so on.
+</p>
+<p>
+for example, say my universe is <i>two</i> dice, rolled once each: \(S_2 = S_1 \times S_1 =
+\{(1, 1), (1, 2), \dots, (6, 5), (6, 6)\}\), \(|S_2| = 36\). if i want to know the
+likelihood of rolling at most 2 on my first die and at least 5 on my second, i
+would write
+</p>
+
+\begin{align*}
+	A &amp; = \{1, 2\} \times S_1 = \{(1, 1), \dots, (2, 6)\}        \\
+	B &amp; = S_1 \times \{5, 6\} = \{(1, 5), \dots, (6, 6)\}        \\
+	C &amp; = A \cap B = \{(1, 5), (1, 6), (2, 5), (2, 6)\}          \\
+	  &amp; \implies P[A \cap B] = P[C] = \frac{4}{36} = \frac{1}{9} \\
+\end{align*}
+
+<p>
+and find i have a one in nine chance of doing so.
+</p>
+<p>
+these sets can also be infinite: say i have a very large die that rolls any
+integer, setting \(S = \mathbb{N}\). i can still compute probabilities, of
+course, but the notion of "measure" gets weirder. since i don't want to define
+it (informal review), i hope it's evident that \(P[k\ \text{is even}]\) for  \(k
+\in S\) is 0.5.
+</p>
+<p>
+the following formula is really handy when dealing with combinations of events:
+</p>
+
+\begin{align*}
+	P[A \cup B] + P[A \cap B] &amp; = P[A] + P[B]               \\[0.8em]
+	\iff P[A \cap B]          &amp; = P[A] + P[B] - P[A \cup B] \\[0.8em]
+	\iff P[A \cup B]          &amp; = P[A] + P[B] - P[A \cap B] \\
+\end{align*}
+
+<p>
+the intuition for the last variant of this formula is: if we want the measure of
+\(A \cup B\), we could measure both \(A\) and \(B\) by themselves, then add the
+measurements — but this counts elements in <i>both</i> sets twice, so we should
+subtract that out. the other forms follow via arithmetic. (since this is a
+refresher, i won't go into more detail than that.)
+</p>
+<p>
+also note that, since both \(\cap\) and \(\cup\) commute, \(A \cap B = B \cap A\) <i>&amp;</i> \(A \cup B
+= B \cup A\), so their probabilities are also equal.
+</p>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.appendix.random-variables--distributions">
+<h3 id=".appendix.random-variables--distributions">random variables <i>&amp;</i> distributions</h3>
+<div class="outline-text-3" id="text-org64535d9">
+<p>
+a <b>random variable</b> is the term used to talk about probability of some property of
+events. given \(S_2\) above, say, we might want to know things about the <i>sum</i> of
+the two dice, say \(P[\text{the dice add to}\ \geq 11]\). this is often written
+\(P[X \geq 11]\), where \(X\) is a random variable equal to the sum of the dice.
+one important thing to note about \(X\) is that it's not really a value — it's
+a thing with a <b>distribution</b> attached to it that describes the probability of any
+given value when you sample it. more concretely, some assertion about \(X\)
+corresponds to an event — e.g.,
+</p>
+
+\begin{gather*}
+	X \geq 11 \sim \{(5, 6), (6, 5), (6, 6)\} \\
+	\implies P[X \geq 11] = \frac{3}{36} = \frac{1}{12}. \\
+\end{gather*}
+
+<p>
+this sort of thing is common enough that we invented probability distributions
+to describe the probability of \(X\) being a givne value — since \(X\) is
+discrete (as the set of values it can take, \(\{2, 3, \dots, 12\}\), is a discrete
+set), we can describe its distribution with a <b>probability mass function</b> (<sc>pmf</sc>):
+</p>
+
+\begin{align*}
+	f(k) &amp; = P[X = k],\ k \in \{2, 3, \dots, 12\}          \\[1em]
+	     &amp; = \begin{cases}
+		         \displaystyle \frac{1}{36}, &amp; k = 2  \\[0.7em]
+		         \displaystyle \frac{2}{36}, &amp; k = 3  \\[0.7em]
+		         \displaystyle \frac{3}{36}, &amp; k = 4  \\[0.7em]
+		         \dots                                \\
+		         \displaystyle \frac{2}{36}, &amp; k = 11 \\[0.7em]
+		         \displaystyle \frac{1}{36}, &amp; k = 12 \\[0.7em]
+	         \end{cases} \\
+\end{align*}
+
+<p>
+then an event like \(X \geq 11\) becomes \(X = 11 \cup X = 12\), and we can compute
+accordingly. most of the events in this blog post are really me making some
+assertion about a random variable with some prior distribution, then using the
+laws of probability to figure out what that distribution looks like.
+</p>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.appendix.mutual-exclusion">
+<h3 id=".appendix.mutual-exclusion">mutual exclusion</h3>
+<div class="outline-text-3" id="text-orgb564f19">
+<p>
+two events \(A, B\) are <b>mutually exclusive</b> if they cannot both occur — i.e,
+\(P[A \cap B] = 0\). notably, this implies that the probability of <i>either</i> event
+occurring is
+</p>
+
+\begin{align*}
+	P[A \cup B] &amp; = P[A] + P[B] - P[A \cap B] \\[0.8em]
+	            &amp; = P[A] + P[B],              \\
+\end{align*}
+
+<p>
+which is <i>really</i> useful.
+</p>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.appendix.conditional-probability">
+<h3 id=".appendix.conditional-probability">conditional probability</h3>
+<div class="outline-text-3" id="text-org8352bda">
+<p>
+the <b>conditional probability of \(A\) given \(B\)</b>, written \(P[A|B]\), is the
+probability of \(A\) in the universe where \(B\) already happened. in other
+words, the space of all events \(S = B\). it's defined as
+</p>
+
+\begin{equation*}
+	P[A|B] = \frac{P[A \cap B]}{P[B]}
+\end{equation*}
+
+<p>
+which is basically the same as the original ratio measurement for the
+probability of an event, but we only care about things contained within the set
+\(B\). you can rewrite this as
+</p>
+
+\begin{align*}
+	P[A|B]\ P[B] &amp; = P[A \cap B]  \\[0.8em]
+	             &amp; = P[B \cap A]  \\[0.8em]
+	             &amp; = P[B|A]\ P[A], \\
+\end{align*}
+
+<p>
+or equivalently
+</p>
+
+\begin{equation*}
+	P[A|B] = P[B|A]\ \frac{P[A]}{P[B]},
+\end{equation*}
+
+<p>
+also known as bayes' theorem.<span class="sidenote right-note"><small>
+<a href="https://www.lesswrong.com/">some people on the internet</a> really like this one. despite its relatively
+straightforward derivation (really just using the definition of conditional
+probability and the fact that \(\cap\) commutes), bayes' theorem is really
+powerful and produces some surprising results!
+</small></span>
+</p>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.appendix.independence">
+<h3 id=".appendix.independence">independence</h3>
+<div class="outline-text-3" id="text-org481a41f">
+<p>
+two events \(A, B\) are <b>independent</b> if knowing whether one event happened does
+not give you any information about the other event — i.e., \(P[A|B] = P[A]\).
+thus, by definition,
+</p>
+
+\begin{equation*}
+	P[A \cap B] = P[A|B]\ P[B] = P[A]\ P[B],
+\end{equation*}
+
+<p>
+which is <i>also</i> really useful. note that this implies
+</p>
+
+\begin{align*}
+	P[B|A] &amp; = \frac{P[B \cap A]}{P[A]}        \\[0.8em]
+	       &amp; = \frac{P[A \cap B]}{P[A]}        \\[0.8em]
+	       &amp; = \frac{P[A]\ P[B]}{P[A]} = P[B], \\
+\end{align*}
+
+<p>
+so independence is always reciprocal: if \(A\) is independent of \(B\), \(B\) is
+independent of \(A\), and vice versa.
+</p>
+</div>
+</div>
+<div class="outline-3" id="outline-container-.appendix.the-birthday-problem">
+<h3 id=".appendix.the-birthday-problem">the birthday problem</h3>
+<div class="outline-text-3" id="text-orgc081207">
+<p>
+i use a trick like this a lot here, so it's probably worth going over. this
+trick applies whenever you want to know whether something <i>has occurred at all</i> in
+one of possibly very many different ways.
+</p>
+<p>
+the phrasing of the birthday problem is: what is the probability that, given a
+room of \(N\) people, two of them share a birthday?
+</p>
+<p>
+not two <i>specific</i> people, mind you — since birthdays are independently assigned
+and uniformly distributed throughout the year, that would simply be
+\(\frac{1}{365}\).<span class="sidenote left-note"><small>
+adapting these calculations to take leap years into account is left as
+an exercise for the reader. if anyone still does those.
+</small></span> <i>any</i> two people from a group of \(N\). we might have
+duplicates, too, which starts to make this look like a horrible sum over
+individual chances for each pair of people…
+</p>
+<p>
+…or we could recognize that \(P[\text{two people share a birthday}]\) is equal
+to \(1 - P[\text{nobody shares a birthday}]\), and that the latter is <i>much</i> easier
+to compute!
+</p>
+<p>
+so. the probability space \(S\) of all possible events is simply the number of
+ways to assign birthdays to a group of \(N\) people:
+</p>
+
+\begin{gather*}
+	S = \{(x_1, \dots, x_N)\, |\, x_k \in \{1, \dots, 365\}\} \\
+	\implies |S| = 365^N \\
+\end{gather*}
+
+<p>
+the event \(A\) corresponding to "no one shares a birthday" is the set of ways
+we can assemble a room where no one shares a birthday, which we construct as
+follows:
+</p>
+<ol class="org-ol">
+<li>for the first person, there are 365 ways to assign them a birthday;</li>
+<li>for the second person, there are 364 ways to do it, as one day is already
+taken;</li>
+<li>for the third person, there are 363 ways, as the first two days are already
+taken;</li>
+</ol>
+<p>
+and so on, implying
+</p>
+
+\begin{align*}
+	| A | &amp; = 365 \times 364 \times \dots \times (365 - N + 1) \\ |
+	    &amp; = \frac{365!}{(365 - N)!}.                         \\
+\end{align*}
+
+<p>
+thus,
+</p>
+
+\begin{align*}
+	P[\text{two people share a birthday}]
+	 &amp; = 1 - P[\text{nobody shares a birthday}] \\
+	 &amp; = 1 - \frac{|A|}{|S|}                    \\
+	 &amp; = 1 - \frac{365!}{365^N\ (365 - N)!},    \\
+\end{align*}
+
+<p>
+which yields the surprising result that
+</p>
+<div class="org-src-container">
+<pre class="src src-qalc"><span class="org-keyword">function</span> P_two_people_share_a_birthday_out_of ...
+    <span class="org-constant">1</span> <span class="org-builtin">-</span> (<span class="org-constant">365</span><span class="org-builtin">!</span>)<span class="org-builtin">/</span>(<span class="org-constant">365</span><span class="org-builtin">^</span>\x <span class="org-builtin">*</span> (<span class="org-constant">365</span> <span class="org-builtin">-</span> \x)<span class="org-builtin">!</span>)
+
+P_two_people_share_a_birthday_out_of(<span class="org-constant">23</span>)
+</pre>
+</div>
+<pre class="example">
+0.5072972343
+</pre>
+<p>
+in a room of 23 people, the odds are better than even that two of them share a
+birthday.
+</p>
+<p>
+this approach generalizes very well ("what are the odds that any two sectors are
+both bad?"), and i use it a lot.
+</p>
+</div>
+</div>
+</div>
+</main>
