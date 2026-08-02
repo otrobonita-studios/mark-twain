@@ -1,0 +1,95 @@
+<main class="flex-fill">
+<div class="container mt-5">
+<div class="markdown-content">
+<p class="text-muted">2026-08-02</p>
+<h1 align="center" class="mb-3">Sharing an X Server Across Hosts with FamilyWild</h1>
+
+<p>Ever tried running an X11 application from inside a container, a chroot, or over
+<code>ssh</code> with a bind-mounted <code>.Xauthority</code> — only to be greeted by the ever-helpful
+<code>Authorization required, but no authorization protocol specified</code>?</p>
+<p>The file is right there, mounted read-only where the client expects it, and yet
+X refuses the connection. The reason is subtle, and the fix is a single line of
+<code>sed</code>.</p>
+
+<h2>Why the cookie is rejected</h2>
+<p>An <code>.Xauthority</code> file is a list of cookies, and every entry is keyed by a
+<em>family</em> and a <em>hostname</em>. When a client connects, it doesn't just grab the
+first cookie it finds — it looks for the entry whose hostname matches the
+machine the client believes it's running on.</p>
+<p>That's exactly what breaks the moment the client runs somewhere other than where
+the cookie was minted. Inside a container the hostname is different; over an
+un-forwarded socket the client resolves a different name entirely. The cookie is
+present and valid, but its hostname doesn't match, so the client never offers it
+and X falls back to "no authorization protocol."</p>
+<p>You can see the family/hostname keying for yourself:</p>
+<pre><code>$ xauth list
+myhost/unix:0  MIT-MAGIC-COOKIE-1  a1b2c3d4e5f6...
+</code></pre>
+<p>That leading <code>myhost/unix:0</code> is the problem — it pins the cookie to <code>myhost</code>.</p>
+
+<h2>FamilyWild to the rescue</h2>
+<p>X has a wildcard family, <code>FamilyWild</code>, whose numeric value is <code>0xffff</code>. A cookie
+in this family matches <em>any</em> hostname. So instead of trying to make the client's
+hostname match the cookie, we rewrite the cookie to match every host.</p>
+<p><code>xauth nlist</code> prints entries in a numeric format where the first field is the
+4-hex-digit family. Overwrite it with <code>ffff</code> and merge the result into a fresh
+file:</p>
+<div class="code-block" data-title="build a portable .Xauthority">
+<pre><code>: &gt; /tmp/portable.Xauthority &amp;&amp; xauth nlist :0 | \
+    sed 's/^..../ffff/' | xauth -f /tmp/portable.Xauthority nmerge -
+# Replace :0 with your $DISPLAY value
+</code></pre>
+</div>
+
+<h2>The change is a single field</h2>
+<p>It's worth seeing just how small the edit is. An <code>.Xauthority</code> entry is a packed
+binary record: a 2-byte <em>family</em>, then length-prefixed address, display number,
+auth name, and the cookie itself. Dump the original file and the family sits in
+the very first two bytes — <code>0100</code>, i.e. <code>FamilyLocal</code>:</p>
+<div class="code-block" data-title="xxd ~/.Xauthority — before">
+<pre><code>00000000: 0100 0006 6d79 686f 7374 0001 3000 124d  ....myhost..0..M
+00000010: 4954 2d4d 4147 4943 2d43 4f4f 4b49 452d  IT-MAGIC-COOKIE-
+00000020: 3100 10a1 b2c3 d4e5 f607 1829 3a4b 5c6d  1..........):K\m
+00000030: 7e8f 90                                   ~..
+</code></pre>
+</div>
+<p>Now dump the FamilyWild version we just built. Everything is byte-for-byte
+identical — same <code>myhost</code> address, same cookie — except those first two bytes,
+now flipped to <code>ffff</code>:</p>
+<div class="code-block" data-title="xxd /tmp/portable.Xauthority — after">
+<pre><code>00000000: ffff 0006 6d79 686f 7374 0001 3000 124d  ....myhost..0..M
+00000010: 4954 2d4d 4147 4943 2d43 4f4f 4b49 452d  IT-MAGIC-COOKIE-
+00000020: 3100 10a1 b2c3 d4e5 f607 1829 3a4b 5c6d  1..........):K\m
+00000030: 7e8f 90                                   ~..
+</code></pre>
+</div>
+<p>That one field is the whole trick: the address bytes still spell <code>myhost</code>, but X
+no longer cares, because family <code>0xffff</code> matches unconditionally.</p>
+<p>Bind-mount (or <code>scp</code>) <code>/tmp/portable.Xauthority</code> wherever the client runs, point
+<code>XAUTHORITY</code> at it, and the connection is accepted regardless of the hostname
+mismatch.</p>
+
+<h2>What about <code>xhost +</code>?</h2>
+<p>You'll often see <code>xhost +</code> suggested as the "just make it work" answer, and it
+does — by turning host-based access control off entirely. Every client from
+every host can then connect to your display <em>without any cookie at all</em>.</p>
+<p>On a single-user machine that sounds harmless, but X has no isolation between
+clients: anyone who can reach the server can read your keystrokes, grab the
+contents of any window, and inject synthetic input. <code>xhost +</code> hands that
+capability to every local user and, if your server listens on TCP, to the
+network. Even the narrower <code>xhost +local:</code> still trusts every UID on the box.</p>
+<p>The FamilyWild cookie keeps the door locked — a client still has to <em>present the
+secret</em> — while removing only the hostname constraint that was getting in the
+way. Reach for it instead of <code>xhost +</code>, and keep the cookie file at <code>0600</code>.</p>
+
+<h2>One caveat</h2>
+<p>A FamilyWild cookie is deliberately less specific than the one it replaces:
+anyone who can both reach your X socket <em>and</em> read this file can talk to your
+display. Hand it only to the environments that actually need it, and don't leave
+copies lying around on shared machines.</p>
+<p>This trick is one small piece of a larger setup — I use it to forward X into
+unprivileged LXC containers, which I wrote up in detail in
+<a href="https://dobrowolski.dev/article/enhancing-x11-application-security-with-lxc/">Enhancing x11 Application Security with LXC</a>.</p>
+</div>
+</div>
+</main>
