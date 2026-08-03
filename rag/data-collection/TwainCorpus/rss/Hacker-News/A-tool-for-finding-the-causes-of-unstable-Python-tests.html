@@ -1,0 +1,119 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">pytest-leak-finder</h1></div>
+<p dir="auto"><a href="https://pypi.org/project/pytest-leak-finder" rel="nofollow"></a>
+<a href="https://pypi.org/project/pytest-leak-finder" rel="nofollow"></a>
+<a href="https://github.com/mgaitan/pytest-leak-finder/actions/workflows/ci.yml"></a></p>
+<p dir="auto">You have a test that passes when executed alone but fails when running its suite. What's happening? My two cents that some previous test keeps the things dirty. But wich one/s, maybe the previous are a lot, right?</p>
+<p dir="auto">This plugin helps to find a culprit by doing a <a href="https://en.wikipedia.org/wiki/Binary_search_algorithm" rel="nofollow">binary search</a> (<em>alla</em> <a href="https://git-scm.com/docs/git-bisect" rel="nofollow">git bisect</a>) on the collected tests before the target.</p>
+<p dir="auto">The first time it will collect the first half of those tests plus the failing one (the target). If the target fails, we are in a good path, so, a new bisect is applied. When the target doesn't fail, it changes the "half" to bisect the next time.</p>
+<p dir="auto">Consider the following example:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="$ pytest -v demo/test_demo.py 
+collected 6 items                                                                                                                                            
+tests/test_demo.py::test1 PASSED                                                                             
+tests/test_demo.py::test2 PASSED                                                                              
+tests/test_demo.py::test3 PASSED                                                                              
+tests/test_demo.py::test4 PASSED                                                                             
+tests/test_demo.py::test5 FAILED                                                                              
+tests/test_demo.py::test6 PASSED 
+
+$ pytest -v --lf demo/test_demo.py 
+collected 6 items / 5 deselected / 1 selected                                                                                                                
+tests/test_demo.py::test5 PASSED 
+"><pre class="notranslate"><code>$ pytest -v demo/test_demo.py 
+collected 6 items                                                                                                                                            
+tests/test_demo.py::test1 PASSED                                                                             
+tests/test_demo.py::test2 PASSED                                                                              
+tests/test_demo.py::test3 PASSED                                                                              
+tests/test_demo.py::test4 PASSED                                                                             
+tests/test_demo.py::test5 FAILED                                                                              
+tests/test_demo.py::test6 PASSED 
+
+$ pytest -v --lf demo/test_demo.py 
+collected 6 items / 5 deselected / 1 selected                                                                                                                
+tests/test_demo.py::test5 PASSED 
+
+</code></pre></div>
+<p dir="auto">You can use pytest-leak-finder to find the problematic test.</p>
+<p dir="auto">On the first run will set the failed test as the "target" and will stop the session.</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="$ pytest -v --leak-finder demo/test_demo.py 
+collected 6 items
+
+tests/test_demo.py::test1 PASSED                                                                              
+tests/test_demo.py::test2 PASSED                                                                              
+tests/test_demo.py::test3 PASSED                                                                              
+tests/test_demo.py::test4 PASSED                                                                              
+tests/test_demo.py::test5 FAILED
+
+===================================================== Leak finder =====================================================
+Target set to: pytest-leak-finder/tests/test_demo.py::test5
+
+Next step: a
+Current target is: pytest-leak-finder/tests/test_demo.py::test5
+============================================= 1 failed, 4 passed in 0.13s ============================================="><pre class="notranslate"><code>$ pytest -v --leak-finder demo/test_demo.py 
+collected 6 items
+
+tests/test_demo.py::test1 PASSED                                                                              
+tests/test_demo.py::test2 PASSED                                                                              
+tests/test_demo.py::test3 PASSED                                                                              
+tests/test_demo.py::test4 PASSED                                                                              
+tests/test_demo.py::test5 FAILED
+
+===================================================== Leak finder =====================================================
+Target set to: pytest-leak-finder/tests/test_demo.py::test5
+
+Next step: a
+Current target is: pytest-leak-finder/tests/test_demo.py::test5
+============================================= 1 failed, 4 passed in 0.13s =============================================
+</code></pre></div>
+<p dir="auto">The second execution will run the first half of the tests passed before the target (step "a", composed by <code>test1</code> and <code>test2</code>).</p>
+<p dir="auto">If the target still fail, that path would followed deeper by dividing again. But in this example
+it passes, so we'll discard it, and asumme the other half was the one that include the leak.
+That's the reason why the "next step" will be "ba".</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="$ pytest -v --leak-finder demo/test_demo.py
+collected 6 items / 3 deselected / 3 selected                                                                                                                
+demo/test_demo.py::test1 PASSED                                                                                 [ 33%]
+demo/test_demo.py::test2 PASSED                                                                                 [ 66%]
+demo/test_demo.py::test5 PASSED                                                                                 [100%]
+
+
+===================================================== Leak finder =====================================================
+We reach the target and nothing failed. Let's change the last half.
+
+Next step: ba
+Current target is: pytest-leak-finder/demo/test_demo.py::test5
+=========================================== 3 passed, 3 deselected in 0.03s ==========================================="><pre class="notranslate"><code>$ pytest -v --leak-finder demo/test_demo.py
+collected 6 items / 3 deselected / 3 selected                                                                                                                
+demo/test_demo.py::test1 PASSED                                                                                 [ 33%]
+demo/test_demo.py::test2 PASSED                                                                                 [ 66%]
+demo/test_demo.py::test5 PASSED                                                                                 [100%]
+
+
+===================================================== Leak finder =====================================================
+We reach the target and nothing failed. Let's change the last half.
+
+Next step: ba
+Current target is: pytest-leak-finder/demo/test_demo.py::test5
+=========================================== 3 passed, 3 deselected in 0.03s ===========================================
+</code></pre></div>
+<p dir="auto">So, the new step will be "B-A", i.e. <code>test3</code></p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="$ pytest -v --leak-finder demo/test_demo.py
+collected 6 items / 3 deselected / 3 selected                                                                                                                
+tests/test_demo.py::test3 PASSED                                                                              
+tests/test_demo.py::test5 FAILED
+
+===================================================== Leak finder =====================================================
+We found a leak!
+
+Leak found in: pytest-leak-finder/demo/test_demo.py::test3
+Last step was: ba"><pre class="notranslate"><code>$ pytest -v --leak-finder demo/test_demo.py
+collected 6 items / 3 deselected / 3 selected                                                                                                                
+tests/test_demo.py::test3 PASSED                                                                              
+tests/test_demo.py::test5 FAILED
+
+===================================================== Leak finder =====================================================
+We found a leak!
+
+Leak found in: pytest-leak-finder/demo/test_demo.py::test3
+Last step was: ba
+</code></pre></div>
+<p dir="auto">And there it is, <code>test3</code> was the problematic test we were looking for!</p>
+</article>
