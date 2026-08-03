@@ -1,0 +1,296 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">metadata-search-engine-rs</h1></div>
+<p dir="auto">A SearXNG-style metadata search engine written in Rust. Fans out queries to multiple search engines concurrently, scrapes their HTML results, deduplicates by normalized URL, and ranks using Reciprocal Rank Fusion (RRF).</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How it works</h2></div>
+<ol dir="auto">
+<li>A search request arrives at <code>GET /search?q=&lt;query&gt;</code></li>
+<li>The query is sent concurrently to DuckDuckGo, Brave, Startpage, and Yahoo via <code>reqwest</code></li>
+<li>Each engine parses the HTML response with <code>scraper</code> (CSS selectors over Mozilla's html5ever)</li>
+<li>Results are deduplicated by normalized URL (tracking params stripped, locale prefixes removed, query params sorted)</li>
+<li>Duplicate URLs are merged and scored with RRF (<code>score = Σ 1/(60 + rank)</code> across engines) — pages returned by multiple engines rank higher</li>
+<li>The top results are returned as JSON</li>
+</ol>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Requirements</h2></div>
+<ul dir="auto">
+<li>Rust 1.75+</li>
+<li>Cargo</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Installation</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">As a library</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo add metadata-search-engine-rs" dir="auto"><pre>cargo add metadata-search-engine-rs</pre></div>
+<p dir="auto">Or add manually to <code>Cargo.toml</code>:</p>
+<div class="highlight highlight-source-toml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='[dependencies]
+metadata-search-engine-rs = "0.1"' dir="auto"><pre>[<span class="pl-en">dependencies</span>]
+<span class="pl-smi">metadata-search-engine-rs</span> = <span class="pl-s"><span class="pl-pds">"</span>0.1<span class="pl-pds">"</span></span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">As a server (from source)</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="git clone https://github.com/MikeLuu99/searxng-rust
+cd metadata-search-engine-rs
+cargo build --release" dir="auto"><pre>git clone https://github.com/MikeLuu99/searxng-rust
+<span class="pl-c1">cd</span> metadata-search-engine-rs
+cargo build --release</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Running</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="cargo run" dir="auto"><pre>cargo run</pre></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="PORT=8080 MAX_RESULTS=20 cargo run --release" dir="auto"><pre>PORT=8080 MAX_RESULTS=20 cargo run --release</pre></div>
+<p dir="auto">Enable debug logging:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="RUST_LOG=debug cargo run" dir="auto"><pre>RUST_LOG=debug cargo run</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Examples</h2></div>
+<p dir="auto">Add to your <code>Cargo.toml</code>:</p>
+<div class="highlight highlight-source-toml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='[dependencies]
+metadata-search-engine-rs = "0.1"
+tokio = { version = "1", features = ["full"] }' dir="auto"><pre>[<span class="pl-en">dependencies</span>]
+<span class="pl-smi">metadata-search-engine-rs</span> = <span class="pl-s"><span class="pl-pds">"</span>0.1<span class="pl-pds">"</span></span>
+<span class="pl-smi">tokio</span> = { <span class="pl-smi">version</span> = <span class="pl-s"><span class="pl-pds">"</span>1<span class="pl-pds">"</span></span>, <span class="pl-smi">features</span> = [<span class="pl-s"><span class="pl-pds">"</span>full<span class="pl-pds">"</span></span>] }</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Query a single engine</h3></div>
+<div class="highlight highlight-source-rust notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='use std::sync::Arc;
+use metadata_search_engine_rs::engines::{DuckDuckGoEngine, SearchEngine, build_http_client};
+
+#[tokio::main]
+async fn main() -&gt; anyhow::Result&lt;()&gt; {
+    let client = Arc::new(build_http_client()?);
+    let engine = DuckDuckGoEngine { client };
+
+    let results = engine.search("rust programming", 5).await?;
+    for r in results {
+        println!("{}\n  {}", r.title, r.url);
+    }
+    Ok(())
+}' dir="auto"><pre><span class="pl-k">use</span> std<span class="pl-kos">::</span>sync<span class="pl-kos">::</span><span class="pl-v">Arc</span><span class="pl-kos">;</span>
+<span class="pl-k">use</span> metadata_search_engine_rs<span class="pl-kos">::</span>engines<span class="pl-kos">::</span><span class="pl-kos">{</span><span class="pl-v">DuckDuckGoEngine</span><span class="pl-kos">,</span> <span class="pl-v">SearchEngine</span><span class="pl-kos">,</span> build_http_client<span class="pl-kos">}</span><span class="pl-kos">;</span>
+
+<span class="pl-c1">#<span class="pl-kos">[</span>tokio<span class="pl-kos">::</span>main<span class="pl-kos">]</span></span>
+<span class="pl-k">async</span> <span class="pl-k">fn</span> <span class="pl-en">main</span><span class="pl-kos">(</span><span class="pl-kos">)</span> -&gt; anyhow<span class="pl-kos">::</span><span class="pl-smi">Result</span><span class="pl-kos">&lt;</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">&gt;</span> <span class="pl-kos">{</span>
+    <span class="pl-k">let</span> client = <span class="pl-smi">Arc</span><span class="pl-kos">::</span><span class="pl-en">new</span><span class="pl-kos">(</span><span class="pl-en">build_http_client</span><span class="pl-kos">(</span><span class="pl-kos">)</span>?<span class="pl-kos">)</span><span class="pl-kos">;</span>
+    <span class="pl-k">let</span> engine = <span class="pl-smi">DuckDuckGoEngine</span> <span class="pl-kos">{</span> client <span class="pl-kos">}</span><span class="pl-kos">;</span>
+
+    <span class="pl-k">let</span> results = engine<span class="pl-kos">.</span><span class="pl-en">search</span><span class="pl-kos">(</span><span class="pl-s">"rust programming"</span><span class="pl-kos">,</span> <span class="pl-c1">5</span><span class="pl-kos">)</span><span class="pl-kos">.</span><span class="pl-k">await</span>?<span class="pl-kos">;</span>
+    <span class="pl-k">for</span> r <span class="pl-k">in</span> results <span class="pl-kos">{</span>
+        <span class="pl-en">println</span><span class="pl-en">!</span><span class="pl-kos">(</span><span class="pl-s">"{}<span class="pl-cce">\n</span>  {}"</span><span class="pl-kos">,</span> r<span class="pl-kos">.</span>title<span class="pl-kos">,</span> r<span class="pl-kos">.</span>url<span class="pl-kos">)</span><span class="pl-kos">;</span>
+    <span class="pl-kos">}</span>
+    <span class="pl-en">Ok</span><span class="pl-kos">(</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">)</span>
+<span class="pl-kos">}</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Fan out to all engines and get RRF-ranked results</h3></div>
+<div class="highlight highlight-source-rust notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='use std::sync::Arc;
+use metadata_search_engine_rs::{
+    aggregator::{aggregate, query_all_engines},
+    engines::{BraveEngine, DuckDuckGoEngine, SearchEngine, StartpageEngine, YahooEngine, build_http_client},
+};
+
+#[tokio::main]
+async fn main() -&gt; anyhow::Result&lt;()&gt; {
+    let client = Arc::new(build_http_client()?);
+    let engines: Vec&lt;Arc&lt;dyn SearchEngine&gt;&gt; = vec![
+        Arc::new(DuckDuckGoEngine { client: Arc::clone(&amp;client) }),
+        Arc::new(BraveEngine     { client: Arc::clone(&amp;client) }),
+        Arc::new(StartpageEngine { client: Arc::clone(&amp;client) }),
+        Arc::new(YahooEngine     { client: Arc::clone(&amp;client) }),
+    ];
+
+    let (successes, failures) = query_all_engines(&amp;engines, "rust programming", 10).await;
+    for (name, err) in &amp;failures {
+        eprintln!("engine {name} failed: {err}");
+    }
+
+    let results = aggregate(successes, 10);
+    for r in &amp;results {
+        println!("[{:.3}] ({}) {}", r.score, r.engines.join(", "), r.title);
+        println!("        {}", r.url);
+    }
+    Ok(())
+}' dir="auto"><pre><span class="pl-k">use</span> std<span class="pl-kos">::</span>sync<span class="pl-kos">::</span><span class="pl-v">Arc</span><span class="pl-kos">;</span>
+<span class="pl-k">use</span> metadata_search_engine_rs<span class="pl-kos">::</span><span class="pl-kos">{</span>
+    aggregator<span class="pl-kos">::</span><span class="pl-kos">{</span>aggregate<span class="pl-kos">,</span> query_all_engines<span class="pl-kos">}</span><span class="pl-kos">,</span>
+    engines<span class="pl-kos">::</span><span class="pl-kos">{</span><span class="pl-v">BraveEngine</span><span class="pl-kos">,</span> <span class="pl-v">DuckDuckGoEngine</span><span class="pl-kos">,</span> <span class="pl-v">SearchEngine</span><span class="pl-kos">,</span> <span class="pl-v">StartpageEngine</span><span class="pl-kos">,</span> <span class="pl-v">YahooEngine</span><span class="pl-kos">,</span> build_http_client<span class="pl-kos">}</span><span class="pl-kos">,</span>
+<span class="pl-kos">}</span><span class="pl-kos">;</span>
+
+<span class="pl-c1">#<span class="pl-kos">[</span>tokio<span class="pl-kos">::</span>main<span class="pl-kos">]</span></span>
+<span class="pl-k">async</span> <span class="pl-k">fn</span> <span class="pl-en">main</span><span class="pl-kos">(</span><span class="pl-kos">)</span> -&gt; anyhow<span class="pl-kos">::</span><span class="pl-smi">Result</span><span class="pl-kos">&lt;</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">&gt;</span> <span class="pl-kos">{</span>
+    <span class="pl-k">let</span> client = <span class="pl-smi">Arc</span><span class="pl-kos">::</span><span class="pl-en">new</span><span class="pl-kos">(</span><span class="pl-en">build_http_client</span><span class="pl-kos">(</span><span class="pl-kos">)</span>?<span class="pl-kos">)</span><span class="pl-kos">;</span>
+    <span class="pl-k">let</span> engines<span class="pl-kos">:</span> <span class="pl-smi">Vec</span><span class="pl-kos">&lt;</span><span class="pl-smi">Arc</span><span class="pl-kos">&lt;</span><span class="pl-k">dyn</span> <span class="pl-smi">SearchEngine</span><span class="pl-kos">&gt;</span><span class="pl-kos">&gt;</span> = <span class="pl-en">vec</span><span class="pl-en">!</span><span class="pl-kos">[</span>
+        <span class="pl-v">Arc</span><span class="pl-kos">::</span>new<span class="pl-kos">(</span><span class="pl-v">DuckDuckGoEngine</span> <span class="pl-kos">{</span> client<span class="pl-kos">:</span> <span class="pl-v">Arc</span><span class="pl-kos">::</span>clone<span class="pl-kos">(</span><span class="pl-c1">&amp;</span>client<span class="pl-kos">)</span> <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">,</span>
+        <span class="pl-v">Arc</span><span class="pl-kos">::</span>new<span class="pl-kos">(</span><span class="pl-v">BraveEngine</span>     <span class="pl-kos">{</span> client<span class="pl-kos">:</span> <span class="pl-v">Arc</span><span class="pl-kos">::</span>clone<span class="pl-kos">(</span><span class="pl-c1">&amp;</span>client<span class="pl-kos">)</span> <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">,</span>
+        <span class="pl-v">Arc</span><span class="pl-kos">::</span>new<span class="pl-kos">(</span><span class="pl-v">StartpageEngine</span> <span class="pl-kos">{</span> client<span class="pl-kos">:</span> <span class="pl-v">Arc</span><span class="pl-kos">::</span>clone<span class="pl-kos">(</span><span class="pl-c1">&amp;</span>client<span class="pl-kos">)</span> <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">,</span>
+        <span class="pl-v">Arc</span><span class="pl-kos">::</span>new<span class="pl-kos">(</span><span class="pl-v">YahooEngine</span>     <span class="pl-kos">{</span> client<span class="pl-kos">:</span> <span class="pl-v">Arc</span><span class="pl-kos">::</span>clone<span class="pl-kos">(</span><span class="pl-c1">&amp;</span>client<span class="pl-kos">)</span> <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">,</span>
+    <span class="pl-kos">]</span><span class="pl-kos">;</span>
+
+    <span class="pl-k">let</span> <span class="pl-kos">(</span>successes<span class="pl-kos">,</span> failures<span class="pl-kos">)</span> = <span class="pl-en">query_all_engines</span><span class="pl-kos">(</span><span class="pl-c1">&amp;</span>engines<span class="pl-kos">,</span> <span class="pl-s">"rust programming"</span><span class="pl-kos">,</span> <span class="pl-c1">10</span><span class="pl-kos">)</span><span class="pl-kos">.</span><span class="pl-k">await</span><span class="pl-kos">;</span>
+    <span class="pl-k">for</span> <span class="pl-kos">(</span>name<span class="pl-kos">,</span> err<span class="pl-kos">)</span> <span class="pl-k">in</span> <span class="pl-c1">&amp;</span>failures <span class="pl-kos">{</span>
+        <span class="pl-en">eprintln</span><span class="pl-en">!</span><span class="pl-kos">(</span><span class="pl-s">"engine {name} failed: {err}"</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+    <span class="pl-kos">}</span>
+
+    <span class="pl-k">let</span> results = <span class="pl-en">aggregate</span><span class="pl-kos">(</span>successes<span class="pl-kos">,</span> <span class="pl-c1">10</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+    <span class="pl-k">for</span> r <span class="pl-k">in</span> <span class="pl-c1">&amp;</span>results <span class="pl-kos">{</span>
+        <span class="pl-en">println</span><span class="pl-en">!</span><span class="pl-kos">(</span><span class="pl-s">"[{:.3}] ({}) {}"</span><span class="pl-kos">,</span> r<span class="pl-kos">.</span>score<span class="pl-kos">,</span> r<span class="pl-kos">.</span>engines<span class="pl-kos">.</span>join<span class="pl-kos">(</span><span class="pl-s">", "</span><span class="pl-kos">)</span><span class="pl-kos">,</span> r<span class="pl-kos">.</span>title<span class="pl-kos">)</span><span class="pl-kos">;</span>
+        <span class="pl-en">println</span><span class="pl-en">!</span><span class="pl-kos">(</span><span class="pl-s">"        {}"</span><span class="pl-kos">,</span> r<span class="pl-kos">.</span>url<span class="pl-kos">)</span><span class="pl-kos">;</span>
+    <span class="pl-kos">}</span>
+    <span class="pl-en">Ok</span><span class="pl-kos">(</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">)</span>
+<span class="pl-kos">}</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Use only specific engines</h3></div>
+<div class="highlight highlight-source-rust notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='use std::sync::Arc;
+use metadata_search_engine_rs::{
+    aggregator::{aggregate, query_all_engines},
+    engines::{BraveEngine, DuckDuckGoEngine, SearchEngine, build_http_client},
+};
+
+#[tokio::main]
+async fn main() -&gt; anyhow::Result&lt;()&gt; {
+    let client = Arc::new(build_http_client()?);
+    let engines: Vec&lt;Arc&lt;dyn SearchEngine&gt;&gt; = vec![
+        Arc::new(DuckDuckGoEngine { client: Arc::clone(&amp;client) }),
+        Arc::new(BraveEngine     { client: Arc::clone(&amp;client) }),
+    ];
+
+    let (successes, _) = query_all_engines(&amp;engines, "tokio async rust", 5).await;
+    for r in aggregate(successes, 5) {
+        println!("{} — {}", r.title, r.url);
+        if let Some(snippet) = r.snippet {
+            println!("  {snippet}");
+        }
+    }
+    Ok(())
+}' dir="auto"><pre><span class="pl-k">use</span> std<span class="pl-kos">::</span>sync<span class="pl-kos">::</span><span class="pl-v">Arc</span><span class="pl-kos">;</span>
+<span class="pl-k">use</span> metadata_search_engine_rs<span class="pl-kos">::</span><span class="pl-kos">{</span>
+    aggregator<span class="pl-kos">::</span><span class="pl-kos">{</span>aggregate<span class="pl-kos">,</span> query_all_engines<span class="pl-kos">}</span><span class="pl-kos">,</span>
+    engines<span class="pl-kos">::</span><span class="pl-kos">{</span><span class="pl-v">BraveEngine</span><span class="pl-kos">,</span> <span class="pl-v">DuckDuckGoEngine</span><span class="pl-kos">,</span> <span class="pl-v">SearchEngine</span><span class="pl-kos">,</span> build_http_client<span class="pl-kos">}</span><span class="pl-kos">,</span>
+<span class="pl-kos">}</span><span class="pl-kos">;</span>
+
+<span class="pl-c1">#<span class="pl-kos">[</span>tokio<span class="pl-kos">::</span>main<span class="pl-kos">]</span></span>
+<span class="pl-k">async</span> <span class="pl-k">fn</span> <span class="pl-en">main</span><span class="pl-kos">(</span><span class="pl-kos">)</span> -&gt; anyhow<span class="pl-kos">::</span><span class="pl-smi">Result</span><span class="pl-kos">&lt;</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">&gt;</span> <span class="pl-kos">{</span>
+    <span class="pl-k">let</span> client = <span class="pl-smi">Arc</span><span class="pl-kos">::</span><span class="pl-en">new</span><span class="pl-kos">(</span><span class="pl-en">build_http_client</span><span class="pl-kos">(</span><span class="pl-kos">)</span>?<span class="pl-kos">)</span><span class="pl-kos">;</span>
+    <span class="pl-k">let</span> engines<span class="pl-kos">:</span> <span class="pl-smi">Vec</span><span class="pl-kos">&lt;</span><span class="pl-smi">Arc</span><span class="pl-kos">&lt;</span><span class="pl-k">dyn</span> <span class="pl-smi">SearchEngine</span><span class="pl-kos">&gt;</span><span class="pl-kos">&gt;</span> = <span class="pl-en">vec</span><span class="pl-en">!</span><span class="pl-kos">[</span>
+        <span class="pl-v">Arc</span><span class="pl-kos">::</span>new<span class="pl-kos">(</span><span class="pl-v">DuckDuckGoEngine</span> <span class="pl-kos">{</span> client<span class="pl-kos">:</span> <span class="pl-v">Arc</span><span class="pl-kos">::</span>clone<span class="pl-kos">(</span><span class="pl-c1">&amp;</span>client<span class="pl-kos">)</span> <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">,</span>
+        <span class="pl-v">Arc</span><span class="pl-kos">::</span>new<span class="pl-kos">(</span><span class="pl-v">BraveEngine</span>     <span class="pl-kos">{</span> client<span class="pl-kos">:</span> <span class="pl-v">Arc</span><span class="pl-kos">::</span>clone<span class="pl-kos">(</span><span class="pl-c1">&amp;</span>client<span class="pl-kos">)</span> <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">,</span>
+    <span class="pl-kos">]</span><span class="pl-kos">;</span>
+
+    <span class="pl-k">let</span> <span class="pl-kos">(</span>successes<span class="pl-kos">,</span> _<span class="pl-kos">)</span> = <span class="pl-en">query_all_engines</span><span class="pl-kos">(</span><span class="pl-c1">&amp;</span>engines<span class="pl-kos">,</span> <span class="pl-s">"tokio async rust"</span><span class="pl-kos">,</span> <span class="pl-c1">5</span><span class="pl-kos">)</span><span class="pl-kos">.</span><span class="pl-k">await</span><span class="pl-kos">;</span>
+    <span class="pl-k">for</span> r <span class="pl-k">in</span> <span class="pl-en">aggregate</span><span class="pl-kos">(</span>successes<span class="pl-kos">,</span> <span class="pl-c1">5</span><span class="pl-kos">)</span> <span class="pl-kos">{</span>
+        <span class="pl-en">println</span><span class="pl-en">!</span><span class="pl-kos">(</span><span class="pl-s">"{} — {}"</span><span class="pl-kos">,</span> r<span class="pl-kos">.</span>title<span class="pl-kos">,</span> r<span class="pl-kos">.</span>url<span class="pl-kos">)</span><span class="pl-kos">;</span>
+        <span class="pl-k">if</span> <span class="pl-k">let</span> <span class="pl-v">Some</span><span class="pl-kos">(</span>snippet<span class="pl-kos">)</span> = r<span class="pl-kos">.</span><span class="pl-c1">snippet</span> <span class="pl-kos">{</span>
+            <span class="pl-en">println</span><span class="pl-en">!</span><span class="pl-kos">(</span><span class="pl-s">"  {snippet}"</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+        <span class="pl-kos">}</span>
+    <span class="pl-kos">}</span>
+    <span class="pl-en">Ok</span><span class="pl-kos">(</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">)</span>
+<span class="pl-kos">}</span></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">API</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1"><code>GET /health</code></h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="curl http://localhost:3000/health" dir="auto"><pre>curl http://localhost:3000/health</pre></div>
+<div class="highlight highlight-source-json notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='{ "status": "ok" }' dir="auto"><pre>{ <span class="pl-ent">"status"</span>: <span class="pl-s"><span class="pl-pds">"</span>ok<span class="pl-pds">"</span></span> }</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1"><code>GET /search?q=&lt;query&gt;</code></h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='curl "http://localhost:3000/search?q=rust"' dir="auto"><pre>curl <span class="pl-s"><span class="pl-pds">"</span>http://localhost:3000/search?q=rust<span class="pl-pds">"</span></span></pre></div>
+<div class="highlight highlight-source-json notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='{
+  "query": "rust",
+  "results": [
+    {
+      "title": "Rust Programming Language",
+      "url": "https://rust-lang.org/",
+      "snippet": "A language empowering everyone to build reliable and efficient software.",
+      "engines": ["duckduckgo", "brave", "startpage", "yahoo"],
+      "score": 0.049
+    }
+  ],
+  "engines_queried": ["duckduckgo", "brave", "startpage", "yahoo"],
+  "engines_failed": []
+}' dir="auto"><pre>{
+  <span class="pl-ent">"query"</span>: <span class="pl-s"><span class="pl-pds">"</span>rust<span class="pl-pds">"</span></span>,
+  <span class="pl-ent">"results"</span>: [
+    {
+      <span class="pl-ent">"title"</span>: <span class="pl-s"><span class="pl-pds">"</span>Rust Programming Language<span class="pl-pds">"</span></span>,
+      <span class="pl-ent">"url"</span>: <span class="pl-s"><span class="pl-pds">"</span>https://rust-lang.org/<span class="pl-pds">"</span></span>,
+      <span class="pl-ent">"snippet"</span>: <span class="pl-s"><span class="pl-pds">"</span>A language empowering everyone to build reliable and efficient software.<span class="pl-pds">"</span></span>,
+      <span class="pl-ent">"engines"</span>: [<span class="pl-s"><span class="pl-pds">"</span>duckduckgo<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>brave<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>startpage<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>yahoo<span class="pl-pds">"</span></span>],
+      <span class="pl-ent">"score"</span>: <span class="pl-c1">0.049</span>
+    }
+  ],
+  <span class="pl-ent">"engines_queried"</span>: [<span class="pl-s"><span class="pl-pds">"</span>duckduckgo<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>brave<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>startpage<span class="pl-pds">"</span></span>, <span class="pl-s"><span class="pl-pds">"</span>yahoo<span class="pl-pds">"</span></span>],
+  <span class="pl-ent">"engines_failed"</span>: []
+}</pre></div>
+<p dir="auto"><strong>Error responses:</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Status</th>
+<th>Body</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Missing <code>q</code></td>
+<td>400</td>
+<td><code>{"error": "query parameter 'q' is required"}</code></td>
+</tr>
+<tr>
+<td>Empty <code>q</code></td>
+<td>400</td>
+<td><code>{"error": "query parameter 'q' cannot be empty"}</code></td>
+</tr>
+<tr>
+<td>All engines fail</td>
+<td>503</td>
+<td><code>{"error": "all engines failed to respond"}</code></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Tests</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# All unit tests
+cargo test
+
+# Specific module
+cargo test normalizer
+cargo test aggregator
+cargo test engines::duckduckgo
+cargo test engines::brave
+cargo test engines::startpage
+cargo test engines::yahoo
+cargo test server::handlers
+
+# Live tests (hit real search engines — requires internet)
+cargo test -- --ignored test_live" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> All unit tests</span>
+cargo <span class="pl-c1">test</span>
+
+<span class="pl-c"><span class="pl-c">#</span> Specific module</span>
+cargo <span class="pl-c1">test</span> normalizer
+cargo <span class="pl-c1">test</span> aggregator
+cargo <span class="pl-c1">test</span> engines::duckduckgo
+cargo <span class="pl-c1">test</span> engines::brave
+cargo <span class="pl-c1">test</span> engines::startpage
+cargo <span class="pl-c1">test</span> engines::yahoo
+cargo <span class="pl-c1">test</span> server::handlers
+
+<span class="pl-c"><span class="pl-c">#</span> Live tests (hit real search engines — requires internet)</span>
+cargo <span class="pl-c1">test</span> -- --ignored test_live</pre></div>
+<p dir="auto">Live tests are marked <code>#[ignore]</code> so they don't run in CI by default. Run them manually to verify HTML selectors still work against the real sites.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Terminal UI</h2></div>
+<p dir="auto">A ratatui-based TUI is available as a <a href="https://crates.io/crates/search-tui" rel="nofollow">crate</a> to install here. Access the code via <a href="https://github.com/MikeLuu99/search-tui">github</a></p>
+<p dir="auto"><a href="/MikeLuu99/searxng-rust/blob/main/assets/tui_screenshots.png" rel="noopener noreferrer" target="_blank"></a></p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Adding a new search engine</h2></div>
+<ol dir="auto">
+<li>Create <code>src/engines/&lt;name&gt;.rs</code></li>
+<li>Define a struct holding <code>Arc&lt;reqwest::Client&gt;</code></li>
+<li>Implement the <code>SearchEngine</code> trait:</li>
+</ol>
+<div class="highlight highlight-source-rust notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="impl SearchEngine for MyEngine {
+    fn name(&amp;self) -&gt; &amp;'static str { &quot;myengine&quot; }
+
+    fn search&lt;'a&gt;(
+        &amp;'a self,
+        query: &amp;'a str,
+        max_results: usize,
+    ) -&gt; BoxFuture&lt;'a, Result&lt;Vec&lt;SearchResult&gt;, EngineError&gt;&gt; {
+        Box::pin(async move {
+            // fetch HTML, parse with scraper, return Vec&lt;SearchResult&gt;
+        })
+    }
+}" dir="auto"><pre><span class="pl-k">impl</span> <span class="pl-smi">SearchEngine</span> <span class="pl-k">for</span> <span class="pl-smi">MyEngine</span> <span class="pl-kos">{</span>
+    <span class="pl-k">fn</span> <span class="pl-en">name</span><span class="pl-kos">(</span><span class="pl-c1">&amp;</span><span class="pl-smi">self</span><span class="pl-kos">)</span> -&gt; <span class="pl-c1">&amp;</span><span class="pl-c1">'</span><span class="pl-ent">static</span> <span class="pl-smi">str</span> <span class="pl-kos">{</span> <span class="pl-s">"myengine"</span> <span class="pl-kos">}</span>
+
+    <span class="pl-k">fn</span> <span class="pl-en">search</span><span class="pl-kos">&lt;</span><span class="pl-c1">'</span><span class="pl-ent">a</span><span class="pl-kos">&gt;</span><span class="pl-kos">(</span>
+        <span class="pl-c1">&amp;</span><span class="pl-c1">'</span><span class="pl-ent">a</span> <span class="pl-smi">self</span><span class="pl-kos">,</span>
+        <span class="pl-s1">query</span><span class="pl-kos">:</span> <span class="pl-c1">&amp;</span><span class="pl-c1">'</span><span class="pl-ent">a</span> <span class="pl-smi">str</span><span class="pl-kos">,</span>
+        <span class="pl-s1">max_results</span><span class="pl-kos">:</span> <span class="pl-smi">usize</span><span class="pl-kos">,</span>
+    <span class="pl-kos">)</span> -&gt; <span class="pl-smi">BoxFuture</span><span class="pl-kos">&lt;</span><span class="pl-c1">'</span><span class="pl-ent">a</span><span class="pl-kos">,</span> <span class="pl-smi">Result</span><span class="pl-kos">&lt;</span><span class="pl-smi">Vec</span><span class="pl-kos">&lt;</span><span class="pl-smi">SearchResult</span><span class="pl-kos">&gt;</span><span class="pl-kos">,</span> <span class="pl-smi">EngineError</span><span class="pl-kos">&gt;</span><span class="pl-kos">&gt;</span> <span class="pl-kos">{</span>
+        <span class="pl-smi">Box</span><span class="pl-kos">::</span><span class="pl-en">pin</span><span class="pl-kos">(</span><span class="pl-k">async</span> <span class="pl-k">move</span> <span class="pl-kos">{</span>
+            <span class="pl-c">// fetch HTML, parse with scraper, return Vec&lt;SearchResult&gt;</span>
+        <span class="pl-kos">}</span><span class="pl-kos">)</span>
+    <span class="pl-kos">}</span>
+<span class="pl-kos">}</span></pre></div>
+<p dir="auto">Add it to <code>engines/mod.rs</code> and wire it in <code>main.rs</code></p>
+</article>

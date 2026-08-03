@@ -1,0 +1,594 @@
+(Originally published in 2019. I pulled this one from the archives and gave it
+a fresh makeover after a reader reached out to tell me they misses this article.)
+
+In my day to day as a software developer I often switch between different code
+repositories. Each repository can be written in a different tech stack but there are
+common tasks I need to run in all of these repositories, regardless of the stack:
+I need to install dependencies, build the source code, lint my code, format it, run tests,
+run database migrations, deploy to a staging environment, create a new version, start dependent
+services, you get the idea.
+
+Depending on the exact tooling used in each repo, I’d have to remember
+a few clunky incantations to invoke from my command line. Was it 
+rust fmt
+ to format?
+
+mix deps.update
+ to update dependencies? Was it 
+./gradlew build
+ or did we switch
+back to 
+mvn
+ again? Was it 
+yarn
+ or 
+npm
+ or 
+pnpm
+ after all these years? Do I
+need to pass any arguments to 
+npm run prettier
+? And what was that three-step
+command to run all migrations from scratch again?
+
+I don’t want to remember any of this.
+
+I want to be able to say 
+“build the code”
+, 
+“lint it”
+, 
+“format it”
+, 
+“run migrations”
+,
+
+“install dependencies”
+.
+
+To make my life just 
+a little bit
+ easier, I often create convenience tooling that allows me to
+run common tasks the same way no matter the repository I’m in. This allows me to
+apply muscle memory to do the things I do a dozen times each day.
+
+There are a few ways we can pull this off, from good old bash scripts and
+
+make
+ to more modern tools like 
+mise
+ and 
+just
+. Some people have started
+calling these tools 
+“task runners”
+ so I guess that’s the name I’m going to stick
+with here. Let’s take a quick look at these options together.
+
+A Simple Bash Script
+
+We can write a simple shell script (or ask our 
+LLM
+ of choice for help) to act as a small wrapper for commonly run
+commands we need for messing with our code.
+
+Here’s an example you can use. In this example I’m assuming you’re using
+node/npm/javascript. If you aren’t I’m sure you can fill in the blanks yourself.
+
+#!/usr/bin/env bash
+
+set
+ -e
+
+function
+ usage
+ {
+
+  # print usage information
+
+}
+
+function
+ install
+ {
+
+  # install dependencies
+
+  npm
+ run
+ ci
+
+}
+
+function
+ build
+ {
+
+  # trigger build process
+
+  npm
+ run
+ build
+
+}
+
+function
+ test
+ {
+
+  # run test suite
+
+  # you can even run multiple steps in one command, cool huh?
+
+  npm
+ run
+ test:unit
+
+  npx
+ run
+ playwright
+
+}
+
+function
+ format
+ {
+
+  # it works well for hiding args we need to pass to underlying commands
+
+  npm
+ run
+ prettier
+ --write
+
+}
+
+if
+ [[
+ $# 
+-lt
+ 1
+ ]];
+ then
+
+  usage
+
+  exit
+ 1
+
+fi
+
+TARGET
+=
+$1
+
+case
+ $TARGET 
+in
+
+  "
+help
+"
+ )
+
+    usage
+
+  ;;
+
+  "
+install
+"
+ )
+
+    install
+
+  ;;
+
+  "
+build
+"
+ )
+
+    build
+
+  ;;
+
+  "
+test
+"
+ )
+
+    test
+
+  ;;
+
+  "
+format
+"
+ )
+
+    format
+
+  ;;
+
+  *)
+
+    fail
+ "
+Unknown command '
+${
+TARGET
+}
+'
+"
+
+    usage
+
+    exit
+ 1
+
+  ;;
+
+esac
+
+Save that script under a file name you like at the root directory of your repository.
+Pick a short and crisp name, you’ll type it many times (I tend to use 
+run
+).
+Oh, and don’t forget to make it executable with 
+chmod +x run
+.
+
+With this script in place, you can simply use 
+run build
+, 
+run lint
+, 
+run test
+ and add any other command you might need for your project.
+
+The nice thing about using shell scripts is that you’ve got a lot of
+flexibility. You can perform more complicated tasks and easily add more
+sophisticated validations to prevent you from common gotchas, for example
+if you want to avoid that someone nukes the 
+PROD
+ database by accident.
+
+If your bash script ever becomes unwieldy, you can start extracting the individual
+functions outlined in the script above into dedicated shell scripts. A common
+convention is to store them in a 
+bin/
+ directory in your repository, but that’s really
+up to you.
+
+Bash is a natural choice for simple automation tasks like this. It’s available on most
+developer machines (and your CI/CD server) and is pretty flexible. If only it
+weren’t for its questionable syntax…
+
+Make
+
+make
+ is 
+another classic tool
+ at our
+disposal. Hailing straight from the 1970s it stood the test of time as a build automation
+tool and is installed pretty much on every developer’s machine already.
+
+We can contort 
+make
+ just a little bit to turn it into a simple task runner and
+ignore most of the more powerful features it offers.
+
+make
+ looks for a file called 
+Makefile
+ in your current directory to figure out what
+it’s supposed to do. A Makefile is a plain text file that defines the different 
+rules
+
+you can execute.
+
+A rule follows this pattern:
+
+target: dependencies
+
+	system command to execute
+
+The 
+target
+ defines how you call the rule from your command line. 
+make test
+ would look
+for a rule called 
+“test”
+ and execute the commands you defined.
+
+A simple 
+Makefile
+ comparable to our bash script above could look like this:
+
+.PHONY
+:
+ install build test format
+
+install
+:
+
+	npm run ci
+
+build
+:
+
+	npm run build
+
+test
+:
+
+	npm run test:unit
+
+	npx run playwright
+
+format
+:
+
+	npm run prettier --write
+
+Note
+
+Keep in mind that 
+make
+ is picky about indentation. You need to indent your commands with a 
+tab
+, not 
+spaces
+.
+Copying the above code snippet might not work unless you ensure that you properly indented your file correctly.
+
+Once we put this 
+Makefile
+ at the root of our project we can simply run 
+make install
+, 
+make test
+ or 
+make format
+
+from our command line to perform the tasks we defined.
+
+What’s up whith those 
+.PHONY
+ targets?
+
+If you take a close look at the first line of our 
+Makefile
+ you’ll see a line starting with 
+.PHONY:
+:
+
+.PHONY: install build test format
+
+This line declares all three of our targets as 
+phony
+ targets, i.e. targets that do not produce or depend on files
+on our file system. 
+This answer on Stack Overflow
+ does a fantastic job
+explaining what this is all about. In a nutshell: 
+make
+ usually expects to create files as output of the targets we run.
+If these files are in place, make won’t do anything.
+
+As an example:
+Take the above Makefile. If we had a file called 
+“format”
+ next to our Makefile and didn’t declare the 
+format
+ target
+as a phony target, 
+make
+ would lazily refuse to do anything once we run 
+make format
+. It would just claim:
+
+make: `format' is up to date.
+
+It might be unlikely but not impossible that someone creates a file called 
+format
+. We don’t want to break our tooling and
+go on a long goose chase when that happens. That’s why we declare all our
+targets as 
+.PHONY
+ for good measure.
+
+Tab Autocompletion
+
+Another cool freebie we get from using 
+make
+ is that some shells provide autocompletion for your targets, either
+out of the box or by installing a small utility package. 
+zsh
+ and 
+fish
+ support make autocompletion out of the
+box (or with 
+minimal configuration
+).
+If you use 
+bash
+ you can get autocompletion - not only for make - by installing 
+this package
+.
+
+With make autocompletion in place, you can start typing 
+make
+ in your command line and hit 
+tab
+ repeatedly to cycle through the available targets defined in your 
+Makefile
+. Pretty cool, huh?
+
+There’s more
+
+Make is much more than just a simple task runner. It’s most commonly used as a
+file-based build tool. You can set up dependencies between targets, declare functions
+and variables, and do so much more. If that’s something you need,
+
+maketutorial.com
+ is a 
+great
+ resource for you.
+
+Just
+
+just
+ is a fairly new kid on the block. It takes
+a lot of inspirations from Make while adding a few nice bells and whistles that
+are useful for a task runner and removing some of Make’s weirder parts (like
+having to declare phony targets).
+
+If you know Make, 
+just
+ will look very familiar. You store a 
+justfile
+ at your
+repository’s root and you’re ready to go:
+
+install:
+
+	npm run ci
+
+build:
+
+	npm run build
+
+test:
+
+	npm run test:unit
+
+	npx run playwright
+
+format:
+
+	npm run prettier --write
+
+A small drawback is that 
+just
+ isn’t readily available on developer’s machines
+(unlike 
+bash
+ and 
+make
+). Luckily, installing it is super straightforward since
+it’s available on many package managers.
+
+If you want to dive deeper the 
+official manual
+
+has got you covered.
+
+Mise
+
+Another contestant in this space is 
+mise
+. In
+recent years, 
+mise
+ has grown to a developer’s swiss army knife. At the time of
+writing it’s a tool that allows you to install packages, manage developer tools
+(and specific versions), manage environment variables and, well, 
+run
+tasks
+.
+
+Create a 
+mise.toml
+ file at your project root and declare tasks similar to this:
+
+[
+tasks
+.
+install
+]
+
+description 
+=
+ "
+Install dependencies
+"
+
+run 
+=
+ "
+npm ci
+"
+
+[
+tasks
+.
+build
+]
+
+description 
+=
+ "
+Build the application
+"
+
+run 
+=
+ "
+npm run dev
+"
+
+[
+tasks
+.
+test
+]
+
+description 
+=
+ "
+Run unit and e2e tests
+"
+
+run 
+=
+ "
+npm run test:unit && npx run playwright
+"
+
+[
+tasks
+.
+format
+]
+
+description 
+=
+ "
+Format the code
+"
+
+run 
+=
+ "
+npm run prettier --write
+"
+
+If you’re outgrowing a simple, single 
+mise.toml
+ file, you can extract tasks
+into 
+their own task files
+ or simply
+use small bash scripts as wrappers similar to what I described in the bash example.
+
+Conclusion
+
+There you have it. Multiple ways to run common coding tasks in a convenient and
+consistent way across multiple repositories. This is not exactly rocket science.
+It’s a small quality of life improvement for you and your team. It’s super simple to
+set up and yet it’s something I rarely see in the wild. This could be one small thing
+you can implement while you’re having your first coffee tomorrow morning to do
+your good deed for the day.
