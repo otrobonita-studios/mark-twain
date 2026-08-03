@@ -1,0 +1,409 @@
+Now that the shooting gallery is done and dusted, it’s time to turn to a piece of 
+our initial tour of the ZX Spectrum
+ that has been left untouched: sound. There isn’t a 
+whole
+ lot new here compared to what has come before on other platforms, but that in turn means that the core principles of our solutions to it arrive pre-baked; we’ll just have to add the Spectrum-specific frosting.
+
+The mainline Spectrum systems offer two sound options:
+
+A 1-bit beeper under software control. This is present on all systems, and the underlying hardware is not unlike what we saw on the 
+Apple II
+ or the 
+PC speaker
+.
+
+A General Instrument AY-3-8910 synthesizer chip, present in all models from the 128K Spectrum on and available as a peripheral for the 16K and 48K variants. These are basically the same as 
+the one in the Atari ST
+ but it’s clocked differently and we don’t have a built-in BIOS call to communicate with it.
+
+This is part of our general survey, rather like our 
+text mode
+ and 
+bitmap mode
+ surveys, so our goals will be modest; we’ll end this article with three programs that play us a C-major scale.
+
+Using the Beeper Through the BIOS
+
+The 1-bit beeper is very similar to the Apple II’s; the 
+$10
+ bit on the I/O port may be set or cleared to set the speaker’s status. Specific tones are produced by carefully timing the intervals between toggling that bit. We’ll get to code that does that later, but we can put that off because 
+we don’t have to do it ourselves
+— the 
+BEEP
+ command in BASIC already manages this and it does so by forwarding to a generic routine that we may, ourselves, make use of. The 
+BEEPER
+ routine lies at 
+memory location 
+$03B5
+ and it’s honestly more clever than the versions I’ve written for 6502 systems. The 
+HL
+ register specifies the delay time in units of 4 cycles (the length of a no-op) and it acquires that precision using a technique not unlike the one we used for 
+programmable cycle-exact 6502 delays
+. The 
+DE
+ register specifies the duration of the note, which is a touch inconvenient because it actually specifies 
+the number of wavelengths the note should have
+. Notes of equal length but different pitches will need different duration codes.
+
+The 
+BEEP
+ command itself, though, relies on being told notes in half-steps off middle C and durations measured in seconds. We can look at its own implementation, at 
+$03F8
+, to see how to get the values we need. This is done via the system’s floating-point engine, so we actually get neat formulae for both right out of the commentary:
+
+The frequency code 
+HL
+ for a frequency of 
+f
+ Hz is provided by the formula 
+437500/f – 30.125
+.
+
+The duration code 
+DE
+ for a note with frequency 
+f
+ Hz and duration 
+t
+ seconds is simply 
+f×t
+.
+
+A few lines of Python let us apply these to the frequencies of the C major scale, giving us frequency and duration codes to feed to the routine. Here is our playback program:
+
+        org     $7000
+
+        ld      b,8                     ; Play 8 notes
+        ld      hl,scale                ; Load from pointer
+loop:   push    bc
+        ld      c,(hl)                  ; Load frequency into BC
+        inc     hl
+        ld      b,(hl)
+        inc     hl
+        ld      e,(hl)                  ; Load duration into HL
+        inc     hl
+        ld      d,(hl)
+        inc     hl
+        push    hl                      ; Stash pointer...
+        ld      h,b                     ; ... Copy BC to HL...
+        ld      l,c
+        call    $03b5                   ; ... and let the ROM do the rest
+        pop     hl
+        pop     bc
+        djnz    loop
+        ret
+
+scale:  dw      $066a,$0082,$05b3,$0092,$0511,$00a4,$04c6,$00ae
+        dw      $043d,$00c3,$03c4,$00dc,$0357,$00f6,$0325,$0105
+
+This is a “half-wavelength” system like my initial Apple II sound playback routine, but its much finer timing controls mean that the overall precision of the tones is 
+much
+ better. Essentially none of the tradeoffs I faced in my initial article show up here at all, and we have the kind of control we’d expect from a dedicated PSG. That’s honestly really great. The only real downside here is that it’s a little awkward to need to run our own divisions on both sides like this; if we want a generic routine that manages tones of arbitrary frequencies and duration we’ll need to bring our own divider. However, as we’ll see shortly, on a 16KB Spectrum we don’t have any other choice, and we have no option other than leaning on this routine.
+
+We’re getting ahead of ourselves, though. Let’s look at how we’d do it by hand before actually running into the issues that we’d hit on the 16K systems.
+
+Using the Beeper Directly
+
+The BIOS routine is good enough that if if I’m going to write my own oscillator function I want it to run on an entirely different principle. Fortunately, I have just such a principle available: the 
+16-bit system based on frequency instead of half-wavelength
+ that I created inspired by the internals of the SID and the Ensoniq chip. With the Z80’s built-in support for 16-bit math it should be much more straightforward than the 6502 code.
+
+The basic idea is to repeatedly add our frequency code to a running counter and toggle the speaker every time that counter overflows. The tricky part is actually making sure that we don’t mess with anything else, because I/O port 
+$FE
+ does triple duty:
+
+The low three bits set the border color. We want to preserve whatever value is in the 
+BORDCR
+ system variable here.
+
+The 
+$08
+ bit controls the audio output when controlling the tape deck rather than when controlling the loudspeaker. These mess with the voltages somehow, and 
+Korth’s documentation
+ linked in 
+my platform guide
+ cover the gory details, but we will just do what the system ROMs do and force this bit on at all times.
+
+The 
+$10
+ bit is the one we actually want to work with, controlling the loudspeaker audio.
+
+We start by just directly implementing all this, and with as few branches as we can get away with:
+
+sound:  ld      hl,0                    ; Counter starts at 0
+        ld      a,($5c48)               ; BORDCR
+        and     $38                     ; Extract border color
+        rrca                            ; and shift to low 3 bits
+        rrca
+        rrca
+        or      $08                     ; Disable tape audio
+        di                              ; Don't get interrupted by IRQ
+        push    af
+.loop:  pop     af
+        add     hl,de                   ; Add frequency to counter
+        jr      nc,1F                   ; If it overflows...
+        xor     $10                     ; ... toggle speaker output
+        out     ($fe),a
+1       dec     bc                      ; Decrement timer
+        push    af                      ; Check for 0. Can't pop AF
+        ld      a,b                     ; until after the branch or
+        or      c                       ; we lose the Z flag value!
+        jr      nz,.loop
+        pop     af                      ; Clean up
+        ei
+        ret
+
+We now need to rework the code so that each path through each iteration takes exactly the same amount of time. Our enemy here is the 
+JR
+ instruction: it takes 12 cycles on a branch we take and 7 on one we don’t. That means that we need to delay, on the path where we don’t toggle the output, 7 (JR) + 7 (XOR) + 11 (OUT) – 12 (the JR in the branch-taken case) = 13 cycles. The unconditional JR back 
+also
+ takes 12 cycles, which means we need to delay a single cycle on an architecture where each instruction takes a minimum of four. Gross.
+
+The solution, funnily enough, is to simply 
+not use the 
+JR
+ instruction
+— the absolute-address 
+JP
+ versions are one byte longer but have absolutely consistent timing even when conditional, at 10 cycles each. That makes this much easier; our delay branch turns into two NOPs and and a 
+JP
+ back to the main line. Here’s our next draft:
+
+sound:  ld      hl,0                    ; Counter starts at 0
+        ld      a,($5c48)               ; BORDCR
+        and     $38                     ; Extract border color
+        rrca                            ; and shift to low 3 bits
+        rrca
+        rrca
+        or      $08                     ; Disable tape audio
+        di                              ; Don't get interrupted by IRQ
+        push    af
+.loop:  pop     af
+        add     hl,de                   ; Add frequency to counter
+        jp      nc,2F                   ; If it overflows...
+        xor     $10                     ; ... toggle speaker output
+        out     ($fe),a
+1       dec     bc                      ; Decrement timer
+        push    af                      ; Check for 0. Can't pop AF
+        ld      a,b                     ; until after the branch or
+        or      c                       ; we lose the Z flag value!
+        jr      nz,.loop
+        pop     af                      ; Clean up
+        ei
+        ret
+2       nop                             ; If no overflow, stall 18 cycles
+        nop
+        jp      1B
+
+Counting it up, this one clocks in at 84 cycles per iteration. This gives us linear frequency control in increments of just over 3Hz all the way up to nearly 100kHz, which is more than fine. Our durations can only go up to about 1.5 seconds, though, which isn’t great.
+
+We have a bigger problem, though; the tone produced by this routine sounds 
+awful,
+ both wildly off-pitch and inconsistent in its timing, rattling and warbling as it goes.
+
+The problem, as it turns out, is that the Spectrum’s video circuitry needs to fetch pixel and color data from the RAM, and it can force the CPU to wait while it does those things. This is not unlike the “
+badline
+” phenomenon on the C64 that dominated the early years of this blog, but it spaces itself out more regularly and is basically happening all the time when we aren’t in VBLANK. The issue is restricted, on the early Spectrums, to the 
+$4000
+–
+$7FFF
+ range… but on the 16K Spectrum that is 
+all of our RAM
+ and this technique is nonviable. On the 48K we may relocate the program to 
+$9000
+ instead of our default of 
+$7000
+ and it works fine.
+
+It still breaks when we load at 
+$8000
+, though. It turns out that BASIC’s 
+CLEAR
+ command, which shrinks the memory BASIC uses to leave room dedicated for machine code programs, 
+also
+ adjusts the stack pointer to stay below the 
+CLEAR
+ limit. That meant that while our code started at 
+$8000
+, the stack pointer itself had been pushed down into the 
+$7Fxx
+ range and was now subject to memory access wait states.
+
+I decided in this code to just set aside a byte of RAM further up in memory and use it directly as a global variable instead of trying to insist on the stack being anywhere in particular. While I was at it, I also unrolled the loop a bit so that the duration codes could be half as big as before. A whole note in a song playing at 100BPM will last 2.4 seconds, and we are now able to comfortably hold that note.
+
+Here’s the final code for the playback routine:
+
+sound:  ld      hl,0
+        ld      a,($5c48)               ; BORDCR
+        and     $38
+        rrca
+        rrca
+        rrca
+        or      $08
+        di
+.lp:    add     hl,de                   ; +11 = 11
+        jp      nc,2F                   ; +10 = 21
+        xor     $10                     ; + 7 = 28
+        out     ($fe),a                 ; +11 = 39
+1       nop                             ; + 4 = 43
+        nop                             ; + 4 = 47
+        nop                             ; + 4 = 51
+        nop                             ; + 4 = 55
+        nop                             ; + 4 = 59
+        nop                             ; + 4 = 63
+        nop                             ; + 4 = 67
+        nop                             ; + 4 = 71
+        nop                             ; + 4 = 75
+        nop                             ; + 4 = 79
+        jp      3F                      ; +10 = 89
+3       add     hl,de                   ; +11 = 11
+        jp      nc,5F                   ; +10 = 21
+        xor     $10                     ; + 7 = 28
+        out     ($fe),a                 ; +11 = 39
+4       dec     bc                      ; + 6 = 45
+        ld      (.scratch),a            ; +13 = 58
+        ld      a,b                     ; + 4 = 62
+        or      c                       ; + 4 = 66
+        ld      a,(.scratch)            ; +13 = 79
+        jp      nz,.lp                  ; +10 = 89
+        ei
+        ret
+2       nop                             ; + 4 = 25
+        nop                             ; + 4 = 29
+        jp      1B                      ; +10 = 39
+5       nop                             ; + 4 = 25
+        nop                             ; + 4 = 29
+        jp      4B                      ; +10 = 39
+.scratch # 1
+
+And here is the program that exercises it to play a scale:
+
+        org     $8000
+        map     $9000
+        ld      b,8
+        ld      hl,scale
+loop:   ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        inc     hl
+        push    hl
+        push    bc
+        ld      bc,$2000
+        call    sound
+        pop     bc
+        pop     hl
+        djnz    loop
+        ret
+scale:  dw      $0367,$03d2,$044a,$048b,$051a,$05ba,$066e,$06cf
+
+Programming the AY-3 Sound Chip
+
+We’ve seen the AY-3-8910 before; 
+the Atari ST has one.
+ The overall programming of the chip is the same, with 16 8-bit registers we may write to; the only differences are how we write them and how we compute for the frequency codes. For the most part I will be deferring to that old article because everything there still holds. Here’s what’s new, that we need to know on the Spectrum 128 and its successors:
+
+To write a value to an AY register, first write the register number to port 
+$FFFD
+, then write the value to port 
+$BFFD
+.
+
+The main clock driving the chip runs at 3.5469 MHz instead of the 4MHz the ST used; as such the code for a frequency 
+f
+ Hz is 
+3546900/(32f)
+.
+
+Similarly, the envelope length code for an envelope of length 
+t
+ seconds is 
+3546900/(512t)
+.
+
+That’s… really it. I wrote a simple function to write the byte 
+D
+ to register 
+A
+:
+
+ayreg:  ld      bc,$fffd                ; AY-3 Index
+        out     (c),a
+        ld      b,$bf                   ; AY-3 Value
+        ld      a,d
+        out     (c),a
+        ret
+
+And then made a macro that makes calling it more convenient, whether I’m providing data as a constant value or reading it through a pointer:
+
+macro   AY      index,val:(hl)
+        ld      a,index
+        ld      d,val
+        call    ayreg
+endmacro
+
+(Sjasm macros do textual replacement of their arguments and also let you set defaults; as a result, the 
+LD D,val
+ instruction will have different opcodes depending on whether we pass in a value or a register.)
+
+And that makes the main code here the shortest of them all even if we use the envelope system:
+
+        org     $7000
+
+        ;; Initialize AY-3 voice
+        AY      $0b,$10                 ; Envelope length: 1sec
+        AY      $0c,$1b
+        AY      $08,$10                 ; Use envelope on channel A
+
+        ld      b,8
+        ld      hl,scale
+1       push    bc
+        AY      $00                     ; Read frequency from (HL) table
+        inc     hl                      ; And advance pointer as we go
+        AY      $01
+        inc     hl
+        AY      $0d,$09                 ; Start a decaying envelope
+        AY      $07,$fe                 ; Enable Channel A
+        call    pause                   ; Then wait half a second
+        pop     bc
+        djnz    1B
+
+        AY      $07,$ff                 ; Disable channel A
+        ret
+
+pause:  push    af                      ; Wait 25 frames
+        push    hl
+        ld      hl,$5c78                ; FRAMES
+        ld      a,(hl)
+        add     25
+1       halt
+        cp      (hl)
+        jr      nz,1B
+        pop     hl
+        pop     af
+        ret
+
+scale:  dw      $01a7,$0179,$0150,$013d,$011a,$00fb,$00e0,$00d3
+
+What We Can Do With It
+
+The beeper is really only good for sound effects and jingles brief enough that we can get away with stopping all the action while we do them. This tracks the use of sound on the Apple II pretty closely. The PC speaker, despite having a similar “beeper” circuit, 
+also
+ offered dedicated interrupts and independent timers to drive it, allowing sound processing to not necessarily take over the full system.
+
+The AY-3, on the other hand, mostly runs itself and it should be just as amenable to things like music drivers and ambient sound effects as any other systems that use it. Of the systems I’ve looked at here, that includes not merely the Atari ST but also the MSX line.
+
+Share this:
+
+Share on X (Opens in new window)
+
+X
+
+Share on Facebook (Opens in new window)
+
+Facebook
+
+Like
+ 
+Loading...
+
+Related
