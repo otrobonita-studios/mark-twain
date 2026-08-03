@@ -1,0 +1,164 @@
+← All articles
+
+Insight
+
+What DMARC Actually Protects You From, and What It Does Not
+
+                3 Aug 2026 · 7 min read
+
+DMARC gets asked to do a lot of jobs it was never designed for. Teams reach for it as a spam filter, a phishing filter, and a general trust signal. It is none of those. The current DMARC protocol, defined in 
+RFC 9989
+, answers a deliberately narrow question: did the owner of the domain in the visible 
+From
+ address authorise this message, and can that authorisation be established through an aligned SPF or DKIM result?
+
+That question is worth answering, and it is much narrower than the reputation DMARC has picked up. A team that reaches 
+p=reject
+ believing they are now phishing-proof will skip the controls that cover everything DMARC leaves untouched.
+
+How email proves who sent it
+
+Three terms come up throughout, so here they are in plain English. 
+SPF
+ is a published list of the servers a domain says are allowed to send mail for it; a receiver checks whether the message actually came from one of them. 
+DKIM
+ is a cryptographic signature added to the message, so a receiver can confirm it genuinely came from the signing domain and was not tampered with in transit. DMARC ties both back to one thing: the 
+visible From
+ address.
+
+Every email is handled in two stages, and each stage has its own "from" address. The delivery stage uses an 
+envelope address
+, like the address on a posted parcel: the mail servers read it to route the message, then the recipient never sees it. The message itself then carries the 
+visible From
+, the name and address your mail app displays (for example, "Your Bank <alerts@your-bank.com>"). That is the one a human reads and trusts. Because the two are set independently, an attacker can put your bank in the visible From while the envelope points somewhere else entirely. SPF checks the envelope address; DKIM's signature carries its own domain; DMARC exists to tie whichever one authenticated back to the visible From, so authentication lines up with the address the reader can actually see.
+
+What these actually look like
+
+All three live as text records in your domain's DNS, the same place your website's address is configured. You do not need to memorise the syntax; it helps to recognise the shape.
+
+An 
+SPF
+ record lists who is allowed to send. This one authorises Google Workspace and a marketing tool, and says anything else should be treated as suspicious:
+
+example.com.  TXT  "v=spf1 include:_spf.google.com include:sendgrid.net -all"
+
+The 
+include:
+ entries pull in each provider's own list of servers, and 
+-all
+ means "if it is not on those lists, it is not us".
+
+A 
+DKIM
+ record publishes the public half of the signing key, so receivers can check the signature on your mail. The long string is the key itself:
+
+selector1._domainkey.example.com.  TXT  "v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQ...AB"
+
+Finally the 
+DMARC
+ record ties it together and tells receivers what to do when a message fails. This one asks them to reject failures and to send you reports:
+
+_dmarc.example.com.  TXT  "v=DMARC1; p=reject; rua=mailto:reports@example.com"
+
+The 
+p=reject
+ here is the same policy the rest of this article keeps referring to, and 
+rua=
+ is the address your aggregate reports are sent to.
+
+How a pass is actually decided
+
+DMARC sits on top of SPF and DKIM, and it evaluates them independently. There are two separate ways a message can pass: SPF passes for the hidden envelope domain and that domain aligns with the visible 
+From
+ domain, or a DKIM signature validates and its signing domain aligns with the visible 
+From
+ domain. If either aligned path succeeds, DMARC passes. If neither does, it fails. "Aligns" simply means the two domains match closely enough to count as the same organisation.
+
+flowchart TD
+  A[Incoming email] --> S{SPF authenticates and aligns with From domain?}
+  S -->|yes| P([DMARC pass])
+  S -->|no| D{DKIM validates and aligns with From domain?}
+  D -->|yes| P
+  D -->|no| F([DMARC fail])
+
+DMARC passes if either SPF or DKIM both authenticates and aligns with the visible From domain. It fails only when neither does.
+
+Alignment is the part most explanations skip. DMARC defines two alignment modes. In 
+relaxed
+ mode (the default) the two domains only need to share the same organisational domain, so a DKIM signature from 
+mail.example.com
+ aligns with a 
+From
+ of 
+example.com
+. In 
+strict
+ mode they must be identical, and that same signature would fail. If you have seen "SPF pass, DMARC fail" and wondered how both can be true at once, it normally means SPF confirmed the hidden envelope domain successfully, but that domain did not match the visible 
+From
+ address closely enough to align. Strict versus relaxed mode then decides whether closely related domains count as the same.
+
+Notice what the test never inspects: the body, the links, the attachments, or the sender's intent. It is a check on provenance, not on content.
+
+Where DMARC helps
+
+The case DMARC was built for is exact-domain spoofing. If someone places 
+your-bank.com
+ in the 
+From
+ address without producing an aligned SPF or DKIM result, a policy of 
+p=reject
+ asks participating receivers to reject the message, although the receiver retains final control over its disposition and may apply local policy or exceptions. This is real protection, and for this specific attack it is strong. It also gives you something you did not have before: aggregate reports (defined in 
+RFC 9990
+) revealing many of the systems participating receivers have observed sending as your domain, which is how you find the forgotten marketing tool or misconfigured relay before an attacker does.
+
+Where it falls short
+
+Lookalike domains.
+ An attacker registers 
+your-bank-support.com
+, sets up valid SPF and DKIM, and passes DMARC on their own domain. Your policy has no reach over a domain you do not own. To every receiver, that mail is fully authenticated.
+
+Display-name impersonation.
+ The visible name reads "Your Bank Security" while the actual address is 
+alerts@some-unrelated-domain.com
+. DMARC validates the domain, not the friendly name that most people actually read. The message can pass and still be impersonation.
+
+Compromised mailboxes.
+ When an attacker signs into a real account through phished credentials and sends through the legitimate provider, the message will usually pass SPF, DKIM and DMARC because, in the protocol's terms, it was sent through authorised infrastructure. Authentication cannot tell a real user apart from an attacker controlling that user's account.
+
+Authenticated but malicious domains.
+ Anyone can register a domain and configure flawless authentication; senders of unwanted mail do this routinely. A pass on 
+totally-legit-invoices.com
+ confirms the owner authorised the mail. It says nothing about whether the owner is honest.
+
+Spam and inbox placement.
+ DMARC is not a spam filter and does not decide whether mail reaches the inbox. Filters may weigh it as one input, but authenticated spam is still spam, and placement is a separate system with its own logic.
+
+Forwarding and mailing lists.
+ Legitimate intermediaries can break authentication. Forwarding commonly breaks SPF because the forwarding server is not authorised by the original sender's domain, while mailing lists may modify the subject or body and invalidate DKIM. A legitimate message can therefore fail DMARC even though nobody is impersonating the sender. This is one reason enforcement should follow careful monitoring and remediation rather than a blind switch to 
+p=reject
+.
+
+Authentication is not trust
+
+A pass establishes one fact: the domain in the 
+From
+ address authorised this message, via SPF or DKIM, with alignment. That fact shuts down exact-domain spoofing and gives you visibility into who sends as you. What it does not establish is whether the message is truthful or safe to act on. Those are properties of content and intent, and no authentication check reaches them. Vendors who imply DMARC "stops phishing" leave their customers exposed to every category above.
+
+SenderLedger's position is deliberately narrower: we help you reach enforcement without breaking legitimate mail, prove which senders are yours, and close down exact-domain spoofing. Everything past that (lookalike monitoring, mailbox-compromise detection, and human judgement) is a separate job, and pretending otherwise is how domains end up at 
+p=reject
+ with a false sense of security.
+
+See who is really sending as your domain.
+
+SenderLedger maps every sender, tracks remediation, and tells you when reaching 
+p=reject
+ is actually safe.
+
+Request access
+
+dmarc
+
+email-authentication
+
+phishing
