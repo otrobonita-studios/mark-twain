@@ -1,0 +1,386 @@
+<article class="post">
+
+<p>I'm very excited to announce the 1.0 release of <a href="https://github.com/ad-si/Perspec" rel="external">Perspec</a>!</p>
+<p>Perspec is a desktop app for correcting the perspective of images.
+This is primarily useful for photos of documents and receipts,
+but it can be used for any kind of image.</p>
+<p></p>
+<p>This has finally become the app I envisioned
+when I started working on the project 9 years ago.
+I didn't think it would take me this long to get here,
+but I'm very happy with the result and I hope you'll like it too!</p>
+<h2 id="initial-motivation">Initial Motivation</h2>
+<p>You're probably familiar with the scanner apps available for mobile phones, like
+<a href="https://www.adobe.com/acrobat/mobile/scanner-app.html" rel="external">Adobe Scan</a>, <a href="https://www.vflat.com" rel="external">vFlat</a>,
+<a href="https://swiftscan.app/" rel="external">SwiftScan</a>, … and numerous others.
+Scanning functionality is also integrated into
+<a href="https://www.dropbox.com/features/productivity/document-scanner" rel="external">Dropbox</a>,
+and these days even natively into <a href="https://support.apple.com/en-us/108963" rel="external">iOS</a> itself.</p>
+<p>However, I don't like working on my phone and I'd rather just take photos of the documents and receipts
+and deal with cleaning them up and organizing them on my computer another day.
+There, I have a big screen, a keyboard, and a precise mouse,
+which makes editing faster and more accurate.</p>
+<p>Also, the mobile apps make some annoying technical decisions
+in the name of giving users something they're familiar with.</p>
+<p>For example:
+If you store a document as a grayscale PNG,
+you can get small file sizes without introducing any compression artifacts.
+However, all the popular apps will give you a grayscale JPEG image
+with a much bigger file size and worse image quality,
+just because JPEG is what people are familiar with.</p>
+<p>Or maybe I'm giving them too much credit
+and they actually don't know that PNGs can
+be smaller than JPEGs if the image contains large areas of uniform color,
+whereas for normal photos, JPEGs are smaller than PNGs.
+And no, converting it to PNG afterwards is not an option,
+as by then the image already contains all the JPEG compression artifacts.</p>
+<p>For example, let's compare the results of scanning the following document:</p>
+<p></p>
+<p>The other apps produce bigger files, and you can clearly see
+the compression artifacts that degrade the result.</p>
+<table>
+<thead>
+<tr>
+<th>App</th>
+<th>Result</th>
+<th>Preview</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Perspec</td>
+<td>
+        ~110 kB, PNG
+        
+<a href="result_perspec.png" target="_blank">View result</a>
+</td>
+<td>
+
+</td>
+
+</tr>
+<tr>
+<td>Scanner Pro</td>
+<td>
+        ~190 kB, JPEG
+        
+<a href="result_scanner_pro.jpeg" target="_blank">View result</a>
+</td>
+<td>
+
+</td>
+<td>Extracted JPEG from exported PDF</td>
+</tr>
+<tr>
+<td>iOS</td>
+<td>
+        ~300 kB, JPEG
+        
+<a href="result_ios.jpeg" target="_blank">View result</a>
+</td>
+<td>
+
+</td>
+<td>Extracted JPEG from exported PDF</td>
+</tr>
+</tbody>
+</table>
+<p>Another thing that annoys me more than it should is the
+ridiculous detection previews that seemingly every app includes these days:</p>
+<table>
+<tr>
+<td></td>
+<td></td>
+</tr>
+</table>
+<p>While you're taking a photo, the app shows you a live overlay
+of where it detects the document.
+This, however, doesn't help you at all.
+Just because it can detect the document correctly in the preview video feed
+doesn't mean it will detect it correctly in the final photo.
+Due to the higher resolution, different lighting (exposure times, flash, …),
+and different contrast,
+the detection will often be quite different in the final photo.</p>
+<p>So all the preview is telling you
+is that there is indeed a document in front of your camera,
+which you already know since you placed it there. 🤦‍♂️</p>
+<p>Lastly, and most importantly, I knew I could build
+a better document detection algorithm for the kind of photos I was taking.
+The detection in existing apps would often be slightly off,
+even if you had a good picture
+with good contrast between the document and the background.</p>
+<p>Most apps use some kind of edge detection step in their pipeline,
+as Dropbox <a href="https://dropbox.tech/machine-learning/fast-and-accurate-document-detection-for-scanning" rel="external">explains here</a>.
+But I knew that documents and receipts often don't have straight edges
+but rather wrinkled or curved ones.
+When you try to match even just a slight curve with a straight line,
+the endpoints will be quite far off.
+So instead, the app should try to detect the corners and build up the document from there.
+There is a detailed explanation of the computer vision techniques later in the post.</p>
+<h2 id="the-long-road-to-1-0">The Long Road to 1.0</h2>
+<p>I was still a student when I started working on Perspec
+and had to scan a lot of stuff for my studies,
+so I had plenty of motivation to build something like this.</p>
+<p>Sure, you could also fix the perspective with Photoshop, <a href="https://www.affinity.studio/photo-editing-software" rel="external">Affinity Photo</a>, or <a href="https://www.gimp.org/" rel="external">GIMP</a>.
+But the overhead is substantial:
+Open each photo, find the perspective tool, drag the corners,
+pick the right export settings, repeat for the next photo, and so on.
+These tools are built to do everything with any image
+and not to churn through 50 receipts as quickly as possible.
+I wanted an app that's focused on this one task,
+with a workflow that's as streamlined as possible.</p>
+<p>My first iteration was a fully automatic CLI app called <a href="https://github.com/ad-si/Perspectra" rel="external">Perspectra</a>,
+implemented with Python and <a href="https://scikit-image.org/" rel="external">scikit-image</a>.
+You'd pass your image and it would try to detect and extract the document for you.
+Simple as that.</p>
+<p>Although I actually liked <a href="https://scikit-image.org/" rel="external">scikit-image</a> —
+feature-rich, yet more straightforward than <a href="https://opencv.org" rel="external">OpenCV</a> —
+I quickly realized that I absolutely do not like Python.
+But more importantly, I realized that I also needed a GUI
+to fix incorrectly detected document boundaries,
+as the fully automatic CV pipeline would never get all documents 100% right.</p>
+<p>And how do you build a desktop app with a GUI?
+Obviously with Haskell. 😝
+Joking aside, I had recently started learning Haskell and was absolutely in love with it.
+So naturally, I wanted to see if it could be used for building the desktop app.</p>
+<p>As I didn't want to use Python any longer,
+my next instinct was to use ImageMagick for the computer vision and image manipulation tasks,
+as I had some experience with its features and capabilities.
+The <a href="https://hackage.haskell.org/packages/search?terms=magick" rel="external">existing Haskell bindings</a>
+were rather lacking, so I opted to simply call <code>magick</code> as an external process.
+While this mostly worked, it was always a pain to get it installed
+and linked correctly across platforms,
+and the performance was surprisingly bad for larger images.</p>
+<p>Another obvious choice would have been OpenCV, but I had some bad memories of using it at university
+(maybe it was just the C++ context …), and the Haskell bindings looked rather painful.</p>
+<p>So, my next experiment was using the native Haskell image processing library
+<a href="https://github.com/lehins/hip" rel="external">Hip</a>.
+With the help of its author <a href="https://github.com/lehins" rel="external">@lehins</a> himself
+and <a href="https://github.com/hanstolpo" rel="external">@HanStolpo</a>,
+we were able to make it work at ZuriHac! <em>(Thanks again!)</em></p>
+<p>However, it was still missing some features that I wanted, like binarization with Otsu's Method.
+While it was certainly possible to implement this in Hip,
+I (for once) felt that Haskell's abstractions didn't really help with the task at hand
+and only complicated things unnecessarily.
+A <code>for</code> loop in C, by comparison, is conceptually very simple and just as fast as the Haskell code.
+Luckily, C is a first-class citizen in Haskell
+and it's very easy to bundle some C code and call it via Haskell's FFI.</p>
+<p>Unfortunately, there didn't seem to be a straightforward C library
+that I could hook up to Perspec without too many FFI headaches,
+and so I started working on <a href="https://github.com/ad-si/FlatCV" rel="external">FlatCV</a> —
+a pure C library for computer vision and image manipulation.</p>
+<p>I might have overdone it with the yak shaving here,
+but since the whole project is a labor of love anyway,
+why not go all the way? 😅</p>
+<p>I'm quite happy with the experience of using C for the image manipulation algorithms,
+and I was able to quickly build a fully functioning version with the necessary Haskell bindings.
+Just recently, I released <a href="https://github.com/ad-si/FlatCV/releases/tag/v0.3.0" rel="external">version 0.3.0</a>,
+and by now it has most of the basic operations you would expect from an image manipulation library.
+I also ported some of the higher-level CV operations,
+like <a href="https://flatcv.ad-si.com/binarize.html#smart-black--white" rel="external">adaptive binarization</a>
+and <a href="https://flatcv.ad-si.com/corner-detection.html" rel="external">corner detection</a>,
+that I first implemented in <a href="https://github.com/ad-si/Perspectra" rel="external">Perspectra</a>.</p>
+<p>There are still plenty of opportunities to improve the performance of FlatCV:
+SIMD, GPU usage,
+<a href="https://github.com/libvips/libvips/wiki/Why-is-libvips-quick" rel="external">streamed processing</a>, etc.
+However, as FlatCV isn't used in a real-time context (i.e., 60 fps),
+the performance is already more than sufficient.</p>
+<p>With FlatCV in place, I could finally implement the last missing piece for 1.0:
+Automatic corner detection directly in Perspec.</p>
+<h2 id="edge-detection-vs-corner-detection">Edge Detection vs. Corner Detection</h2>
+<p>Most scanner apps detect documents with a pipeline
+along the lines of the one
+<a href="https://dropbox.tech/machine-learning/fast-and-accurate-document-detection-for-scanning" rel="external">described by Dropbox</a>:</p>
+<ol>
+<li>Downscale the image</li>
+<li>Run an edge detection algorithm (e.g. <a href="https://en.wikipedia.org/wiki/Canny_edge_detector" rel="external">Canny</a>)</li>
+<li>Find the most prominent straight lines with a <a href="https://en.wikipedia.org/wiki/Hough_transform" rel="external">Hough transform</a></li>
+<li>Build quadrilaterals from the intersections of those lines
+and score them to pick the best one</li>
+</ol>
+<p>This works great for a perfectly flat sheet of paper on a high-contrast background.
+But real documents are rarely perfectly flat:
+Receipts are wrinkled, book pages are curved,
+and paper that has been folded never lies completely flat either.
+When you fit a straight line to a curved edge,
+the intersections of the lines (i.e. the reconstructed corners)
+can be quite off, even if the edge detection itself was perfect.</p>
+<p>Perspec therefore approaches it from the other side:
+Instead of looking for straight edges,
+it segments the photo into document and background
+and then derives the corners from the document's outline.
+This is FlatCV's <a href="https://flatcv.ad-si.com/corner-detection.html" rel="external">corner detection</a>
+pipeline in detail:</p>
+<ol>
+<li>Convert the image to grayscale and downscale it to 256×256 px.
+(The detection doesn't need the full resolution, and this makes it fast.)</li>
+<li>Blur the image to get rid of noise and paper texture.</li>
+<li>Create an elevation map with a <a href="https://en.wikipedia.org/wiki/Sobel_operator" rel="external">Sobel filter</a>.
+(Strong edges become mountain ridges.)</li>
+<li>Flood the elevation map with <a href="https://en.wikipedia.org/wiki/Watershed_(image_processing)" rel="external">watershed segmentation</a>:
+The center of the image seeds the document basin
+and the image border seeds the background basin.
+The result is a binary mask of the document.</li>
+<li>Smooth the mask with a binary closing.</li>
+<li>Run a <a href="https://en.wikipedia.org/wiki/Corner_detection#The_F%C3%B6rstner_corner_detector" rel="external">Förstner corner detector</a> on the mask.
+(Unlike the more popular Harris detector,
+whose corners are shifted inwards,
+the Förstner detector yields sub-pixel-accurate corner positions.)</li>
+<li>Sort the corner candidates and
+keep the 4 corners with the largest angles.</li>
+<li>Scale the corner coordinates back up to the original resolution.</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Detected Corners</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>The nice thing about this approach is that it never assumes straight edges.
+The watershed happily follows a wrinkled document boundary,
+and even on a crumpled receipt the corners are still locally well defined.</p>
+<p>And if the detection does get it wrong,
+you can simply drag the selection polygon into the right size and position.
+The best of both worlds: automatic detection and manual correction.</p>
+<h2 id="binarization-algorithms">Binarization Algorithms</h2>
+<p>Correcting the perspective is only half the story.
+For documents and receipts, the other half is converting the photo
+into a clean black &amp; white image.
+This is what the <code>Save BW</code> and <code>Save BW Smooth</code> buttons in Perspec do.</p>
+<p>The task sounds trivial:
+Every pixel darker than some threshold becomes black
+and every other pixel becomes white.
+The tricky part is picking the threshold.</p>
+<p>The classic solution is <a href="https://en.wikipedia.org/wiki/Otsu%27s_method" rel="external">Otsu's Method</a>:
+It builds a histogram of all gray values in the image
+and then picks the threshold that best separates
+the dark pixels (the text) from the bright pixels (the paper).
+This works well … for evenly lit images.</p>
+<p>Unfortunately, photos are seldom evenly lit.
+There is often a brightness gradient or a shadow
+cast by the person that's holding the camera or the camera itself.</p>
+<p>The document scanning literature is full of locally adaptive algorithms
+(e.g. <a href="https://scikit-image.org/docs/stable/auto_examples/segmentation/plot_niblack_sauvola.html" rel="external">Niblack and Sauvola</a>) that compute an individual threshold
+for every pixel based on its neighborhood.</p>
+<p>FlatCV's <a href="https://flatcv.ad-si.com/binarize.html" rel="external">smart black &amp; white conversion</a>,
+however, uses a simpler trick to get away with a single global threshold:
+It removes the shadows <em>before</em> thresholding.</p>
+<ol>
+<li>Convert the image to grayscale.</li>
+<li>Create a heavily blurred copy of it
+(with a blur radius of roughly 10% of the image size).
+All the text and details get averaged away
+and what remains is basically just the illumination:
+brightness gradients and soft shadows.</li>
+<li>Subtract the blurred copy from the grayscale image.
+This keeps the high frequencies (the text)
+and removes the low frequencies (the shadows).
+The result is an evenly lit image.</li>
+<li>Apply a global threshold calculated with Otsu's Method.</li>
+</ol>
+<p>For photos of printed documents,
+I've found this to work just as well as — or even better than —
+the more complicated locally adaptive algorithms,
+while being faster and simpler to implement.</p>
+<p>The <code>Save BW</code> button applies exactly this pipeline
+and stores the result as a true 1-bit black &amp; white image,
+where every pixel is either fully black or fully white.</p>
+<p>The new <code>Save BW Smooth</code> button goes one step further and uses
+two thresholds (the Otsu threshold ± a small offset):
+Pixels below the lower threshold become black,
+pixels above the upper threshold become white,
+and pixels in between keep a scaled gray value.
+This yields anti-aliased edges, so the text doesn't look jagged,
+while the file size stays almost as small.
+That's why it's the recommended option
+for documents, receipts, and whiteboards.</p>
+<table class="bordered">
+<tbody>
+<tr>
+<th scope="row">Input</th>
+<td></td>
+</tr>
+<tr>
+<th scope="row">Save BW</th>
+<td></td>
+</tr>
+<tr>
+<th scope="row">Save BW Smooth</th>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="what-else-is-new-in-1-0">What Else Is New in 1.0</h2>
+<p>The automatic corner detection is the headline feature,
+but quite a few other things landed in
+<a href="https://github.com/ad-si/Perspec/releases/tag/v1.0.0.0" rel="external">the 1.0 release</a>:</p>
+<ul>
+<li>Support for Windows.
+With macOS and Linux already covered,
+Perspec now runs on all 3 major desktop operating systems.</li>
+<li>The edges of the selection polygon can now be dragged as well
+(previously only the corners),
+and grid lines make it easier to align the selection.</li>
+<li>A new "Select Files" view with a button
+and drag-and-drop support for selecting images.</li>
+<li>The new <code>Save BW Smooth</code> export option that converts the image
+to anti-aliased black &amp; white.
+This is now the recommended option for documents, receipts, and whiteboards.</li>
+<li>EXIF rotation data is now also handled for PNGs.</li>
+<li>An upgrade to the latest version of <a href="https://github.com/ad-si/Brillo" rel="external">Brillo</a>,
+which brings an improved app design, button hover effects,
+and per-OS default fonts.</li>
+</ul>
+<p>Check out the <a href="https://github.com/ad-si/Perspec/blob/master/changelog.md" rel="external">changelog</a>
+for the full list of changes.</p>
+<h2 id="installation">Installation</h2>
+<p>Prebuilt binaries for macOS, Windows, and Linux are also available on the
+<a href="https://github.com/ad-si/Perspec/releases" rel="external">releases page</a>,
+and on macOS you can install it via my <a href="https://brew.sh" rel="external">Homebrew</a> tap:</p>
+<pre class="giallo" style="color: #F8F8F2; background-color: #272822;"><code data-lang="shellscript"><span class="giallo-l"><span style="color: #A6E22E;">brew</span><span style="color: #E6DB74;"> install</span><span style="color: #AE81FF;"> --cask</span><span style="color: #E6DB74;"> ad-si/tap/perspec</span></span></code></pre>
+<p>However, you'll still need to buy a license
+to get rid of the upgrade banner in those versions.</p>
+<p>You can purchase a license for Perspec on either
+<a href="https://feramhq.itch.io/perspec" rel="external">itch.io</a> or
+<a href="https://feram.gumroad.com/l/perspec" rel="external">Gumroad</a>.
+This gets you a license key,
+which removes the annoying "please buy a license" messages in the app.</p>
+<p>And even if you don't need the software yourself,
+please consider buying it as a way to support the development of
+Haskell desktop applications and computer vision software.</p>
+<p>Once installed, you can either drop images onto the app window
+or batch process them via the CLI:</p>
+<pre class="giallo" style="color: #F8F8F2; background-color: #272822;"><code data-lang="shellscript"><span class="giallo-l"><span style="color: #A6E22E;">perspec</span><span style="color: #E6DB74;"> fix photos/</span><span style="color: #FD971F;">*</span><span style="color: #E6DB74;">.jpeg</span></span></code></pre><h2 id="next-steps">Next Steps</h2>
+<p>While the 1.0 release is a big milestone, there are still some features
+that I would like to add.
+Here is what I have planned for the upcoming releases:</p>
+<ul>
+<li><strong>Fixed output sizes:</strong>
+Force the output to standardized dimensions like A4 or US Letter,
+so a scanned document ends up with the correct proportions and size.</li>
+<li><strong>QR code detection:</strong>
+Marcel Robitaille wrote a great post about
+<a href="https://blog.marcelrobitaille.me/receipt-ingestion/" rel="external">automating receipt ingestion</a>
+where a QR code next to the document is used to attach metadata.
+I'd love to support such workflows out of the box.</li>
+</ul>
+<p>If this sounds useful to you, <a href="https://github.com/ad-si/Perspec" rel="external">give Perspec a try</a>!
+And if you run into any issues or have ideas for improvements,
+please <a href="https://github.com/ad-si/Perspec/issues" rel="external">open an issue</a> —
+I'd love to hear your feedback!</p>
+
+
+<p>If you have any comments, thoughts, or other feedback
+    feel free to write me
+    <a href="https://x.com/AdrianSieber">@AdrianSieber</a>.
+    Thanks for your help! 😊</p>
+</article>
