@@ -1,0 +1,99 @@
+<article class="mx-auto max-w-[1060px] px-4 pt-28 pb-16 sm:px-6 lg:pt-36"><div class="mx-auto mt-12 max-w-[760px]"><div class="bodytext"><p><code>no healthy upstream</code> is the kind of error that makes you expect wreckage.</p>
+<p>Then you open the dashboards and find… almost nothing. CPU is low. No pods have crashed. The last deployment was hours ago. By the time you refresh the page, the service has recovered by itself.</p>
+<p>That was the scene a few weeks ago when I started chasing an intermittent failure in a search backend. The eventual fix was only a few lines. The interesting part was getting there.</p>
+<p>We already had a confident root-cause analysis (RCA), complete with a tidy explanation and a one-line remedy. It was also pointing at the wrong subsystem. This post is about the gap between a plausible story and the evidence, and about a common failure mode in which a mostly healthy fleet slowly removes itself from service.</p>
+
+<h2 id="the-shape-of-the-failure">The shape of the failure</h2>
+<p>The setup was ordinary: a search backend behind a load balancer, with a fixed pool of worker processes on each instance.</p>
+<p>Every so often, with no obvious schedule, a burst of requests failed. The browser showed a bare <code>no healthy upstream</code>, and a minute or two later everything worked again.</p>
+<p>One clue appeared every time. Backend p99 latency climbed to <em>almost exactly</em> the load balancer timeout, stayed flat, and then dropped back to normal:</p>
+<p></p>
+<p>That shape matters. Organic slowdowns tend to be uneven. This was a cliff, a flat top, and a recovery. Requests were not gradually becoming slower; they were running into a deadline and being cut off.</p>
+<p>The theory I inherited was <strong>CPU throttling</strong>. A heavy periodic job supposedly pegged the pod’s CPU, the scheduler throttled it, request handling starved, and the load balancer eventually evicted the instance.</p>
+<p>It was coherent. Better still, it came with a one-line fix: raise the CPU limit. That is an attractive combination during an incident. But a root-cause theory makes predictions, and these predictions did not survive contact with the evidence.</p>
+<h2 id="treating-the-rca-as-a-hypothesis-not-a-conclusion">Treating the RCA as a hypothesis, not a conclusion</h2>
+<p>Instead of treating the existing RCA as a conclusion, I treated it as a hypothesis: if CPU throttling caused the incidents, what else should I be able to observe?</p>
+<p>Three checks came back wrong.</p>
+<p><strong>There was no CPU-bound work in the serving path.</strong> The compute-heavy batch indexers ran on <em>separate</em> machines and reached the datastore over the network. They never ran inside the pods serving requests. A process outside the pod’s cgroup cannot cause that pod to be CPU-throttled. The graphs agreed: container throttling counters stayed flat during every event.</p>
+<p><strong>The timing did not fit a scheduled trigger.</strong> The batch jobs ran on a coarse schedule and produced one sustained utilisation bump. The incidents arrived at arbitrary minutes and happened far more often than the jobs ran. If a timer were responsible, the failures should have followed the timer. They did not.</p>
+<p><strong>The failures ignored instance and version boundaries.</strong> The same symptom appeared across different pods and deployment SHAs. A regression usually follows a version. A shared external event usually hits the fleet together. These failures did neither. The pattern looked more like each instance was doing something <em>to itself</em>, triggered by its own traffic.</p>
+<p>To keep the CPU theory alive, I would have had to explain away the topology, the timing, and the distribution of failures. At that point the theory was creating more questions than it answered, so I dropped it and went back to the logs.</p>
+<h2 id="one-line-in-the-logs-and-why-it-changes-the-model">One line in the logs, and why it changes the model</h2>
+<p>The event window contained one recurring error:</p>
+<pre class="astro-code astro-code-themes github-light github-dark" data-language="txt" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8; overflow-x: auto;" tabindex="0"><code><span class="line"><span>ConnectionTimeout: Connection timed out</span></span></code></pre>
+<p>The stack ended in the datastore client, blocked on a socket read that never returned.</p>
+<p>That one line flipped the model.</p>
+<p>A CPU-throttled worker is ready to run but cannot get enough scheduler time. A worker blocked on I/O is off-CPU, waiting on the network while still occupying its worker slot. From the outside, both look like “latency went up, then requests timed out.” Underneath, they are opposites.</p>
+<p>Adding CPU to an I/O stall does not unblock the socket. At best, it gives you more workers to park behind the same slow dependency. This is why edge symptoms are a dangerous thing to tune against: resource saturation and dependency blocking can produce the same fever while needing completely different treatment.</p>
+<h2 id="why-one-slow-dependency-saturates-the-whole-instance">Why one slow dependency saturates the whole instance</h2>
+<p>The mechanism came down to two ordinary client settings that were dangerous in combination:</p>
+<ol>
+<li><strong>No timeout on individual datastore calls.</strong> One call could occupy a worker long after the user had given up.</li>
+<li><strong>Retries on connection timeouts.</strong> After waiting too long once, the worker would wait again, with backoff in between.</li>
+</ol>
+<p>Nothing exotic. That is partly what makes this failure mode easy to miss.</p>
+<p>Little’s Law shows why it is fatal to a fixed worker pool. Concurrency is <code>L = λW</code>: the arrival rate (<code>λ</code>) multiplied by the average time each request spends in the system (<code>W</code>).</p>
+<p>Suppose the service receives 200 requests per second and normally responds in 40 ms:</p>
+<pre class="astro-code astro-code-themes github-light github-dark" data-language="txt" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8; overflow-x: auto;" tabindex="0"><code><span class="line"><span>L = 200 req/s × 0.04 s = 8 concurrent requests</span></span></code></pre>
+<p>Eight concurrent requests are easy for the pool to absorb. But if the datastore slows down and requests wait for tens of seconds, <code>W</code> increases by three orders of magnitude. Retries stretch it further. The required concurrency quickly exceeds the number of workers available.</p>
+<p>The pool then looks something like this:</p>
+<p></p>
+<p>This creates <strong>head-of-line blocking</strong>. Workers parked on datastore calls cannot serve the fast requests behind them, so latency rises for <em>everything</em>, not only for requests that reached the slow dependency.</p>
+<p>Health checks are caught in the same queue. They time out, the load balancer removes the instance from rotation, and the remaining instances receive more traffic. Once enough instances fail their health checks, the load balancer has nowhere to send the next request. That is when the user sees <code>no healthy upstream</code>.</p>
+<p>There was one more twist. The client’s total retry time could exceed the load balancer’s deadline:</p>
+<p></p>
+<p>The load balancer returned an error while the worker continued retrying a result nobody could receive. Every millisecond after the outer deadline was wasted work, and the wasted work held a scarce worker slot.</p>
+<p>This is a <strong>deadline-propagation</strong> failure. Inner operations must finish inside the outer request deadline. Better still, pass the outer deadline through the call chain so every layer knows when its result has become useless.</p>
+<h2 id="why-it-recovered-by-itself">Why it recovered by itself</h2>
+<p>The recovery was initially reassuring. In hindsight, it was the worrying part.</p>
+<p>The datastore blip triggered retries. Those retries added load to the datastore while it was already struggling, which caused more timeouts and therefore more retries:</p>
+<p></p>
+<p>That is the start of a <strong>metastable failure</strong>: a brief trigger knocks the system out of its healthy state, then a feedback loop keeps it unhealthy after the original trigger has passed.</p>
+<p>We got lucky. The datastore blips were short enough that traffic fell below the tipping point before the retry loop became self-sustaining. A slightly longer blip could have kept the loop alive until we restarted the fleet or shed enough traffic to escape it.</p>
+<p>Self-recovery was not proof of resilience. It was a warning shot.</p>
+
+<h2 id="the-fix-and-why-we-kept-it-small">The fix, and why we kept it small</h2>
+<p>The instinct during an availability incident is to add headroom: raise CPU limits, increase the worker pool, add replicas. That can help with genuine capacity problems. Here, it would only give the retry loop more workers to occupy.</p>
+<p>The useful fix was to put a hard bound on the cost of one request.</p>
+<p><strong>First, add an explicit timeout to every downstream call.</strong> Choose it from the dependency’s healthy latency distribution rather than picking a pleasing round number. It should sit comfortably above healthy p99.9, but well below the load balancer’s deadline. A call that can wait forever is a worker you can lose forever.</p>
+<p><strong>Second, bound retries as a fraction of normal traffic, not as an unconditional count on every request.</strong> A rule such as “retry three times” allows every client to multiply traffic precisely when the dependency is least able to handle it. A token-bucket retry budget keeps the added load bounded; the Google SRE guidance uses 10% as an example. Add jitter too, or clients can wake up and retry in synchronised waves.</p>
+<p><strong>Third, be especially reluctant to retry connection timeouts.</strong> During saturation, a timeout often means the dependency is already over its limit. Another immediate attempt is unlikely to help. Retries make the most sense for independent, transient failures and only for idempotent operations. Search requests were idempotent, at least, so duplicate side effects were not another problem waiting for us.</p>
+<p>The decision for each failed call becomes straightforward:</p>
+<p></p>
+<p>Circuit breakers, load shedding, and bulkheads could all strengthen this design:</p>
+<ul>
+<li>A <strong>circuit breaker</strong> stops callers repeatedly rediscovering the same outage.</li>
+<li><strong>Load shedding</strong> rejects excess work early enough to keep the service responsive.</li>
+<li>A <strong>bulkhead</strong> gives the dependency its own bounded concurrency pool, preventing it from occupying every worker.</li>
+</ul>
+<p>All three add code, tuning, and operational state. We did not have evidence that we needed them yet. Once a small timeout and a bounded retry policy removed the amplifier, adding more machinery would have solved a hypothetical problem rather than the incident in front of us.</p>
+<h2 id="wont-failing-fast-just-move-the-errors-to-the-caller">“Won’t failing fast just move the errors to the caller?”</h2>
+<p>This was the immediate pushback: if the backend gives up sooner, won’t users simply see more errors?</p>
+<p>Only if we compare failing fast with a world in which every request eventually succeeds. That was not the world we had.</p>
+<p>With the worker pool full of hung calls, <em>every</em> request eventually failed. The entire search feature became a <code>no healthy upstream</code> page, including requests that never needed the slow dependency in the first place.</p>
+<p>Failing fast keeps the instances responsive and in rotation. It turns one correlated, fleet-wide outage into a smaller number of independent failures: the requests that actually hit the bad path. Those are failures a caller can absorb with a cached result, an empty state, or a retry button.</p>
+<p>A nonessential component should not be able to take down the whole page. Give it its own deadline and a graceful fallback, and a slow dependency degrades one part of the experience instead of replacing the entire document with an error page.</p>
+<h2 id="verifying-the-bound-not-asserting-it">Verifying the bound, not asserting it</h2>
+<p>I did not want to ship a fix that worked only on a whiteboard, so the validation was intentionally mechanical.</p>
+<p>With a <strong>healthy dependency</strong>, normal traffic should remain normal: the same latency distribution and no new errors. If the timeout clips healthy p99.9 requests, it is too aggressive and will create the very failures it is meant to prevent.</p>
+<p>With an <strong>unreachable dependency</strong>, requests should fail near the configured bound and before the outer load balancer deadline. More importantly, worker occupancy and in-flight request counts should remain flat instead of climbing.</p>
+<p>That flat line under induced failure is the real acceptance test. It shows that the amplifier is gone.</p>
+<p>The saturating case needs its own load test. The happy path will never prove that a service behaves well when every downstream call is stuck.</p>
+<h2 id="what-i-actually-took-from-it">What I actually took from it</h2>
+<p>The technical lesson is easy to audit for: an unbounded downstream call plus eager retries is a latent outage with a feedback loop attached. It can sit quietly for months, green on every dashboard, until a dependency has a bad thirty seconds. Then it turns that blip into a fleet-wide event.</p>
+<p>It is worth searching your own services for downstream calls without deadlines and retries without a shared budget. Those two settings deserve to be reviewed together, because together they can change the shape of a failure.</p>
+<p>The lesson that stayed with me, though, was about diagnosis.</p>
+<p>The CPU theory was clean. It was mechanistic. It came with a satisfying one-line fix. And it survived three pieces of contradictory evidence because we had started treating it as an answer instead of a claim.</p>
+<p>A useful root cause makes predictions you can check. When the topology, timing, and distribution of failures all disagree with the story, elegance stops counting. In this case, one dull line in a log file told us more than the tidy explanation we had already grown attached to.</p>
+<p>That was the expensive part of the incident: not the eventual three-line fix, but learning to let the evidence ruin a good story.</p>
+<p>Thanks for reading ✌️</p>
+<h2 id="references">References</h2>
+<ol>
+<li><a href="https://sigops.org/s/conferences/hotos/2021/papers/hotos21-s11-bronson.pdf" rel="nofollow noopener noreferrer">Metastable Failures in Distributed Systems - Bronson et al., HotOS ‘21</a></li>
+<li><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/" rel="nofollow noopener noreferrer">Timeouts, retries, and backoff with jitter - Amazon Builders’ Library</a></li>
+<li><a href="https://sre.google/sre-book/addressing-cascading-failures/" rel="nofollow noopener noreferrer">Addressing Cascading Failures - Google SRE Book</a></li>
+<li><a href="https://sre.google/sre-book/handling-overload/" rel="nofollow noopener noreferrer">Handling Overload - Google SRE Book</a></li>
+<li><a href="https://research.google/pubs/pub40801/" rel="nofollow noopener noreferrer">The Tail at Scale - Dean &amp; Barroso, CACM 2013</a></li>
+<li><a href="https://www.envoyproxy.io/docs/envoy/latest/faq/load_balancing/disable_circuit_breaking" rel="nofollow noopener noreferrer">no healthy upstream - Envoy load balancing FAQ</a></li>
+<li><a href="https://martinfowler.com/bliki/CircuitBreaker.html" rel="nofollow noopener noreferrer">Circuit Breaker - Martin Fowler</a></li>
+</ol></div></div></article>
