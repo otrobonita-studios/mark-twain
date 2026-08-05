@@ -1,0 +1,262 @@
+<body class="body"><div class="promo_banner_wrap" data-wf--promo-banner--variant="base"><a class="promo_link w-inline-block" href="https://www.blacksmith.sh/sandboxes"><div class="section-marquee inline_promo"><div class="fs-marquee-2_instance" fs-marquee-element="marquee" fs-marquee-instance="fs-marquee-2" fs-marquee-type="static"><div class="fs-marquee-2_list-wrapper" fs-marquee-element="wrapper"><div class="fs-marquee-2_list" fs-marquee-element="list"><div class="fs-marquee-2_item" fs-marquee-element="item"><div class="label-02 promo-banner"><div>Blacksmith Sandboxes Coming soon</div></div></div></div></div></div></div></a></div><div class="global_header_wrap w-nav" data-animation="default" data-collapse="medium" data-duration="600" data-easing="ease-in-out" data-easing2="ease" role="banner"><div class="header_inner_wrap"><div class="global-header"><div class="navigation-container w-container"><a class="brand w-nav-brand" href="/"></a><div class="menu-button w-nav-button"><div class="label-01 default_text">MENU</div><div class="label-01 close_menu_text">Close</div></div><a class="label-01 navtigation last" href="https://app.blacksmith.sh" target="_blank">LOG IN</a></div></div></div></div><div class="section_wrap is_yellow hero"><div class="section-article-hero"><div class="blog_date"><div class="label-01">[ </div><div class="label-01">Jul 31, 2026</div><div class="label-01"> ]</div></div><div class="hero-container"><div class="title_block"><h1 class="heading-03" data-w-id="d0ba83a7-019a-2284-5845-41ac913691da" style="-webkit-transform:translate3d(0, 16px, 0) scale3d(1, 1, 1) rotateX(0) rotateY(0) rotateZ(0) skew(0, 0);-moz-transform:translate3d(0, 16px, 0) scale3d(1, 1, 1) rotateX(0) rotateY(0) rotateZ(0) skew(0, 0);-ms-transform:translate3d(0, 16px, 0) scale3d(1, 1, 1) rotateX(0) rotateY(0) rotateZ(0) skew(0, 0);transform:translate3d(0, 16px, 0) scale3d(1, 1, 1) rotateX(0) rotateY(0) rotateZ(0) skew(0, 0);opacity:0">The physics of Docker build caching</h1><div class="body-medium-01">Concepts, rules of thumb, and what dissecting a few hundred CI builds says about them.</div></div><div class="author_block"><div><div class="body-medium-02">Piotr Bejda</div><div class="body-02">Member of Technical Staff</div></div></div></div></div></div><div class="section_wrap"><div class="section-blog-article"><div class="customer-content" id="w-node-c021e89c-c247-0617-1dae-6dd36d1352b4-250b2c58"><div class="customer-overview-content no_border"><div class="container-48"><div class="container-49"><div class="heading-26">TL;DR</div><div class="description-20">Concepts, rules of thumb, and what dissecting a few hundred CI builds says about them.</div></div></div></div><div class="customer-cta-2 is_yellow dotted tight"><div class="description-21">Get started!</div><a class="button-primary-large" href="https://app.blacksmith.sh/"><div class="primary-action-text-13">Try us Free</div></a></div></div><div class="blog_body" id="w-node-_9e21598a-bd92-e71f-267e-33e11a0f4df0-250b2c58"><div class="rich_text_component w-richtext"><p>Advice about Docker build caching tends to arrive as folklore: put the <code>COPY</code> late, enable some cache action, hope. The trouble is that "Docker caching" is not one cache: it's at least three, with different lifetimes, different invalidation rules, and different failure modes. Which of them matters, and whether the folklore helps, does nothing, or actively hurts, depends on the shape of the build in front of you.</p><p>There are too many build shapes to cover one by one: every stack, monorepo layout, and orchestration has its own wrinkle. So this post aims for a different kind of completeness: the concepts and rules of thumb that decide the outcome in <em>any</em> scenario, each illustrated with a measurement from a benchmark lab we built. The lab spans 18 scenarios across Go, Python, Rust, Node, Java, and Bazel, run on real CI runners, comparing every commonly used caching backend. Where our own product wins, I'll show it; where something is genuinely missing, ours included, I'll say so.</p><h2>The mental model: three caches, one invalidation wave</h2><p>The concepts here stand on their own, so no Dockerfile expertise is required to follow along. When the examples reference specific instructions (<code>FROM</code>, <code>COPY</code>, <code>RUN</code>, multi-stage builds), Docker's <a href="https://docs.docker.com/build/concepts/dockerfile/">Dockerfile overview</a> and <a href="https://docs.docker.com/build/building/best-practices/">building best practices</a> are good prose introductions to lean on.</p><p>A Docker build is a chain of instructions, each producing a layer keyed by the instruction and the content that feeds it. A change invalidates its layer <strong>and every layer after it</strong>, a wave that propagates to the end of the chain. That global reach is what makes the wave worth optimizing for: how far it travels decides how much of the build re-runs, on every single change.</p><p>(Strictly, the build graph is a DAG: with multi-stage builds each stage is its own chain, joined by <code>COPY --from</code> edges, and the wave only reaches the stages that depend on the change. But within a stage it's always a chain, most Dockerfiles are effectively a single chain, and that's what the examples here show; everything said about the wave applies per-chain.)</p><p>The chain is only the first cache. Two more sit beside it:</p><ul role="list"><li><strong>Mount caches</strong> (<code>RUN --mount=type=cache</code>): directories that persist <em>across</em> builds. They don't stop the wave, they cushion it: when the wave re-runs an instruction, the instruction finds its mount still warm, so a re-run isn't a from-scratch run. This is where package-manager and compiler state lives (GOCACHE, cargo's registry and <code>target/</code>, pip's wheels, pnpm's store).</li><li><strong>The image store</strong> (<code>/var/lib/docker</code>): pulled base images, built images, everything the daemon itself caches. It touches the chain at exactly one point, the <code>FROM</code> layer: when a base image changes, the wave starts at the very top, and whether the new base is a fast local read or a slow registry pull depends on this store. The wave never invalidates anything <em>in</em> it. And it lives well beyond builds: <code>docker run</code>, service containers, and image distribution are all reads against this store.</li></ul><p>A question that will come back for each of these caches, in every setup below: <strong>where does it live, and does it survive to the next CI job?</strong> Everything that follows is a zoom-in on some part of this picture.</p><div class="w-embed w-iframe w-script"><!DOCTYPE html>
+
+<html lang="en">
+<head>
+
+
+<title>Three caches, one invalidation wave — Blacksmith</title>
+<!--
+      Webflow embed: host this file and paste an iframe.
+
+      <iframe
+        src="https://YOUR_HOST/embeds/layer-cache-diagram.html"
+        title="Three caches, one invalidation wave"
+        data-bs-embed
+        style="width:100%;height:620px;border:0;display:block;overflow:hidden;"
+        loading="lazy"
+      ></iframe>
+
+      The height listener below is the same one the matrix embed uses. Paste it
+      ONCE per page, not once per embed, and every iframe marked data-bs-embed
+      sizes itself.
+
+      <script>
+        window.addEventListener('message', function (e) {
+          if (!e.data || e.data.type !== 'bs-embed-height') return;
+          var frames = document.querySelectorAll('iframe[data-bs-embed]');
+          for (var i = 0; i < frames.length; i++) {
+            if (frames[i].contentWindow === e.source) {
+              frames[i].style.height = e.data.height + 'px';
+              return;
+            }
+          }
+        });
+      <\/script>
+    -->
+
+
+
+
+</head>
+<body>
+<div class="bs-iw-embed">
+
+</div>
+
+</body>
+</html></div><p>‍</p><p>One more piece of shared vocabulary: the <em>change classes</em> from the diagram above are also how every measurement in this post is structured. Each scenario builds four times, and each build probes one class:</p><ul role="list"><li><strong>cold</strong>: the first build, nothing cached anywhere.</li><li><strong>warm</strong>: rebuild with nothing changed; every layer should come from cache.</li><li><strong>source-change</strong>: a code edit, dependency manifests untouched; the wave starts below the install step.</li><li><strong>dep-change</strong>: a manifest/lockfile bump; the install step and everything after it re-runs.</li></ul><p><strong>Rule of thumb #1: think in change classes, not in builds.</strong> Your median CI build is a source-change, not a cold build. A cache setup that looks great on the "second build of the same commit" demo and terrible on a one-line code edit is optimizing the phase you hit least.</p><h2>Order layers by change frequency</h2><p>The general guideline: figure out which of your steps are expensive and stable, and order the Dockerfile so that frequently changing content sits below them. The most common instance is manifest-first ordering: copy your dependency manifest first, install dependencies, and only then copy the source. The expensive install layer then invalidates only when the manifest changes, not on every commit.</p><p>We measured the same service both ways (<code>COPY . .</code> before the install vs manifest-first) across five stacks. Source-change build times:</p><div class="w-embed w-iframe w-script"><!DOCTYPE html>
+
+<html lang="en">
+<head>
+
+
+<title>Manifest-first vs COPY . . first — Blacksmith</title>
+<!--
+      Webflow embed: host this file and paste an iframe.
+
+      <iframe
+        src="https://YOUR_HOST/embeds/docker-benchmark-table.html"
+        title="Build times: manifest-first vs COPY . . first"
+        data-bs-embed
+        style="width:100%;height:320px;border:0;display:block;overflow:hidden;"
+        loading="lazy"
+      ></iframe>
+
+      Same one-per-page height listener as the other two embeds:
+
+      <script>
+        window.addEventListener('message', function (e) {
+          if (!e.data || e.data.type !== 'bs-embed-height') return;
+          var frames = document.querySelectorAll('iframe[data-bs-embed]');
+          for (var i = 0; i < frames.length; i++) {
+            if (frames[i].contentWindow === e.source) {
+              frames[i].style.height = e.data.height + 'px';
+              return;
+            }
+          }
+        });
+      <\/script>
+
+      NOTE: in a frame this table can no longer inherit your article's
+      typography, so the type is set explicitly below. If you'd rather it
+      blend with the surrounding prose, keep the inline version instead --
+      see the note in chat.
+    -->
+
+
+
+
+</head>
+<body>
+<div class="bs-table">
+<table>
+<thead>
+<tr>
+<th>stack</th>
+<th>manifest-first</th>
+<th>COPY . . first</th>
+<th>gap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Go</td>
+<td>1.1s</td>
+<td>5.7s</td>
+<td>~5x</td>
+</tr>
+<tr>
+<td>Python (numpy/pandas/scipy)</td>
+<td>0.9s</td>
+<td>22.7s</td>
+<td>~24x</td>
+</tr>
+<tr>
+<td>Node (express)</td>
+<td>0.8s</td>
+<td>2.6s</td>
+<td>~3x</td>
+</tr>
+<tr>
+<td>Rust (axum)</td>
+<td>2.1s</td>
+<td>10.3s</td>
+<td>~5x</td>
+</tr>
+<tr>
+<td>Java (Spring Boot)</td>
+<td>3.2s</td>
+<td>15.9s</td>
+<td>~5x</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+</body>
+</html></div><p>‍</p><p>Two things worth noticing. First, cold time and the final image are <em>identical</em> in both variants; this optimization is free. Second, the gap is exactly the cost of your dependency step: cheap <code>npm ci</code> gives 3x, Python native wheels give 24x, and a 1GiB model file copied in the wrong layer turns every source edit into ~23s of pure I/O (we measured that too).</p><p><strong>Rule of thumb #2: the payoff of layer ordering equals the cost of the step it protects.</strong> Know your most expensive stable step, and make sure nothing that changes often sits above it.</p><h2>Mount caches are the other half, and they don't travel</h2><p>Layer caching is all-or-nothing: when the wave hits the install step, the whole step re-runs. Mount caches are what make the re-run cheap: the package manager finds its downloads, the compiler finds its incremental state. For compiled languages this is routinely the difference between "re-run means recompile the world" and "re-run means recompile one file".</p><p>Here's the catch that explains a large fraction of "we enabled caching and it's still slow" complaints. The very thing that lets a cache mount survive the wave (being a directory on the builder's local disk, <em>outside</em> the layer filesystem) also puts it outside what cache exporters handle. A <code>cache-to</code> export (<code>type=gha</code>, <code>type=registry</code>, <code>type=inline</code>) is a bundle of <strong>layer</strong> blobs: it serializes each instruction's resulting layer so another builder can skip re-running it. Mount contents are not part of any layer, so they are never in the bundle.</p><p>The two mechanisms attack different parts of the problem. An exported layer cache works <em>along</em> the wave: it lets a fresh machine skip every step the wave didn't reach, and it's the only mechanism that travels between machines. What it cannot do is help the step the wave <em>did</em> reach; making that re-run cheap is the mount cache's job. So on a fresh runner with an exported cache, the surviving layers are warm but every <code>--mount=type=cache</code> directory starts empty: the one step you needed to be fast runs from scratch.</p><p>The Rust scenario makes it concrete: a dependency change costs <strong>3.6s</strong> when the mounts survive (persistent builder state), <strong>164s</strong> with the GHA cache backend, and <strong>19s with no cache at all</strong>. Read that again: the export backend was 8x slower than doing nothing, because it paid to import and export layers that the change invalidated anyway, and the state that would have helped wasn't in the export.</p><p><strong>Rule of thumb #3: know where your build's win actually lives.</strong> If it lives in mount caches (compiled languages, Bazel, anything incremental), a layer-export backend cannot deliver it, no matter how it's tuned.</p><h2>The backend landscape</h2><p>With the model in place, the backends sort themselves into two families:</p><ul role="list"><li><strong>Export/import</strong>: serialize (some of) the cache to an external store after the build, restore it before the next one: <code>gha</code>, <code>registry</code>, <code>inline</code>, plus workarounds like <a href="https://github.com/reproducible-containers/buildkit-cache-dance">buildkit-cache-dance</a>, which patches the mount-cache gap by copying <code>--mount=type=cache</code> contents out of the builder after the build, storing them in the Actions cache, and injecting them back before the next one. Portable, works on any runner; pays serialization both ways, drops mount state (except cache-dance, which pays extra to keep it).</li><li><strong>Persistent builder state</strong>: don't move the cache at all: keep BuildKit's disk between jobs and reattach it. This is what Blacksmith's sticky disks do: the runner mounts the same builder state (layers <em>and</em> mounts) on every job, as a copy-on-write clone of the last committed snapshot.</li></ul><p>The matrix below is the four-phase sequence across backends, for four of the lab's stacks:</p><div class="w-embed w-iframe w-script"><!DOCTYPE html>
+
+<html lang="en">
+<head>
+
+
+<title>What each backend actually buys — Blacksmith</title>
+<!--
+      Webflow embed: host this file and paste an iframe.
+
+      <iframe
+        src="https://YOUR_HOST/embeds/backend-phase-matrix.html"
+        title="What each backend actually buys, per change class"
+        data-bs-embed
+        style="width:100%;height:760px;border:0;display:block;overflow:hidden;"
+        loading="lazy"
+      ></iframe>
+
+      Optional, and worth it here: the card's height changes when the tab track
+      wraps and when the size bucket flips, so a fixed height either clips or
+      leaves a gap. Paste this once per page and every iframe marked
+      data-bs-embed sizes itself.
+
+      <script>
+        window.addEventListener('message', function (e) {
+          if (!e.data || e.data.type !== 'bs-embed-height') return;
+          var frames = document.querySelectorAll('iframe[data-bs-embed]');
+          for (var i = 0; i < frames.length; i++) {
+            if (frames[i].contentWindow === e.source) {
+              frames[i].style.height = e.data.height + 'px';
+              return;
+            }
+          }
+        });
+      <\/script>
+
+      Self-contained: no build step, no shadow DOM, no framework.
+    -->
+
+
+
+
+</head>
+<body>
+<div class="bs-bpm-embed">
+
+</div>
+
+</body>
+</html></div><p>‍</p><p>The pattern is consistent. On the phases that dominate real CI traffic (warm, source-change, dep-change), persistent state wins by 10–30x, mostly because of the mount caches. Export backends cluster in an uncomfortable middle: often slower than no cache on change phases, because import/export overhead scales with cache size while the hit rate scales with what the change didn't touch.</p><p>Being honest about the other direction:</p><ul role="list"><li><strong>True cold builds don't care.</strong> A first build on a brand-new cache key is a from-scratch build everywhere (83s sticky vs 85s no-cache on the Go scenario). Persistent disks don't seed a new key from a sibling, a place where export caches, which any branch can restore, genuinely have an answer we lack.</li><li><strong>Export caches are portable.</strong> They work on hosted runners, across providers, in air-gapped mirrors. A persistent disk is a property of the platform you run on.</li><li><strong>The persistence tax is real but flat.</strong> Attaching the disk costs 2–4s, committing it 1–2s, and this held regardless of state size in our runs (even a commit after populating ~1GiB of fresh state took 2s, because it's a block-level snapshot, not an upload).</li></ul><p><strong>Rule of thumb #4: export backends charge a transfer tax on every build; only use one when the hits are worth more than the tax.</strong> The import and export happen whether or not the build hits, so the math is simple: an export backend makes sense when the win lives in layers and the cache is small. When the win lives in mount caches, or builds run often enough that 20–90 seconds of import/export per job adds up, keep the cache in place between jobs instead.</p><h2>Scope the cache to what shares content</h2><p>Persistent state introduces a question exports never face: <em>who shares the disk?</em> The default temptation is one cache per repo. The right answer is one cache per <strong>image lineage</strong>: a set of builds that actually reuse each other's layers.</p><p>We measured both failure directions:</p><ul role="list"><li><strong>Too broad</strong>: 8–12 unrelated images building in parallel on one shared key. Each build's commit evicts the others' state; round-two hit ratios collapse to 0.17–0.20 and single rebuilds hit 133s, worse than not caching. Per-image keys on the same fleet: 0.73–0.76 hit ratio, ~3s rebuilds.</li><li><strong>Too narrow</strong>: a monorepo where three services inherit one base stage, split across per-service keys. Every key rebuilds and stores its own copy of the shared base (3x the footprint at 3 services, 2.4x at 8, growing linearly), and a shared-base change rebuilds N times instead of once.</li></ul><figure class="w-richtext-align-fullwidth w-richtext-figure-type-image" style="max-width:1179pxpx"><div></div></figure><p><strong>Rule of thumb #5: share the cache exactly as far as the layers are shared.</strong> Related images (a monorepo tree with a common base): one key. Unrelated images that happen to live together: one key each. Repo topology is a proxy, and often a wrong one.</p><h2>Caches grow by what they've seen, not how often you build</h2><p>The lifecycle question: does a long-lived cache rot? We ran 25-cycle churn tests (a realistic 70/30 mix of source edits and dependency bumps on the same key) and tracked what actually grows:</p><figure class="w-richtext-align-fullwidth w-richtext-figure-type-image" style="max-width:1179pxpx"><div></div></figure><p>Layer records grow slowly and linearly (BuildKit's size-capped GC handles them); mount caches converge on the union of dependency versions the cache has ever seen, then go flat. Bounded inputs, bounded cache.</p><p>The honest part is what <em>doesn't</em> get cleaned up. To BuildKit, a mount cache is a single record: an active repo touches it every build, so it never goes idle, and nothing trims the dead content inside it. Whether garbage accumulates depends entirely on the toolchain using the mount: Go's build cache self-trims (entries unused ~5 days), while Cargo's <code>target/</code>, the pip/npm/pnpm caches, and Bazel's disk cache all grow until something external prunes them. No platform (ours included) currently gives you visibility <em>inside</em> a mount cache; today the honest answer is to know your toolchain's behavior and occasionally reset keys for Cargo-like ecosystems with heavy version churn.</p><p><strong>Rule of thumb #6: caches grow with distinct dependency versions seen, not with build count.</strong></p><h2>The other image store: containers, services, and fan-out</h2><p>Everything so far was builder state. The second half of Docker's disk life is the image store, <code>/var/lib/docker</code>, and in CI it gets rebuilt from nothing constantly: every job re-pulls the same base images, the same <code>services:</code> sidecars (that postgres container, pulled on every single run), the same toolchain images.</p><p>Blacksmith's answer here is a different product with deliberately different scoping: <strong>container caching</strong> gives the whole org one shared image-store disk. Every job's VM boots with <code>/var/lib/docker</code> mounted from a copy-on-write clone of it; commits happen only when a job's image set actually changes. Org-wide sharing is correct here for exactly the reason it was wrong for build caches: public base images are identical across repos, build state isn't. It's also zero configuration: no action, no workflow change.</p><p>The most interesting consequence is fan-out: the build-once-run-everywhere pattern where one job builds an image and N jobs run it. The traditional path is builder → registry push → N pulls, and it pays image-size-scaled serialization at every arrow. We measured it with a deliberately fat 3.34GB image and three parallel consumers:</p><figure class="w-richtext-align-fullwidth w-richtext-figure-type-image" style="max-width:1167pxpx"><div></div></figure><p>Once the image is in the org cache, a consumer's "pull" is a manifest check (~0.9s vs ~129s, 140x), and <em>running</em> the image reads 23MB off the clone: 0.7% of its bytes, streamed lazily as the container touches them. The per-consumer cost stopped scaling with image size.</p><p>The honest limit: this kicks in from the <em>second</em> wave onward. The first consumers after a genuinely new image still pull from the registry; the cache commits after somebody has the image, and there's no primitive yet for "hand this just-built image directly to the jobs behind me" without the initial registry round-trip. Related trap: an image <em>rebuilt</em> from identical sources gets new layer digests (<code>COPY</code> records mtimes), which quietly defeats any store-level dedup; reproducible tags matter.</p><p>There's also a <em>producer</em> trap worth calling out, because it inverts the win. A shared image-store disk is built for <strong>consumers</strong>: jobs that pull a stable set of images. A job that <em>builds</em> a multi-GB, uniquely-tagged image with <code>load: true</code> (or <code>--load</code>) is the opposite: the image is exported into <code>/var/lib/docker</code> and re-read for the push, and the unique tag forces a fresh multi-GB commit of the shared disk on every run. The fix is to skip the daemon entirely: <code>push: true</code> pushes straight from the builder to the registry. (Inspect the pushed image with <code>docker buildx imagetools inspect</code> instead of a local <code>docker inspect</code>.)</p><p><strong>Rule of thumb #7: distribution is a caching problem too, and the win isn't a closer registry, it's not serializing at all.</strong></p><h2>The cheat sheet</h2><div class="w-embed"><!-- paste into a Webflow Embed element -->
+
+<div class="bs-guide">
+<table>
+<colgroup>
+
+
+
+</colgroup>
+<thead>
+<tr>
+<th>your situation</th>
+<th>what's costing you</th>
+<th>what fixes it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>every commit reinstalls deps</td>
+<td>COPY . . above the install</td>
+<td>manifest-first ordering (free, 3–24x)</td>
+</tr>
+<tr>
+<td>compiled language, cached but still slow</td>
+<td>mount caches dropped by export backend</td>
+<td>persistent builder state</td>
+</tr>
+<tr>
+<td>“cache enabled”, change builds slower than cold</td>
+<td>import/export tax &gt; hit value</td>
+<td>smaller cache, or stop exporting</td>
+</tr>
+<tr>
+<td>many unrelated images, one cache</td>
+<td>eviction thrash (hit ratio ≤ 0.2)</td>
+<td>one key per image lineage</td>
+</tr>
+<tr>
+<td>monorepo, per-service keys</td>
+<td>shared base duplicated N times</td>
+<td>one shared key for the tree</td>
+</tr>
+<tr>
+<td>cargo/pip cache grows forever</td>
+<td>no toolchain GC inside the mount</td>
+<td>know your toolchain; reset keys occasionally</td>
+</tr>
+<tr>
+<td>N jobs pull the same fat image</td>
+<td>registry serialization × N</td>
+<td>org-wide image-store cache</td>
+</tr>
+<tr>
+<td>build job slower after enabling image-store cache</td>
+<td>load: true double-handles the image through the cached daemon</td>
+<td>push: true straight from the builder</td>
+</tr>
+<tr>
+<td>first build on a new key is slow</td>
+<td>nothing seeds a fresh cache</td>
+<td>(nothing does; this one's real)</td>
+</tr>
+</tbody>
+</table>
+</div></div><p>‍</p><p>And the rules of thumb, in one screen:</p><ol role="list"><li>Think in change classes, not builds; optimize the source-change, not the demo.</li><li>The payoff of layer ordering equals the cost of the step it protects.</li><li>Know where your build's win lives (layers or mounts) before picking how to persist it.</li><li>Export backends charge a transfer tax on every build; only use one when the hits are worth more than the tax.</li><li>Share a cache exactly as far as the layers are shared.</li><li>Caches grow with distinct dependency versions seen, not with build count.</li><li>Distribution is caching too: the win is not serializing at all.</li></ol><p>None of this makes a badly ordered Dockerfile fast, and nothing makes a true first build cheap. But between those two poles, nearly all of the 10–100x that CI teams leave on the table comes down to these seven, and the three-cache picture that generates them.</p></div></div></div><div class="section-feature-image"></div><div class="section_copy_link blog"><div class="copy_wrap" id="w-node-_0a326e14-58ea-9490-5b0d-47470a6fa407-250b2c58"><a class="button-tertiary-icon-large to_left blog w-node-ccf330ae-1f52-d469-46be-ad90f61d0c40-250b2c58 w-inline-block" href="#" id="share-button-link"><div class="copy_link_text">Copy Link</div></a></div></div><div class="section-customer-article-list"><div class="section-title"><div class="featured-card-description-24">/ More articles</div><div class="featured-card-description-25">■</div></div><div class="more_blogs"><div class="blog_list_wrapper w-dyn-list"><div class="blog_list w-dyn-items" fs-list-element="list" fs-list-load="more" role="list"><div class="w-dyn-item" role="listitem"><a class="article-row blog w-inline-block" href="/blog/blacksmith-outage-on-july-21-2026"><div class="inline_title" id="w-node-_023f063e-7293-a14d-6afc-ec1bd69bc655-250b2c58">Blacksmith outage on July 21, 2026</div><div class="item_category_inline body-02" fs-list-field="category">Engineering</div><div class="to_right"><div class="body-02 blog_date">Jul 22, 2026</div></div></a></div><div class="w-dyn-item" role="listitem"><a class="article-row blog w-inline-block" href="/blog/what-is-your-ci-job-talking-to"><div class="inline_title" id="w-node-_023f063e-7293-a14d-6afc-ec1bd69bc655-250b2c58">What is your CI job talking to?</div><div class="item_category_inline body-02" fs-list-field="category">Engineering</div><div class="to_right"><div class="body-02 blog_date">Jul 20, 2026</div></div></a></div><div class="w-dyn-item" role="listitem"><a class="article-row blog w-inline-block" href="/blog/why-i-joined-blacksmith-to-work-on-storage-again"><div class="inline_title" id="w-node-_023f063e-7293-a14d-6afc-ec1bd69bc655-250b2c58">Why I joined Blacksmith to work on storage again</div><div class="item_category_inline body-02" fs-list-field="category">Engineering</div><div class="to_right"><div class="body-02 blog_date">Jul 24, 2026</div></div></a></div></div></div></div></div></div><div class="section_wrap is_yellow"><div class="section_wrap"><div class="global_cta"><div class="cta-inner"><div class="footer_cta_wrap"><h3 class="heading-03" data-w-id="08a85437-806a-b4ee-d1a2-36a6f7e3fbf2">Start with 3,000 free minutes per month or book a live demo with our engineers</h3></div><div class="buttons-container"><a class="button-primary-large" href="https://app.blacksmith.sh" target="_blank"><div class="primary-action-text-5">Try for free</div></a><a class="button-secondary-large mobile_hidden" href="/contact-our-team"><div class="label-01">Contact Our Team</div></a></div></div></div></div></div><div class="section_wrap is_yellow"><div class="section_wrap"><div class="footer"><div class="footer_row"><div class="footer_form_container" id="sign-up"><div class="section-title-02"><div class="label-01">/ Sign up for news</div></div><div class="full stretch w-form"><div class="success-message w-form-done"><div class="body-02">Thanks for subscribing!</div></div><div class="w-form-fail"><div>Oops! Something went wrong while submitting the form.</div></div></div></div><div class="footer_cols"><div class="footer_form_container"><div class="section-title-02"><div class="label-01">/ Product</div></div><div class="primary-action"><a class="label-01" href="/pricing">Pricing</a><a class="label-01" href="https://docs.blacksmith.sh/introduction/why-blacksmith" target="_blank">Docs</a><a class="label-01" href="/security-old">Security</a><a class="label-01" href="https://status.blacksmith.sh/" target="_blank">■ Status</a></div></div><div class="footer_form_container"><div class="section-title-02"><div class="label-01">/ Resources</div></div><div class="primary-action"><a class="label-01" href="/support">Support</a><a class="label-01" href="/customers">Customers</a><a class="label-01" href="/blog">Blog</a><a class="label-01" href="/guides">Guides</a></div></div><div class="footer_form_container"><div class="section-title-02"><div class="label-01">/ Company</div></div><div class="primary-action"><a class="label-01" href="/company">About</a><a class="label-01" href="/careers">Careers</a><a class="label-01" href="https://docs.blacksmith.sh/about/terms-of-service" target="_blank">Terms</a><a class="label-01" href="https://docs.blacksmith.sh/about/privacy-policy" target="_blank">Privacy</a></div></div></div></div><div class="footer_bottom"><div class="footer_social" id="w-node-eaadc50f-a794-5fd3-d22b-ff43aee36d72-83c83807"><a class="social_block-2 border-right is_yellow dotted w-inline-block" href="https://x.com/useblacksmith" target="_blank"></a><a class="social_block is_yellow bnl w-inline-block" href="https://www.linkedin.com/company/blacksmithrun" target="_blank"></a><a class="social_block-2 is_yellow dotted tight w-inline-block" href="https://www.youtube.com/@useblacksmith" target="_blank"></a></div><div class="footer_copyright">© <strong class="currentyear">2026</strong> Blacksmith Software Inc</div></div></div></div></div><div class="cookie_component"><div class="fs-cc_cookie-component dotted tight" fs-cc="banner"><div class="fs-cc_modal dotted tight is_yellow"><div class="fs_cc-modal-content"><div class="body-02">We use cookies for performance and analytics. Accept or manage in Settings. View <a href="https://docs.blacksmith.sh/about/privacy-policy" target="_blank">Privacy Policy</a>.</div></div><div class="cookie_buttons"><a class="button-primary-large is_small w-button" fs-cc="allow" href="#">ACCEPT</a><a class="button-secondary-large is_small cookie w-button" fs-cc="open-preferences" href="#">SETTINGS</a></div></div></div><div class="fs-cc_preference-component" fs-cc="preferences"><div class="cookie-preference_wrapper"><div class="fs-cc_modal settings"><a class="fs-cc_close-button settings w-inline-block" fs-cc="close" href="#"><div class="fs-cc_screen-reader-only">Close Cookie Preference Manager</div></a><div class="fs_cc-modal-content settings"><div class="fs-cc_title">Cookie settings</div><div class="fs-cc_description body-02">By clicking 'Accept all cookies', you agree to storing cookies on your device to enhance site navigation, analyze site usage and assist in our marketing efforts as outlined in our <a class="fs-cc_link" href="https://docs.blacksmith.sh/about/privacy-policy" target="_blank">privacy policy</a>.</div><div class="fs-cc_form w-form"><div class="fs-cc_preference-buttons"><a class="button-primary-large is_small w-button" fs-cc="allow" href="#">ACCEPT</a><a class="button-secondary-large is_small w-button" fs-cc="submit" href="#">SAVE SETTINGS</a></div></div></div></div></div></div></div><!-- Finsweet Attributes -->
+
+
+
+
+
+
+
+
+
+
+
+</body>
