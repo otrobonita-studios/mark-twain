@@ -1,0 +1,293 @@
+<body class="smallhead">
+<div id="smallhead">
+<div id="smallhead-inner">
+<h1><a href="/">Simon Willison’s Weblog</a></h1>
+<a href="/about/#subscribe" id="smallhead-about">Subscribe</a>
+</div>
+</div><!-- #smallhead -->
+<div class="sponsor-scheme-sky" id="sponsored-banner">
+<div id="sponsored-banner-inner">
+<strong class="sponsored-label">Sponsored by:</strong> AWS — Move from SaaS to Agentic SaaS with resources for ISVs at every layer of the stack. <a class="sponsor-learn-more-label" href="https://fandf.co/4yrcF3h" rel="sponsored noopener" target="_blank">Explore how AI for ISVs turns vision into results</a>
+</div>
+</div>
+<div id="wrapper">
+<div id="primary">
+<div class="entry entryPage">
+<div data-permalink-context="/2026/Jul/31/stateless-mcp/">
+<h2>Stateless MCP has recaptured my interest (and inspired mcp-explorer and datasette-mcp)</h2>
+<p class="mobile-date">31st July 2026</p>
+<p>Tuesday was <a href="https://x.com/ade_oshineye/status/2082129440943866149">Stateless MCP day</a>—the rollout of MCP 2.0, or <a href="https://blog.modelcontextprotocol.io/posts/2026-07-28/">the 2026-07-28 Model Context Protocol specification</a> to use the more formal but less memorable name. This is the most significant change to the MCP spec since it first launched, and has also served to reignite my personal interest in the protocol.</p>
+<p>For background: MCP is the Model Context Protocol, which describes a standard way to expose new tools to LLM-powered agent frameworks. It was introduced by Anthropic back <a href="https://www.anthropic.com/news/model-context-protocol">in November 2024</a>, had a <em>huge</em> spike of interest through much of 2025, and then became somewhat eclipsed by <a href="https://simonwillison.net/2025/Oct/16/claude-skills/">Skills</a> (another Anthropic invention) when it became apparent that an agent harness with access to a terminal and <code>curl</code> could do most of what MCP did in a more flexible way. I wrote about that <a href="https://simonwillison.net/2025/Dec/31/the-year-in-llms/#the-only-year-of-mcp">in my review of 2025</a>.</p>
+<p>I’m coming back around to MCP now. Giving an agent a shell environment with the ability to access the internet is <a href="https://simonwillison.net/2026/Jul/22/openai-cyberattack/">fraught with risk</a>, and requires a strong model that is capable of effectively driving such an environment. MCP tools are easier to audit and control, and simple enough that smaller models that run on a laptop can still drive them reasonably well.</p>
+<p>The new stateless MCP specification also greatly decreases the complexity of implementing both clients and servers for the protocol. I built three of those this week!</p>
+<h4 id="what-s-easier-with-stateless-mcp">What’s easier with stateless MCP</h4>
+<p>The best demonstration of the difference between stateful and stateless MCP is in this <a href="https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/">May 21st blog post</a> that introduced the RC for the new specification. It included a clear before-and-after example.</p>
+<p>The older stateful MCP (I’m going to call it “legacy MCP”) required two HTTP requests—the first to initialize a session and obtain a <code>Mcp-Session-Id</code>, and the second to actually call the tool:</p>
+<pre><code>POST /mcp HTTP/1.1
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2025-11-25",
+    "capabilities": {
+    },
+    "clientInfo": {
+      "name": "my-app",
+      "version": "1.0"
+    }
+  }
+}
+
+POST /mcp HTTP/1.1
+Mcp-Session-Id: 1868a90c-3a3f-4f5b
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "search",
+    "arguments": {
+      "q": "otters"
+    }
+  }
+}
+</code></pre>
+<p>The new stateless way uses a single HTTP request which looks like this:</p>
+<pre><code>POST /mcp HTTP/1.1
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: search
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "search",
+    "arguments": {
+      "q": "otters"
+    },
+    "_meta": {
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "my-app",
+        "version": "1.0"
+      }
+    }
+  }
+}
+</code></pre>
+<p>This is so much cleaner from both a client- and server-side implementation perspective. It’s also a better fit for building scalable web applications, since now you don’t need to maintain server-side state to keep track of those session IDs, or worry about routing the same session to the same backend machine.</p>
+<h4 id="mcp-explorer">mcp-explorer</h4>
+<p>I couldn’t find a great CLI tool for interactively probing an MCP server, so I had Codex help build my own.</p>
+<p><strong><a href="https://github.com/simonw/mcp-explorer">mcp-explorer</a></strong> is the result. It’s a stateless Python CLI tool, so you don’t even need to install it to try it out—it works with <a href="https://docs.astral.sh/uv/guides/tools/#running-tools">uvx</a> like this:</p>
+<div class="highlight highlight-source-shell"><pre>uvx mcp-explorer list https://agentic-mermaid.dev/mcp</pre></div>
+<p>This queries Ade Oshineye’s <a href="https://agentic-mermaid.dev/">agentic-mermaid.dev</a> demo MCP. The above command returns the following list of tools:</p>
+<pre><code>execute(code: string, timeoutMs?: integer) - Execute Mermaid SDK code
+  Run JavaScript in an isolated sandbox; return a value.
+
+describe_sdk(family: string, detail?: string) - Describe Mermaid SDK operations
+  Return version-matched mutation operations for one diagram family.
+
+render_svg(source: string, options?: object) - Render Mermaid as SVG
+  Render a Mermaid source string to themeable SVG. Returns { ok, svg }.
+
+render_ascii(source: string, useAscii?: boolean, targetWidth?: integer, options?: object) - Render Mermaid as text
+  Render a Mermaid source string to text. Returns { ok, text }.
+
+render_png(source: string, scale?: number, background?: string, fitTo?: object, options?: object) - Render Mermaid as PNG
+  Rasterize a Mermaid source string to PNG. Returns { ok, png_base64 }.
+...
+</code></pre>
+<p>Then to inspect a tool:</p>
+<div class="highlight highlight-source-shell"><pre>uvx mcp-explorer inspect render_svg</pre></div>
+<p>This outputs a whole bunch of information, including the JSON schema of the inputs and outputs.</p>
+<p>To call that tool and pass arguments to it:</p>
+<div class="highlight highlight-source-shell"><pre>uvx mcp-explorer call \
+  https://agentic-mermaid.dev/mcp \
+  render_svg \
+  -a <span class="pl-c1">source</span> <span class="pl-s"><span class="pl-pds">'</span>graph TD; A--&gt;B<span class="pl-pds">'</span></span> \
+  -a options <span class="pl-s"><span class="pl-pds">'</span>{"padding":24}<span class="pl-pds">'</span></span></pre></div>
+<p>Which returns:</p>
+<pre><code>{"ok":true,"svg":"&lt;svg xmlns=\"http://www.w3.org/2000/svg\" width=...
+</code></pre>
+<p>To get just the raw SVG try adding <code>| jq .svg -r</code> to that command. I got back <a href="https://gist.github.com/simonw/b07c62f0ce103be6932477659d5dd1ac">this image</a>:</p>
+<p></p>
+<p>There are a <a href="https://github.com/simonw/mcp-explorer/blob/main/README.md">few more commands</a> in the README, but you get the general idea. I find building CLI tools like this to be a really productive way to get familiar with a specification, even if an agent writes most of the actual code.</p>
+<h4 id="datasette-mcp">datasette-mcp</h4>
+<p>The second project is <strong><a href="https://github.com/datasette/datasette-mcp">datasette-mcp</a></strong>, a Datasette plugin which adds a <code>/-/mcp</code> endpoint to any Datasette instance.</p>
+<p>This is probably the fourth time I’ve tried building this plugin, but thanks to the new stateless MCP specification I finally have a version that feels good to release.</p>
+<p>It provides just three tools: <code>list_databases()</code>, <code>get_database_schema(database_name)</code>, and <code>execute_sql(database_name, sql)</code>. They do exactly what you would expect them to do—though <code>execute_sql()</code> is read-only for the moment.</p>
+<p>Wire these into an agent, or a chat tool like ChatGPT or Claude, and they’ll gain the ability to run SQL queries against your hosted Datasette instance.</p>
+<p>So far I’m running it on the Datasette mirror of my blog, at <a href="datasette.simonwillison.net/-/mcp">datasette.simonwillison.net/-/mcp</a>. It took a bit of fiddling to figure out how to attach that to ChatGPT and Claude, but I got there in the end. Here’s <a href="https://til.simonwillison.net/llms/mcp-in-claude-and-chatgpt">a new TIL</a> showing exactly how to do that.</p>
+<p>Here’s <a href="https://claude.ai/share/de1ad9bf-f7c2-4fb9-a9a0-2a1ae39995db">a shared Claude session</a> where I asked it:</p>
+<blockquote>
+<p><code>list tables in simonwillison.net</code></p>
+</blockquote>
+<p>And then:</p>
+<blockquote>
+<p><code>what has Simon said recently about MCP?</code></p>
+</blockquote>
+<p>It ran 7 separate SQL queries to figure out the answer.</p>
+<h4 id="llm-mcp-client">llm-mcp-client</h4>
+<p>My <a href="https://llm.datasette.io/">LLM tool</a> is long overdue for an official MCP integration. The new alpha <a href="https://github.com/simonw/llm-mcp-client">llm-mcp-client</a> plugin is my attempt at exactly that:</p>
+<div class="highlight highlight-source-shell"><pre>llm install llm-mcp-client
+llm -T <span class="pl-s"><span class="pl-pds">'</span>MCP("https://datasette.simonwillison.net/-/mcp")<span class="pl-pds">'</span></span> <span class="pl-s"><span class="pl-pds">'</span>count the notes<span class="pl-pds">'</span></span></pre></div>
+<p>Here’s the output (including reasoning trace, I’m using <a href="https://simonwillison.net/2026/Jul/30/llm-rc2/">LLM 0.32rc2</a>):</p>
+<blockquote>
+<p><em><strong>Considering note count</strong></em></p>
+<p><em>I see the question “count the notes” is probably asking me to tally up blog notes. It could also mean published notes or drafts, so there’s some ambiguity there. I’ll need to figure out the total number of notes, likely by querying the count for both published notes and drafts to get a clear answer. Let’s execute that count!</em></p>
+<p>There are <strong>151 notes</strong>.</p>
+</blockquote>
+<p>And <a href="https://gist.github.com/simonw/4e8f558766150658ce35eab4f0fc3e04">the output of llm logs</a> for that prompt.</p>
+<p>Once this is fully baked, I’m considering bringing it directly into LLM core. I’m excited to experiment with MCP in <a href="https://agent.datasette.io/">Datasette Agent</a> and <a href="https://github.com/simonw/llm-coding-agent">llm-coding-agent</a> as well.</p>
+<h4 id="mcp-is-a-safer-way-to-build-with-agents">MCP is a safer way to build with agents</h4>
+<p>A few months after MCP was first released, I wrote <a href="https://simonwillison.net/2025/Apr/9/mcp-prompt-injection/">Model Context Protocol has prompt injection security problems</a>, where I noted that the pattern of having end users mix and match tools pushed responsibility for avoiding data exfiltration attacks out to the users themselves. I hadn’t coined <a href="https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/">the Lethal Trifecta</a> yet, but that was absolutely what I had in mind.</p>
+<p>Then general agents with arbitrary shell and <code>curl</code> access came along, and that’s so much harder to keep secure!</p>
+<p>Something I’ve come to appreciate about MCP is that it’s much easier to reason about agent capabilities and what might go wrong than with arbitrary command execution in an open network environment—the default for most of today’s general and coding agent tools.</p>
+<p>I plan to lean into MCP a whole lot more when I’m building sensitive applications on top of LLMs.</p>
+</div>
+<div class="entryFooter">Posted <a href="/2026/Jul/31/">31st July 2026</a> at 11:13 pm · Follow me on <a href="https://fedi.simonwillison.net/@simon">Mastodon</a>, <a href="https://bsky.app/profile/simonwillison.net">Bluesky</a>, <a href="https://twitter.com/simonw">Twitter</a> or <a href="https://simonwillison.net/about/#subscribe">subscribe to my newsletter</a></div>
+
+</div>
+<div class="recent-articles">
+<h2>More recent articles</h2>
+<ul class="bullets">
+<li><a href="/2026/Aug/4/new-release-of-llm/">New release of LLM adds support for reasoning traces, OpenAI Responses, server-side tools, and smarter logging</a> - 4th August 2026</li>
+<li><a href="/2026/Jul/22/openai-cyberattack/">OpenAI’s accidental cyberattack against Hugging Face is science fiction that happened</a> - 22nd July 2026</li>
+</ul>
+</div>
+</div> <!-- #primary -->
+<div id="secondary">
+<div class="metabox">
+<p class="this-is">This is <strong>Stateless MCP has recaptured my interest (and inspired mcp-explorer and datasette-mcp)</strong> by Simon Willison, posted on <a href="/2026/Jul/31/">31st July 2026</a>.</p>
+<a class="item-tag" href="/tags/projects/" rel="tag">
+            projects
+            <span>551</span>
+</a>
+<a class="item-tag" href="/tags/ai/" rel="tag">
+            ai
+            <span>2,166</span>
+</a>
+<a class="item-tag" href="/tags/datasette/" rel="tag">
+            datasette
+            <span>1,531</span>
+</a>
+<a class="item-tag" href="/tags/mermaid/" rel="tag">
+            mermaid
+            <span>5</span>
+</a>
+<a class="item-tag" href="/tags/generative-ai/" rel="tag">
+            generative-ai
+            <span>1,918</span>
+</a>
+<a class="item-tag" href="/tags/llms/" rel="tag">
+            llms
+            <span>1,884</span>
+</a>
+<a class="item-tag" href="/tags/llm/" rel="tag">
+            llm
+            <span>620</span>
+</a>
+<a class="item-tag" href="/tags/anthropic/" rel="tag">
+            anthropic
+            <span>323</span>
+</a>
+<a class="item-tag" href="/tags/model-context-protocol/" rel="tag">
+            model-context-protocol
+            <span>33</span>
+</a>
+<p><strong>Next:</strong> <a href="/2026/Aug/4/new-release-of-llm/">New release of LLM adds support for reasoning traces, OpenAI Responses, server-side tools, and smarter logging</a></p>
+<p><strong>Previous:</strong> <a href="/2026/Jul/22/openai-cyberattack/">OpenAI’s accidental cyberattack against Hugging Face is science fiction that happened</a></p>
+<section style="
+    /* .promo */
+    border-radius: 8px;
+    margin: 1.5rem 0;
+    padding: 1rem 1.25rem;
+    /* .variant-a */
+    border: 2px solid #6c3eb9;
+  ">
+<h3 style="
+      /* h3 */
+      margin: 0 0 0.5rem;
+      font-size: 1.25rem;
+    ">
+    Monthly briefing
+  </h3>
+<p style="
+      /* p */
+      margin: 0 0 1rem;
+      line-height: 1.4;
+    ">
+    Sponsor me for <strong>$10/month</strong> and get a curated email digest of the month's most important LLM developments.
+  </p>
+<p style="
+      /* p */
+      margin: 0 0 1rem;
+      line-height: 1.4;
+    ">
+    Pay me to send you less!
+  </p>
+<a href="https://github.com/sponsors/simonw/" style="
+      /* a.button */
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      background: #6c3eb9;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 4px;
+      font-weight: 600;
+    ">
+    Sponsor &amp; subscribe
+  </a>
+</section>
+</div>
+</div> <!-- #secondary -->
+</div> <!-- #wrapper -->
+<div id="ft">
+<ul>
+<li><a href="/about/#disclosures">Disclosures</a></li>
+<li><a href="/about/#about-site">Colophon</a></li>
+<li>©</li>
+<li><a href="/2002/">2002</a></li>
+<li><a href="/2003/">2003</a></li>
+<li><a href="/2004/">2004</a></li>
+<li><a href="/2005/">2005</a></li>
+<li><a href="/2006/">2006</a></li>
+<li><a href="/2007/">2007</a></li>
+<li><a href="/2008/">2008</a></li>
+<li><a href="/2009/">2009</a></li>
+<li><a href="/2010/">2010</a></li>
+<li><a href="/2011/">2011</a></li>
+<li><a href="/2012/">2012</a></li>
+<li><a href="/2013/">2013</a></li>
+<li><a href="/2014/">2014</a></li>
+<li><a href="/2015/">2015</a></li>
+<li><a href="/2016/">2016</a></li>
+<li><a href="/2017/">2017</a></li>
+<li><a href="/2018/">2018</a></li>
+<li><a href="/2019/">2019</a></li>
+<li><a href="/2020/">2020</a></li>
+<li><a href="/2021/">2021</a></li>
+<li><a href="/2022/">2022</a></li>
+<li><a href="/2023/">2023</a></li>
+<li><a href="/2024/">2024</a></li>
+<li><a href="/2025/">2025</a></li>
+<li><a href="/2026/">2026</a></li>
+<li>
+
+</li>
+</ul>
+</div>
+
+
+
+
+
+
+</body>
