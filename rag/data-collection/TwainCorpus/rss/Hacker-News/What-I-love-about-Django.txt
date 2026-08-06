@@ -1,0 +1,354 @@
+My goal at the onset of writing this essay was to celebrate the parts of Django that I, in Buttondown writ large, have found so useful and so enduring over the years.
+One of the challenges in doing this is what I would describe as a fundamental asset of Django itself: that it is just the right level of opinionated and structured such that it becomes, over time, invisible. And I found it hard at first to squint at our codebase and point to "quote-unquote" Django things, because the Django part of the application blends so smoothly into the aspects that are simply Pythonic or simply business logic.
+I do not look at Buttondown and see a Django app; I see a well-structured codebase with many things that have been solved by smarter people than myself. This, more than anything else, is what I love about Django.
+However poetic that might be, it makes for a short and boring blog post. So I put on a combination of thinking cap and x-ray goggles and really took a look at: what parts of Django brought us the most long-term leverage over the past few years?
+1. Middlewares
+Django's middleware abstraction is incredibly simple, and thereby incredibly powerful. I think folks like me who really matured during the middleware-as-function versus middleware-as-class migration take for granted that, regardless of the actual Python primitive, Django middlewares are simple functions that act on the request/response lifecycle. All they need to do is adopt that protocol, and they can do whatever they want within it. It turns out this kind of request hook is extremely useful for a number of things: routing a request to the right newsletter based on its subdomain, capturing UTM and referrer attribution, setting Content-Security-Policy headers, recording pageviews, binding request context onto our structured logs, and — below — stamping the deployed build version.
+Here's the entirety of the one that stamps every response with the deployed git SHA, so a stale browser tab can notice a newer build has shipped:
+# app/emails/middlewares/build_version.py
+
+class
+ Middleware
+:
+
+    def
+ __init__
+(
+self
+, 
+get_response
+: Callable[[HttpRequest], HttpResponse]) -> 
+None
+:
+
+        self
+.get_response = get_response
+
+    def
+ __call__
+(
+self
+, 
+request
+: HttpRequest) -> HttpResponse:
+
+        response = 
+self
+.get_response(request)
+
+        if
+ settings.HEROKU_SLUG_COMMIT 
+and
+ not
+ flag_is_active(CIRCUIT_BREAKER_FLAG):
+
+            response[BUILD_VERSION_HEADER] = settings.HEROKU_SLUG_COMMIT
+
+        return
+ response
+
+If there's one tool that I think the median Django developer should take more advantage of, it's middlewares.
+2. Models (and light inheritance)
+We shy away from polymorphic models, partially because we think they're a bit of a footgun, but more realistically because we just don't have many use cases that adapt well for them. However, every single model in Buttondown inherits from a base model. A trimmed version of it looks like this:
+# app/utils/models.py
+
+class
+ BaseModel
+(
+models
+.
+Model
+):
+
+    creation_date = models.DateTimeField(
+auto_now_add
+=
+True
+)
+
+    id
+ = models.UUIDField(
+primary_key
+=
+True
+, 
+default
+=uuid.uuid4, 
+editable
+=
+False
+)
+
+    objects = TypeIDAwareManager()
+
+    def
+ save
+(
+self
+, *
+args
+, **
+kwargs
+):
+
+        super
+().save(*args, **kwargs)
+
+        # For any tracked field that actually changed, fire its
+
+        # handle_<field>_change hook and persist a transition row.
+
+        ...
+
+    class
+ Meta
+:
+
+        abstract = 
+True
+
+        ordering = (
+"-creation_date"
+,)
+
+That base class is quietly doing a lot, all of it opt-in and additive:
+A UUID primary key and a 
+creation_date
+ on every table, for free.
+Public, type-prefixed IDs (
+sub_...
+, 
+em_...
+) that the ORM decodes transparently, via a custom manager and queryset.
+Implicit change tracking: define 
+handle_<field>_change
+ and it runs whenever that field changes — no signal, no registration.
+Durable provenance: map a field to a transition table and every change is written as its own row.
+Per-field validation hooks (
+validate_<field>
+).
+An opt-in soft-delete manager, and hooks into our data-integrity checker system.
+It seems like an odd thing to surface in this post, but what was so convenient about Django's approach to object-orientation was that all of this was piecemeal. Grafting on new bits of common functionality did not require any significant amount of labor or migration or refactor. And it means being able to do things like provenance tracking for new fields is very, very simple — the model opts in with a single method, and the base class does the rest:
+# app/emails/models/email/model.py
+
+class
+ Email
+(
+BaseModel
+):
+
+    # Implicit change tracking: define handle_<field>_change and BaseModel
+
+    # invokes it whenever that field actually changes. No signal, no wiring.
+
+    def
+ handle_body_change
+(
+self
+, **
+kwargs
+) -> 
+None
+:
+
+        AsynchronousAction.enqueue(sync_snippet_references, [
+str
+(
+self
+.id)])
+
+    # Durable provenance: map a field to a transition table and every change
+
+    # is persisted as a row. Adding one is a one-line dict entry.
+
+    @
+classmethod
+
+    def
+ tracked_field_to_transition_class
+(
+cls
+) -> dict[
+str
+, type[BaseTransition]]:
+
+        return
+ {
+"status"
+: EmailStatusTransition}
+
+Neither of these required a migration to the base class or a refactor of any call site.
+3. Actions
+Rather than let model classes accrete dozens of methods, every behavior a model can undergo lives in its own file under an 
+actions/
+ folder beside that model — one verb per module, each exposing a 
+call()
+. Here's the whole of "ban a subscriber," which itself composes another action:
+# app/emails/models/subscriber/actions/ban.py
+
+from
+ emails.models.subscriber.actions 
+import
+ end_premium_subscription
+
+from
+ emails.models.subscriber.model 
+import
+ Subscriber
+
+def
+ call
+(
+subscriber
+: Subscriber) -> 
+None
+:
+
+    if
+ subscriber.subscriber_type == Subscriber.Type.PREMIUM.value:
+
+        end_premium_subscription.call(
+str
+(subscriber.id))
+
+    subscriber.subscriber_type = Subscriber.Type.REMOVED.value
+
+    subscriber.save(
+update_fields
+=[
+"subscriber_type"
+, 
+"modification_date"
+])
+
+4. Views
+Our approach to views is extremely doctrinaire and extremely simple. A view must:
+live in its own file
+be function-based rather than a CBV
+expose that function with the name of 
+view
+# app/emails/views/record_lifecycle_email_open.py
+
+def
+ view
+(
+request
+: HttpRequest, 
+compressed_id
+: 
+str
+) -> HttpResponse:
+
+    try
+:
+
+        account_id, email_type = _decode_open_payload(compressed_id)
+
+    except
+ (
+UnicodeDecodeError
+, Base64Error, 
+ValueError
+):
+
+        return
+ HttpResponse(TRANSPARENT_GIF, 
+content_type
+=
+"image/gif"
+)
+
+    with
+ transaction.atomic():
+
+        LifecycleEmailEvent.objects.create(
+
+            account_id
+=account_id,
+
+            email_type
+=email_type,
+
+            event_type
+=LifecycleEmailEvent.EventType.OPENED,
+
+            timestamp
+=timezone.now(),
+
+            metadata
+=_build_metadata(request),
+
+        )
+
+    return
+ HttpResponse(TRANSPARENT_GIF, 
+content_type
+=
+"image/gif"
+)
+
+Why be so boring and or strict? Largely due to the pain of context switching. In my opinion, writing maintainable view code is more about avoiding failure than finding success, and failure tends to come in the forms of unnecessary indirection and lack of code re-use: both things made simpler by making views as "pure" (in the FP sense) as possible.
+5. Testing
+I've written a lot on my personal blog around tests, having spent much of my individual-contributor time over the past year working on making the CI pipeline — for which the backend test suite has long been the long pole — as fast as I can. We use pytest and pytest-django and an absolute slew of pytest plugins. Notably, we don't actually use an off-the-shelf fixture generator like Factory Boy or anything like that, instead constructing them ourselves in order to eke out more performance. A test is a plain function that takes the fixtures it needs and asserts against real rows:
+# app/emails/views/record_lifecycle_email_open--test.py
+
+# `account` is a hand-rolled fixture, colocated in account/model--mock.py and
+
+# registered via pytest_plugins — no factory_boy, no mock.patch.
+
+def
+ test_records_open_event
+(
+account
+):
+
+    encoded = encode_open_payload(
+str
+(account.pk), 
+"unconfirmed"
+)
+
+    request = RequestFactory().get(
+f
+"/lo/
+{
+encoded
+}
+/"
+)
+
+    response = view(request, encoded)
+
+    assert
+ response.status_code == 
+200
+
+    event = LifecycleEmailEvent.objects.get(
+account
+=account)
+
+    assert
+ event.event_type == LifecycleEmailEvent.EventType.OPENED
+
+The things we leave out
+Where Rails is famously omakase, one of the things I love most about Django is all the things 
+not
+ mentioned above — the ones we decided, for one reason or another, weren't the right fit for us.
+Some examples:
+Signals.
+ I'm not even sure you can say we don't use them, so much as we don't abuse them. We have exactly one signal in play, a lightweight link into django-allauth. We've found that internal use of signals — connecting two bits of code that we ourselves own — is an anti-pattern that makes it harder to reason about what's happening, or to improve things for performance's sake down the line.
+Class-based views.
+ I think class-based views have some merit in some contexts, but one of the hardest things to deal with when bopping around a codebase is context-switching between a function-based view and a class-based one. And whatever slight marginal benefits a CBV might have for one use case or another, it pales in comparison to being able to be very doctrinaire and standardized about how every single view works.
+Apps.
+ We don't use apps in the conventional modular sense that Django suggests, for two main reasons. One, it's very difficult to deal with cross-app migrations, particularly squashing them. And two, it doesn't provide an obvious benefit over other organizational approaches — of which Django is largely agnostic — like just grouping related models in a folder. We have two exceptions to this rule. The first is our core API infrastructure, the bones of which live in their own app, solely because I built it that way before I had a more sophisticated view. The second is anything we think we might want to abstract out into a third-party package or open-source, where an app helps front-load some of the boundary-setting between it and the rest of our codebase.
+Checks.
+ I think checks are actually really cool, and part of me bemoans not using them more. I've found that adopting weird tests is a simpler way to enforce various constraints within the system. It costs a bit of performance — you can say that technically the REPL is slower — but again, it's one fewer moving part.
+Forms and front-end stuff.
+ We don't use Django's form abstraction whatsoever. In fact, our approach to building out the front end of the application is somewhat interesting: we lean on more of a hydration-based pattern, in which Django's job for most authenticated views is to render a thin shell and seed it with data, not to produce HTML. A single view backs nearly every page of the app — it resolves the session, serializes the account (and, for a handful of routes, a first page of the relevant resource) into 
+json_script
+ tags, and hands off to Vue, which boots and hydrates from that payload instead of paying for an API round-trip on load. Django renders the bones; the SPA does the rest.
+Why did I use Django in the first place?
+Buttondown is written in Django for a boring but revealing reason: it's what I knew at the time. Back in 2018, I was working for a company whose stack was Django and Vue, and I had been hired as someone with extensive amounts of Django experience (meaning: I knew what South was, for you fellow old-timers.)
+One of my longstanding philosophies has been to limit 
+innovation tokens
+. I didn't want to spend time context-switching between frameworks as I went from my day job to my side project. Over the intervening eight years, I've found myself ruing my choice of Vue as a front-end framework — but I can honestly say that, even if it wasn't a meticulously reasoned and considered choice, I have not for one second regretted using Django.
