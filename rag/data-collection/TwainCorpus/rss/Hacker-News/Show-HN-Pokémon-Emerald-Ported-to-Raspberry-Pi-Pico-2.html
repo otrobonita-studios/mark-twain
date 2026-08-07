@@ -1,0 +1,188 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">pokeemerald-rp2350</h1></div>
+<p dir="auto"><strong>Pokémon Emerald running natively on a $6 microcontroller</strong> — full game, 60 fps,
+HDMI out, real buttons, saves that survive a power cycle. No emulator: the
+<a href="https://github.com/pret/pokeemerald">pret decompilation</a> is recompiled from
+ARMv4T to Cortex-M33 and the Game Boy Advance's video hardware is reimplemented
+in software on the second core.</p>
+<p dir="auto">Target board is a <strong>WeAct Studio Core2350B</strong> (RP2350B, 16 MB QSPI flash). The
+whole game — code, graphics, maps, music — is an 11.7 MB image executed in place
+from flash.</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="        RP2350B @ 252 MHz
+  ┌──────────────┬──────────────┐
+  │    core 0    │    core 1    │
+  │  game logic  │  PPU render  │──▶ 240×160 RGB565 framebuffer
+  │   ~0.3 ms/f  │  ~12 ms/f    │         │
+  └──────────────┴──────────────┘         ▼
+         ▲                          HSTX ──▶ DVI/HDMI 640×480p60
+    GP0–GP9 buttons                        (2× upscale, DMA control-block ring)"><pre class="notranslate"><code>        RP2350B @ 252 MHz
+  ┌──────────────┬──────────────┐
+  │    core 0    │    core 1    │
+  │  game logic  │  PPU render  │──▶ 240×160 RGB565 framebuffer
+  │   ~0.3 ms/f  │  ~12 ms/f    │         │
+  └──────────────┴──────────────┘         ▼
+         ▲                          HSTX ──▶ DVI/HDMI 640×480p60
+    GP0–GP9 buttons                        (2× upscale, DMA control-block ring)
+</code></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Status</h2></div>
+<p dir="auto">Playable start to finish as far as it has been tested — boots, plays the intro,
+starts a new game, walks the overworld, battles, and saves. Every scene holds a
+locked 60 fps except the OBJ-window intro cinematic. It is <strong>not</strong> a finished
+product; see <a href="#limitations">Limitations</a>.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+
+
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Video</td>
+<td>✅ Full PPU: modes 0–4, affine, sprites, windows, blending. Byte-exact vs. reference.</td>
+</tr>
+<tr>
+<td>Frame rate</td>
+<td>✅ Locked 60 fps, tear-free, vsync-locked to the scanout beam</td>
+</tr>
+<tr>
+<td>Input</td>
+<td>✅ 10 GPIO buttons</td>
+</tr>
+<tr>
+<td>Saves</td>
+<td>✅ Persist to QSPI flash, survive reboot and reflash</td>
+</tr>
+<tr>
+<td>Audio</td>
+<td><g-emoji alias="warning" class="g-emoji">⚠️</g-emoji> Music plays; some instrument classes silent (see below)</td>
+</tr>
+<tr>
+<td>Link cable / RFU</td>
+<td>❌ Not implemented</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Hardware</h2></div>
+<p dir="auto">See <strong><a href="/mattdeeds/pokeemerald-rp2350/blob/master/docs/HARDWARE.md">docs/HARDWARE.md</a></strong> for the full pinout, bill of
+materials, and wiring notes. In brief: an RP2350B board, an HSTX-to-HDMI
+breakout wired in the Pico DVI Sock pin order, ten buttons to ground, and
+optionally a PCM5102A I²S DAC for sound.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Build</h2></div>
+<p dir="auto">See <strong><a href="/mattdeeds/pokeemerald-rp2350/blob/master/docs/BUILD.md">docs/BUILD.md</a></strong> for prerequisites and the full procedure.
+The short version, from the repo root:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="make tools &amp;&amp; make modern           # first: decomp tools + generated assets
+rp2350/gen_sound_assets.sh          # one-time: wav→bin, mid→song .s
+rp2350/build_objs.sh                # game sources → rp2350/build/libpokeemerald.a
+cmake -B rp2350/hw/build -S rp2350/hw -G Ninja   # PICO_SDK_PATH must be set
+ninja -C rp2350/hw/build emerald
+picotool load -f rp2350/hw/build/emerald.uf2" dir="auto"><pre>make tools <span class="pl-k">&amp;&amp;</span> make modern           <span class="pl-c"><span class="pl-c">#</span> first: decomp tools + generated assets</span>
+rp2350/gen_sound_assets.sh          <span class="pl-c"><span class="pl-c">#</span> one-time: wav→bin, mid→song .s</span>
+rp2350/build_objs.sh                <span class="pl-c"><span class="pl-c">#</span> game sources → rp2350/build/libpokeemerald.a</span>
+cmake -B rp2350/hw/build -S rp2350/hw -G Ninja   <span class="pl-c"><span class="pl-c">#</span> PICO_SDK_PATH must be set</span>
+ninja -C rp2350/hw/build emerald
+picotool load -f rp2350/hw/build/emerald.uf2</pre></div>
+<p dir="auto"><code>rp2350/hw/CMakeLists.txt</code> also builds standalone bring-up targets that were
+used to validate each subsystem on silicon before integration, and which are the
+fastest way to debug a new board: <code>hstx_test</code> (colour bars), <code>psram_test</code>,
+<code>i2s_test</code> (440 Hz sine), <code>display_test</code>, <code>ppu_display_test</code>, <code>emerald_hwtest</code>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How it works</h2></div>
+<p dir="auto">The full engineering log — every phase, the measurements that made the go/no-go
+call, and the bugs that cost the most time — is in
+<strong><a href="/mattdeeds/pokeemerald-rp2350/blob/master/docs/PORTING.md">docs/PORTING.md</a></strong>. The short story:</p>
+<p dir="auto"><strong>It piggybacks on a WASM port.</strong> <a href="https://github.com/tripplyons/pokeemerald-wasm">tripplyons/pokeemerald-wasm</a>
+had already fenced every dependency on real GBA hardware behind <code>#if WASM</code>.
+Reusing those seams as <code>#if WASM || RP2350</code> meant the de-hardwaring work was
+already done; this port only had to add the MCU-specific half.</p>
+<p dir="auto"><strong>The GBA memory map survives.</strong> The game still writes DISPCNT, VRAM, OAM and
+palette RAM at their original addresses — those are just plain SRAM now. Live
+RAM is ~378 KB of the RP2350's 520 KB. ROM lives in QSPI flash via XIP, with the
+game's <code>0x08000000</code> base remapped to <code>0x10000000</code>.</p>
+<p dir="auto"><strong>The PPU is a software rasteriser on core 1.</strong> Ported from the WASM host's
+<code>web/app.js</code> and validated byte-exact against it. The first working version ran
+at 909 ms/frame; per-frame palette LUTs, per-scanline window masks, 8-pixel tile
+spans, and incremental affine stepping brought that to 60 fps — about 45×
+faster. Specialised inner loops then cut typical scenes to ~12 ms.</p>
+<p dir="auto"><strong>Scanout needs no CPU at all.</strong> A DMA control-block ring feeds the HSTX
+serialiser a full 525-line frame with the CPU never touching the re-arm path.
+The interrupt is advisory. This is what makes the display immune to the
+multi-millisecond stalls that flash writes cause during saves — and it took
+killing an ~0.8-blink-per-minute HDMI dropout to get there.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Limitations</h2></div>
+<p dir="auto">Honest list of what is stubbed, missing, or wrong:</p>
+<ul dir="auto">
+<li><strong>Audio is incomplete.</strong> The m4a engine is ported and music plays, but DPCM
+(compressed) and reverse-playback instruments are silent stubs. Mixing is
+coupled to the frame rate, so any scene below 60 fps underruns. It has not had
+a careful by-ear correctness pass.</li>
+<li><strong>No link cable or wireless.</strong> The RFU and multiboot paths are stubbed. Trading,
+battling, and the Mystery Gift download-code path do not work. (Mystery Gift's
+run-downloaded-code path relocates data as Thumb code, which cannot work on an
+M33 as written.)</li>
+<li><strong>The RTC is a dead cartridge clock.</strong> Real Emerald bit-bangs an RTC over
+cartridge GPIO, which does not exist here. Time reads as zero and the in-game
+clock-set screen reports "clock is stopped." Berry growth and other
+time-of-day events are affected.</li>
+<li><strong>The OBJ-window intro cinematic runs at 20–25 ms/frame</strong>, below 60 fps. It is
+the one scene with no fast path.</li>
+<li><strong>Audio hardware is optional but unpolished.</strong> Without the I²S DAC wired, the
+game runs silently and correctly.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Repository layout</h2></div>
+<p dir="auto">This is a fork of pokeemerald-wasm, which is a fork of pret/pokeemerald. Almost
+everything here is upstream; the port is confined to one directory.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rp2350/</code></td>
+<td><strong>The port.</strong> PPU, HSTX display driver, BIOS calls, m4a engine, build scripts.</td>
+</tr>
+<tr>
+<td><code>rp2350/hw/</code></td>
+<td>Pico SDK project: <code>game_main.c</code>, linker script, flash saves, I²S, test targets.</td>
+</tr>
+<tr>
+<td><code>docs/</code></td>
+<td>Hardware, build, and porting documentation.</td>
+</tr>
+<tr>
+<td><code>src/</code>, <code>data/</code>, <code>graphics/</code>, <code>sound/</code></td>
+<td>Upstream pokeemerald game sources and assets.</td>
+</tr>
+<tr>
+<td><code>web/</code>, <code>tools/wasm_*</code></td>
+<td>The WASM build, kept as the PPU reference (see below).</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto"><strong>The WASM build is deliberately retained.</strong> <code>rp2350/ppu_validate.sh</code> runs the
+game in a browser, dumps GBA memory plus reference frames from the JavaScript
+rasteriser, renders the same state with <code>rp2350/ppu.c</code>, and pixel-diffs the two.
+That harness is the only reason the PPU can be called byte-exact, and it caught
+real bugs during every optimisation pass. The Cloudflare deployment config from
+upstream has been removed, but <code>make wasm</code> and <code>make serve-wasm</code> still work.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Licensing</h2></div>
+<p dir="auto"><code>rp2350/</code> is original work, released under the <strong>MIT License</strong>
+(<a href="/mattdeeds/pokeemerald-rp2350/blob/master/rp2350/LICENSE">rp2350/LICENSE</a>).</p>
+<p dir="auto">The rest of the repository is the pret decompilation and carries no license from
+this project. Following pret convention, no ROM is required or included — the
+decompilation builds the game from its own committed sources. Pokémon and
+Pokémon character names are trademarks of Nintendo, Creatures Inc., and GAME
+FREAK Inc. This project is not affiliated with or endorsed by any of them.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Credits</h2></div>
+<ul dir="auto">
+<li><strong><a href="https://github.com/pret/pokeemerald">pret/pokeemerald</a></strong> — the decompilation
+this is built on. Years of work by many people; none of this is possible
+without it.</li>
+<li><strong><a href="https://github.com/tripplyons/pokeemerald-wasm">tripplyons/pokeemerald-wasm</a></strong>
+— the WebAssembly port, whose <code>#if WASM</code> seams and reference rasteriser this
+port depends on directly.</li>
+<li>The original pokeemerald README is preserved at
+<a href="/mattdeeds/pokeemerald-rp2350/blob/master/docs/original-pokeemerald-readme.md">docs/original-pokeemerald-readme.md</a>.</li>
+</ul>
+</article>
