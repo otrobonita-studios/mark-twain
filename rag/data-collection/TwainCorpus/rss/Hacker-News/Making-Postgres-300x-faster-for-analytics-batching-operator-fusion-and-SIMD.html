@@ -137,11 +137,13 @@ let sum = plan.run();
 </pre>
 <p>Batching on its own eliminates most of the overhead. It brings the time to run the query from 1.3 seconds down to around 480ms. Still slower than the for loop, but much closer. One very important detail is that the batch buffer is allocated on the stack. This means the aggregation node doesn’t need to allocate any memory while it’s running. Allocating memory tends to be one of the slower operations. Therefore, when writing ultra-fast code, you’ll want to minimize the number of memory allocations you make.</p>
 <p>Now, if you profile the batched version, the hotspot is now `copy_from_slice`. Even though we are now batching, we still need to copy the items into the buffer. This overhead can be eliminated with what’s known as “operator fusion”. If there are common operations that we know will be performed together, we can create a single node that replaces two nodes. In our case, we can create a single `SumAggregateSequentialScan` node that combines the logic of both the sequential scan and the sum:</p>
-<p>struct SumAggregateSequentialScan&lt;'a&gt; {
+<pre class="brush: plain; title: ; notranslate" title="">
+struct SumAggregateSequentialScan&lt;'a&gt; {
     table: &amp;'a [f64],
     done: bool,
-}</p>
-<p>impl Node for SumAggregateSequentialScan&lt;'_&gt; {
+}
+
+impl Node for SumAggregateSequentialScan&lt;'_&gt; {
     fn next(&amp;mut self) -&gt; Option&lt;f64&gt; {
         if self.done {
             return None;
@@ -153,7 +155,8 @@ let sum = plan.run();
         }
         Some(total)
     }
-}</p>
+}
+</pre>
 <p>This gives us the same performance as the straight for loop because it is literally the same code as the for loop. Now this may seem like cheating, and it definitely is because we’re hardcoding in an optimization for a specific query we know in advance. With operator fusion, it makes sense to hardcode a couple of the most common cases, but you’ll still pretty quickly hit cases you didn’t prepare for ahead of time.</p>
 <p>This can be solved with JIT compilation. With JIT compilation, you can generate the ideal code you wish you had and “cheat” in every query. JIT compilation lets you generate the perfect code for your query, no matter what the query is and always do operator fusion. Unfortunately, this post is long enough as is, so I’ll have to talk about how pgrust leverages JIT compilation another time.</p>
 <p>For one final optimization, we can look to SIMD. SIMD refers to a set of CPU operations that can perform one operation across multiple pieces of data simultaneously. Using SIMD to perform an operation against multiple rows simultaneously is usually much faster than performing the operation on one row at a time. If we change our code to use SIMD:</p>
@@ -249,7 +252,7 @@ impl Node for SumAggregateSequentialScanSimd&lt;'_&gt; {
 </a></li><li class="share-facebook"><a aria-labelledby="sharing-facebook-1626" class="share-facebook sd-button share-icon" data-shared="sharing-facebook-1626" href="https://malisper.me/how-we-made-postgres-hundreds-of-times-faster-the-query-engine/?share=facebook" rel="nofollow noopener noreferrer" target="_blank">
 <span hidden="" id="sharing-facebook-1626">Share on Facebook (Opens in new window)</span>
 <span>Facebook</span>
-</a></li><li class="share-email"><a aria-labelledby="sharing-email-1626" class="share-email sd-button share-icon" data-email-share-error-text="If you're having problems sharing via email, you might not have email set up for your browser. You may need to create a new email yourself." data-email-share-error-title="Do you have email set up?" data-email-share-nonce="7c507b18f6" data-email-share-track-url="https://malisper.me/how-we-made-postgres-hundreds-of-times-faster-the-query-engine/?share=email" data-shared="sharing-email-1626" href="mailto:?subject=%5BShared%20Post%5D%20Rebuilding%20Postgres%20for%20300x%20faster%20analytics%3A%20batching%2C%20operator%20fusion%2C%20and%20SIMD&amp;body=https%3A%2F%2Fmalisper.me%2Fhow-we-made-postgres-hundreds-of-times-faster-the-query-engine%2F&amp;share=email" rel="nofollow noopener noreferrer" target="_blank">
+</a></li><li class="share-email"><a aria-labelledby="sharing-email-1626" class="share-email sd-button share-icon" data-email-share-error-text="If you're having problems sharing via email, you might not have email set up for your browser. You may need to create a new email yourself." data-email-share-error-title="Do you have email set up?" data-email-share-nonce="1755f2592b" data-email-share-track-url="https://malisper.me/how-we-made-postgres-hundreds-of-times-faster-the-query-engine/?share=email" data-shared="sharing-email-1626" href="mailto:?subject=%5BShared%20Post%5D%20Rebuilding%20Postgres%20for%20300x%20faster%20analytics%3A%20batching%2C%20operator%20fusion%2C%20and%20SIMD&amp;body=https%3A%2F%2Fmalisper.me%2Fhow-we-made-postgres-hundreds-of-times-faster-the-query-engine%2F&amp;share=email" rel="nofollow noopener noreferrer" target="_blank">
 <span hidden="" id="sharing-email-1626">Email a link to a friend (Opens in new window)</span>
 <span>Email</span>
 </a></li><li class="share-print"><a aria-labelledby="sharing-print-1626" class="share-print sd-button share-icon" data-shared="sharing-print-1626" href="https://malisper.me/how-we-made-postgres-hundreds-of-times-faster-the-query-engine/#print?share=print" rel="nofollow noopener noreferrer" target="_blank">
