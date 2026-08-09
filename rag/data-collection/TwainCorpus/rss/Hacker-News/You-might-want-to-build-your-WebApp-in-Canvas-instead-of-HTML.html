@@ -1,0 +1,121 @@
+<body class="blogpost">
+<div id="content">
+<h1 id="why-you-might-want-to-build-your-webapp-in-canvas-instead-of-html">Why you might want to build your WebApp in Canvas instead of HTML</h1>
+<p>Iâm always curious how Google, Microsoft and Co. build their web apps - given that they need to work well on any computer, from a top-shelf speed machine to a potato with wires.</p>
+<p>Of course, there are many answers to this question - but one that I find particularly interesting is their use of the Canvas element for functionality that’s usually implemented in HTML.</p>
+<p>The document in Google Docs is a Canvas. So is the sheet in Google Sheets or in the web version of Excel. Unsurprisingly, Canva is a Canvas - but so is the board in Miro. Our own scheduling interface in Hivekit is also a Canvas.</p>
+<video autoplay="" loop="" muted="" playsinline="" poster="./hivekit-scheduler.png">
+
+
+</video>
+<div class="img-hint">
+    Hivekit's scheduler can be zoomed (changes displayed timespan), panned in x and y direction and has lots of interactive aspects that needed managing.
+</div>
+<p>I helped build it, and in this post, I want to explain why we chose Canvas over DOM elements, what we learned along the way, when I think that Canvas is or isnât a good choice for web apps, and why I think Canvas is used by all these big companies for performance-critical apps.</p>
+<h2 id="what-was-canvas-again">What was Canvas again?</h2>
+<p>Canvas has been around for more than 20 years now. It provides a blank space within an HTML document that can be drawn on. To do that, you use a JavaScript API with higher-level methods like <code>fillRect()</code> to fill a rectangle and lower-level methods like <code>getImageData()</code> to access the raw RGBA values of your pixels.</p>
+<p>Whatever approach you take, you end up with what’s basically a static image. For Web Developers, that feels a bit odd. After all, they’re used to a complex Document Object Model, HTML parsed into element trees, click handlers and event bubbling, dynamic rendering and reflows - all managed for you and perfectly tuned for the user’s device.</p>
+<p>With Canvas, all of this is gone now.</p>
+<h2 id="so---why-on-earth-would-you-use-canvas">So - why on earth would you use Canvas?</h2>
+<p>There are some things only Canvas can do. Pixel image manipulation is the obvious one. But why would you choose Canvas to build a web app that could also be built in HTML?</p>
+<p>A few reasons:</p>
+<ul>
+<li>
+<p><strong>Speed:</strong> Parsing HTML, creating a DOM, applying CSS styles, and handling the myriad of features related to user interaction all take time. If your web app becomes complex, the browser can end up doing some seriously heavy lifting. A âdumbâ drawing API means less work. Less work means more speed.</p>
+</li>
+<li>
+<p><strong>Control:</strong> If youâre building a whiteboarding app with an infinite workspace, a grid with countless rows, or a planning tool with a zoomable workspace, you need to take control of rendering anyway. You can (kind of) do that in HTML - for example, through âvirtual scrolling,â where you swap the content of grid rows instead of using the browserâs native scrolling, or by cleverly adding and removing elements from the DOM as the user zooms and pans. But at that point, you might be better off owning the rendering altogether.</p>
+</li>
+<li>
+<p><strong>Consistency:</strong> With canvas, you output exactly what you specify across devices. This used to be more of an issue when browser implementations differed, but even now, responsive designs, CSS gradients, and transition effects can look quite different across operating systems and screens. With canvas, you get the same result - for better or worse.</p>
+</li>
+<li>
+<p><strong>Portability:</strong> Canvas is used to render output from other visual frameworks. Flutter Web and certain WebAssembly implementations output their screen buffers to canvas. But this also works the other way around: tools such as Ejecta and NativeScript wrap C++ drawing APIs in Canvas calls that let you output your graphics on other systems.</p>
+</li>
+</ul>
+<h2 id="and-why-wouldnt-you-use-canvas">And why wouldnât you use Canvas?</h2>
+<p>There are far more reasons not to use Canvas than to use it. And for most web apps, youâre much better off with good old DOM elements. Take the humble <code>&lt;input type="text"&gt;</code> element, for example. With it, you get crispy rendering at any resolution, support for tab, focus, selection, mouse interactions and arrow key navigation, internationalization for right-to-left text and Asian compound characters, accessibility for screen readers… the list goes on.</p>
+<p>Browsers give you a lot of functionality out of the box and there are plenty of great frameworks that make it easy to use, scale and work on in an organized and standardized way across teams.</p>
+<h2 id="when-is-canvas-the-better-choice">When is Canvas the better choice?</h2>
+<p>There’s a certain set of use cases where Canvas can be the better choice.</p>
+<ul>
+<li>
+<p><strong>When you have a lot of absolutely positioned elements, irregular shapes or complex render order/z-index requirements.</strong> Whether you’re building a vision board app or a 2D platformer, if your app is outside the usual HTML layout flow, Canvas might make your life easier.</p>
+</li>
+<li>
+<p><strong>When you only need to render specific things.</strong> If your app can be zoomed, panned, uses camera transforms, clipping, tiling, level-of-detail rendering, or virtualisation, Canvas makes it easy to make sure you only render what you need to.</p>
+</li>
+<li>
+<p><strong>If your application already has a strong internal model.</strong> If your app already has a strong concept of state, geometry, focus and interaction and all you need is a way to visualize it, Canvas makes it easier than HTML.</p>
+</li>
+</ul>
+<p>But if you do decide on a Canvas implementation, here are some of the key things you want to look out for:</p>
+<ul>
+<li><strong>Manage when to Render:</strong> The pattern that worked best for us is to have one central renderer that calls other classes that render specific aspects, such as <code>backgroundRenderer</code>, <code>rowRenderer</code>, <code>taskRenderer</code>. Each of the other classes can call <code>scheduleRender</code> on the renderer. This schedules a single render pass for the next animation frame. Note that we clear the entire Canvas for every frame and render everything from scratch. This is wasteful and more sophisticated implementations might only clear and rerender specific regions. But - doing that also adds complexity - and rerendering the entire Canvas for every frame really never caused issues for us.</li>
+</ul>
+<div class="highlight"><pre style="background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;" tabindex="0"><code class="language-javascript" data-lang="javascript"><span style="display:flex;"><span><span style="color:#cf222e">class</span> <span style="color:#1f2328">Renderer</span><span style="color:#1f2328">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#1f2328">constructor</span><span style="color:#1f2328">(</span><span style="color:#1f2328">canvas</span><span style="color:#1f2328">){</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">renderScheduled</span> <span style="color:#0550ae">=</span> <span style="color:#cf222e">false</span><span style="color:#1f2328">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">canvas</span> <span style="color:#0550ae">=</span> <span style="color:#1f2328">canvas</span><span style="color:#1f2328">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">context</span> <span style="color:#0550ae">=</span> <span style="color:#1f2328">canvas</span><span style="color:#1f2328">.</span><span style="color:#1f2328">getContext</span><span style="color:#1f2328">(</span><span style="color:#0a3069">'2d'</span><span style="color:#1f2328">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">backgroundRenderer</span> <span style="color:#0550ae">=</span> <span style="color:#cf222e">new</span> <span style="color:#1f2328">BackgroundRenderer</span><span style="color:#1f2328">(</span><span style="color:#cf222e">this</span><span style="color:#1f2328">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">rowRenderer</span> <span style="color:#0550ae">=</span> <span style="color:#cf222e">new</span> <span style="color:#1f2328">RowRenderer</span><span style="color:#1f2328">(</span><span style="color:#cf222e">this</span><span style="color:#1f2328">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#1f2328">}</span>
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>    <span style="color:#1f2328">scheduleRender</span><span style="color:#1f2328">(){</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#cf222e">if</span><span style="color:#1f2328">(</span><span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">renderScheduled</span><span style="color:#1f2328">)</span> <span style="color:#cf222e">return</span><span style="color:#1f2328">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">renderScheduled</span> <span style="color:#0550ae">=</span> <span style="color:#cf222e">true</span><span style="color:#1f2328">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#1f2328">requestAnimationFrame</span><span style="color:#1f2328">(</span><span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">render</span><span style="color:#1f2328">.</span><span style="color:#1f2328">bind</span><span style="color:#1f2328">(</span><span style="color:#cf222e">this</span><span style="color:#1f2328">));</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#1f2328">}</span>
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>    <span style="color:#1f2328">render</span><span style="color:#1f2328">()</span> <span style="color:#1f2328">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">renderScheduled</span> <span style="color:#0550ae">=</span> <span style="color:#cf222e">false</span><span style="color:#1f2328">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">context</span><span style="color:#1f2328">.</span><span style="color:#1f2328">clearRect</span><span style="color:#1f2328">(</span><span style="color:#0550ae">0</span><span style="color:#1f2328">,</span> <span style="color:#0550ae">0</span><span style="color:#1f2328">,</span> <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">canvas</span><span style="color:#1f2328">.</span><span style="color:#1f2328">width</span><span style="color:#1f2328">,</span> <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">canvas</span><span style="color:#1f2328">.</span><span style="color:#1f2328">height</span><span style="color:#1f2328">);</span>
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>        <span style="color:#57606a">// Render the individual layers in order
+</span></span></span><span style="display:flex;"><span>        <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">backgroundRenderer</span><span style="color:#1f2328">.</span><span style="color:#1f2328">render</span><span style="color:#1f2328">(</span><span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">context</span><span style="color:#1f2328">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">rowRenderer</span><span style="color:#1f2328">.</span><span style="color:#1f2328">render</span><span style="color:#1f2328">(</span><span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">context</span><span style="color:#1f2328">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#1f2328">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#1f2328">}</span>
+</span></span></code></pre></div><ul>
+<li>
+<p><strong>Layer Multiple Canvas Elements:</strong> For our planning interface, the fundamental plan stays fairly static while the user interacts with the mouse. But there are a lot of highlight and hover effects. For these, we utilize a second Canvas element with the same dimensions as the original Canvas. This <code>InteractionRenderer</code> refreshes much more frequently than the actual Canvas, but only renders a few bounding frames, which is much more lightweight.</p>
+</li>
+<li>
+<p><strong>Keep styles separate.</strong> Keeping CSS separate from HTML makes your life easier - so why not do this with Canvas? Keep a separate file for styles, e.g.</p>
+</li>
+</ul>
+<div class="highlight"><pre style="background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;" tabindex="0"><code class="language-javascript" data-lang="javascript"><span style="display:flex;"><span><span style="color:#1f2328">gapDiagonalLineSpacing</span><span style="color:#0550ae">:</span> <span style="color:#0550ae">10</span><span style="color:#1f2328">,</span>
+</span></span><span style="display:flex;"><span><span style="color:#1f2328">textColor</span><span style="color:#0550ae">:</span> <span style="color:#0a3069">'#ecf0f5'</span><span style="color:#1f2328">,</span> 
+</span></span><span style="display:flex;"><span><span style="color:#1f2328">textColorSecondary</span><span style="color:#0550ae">:</span> <span style="color:#0a3069">'#4d6585'</span><span style="color:#1f2328">,</span>
+</span></span><span style="display:flex;"><span><span style="color:#1f2328">fontStyle</span><span style="color:#0550ae">:</span> <span style="color:#0a3069">"13px 'Lato', sans-serif"</span><span style="color:#1f2328">,</span>
+</span></span><span style="display:flex;"><span><span style="color:#1f2328">fontStyleBold</span><span style="color:#0550ae">:</span> <span style="color:#0a3069">"bold 13px 'Lato', sans-serif"</span>
+</span></span><span style="display:flex;"><span><span style="color:#1f2328">...</span>
+</span></span></code></pre></div><ul>
+<li><strong>Manage device resolution and pixel density</strong> To get crisp render results, make sure your Canvas element is scaled to the device’s pixel ratio. Then, counterintuitively, set the context’s scale to offset the element’s scale. This way, you get crisp render output without your code having to be conscious of scale and pixel density all the time.</li>
+</ul>
+<div class="highlight"><pre style="background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;" tabindex="0"><code class="language-javascript" data-lang="javascript"><span style="display:flex;"><span><span style="color:#1f2328">getPixelScale</span><span style="color:#1f2328">()</span> <span style="color:#1f2328">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#cf222e">return</span> <span style="color:#6639ba">Math</span><span style="color:#1f2328">.</span><span style="color:#1f2328">max</span><span style="color:#1f2328">(</span><span style="color:#6639ba">window</span><span style="color:#1f2328">.</span><span style="color:#1f2328">devicePixelRatio</span><span style="color:#1f2328">,</span> <span style="color:#0550ae">1</span><span style="color:#1f2328">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#1f2328">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#1f2328">scaleCanvas</span><span style="color:#1f2328">(</span><span style="color:#1f2328">canvas</span><span style="color:#1f2328">,</span> <span style="color:#1f2328">ctx</span><span style="color:#1f2328">)</span> <span style="color:#1f2328">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#cf222e">const</span> <span style="color:#1f2328">pixelScale</span> <span style="color:#0550ae">=</span> <span style="color:#cf222e">this</span><span style="color:#1f2328">.</span><span style="color:#1f2328">getPixelScale</span><span style="color:#1f2328">();</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#1f2328">canvas</span><span style="color:#1f2328">.</span><span style="color:#1f2328">width</span> <span style="color:#0550ae">=</span> <span style="color:#1f2328">canvas</span><span style="color:#1f2328">.</span><span style="color:#1f2328">offsetWidth</span> <span style="color:#0550ae">*</span> <span style="color:#1f2328">pixelScale</span><span style="color:#1f2328">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#1f2328">canvas</span><span style="color:#1f2328">.</span><span style="color:#1f2328">height</span> <span style="color:#0550ae">=</span> <span style="color:#1f2328">canvas</span><span style="color:#1f2328">.</span><span style="color:#1f2328">offsetHeight</span> <span style="color:#0550ae">*</span> <span style="color:#1f2328">pixelScale</span><span style="color:#1f2328">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#1f2328">ctx</span><span style="color:#1f2328">.</span><span style="color:#1f2328">scale</span><span style="color:#1f2328">(</span><span style="color:#1f2328">pixelScale</span><span style="color:#1f2328">,</span> <span style="color:#1f2328">pixelScale</span><span style="color:#1f2328">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#1f2328">}</span>
+</span></span></code></pre></div><ul>
+<li>
+<p><strong>Have central functions that translate domain coordinates to pixels:</strong> If you are building an infinite-workspace-type app, elements on this workspace likely have X and Y coordinates. If you are building a spreadsheet, you’ll have row and column indices. These will be different from the actual pixel coordinates, based on the user’s resolution, zoom and pan position, and a host of other factors.
+You’ll make your life a lot easier by having simple functions like <code>getXForColumn(colIndex)</code> or <code>getPositionForDomainCoordinates(x,y)</code>.</p>
+</li>
+<li>
+<p><strong>Maintain a simple box model:</strong> As the user hovers over or clicks elements, you’ll want to know what they interacted with. To do this fast, build up an index of bounding boxes in screen space beforehand. For each, store its x1, x2, y1, and y2 coordinates, along with its z-index and some identifier that tells your implementation what element it belongs to. If you manage a lot of bounding boxes, you might also want to create simple indices based on x and y coordinates for faster lookups or even consider an R-Tree for spatial indexing.</p>
+</li>
+<li>
+<p><strong>Manage Event Handler Life Cycles</strong> Have a global listener for mouse and keyboard events and a simple way to register and deregister callbacks for specific events and elements.</p>
+</li>
+</ul>
+<h2 id="so-should-you-use-canvas">So, should you use Canvas?</h2>
+<p>Canvas isnât a faster replacement for HTML. Itâs a lower-level rendering tool that gives you more controlâand makes you responsible for much more of the browserâs work.</p>
+<p>For most web apps, the DOM remains the better choice. It gives you accessibility, responsive layouts, text selection, input handling, and countless other features for free. But if the heart of your application is a large, spatial workspace with complex positioning, zooming, panning, or thousands of visual elements, Canvas may be a better fit.</p>
+<p>That was the case for us. Owning the rendering pipeline made the planning interface easier to reason about and gave us predictable performance across a wide range of devices. It also meant building our own systems for interaction, hit testing, scaling, and renderingâwork that shouldnât be underestimated.</p>
+<p>So donât choose Canvas simply because it sounds fast. Choose it when your interface no longer behaves like a document and starts behaving more like a scene.</p>
+</div>
+</body>
