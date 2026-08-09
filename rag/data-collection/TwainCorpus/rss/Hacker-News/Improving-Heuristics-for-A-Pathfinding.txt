@@ -1,0 +1,558 @@
+2026 Jul, but attempted many times since 2015
+
+For optimizing A* we usually look at the priority queue or the map representation. Often overlooked is 
+improving the heuristic function
+. Here’s an example from the town of 
+Denerim
+ in Dragon Age Origins. 
+Try moving the start 
+ and goal 
+ to see A*
+ in action:
+
+Now 
+try moving the green 
+ to be near the purple 
+.  As the heuristic value 
+ gets closer to the 
+true
+ distance 
+, the number of nodes A* has to explore decreases from 
+ to 
+. The blue area is the savings.
+
+On this page I’ll show a way to improve the heuristic to speed up A*. At the 
+end of the page
+ I show this technique with maps from real games.
+
+ 1  
+A*’s use of the heuristic
+#
+
+A* uses a 
+heuristic
+ to guide it towards the goal. We can think of it like wind pushing us in the right direction. Here, the heuristic pushes us east, and the shortest path  goes east:
+
+But sometimes it pushes us in the 
+wrong
+ direction. Here, the shortest path is to the west but the heuristic pushes us east:
+
+A* runs faster when the heuristic guides us in the right direction. It wastes time when the heuristic guides us in the wrong direction. But 
+why
+ is it in the wrong direction? It’s because the usual distance-based heuristic doesn’t know about the walls.
+
+ 2  
+Perfect heuristic
+#
+
+Ideally, we’d find a heuristic that knows about walls and never points in the wrong direction:
+
+Can we calculate this “perfect” heuristic? 
+Yes!
+
+But the perfect heuristic is different for every goal and wall configuration. Move the goal 
+ and you’ll see the heuristic changes. Move the start 
+ and you’ll see it doesn’t.
+
+If the goal and walls stay the same, then we can use 
+flow field pathfinding
+. But usually the goal isn’t the same, so we need to construct a brand new perfect heuristic for each goal. That is impractically slow to calculate every time we run A*, and it’s also impractically too large to store if we want to compute it ahead of time.
+
+It’d be nice if we could calculate the heuristic 
+once
+ and then 
+reuse
+ it for multiple A* runs with different goals.
+
+ 3  
+Reusing a perfect heuristic
+#
+
+Let’s calculate a perfect heuristic to the green 
+, which we call a “landmark”. Can we reuse it for another goal 
+? 
+Yes
+, sometimes! 
+Move the start point 
+ and the landmark 
+ around
+ to see which purple goals are helped:
+
+The idea is that if we already have the path from 
+→
+, we 
+also
+ get the shortest path to any 
+ along the way:
+
+Think of the landmark as something far in the distance. Your friend tells you “from your house 
+, walk towards the Eiffel Tower 
+ until you get to Daniel’s house 
+”. The goal is not to reach the landmark. The landmark tells us a 
+direction
+ to go in. The goal, Daniel’s house, is on the way.
+
+Most goals 
+ aren’t on the path 
+→
+ but sometimes they are 
+close
+ to that path:
+
+But what does it mean to be “close”? We can use the path length, 
+cost(B, L)
+. When the paths are almost the same, 
+cost(B, L)
+ is close to 
+cost(B, X) + cost(X, L)
+. 
+
+In A*, we use the 
+heuristic function
+ as a lower bound for the path length 
+cost(B, X)
+. The 
+triangle inequality
+[1]
+ says that the sum of two sides of a triangle is at least as long as the third side. Adapted for directed graphs, we can say 
+cost(B, X) + cost(X, L) ≥ cost(B, L)
+. To calculate a lower bound, we rewrite this inequality as 
+cost(B, X) ≥ cost(B, L) - cost(X, L)
+.
+
+That’s the key idea here
+. It’s impractical to precalculate all costs to all locations, but if we’ve precalculated the costs to a specific location 
+, we can use that to estimate the cost to a different location 
+.
+
+Some of the academic research papers refer to this as a heuristic based on the triangle inequality. Other papers call this the “differential heuristic” because it takes the difference between already computed distances.
+
+ 4  
+Multiple landmarks
+#
+
+How often is this triangle inequality useful?
+
+It depends on where 
+ is relative to the path 
+→
+:
+
+Relative positions
+
+Landmark useful?
+
+before
+
+only in undirected graphs
+
+middle
+
+no
+
+after
+
+yes
+
+Move the start 
+ and goal 
+ around
+ to see where a landmark would help:
+
+Try moving the landmark 
+ outside the green shaded region, and see that the heuristic and path don’t always match.
+
+Since a landmark needs to be “after” the goal 
+, a single landmark won’t be useful for all paths. We need 
+multiple
+ landmarks L₁, L₂, L₃, etc. Each one gives us some lower bound for the heuristic:
+
+cost(B, X) ≥ cost(B, L₁) - cost(X, L₁)
+cost(B, X) ≥ cost(B, L₂) - cost(X, L₂)
+cost(B, X) ≥ cost(B, L₃) - cost(X, L₃)
+…
+cost(B, X) ≥ cost(B, Lₙ) - cost(X, Lₙ)
+
+We can take the 
+max()
+ of these to pick the highest bound. In this diagram, try 
+moving the goal 
+ to one of the purple shaded areas
+ to see how those areas are improved by the landmarks. Then try moving it to one of the unshaded areas to see how A* isn’t any faster there. Also try moving the start point 
+ to see how the shaded area also depends on where the start is.
+
+ 5  
+Placement of landmarks
+#
+
+The best landmark position depends on the start point 
+ 
+and
+ goal 
+. We want the landmark to be “after” the goal 
+, but what’s “after” depends on where the start point 
+ and goal 
+ are.
+
+We want to use landmarks to improve as many (start, goal) pairs as possible.
+
+Let’s start with a single landmark. Try moving the start 
+, goal 
+, and landmark 
+ on this map:
+
+The purple shaded areas show the goal positions that the landmark helsp. It looks like the landmark can cover the main corridors but not the side rooms. We need many more landmarks:
+
+Much more of the map is covered in purple now. Picking the number and placement of landmarks  is 
+project specific
+. Consider:
+
+Are all paths equally likely? For example in a colony builder game like Dwarf Fortress, we may care a lot more about paths to/from the main base, and not paths between a forest and a mine.
+
+All all paths equally valuable to optimize? For example if pathfinding is limiting the frame rate, we might want to focus on long paths that are slower to compute and not on short paths.
+
+Is the map static or does it change over time? If static, we might want to spend a lot of time in the map designer tool to precalculate optimal landmarks. But if dynamic, we might want to use the last few goal locations to decide new landmark positions.
+
+If the change reduces an edge cost, the heuristic will overestimate sometimes, and A* will return a non-shortest path until we update the cost table. Pathfinding is optimized but nonoptimal. Example: the player broke a wall but the unit won’t look for the shorter path right away.
+
+If the change increases an edge cost, the heuristic will be lower than desired, and A* will take a little longer to run until we update the cost table. Pathfinding is optimal but not optimized. Example: the player added a wall so the unit might think that area’s safe to walk through but will have to find a path around it.
+
+If many units find paths to common areas (such as the Dwarf Fortress dining room), consider dropping the least used landmark and adding one near the common area.
+
+Are the maps open world or constrained? A real time strategy game may have different needs than a room+corridor dungeon crawler.
+
+Thomas Nobes 
+has a video explanation
+[2]
+ including more tips on where to place the landmark points.
+
+Fortunately, even if a landmark isn’t optimal, it might still help somewhat, and it’s still no worse than if we use the regular A* heuristic.
+
+ 6  
+Automated placement
+#
+
+Although the best landmark positions will be project specific, one algorithm to place landmarks in a project-agnostic way is to keep track of which locations are good for many randomly chosen paths. 
+Try it here
+ to find a landmark position:
+
+(start animation)
+
+It usually but not always picks a spot in the upper left. It matches our intuition that landmarks should go on the outer edges of the map. 
+
+The second landmark should be away from the first landmark. The third landmark should be away from the first and second landmark. Each subsequent landmark should be evaluated based on what it adds. This is what it looks like with two existing landmarks:
+
+(start animation)
+
+It picks a third away from the first two, but not always in the same place.
+
+ 7  
+Implementation
+#
+
+The change described on this page is to the heuristic function given to A*. We don’t need to change A* itself.
+
+We need to 
+pick landmarks
+. If the maps are known ahead of time, landmarks can be placed in a map designer tool. If the maps are procedurally generated, try the randomized map analysis earlier on this page. Some of the papers linked at the end have more sophisticated placement algorithms.
+
+Then we need to 
+analyze the map
+. Allocate a 2D array of numbers, 
+cost[nodeId][landmarkId]
+. 
+
+For each landmark, we run 
+Dijkstra’s Algorithm
+. It’s a “single source shortest path” algorithm but we want a single goal instead of a single source. In a directed graph, we need to reverse all the edges. In an undirected graph, we can use the edges as is. We set 
+cost[nodeId][landmarkId]
+ to the cost of the shortest path from node 
+nodeId
+ to node 
+landmarkId
+. If the weights are all 1, we can use Breadth First Search instead of Dijkstra’s Algorithm.
+
+This is approximately what I’m running for the demos on this page (undirected graphs):
+
+const
+ 
+L
+ = [ 
+/* 
+array of landmark locations
+ */
+ ];
+
+let
+ 
+L_cost
+ = [ 
+/* 
+array[nodeId] of arrays[landmarkId]
+ */
+ ];
+
+for
+ (
+let
+ 
+landmarkId
+ = 0; landmarkId < L.length; landmarkId++) {
+    
+let
+ 
+output
+ = dijkstraSearch(L[landmarkId]);
+    
+for
+ (
+let
+ 
+nodeId
+ = 0; nodeId < graph.num_nodes; nodeId++) {
+      L_cost[nodeId][landmarkId] = output.cost_so_far[nodeId];
+    }
+}
+
+Note that 
+it’s not much code
+. It’s running our existing algorithm (Dijkstra’s, A*, or BFS) and storing the results in an array. It could run in a background thread.
+
+Then we need to 
+modify the heuristic function
+. Previously the heuristic was 
+distance(B, X)
+. For example:
+
+function
+ 
+heuristicManhattan
+(
+a
+, 
+z
+) {
+    
+return
+ Math.abs(a.x - z.x) + Math.abs(a.y - z.y);
+}
+
+Each landmark L
+i
+ gives us a lower bound 
+cost(Lᵢ, X) - cost(Lᵢ, B)
+. We want to take the 
+highest
+ of these:
+
+function
+ 
+heuristicLandmark
+(
+B
+, 
+X
+) {
+    
+let
+ 
+h
+ = heuristicManhattan(B, X); 
+// 
+or any base heuristic
+
+for
+ (
+let
+ 
+i
+ = 0; i < L.length; i++) {
+        
+let
+ 
+lowerBound
+ = L_cost[B][i] - L_cost[X][i];
+        lowerBound = Math.abs(lowerBound); 
+// 
+if undirected
+
+if
+ (lowerBound > h) { h = lowerBound; }
+    }
+    
+return
+ h;
+}
+
+Note that 
+it’s not much code
+. It’s running the existing heuristic (typically Manhattan, Chebyshev, or Euclidean distance) and sometimes increasing it if the landmarks form a good triangle.
+
+What changes with the A* code? 
+Nothing
+.
+
+There are lots of techniques for making A* run faster. I like this one because it’s very little code.
+
+ 8  
+Demos
+#
+
+I tried the differential heuristic on some maps from Dragon Age (
+provided by movingai.com
+[3]
+), a maze (also provided by movingai.com), and 
+Cogmind
+[4]
+ (maps provided by Josh Ge). All of these maps are undirected graphs (edges are bidirectional) so I’ve used that version of the differential heuristic.
+
+Blue areas are what 
+we no longer have to search
+ by using the differential heuristic. Orange areas are what we search even with the improved heuristic.
+
+Try moving the start 
+ and goal 
+ to see the performance on different paths.
+
+ 8.1 
+Dragon Age, The Circle Tower
+#
+
+The landmark is badly placed for the initial 
+→
+ path. Try moving it.
+
+ 8.2 
+Cogmind, Factory 5
+#
+
+In the next demo the landmarks 
+ are in places that don’t help. Move them around to improve search.
+
+The blue area are the nodes we no longer have to search. More blue is better.
+
+The landmark 
+ points help more when closer to the start point 
+ than the goal 
+. They help more when they’re “past” the goal point. Move the start 
+ and goal 
+ around and see that there’s a big improvement no matter which path you want to find:
+
+However, it took a lot of landmarks to get that improvement. We can do better by using the random path map analysis to pick fewer landmarks but in smarter locations:
+
+ 8.3 
+Maze
+#
+
+A* with a distance heuristic behaves particularly badly with mazes, but in this one, just four landmarks make a big difference! Then 
+try clicking Random path
+ repeatedly. The blue areas are the areas we 
+didn’t have to search
+ by using the landmarks. Also toggle the bidirectional flag to see how much of a difference that makes.
+
+ 8.4 
+Dragon Age, Lothering
+#
+
+This map has large open areas, and it seems to work well with the landmarks.
+
+ 8.5 
+Cogmind, Research 2
+#
+
+This is a room-and-corridor map from Cogmind.
+
+ 8.6 
+Cogmind, Factory 4
+#
+
+Another room-and-corridor map, common in traditional Roguelike dungeons.
+
+ 9  
+More reading
+#
+
+This page is about using Cartesian coordinates in a game map to construct a graph-based heuristic based on “landmark” nodes (sometimes called “pivots” or “beacons”). 
+I’ve collected some references but haven’t read all of them
+ so I may have some of this wrong.
+
+2004 
+Computing the Shortest Path: A* Search Meets Graph Theory
+[5]
+ (Goldberg, Harrison) [
+mirrors
+[6]
+]. I learned about the technique in this paper. It’s a combination of 
+bidirectional
+ A* search and the landmark-based heuristic, used for road networks. It uses the terminology “landmarks” and “triangle inequality”.
+
+1994 
+Routing information organization to support scalable interdomain routing with heterogeneous path requirements
+ (Hotz). [
+citations
+[7]
+] I can’t find a copy of this online, but it appears to be work that introduced using the triangle inequality with landmarks, for Internet routing.
+
+2005 
+Approximate Distance Oracles
+ (Thorup, Zwick) [
+mirrors
+[8]
+]. This theory paper covers the more general topic of calculating the approximate distance between any pair of nodes in a graph, using a “
+distance oracle
+[9]
+”. An approximate distance is what we need as the heuristic in A*.
+
+It’s also possible to go in reverse. Many graphs do not have natural Cartesian coordinates, and even the ones that do may not have good results from a distance-based heuristic.
+
+2002 
+Predicting Internet Network Distance with Coordinates-Based Approaches
+[10]
+  (Ng, Zhang) [
+mirrors
+[11]
+] This paper uses the landmark-based heuristics to assign Cartesian coordinates for nodes in an Internet routing network. Then it uses Euclidean distance for the heuristic. This is the inverse of what we’re doing on this page, where we already have Cartesian coordinates, but want to use the landmark-based heuristic instead.
+
+2011 
+Euclidean Heuristic Optimization
+[12]
+ (Rayner, Bowling, Sturvetant) transforms the Cartesian coordinates on a game map where distance heuristics don’t work well into new Cartesian coordinates where distance does work well.
+
+Storing the landmark data requires one number per node. In a typical game map, those numbers may be very similar from one grid space to the next. Just as image compression takes advantage of nearby pixels having similar values, we might want to compress the landmark data because nearby graph nodes have similar values:
+
+2011 
+The Compressed Differential Heuristic
+[13]
+ (Goldenberg, Sturvetant, Felner, Schaeffer) - by storing more landmarks in the same amount of space, the heuristic can be better. In this paper, “landmarks” are called “pivots”, and the “landmark based heuristic” is called the “differential heuristic”.
+
+The landmarks 
+ used on this page are placed 
+after
+ the end of the path, so the layout is 
+→
+→
+. There are also algorithms that place landmarks 
+along
+ the path, 
+→
+→
+→
+→
+. I am not covering that topic here, but if you’re interested, see:
+
+2008 
+Approximating Shortest Paths using Landmarks
+[14]
+ (Grant, Mould). Calls them “landmarks”.
+
+2014 
+Hub Labels: Theory and Practice
+[15]
+ (Delling, Goldberg, Savchensko, Werneck). Calls them “hubs”, and uses only a single intermediary on the path B→L→X.
+
+2009 
+Abstraction-Based Heuristics with True Distance Computations
+[16]
+ (Felner, Barer, Sturvetant, Schaeffer). I believe this paper tries to unify both “landmark” approaches. B→X→L is called “differential heuristic” and B→L→L→L→X is called “canonical heuristic”, and both of these are under the umbrella “true distance heuristics”.
+
+I learned about this technique in 2007, then tried writing it up in 2015. I realized that I didn’t understand it enough to be able to explain it. I studied it off and on in 2016, 2018, 2019, 2022, 2024, and 2026. I abandoned and restarted this page many times. And by 2026 I think I understand it well enough to write this page. However I haven’t used it in a real project yet.
