@@ -1,0 +1,118 @@
+<article class="post-single"><div class="post-content"><p>On 2025-12-9, I tested the cross-compilation of the official Svelte template of <a href="https://github.com/wailsapp/wails">Wails</a> v2.11.0, a desktop app framework for Go, on my amd64 laptop running Ubuntu 24 with Go v1.25.5. Of course, the results may change in the future as Wails and Go are being improved. Go is known for making cross-compilation much easier than most other languages, and that is mostly still true when using frameworks like Wails. Creating executable files and/or installers for each of several platforms is sometimes as simple as listing those platforms in a command:</p><pre><code>wails build -clean -nsis \
+    -platform 'linux/amd64,windows/amd64,windows/arm64,windows/386'
+</code></pre><p>The above command creates these files:</p><pre tabindex="0"><code>build
+└── bin
+    ├── my-app-386.exe
+    ├── my-app-amd64.exe
+    ├── my-app-amd64-installer.exe
+    ├── my-app-arm64.exe
+    ├── my-app-arm64-installer.exe
+    └── my-app-linux-amd64
+</code></pre><p>With that, we already have executables and installers for Linux and Windows! I didn’t include MacOS in the list of platforms because Apple generally does not allow cross-compilation. I don’t think there’s anything Wails or Go can do about that. (When I include darwin in the list, the platform is skipped with the message <code>WARNING Crosscompiling to Mac not currently supported</code>.)</p><p>When I accidentally included a platform that doesn’t exist, I got a helpful message that included this:</p><pre><code>Supported platforms: darwin,darwin/amd64,darwin/arm64,darwin/universal,linux,linux/amd64,linux/arm64,linux/arm,windows,windows/amd64,windows/arm64,windows/386
+</code></pre><h2 id="are-they-statically-linked">Are they statically linked?<a aria-hidden="true" class="anchor" hidden="" href="#are-they-statically-linked">#</a></h2><p>According to Linux’s <code>ldd</code> command (which prints shared object dependencies), the Windows executables and installers are statically linked and the Linux one is dynamically linked:</p><pre tabindex="0"><code>$ ldd build/bin/*
+build/bin/my-app-386.exe:
+	not a dynamic executable
+build/bin/my-app-amd64.exe:
+	not a dynamic executable
+build/bin/my-app-amd64-installer.exe:
+	not a dynamic executable
+build/bin/my-app-arm64.exe:
+	not a dynamic executable
+build/bin/my-app-arm64-installer.exe:
+	not a dynamic executable
+build/bin/my-app-linux-amd64:
+	linux-vdso.so.1 (0x00007ffdbe4c7000)
+	libglib-2.0.so.0 =&gt; /lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000079e7a3ff0000)
+	libwebkit2gtk-4.0.so.37 =&gt; /lib/x86_64-linux-gnu/libwebkit2gtk-4.0.so.37 (0x000079e7a0400000)
+	libgtk-3.so.0 =&gt; /lib/x86_64-linux-gnu/libgtk-3.so.0 (0x000079e79fc00000)
+    ...
+</code></pre><p>The <code>file</code> command confirms this:</p><pre tabindex="0"><code>$ file build/bin/*
+build/bin/my-app-386.exe:             PE32 executable (GUI) Intel 80386, for MS Windows, 7 sections
+build/bin/my-app-amd64.exe:           PE32+ executable (GUI) x86-64, for MS Windows, 9 sections
+build/bin/my-app-amd64-installer.exe: PE32 executable (GUI) Intel 80386 (stripped to external PDB), for MS Windows, Nullsoft Installer self-extracting archive, 7 sections
+build/bin/my-app-arm64.exe:           PE32+ executable (GUI) Aarch64, for MS Windows, 7 sections
+build/bin/my-app-arm64-installer.exe: PE32 executable (GUI) Intel 80386 (stripped to external PDB), for MS Windows, Nullsoft Installer self-extracting archive, 7 sections
+build/bin/my-app-linux-amd64:         ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=8ce9189206c3fc10a0fdfb874b0a5cd7b5f61ec7, for GNU/Linux 3.2.0, stripped
+</code></pre><p>I tried to force static linking for the Linux executable by using <code>-ldflags '-extldflags "-static"'</code>, but I got many errors including:</p><pre tabindex="0"><code>/usr/bin/ld: /tmp/go-link-3304063632/000004.o: in function `_cgo_77133bf98b3a_C2func_getaddrinfo':
+/tmp/go-build/cgo_unix_cgo.cgo2.c:60:(.text+0x37): warning: Using 'getaddrinfo' in statically linked applications requires at runtime the shared libraries from the glibc version used for linking
+</code></pre><p>There may still be a way to force static linking for the Linux executable, but I’m not aware of it yet.</p><h2 id="what-about-linuxarm64">What about <code>linux/arm64</code>?<a aria-hidden="true" class="anchor" hidden="" href="#what-about-linuxarm64">#</a></h2><p>Unfortunately, cross-compiling from <code>linux/amd64</code> to <code>linux/arm64</code> doesn’t work right now (see output below). I searched Wails’ repo and found others have the same problem. There doesn’t seem to be a workaround. Here’s the output:</p><pre tabindex="0"><code>$ wails build -platform 'linux/arm64'
+Wails CLI v2.11.0
+
+
+# Build Options
+
+Platform(s)        | linux/arm64
+Compiler           | /usr/local/go/bin/go
+Skip Bindings      | false
+Build Mode         | production
+Devtools           | false
+Frontend Directory | /home/chris/repos/my-app/frontend
+Obfuscated         | false
+Skip Frontend      | false
+Compress           | false
+Package            | true
+Clean Bin Dir      | false
+LDFlags            |
+Tags               | []
+Race Detector      | false
+
+
+# Building target: linux/arm64
+
+  • Generating bindings: Done.
+  • Installing frontend dependencies: Done.
+  • Compiling frontend: Done.
+  • Compiling application: # runtime/cgo
+gcc_arm64.S: Assembler messages:
+gcc_arm64.S:30: Error: no such instruction: `stp x29,x30,[sp,'
+gcc_arm64.S:34: Error: operand size mismatch for `mov'
+gcc_arm64.S:36: Error: no such instruction: `stp x19,x20,[sp,'
+gcc_arm64.S:39: Error: no such instruction: `stp x21,x22,[sp,'
+gcc_arm64.S:42: Error: no such instruction: `stp x23,x24,[sp,'
+gcc_arm64.S:45: Error: no such instruction: `stp x25,x26,[sp,'
+gcc_arm64.S:48: Error: no such instruction: `stp x27,x28,[sp,'
+gcc_arm64.S:52: Error: operand size mismatch for `mov'
+gcc_arm64.S:53: Error: operand size mismatch for `mov'
+gcc_arm64.S:54: Error: operand size mismatch for `mov'
+gcc_arm64.S:56: Error: no such instruction: `blr x20'
+gcc_arm64.S:57: Error: no such instruction: `blr x19'
+gcc_arm64.S:59: Error: no such instruction: `ldp x27,x28,[sp,'
+gcc_arm64.S:62: Error: no such instruction: `ldp x25,x26,[sp,'
+gcc_arm64.S:65: Error: no such instruction: `ldp x23,x24,[sp,'
+gcc_arm64.S:68: Error: no such instruction: `ldp x21,x22,[sp,'
+gcc_arm64.S:71: Error: no such instruction: `ldp x19,x20,[sp,'
+gcc_arm64.S:74: Error: no such instruction: `ldp x29,x30,[sp],'
+  ERROR   exit status 1
+</code></pre><p>I get the same error message when I use the <code>-compiler</code> option with <code>go1.24.11</code> or <code>go1.23.12</code>. (You can <a href="https://go.dev/doc/manage-install">install multiple versions of Go</a>.)</p><h2 id="the-dappserverwails-build-action-github-action">The <code>dAppServer/wails-build-action</code> GitHub Action<a aria-hidden="true" class="anchor" hidden="" href="#the-dappserverwails-build-action-github-action">#</a></h2><p>Wails’ website includes <a href="https://wails.io/docs/guides/crossplatform-build/">a sample GitHub action for building executables</a> which uses the <code>dAppServer/wails-build-action</code> action. I tested the sample with its actions updated to their latest stable versions.</p><p>A few things that may or may not make someone hesitant to use <code>dAppServer/wails-build-action</code>:</p><ul><li>the sample on Wails’ site fails with the error message <code>ditto: Cannot get the real path for source './build/bin/App.app'</code></li><li>fixes for that bug have been submitted to the <code>dAppServer/wails-build-action</code> repo in pull requests, but they have been ignored for 5 months and counting (example: <a href="https://github.com/Snider/build/pull/49/files">https://github.com/Snider/build/pull/49/files</a>)</li><li>it has a copyleft license</li><li>much of the project’s documentation was written by an LLM</li></ul><p>The error message mentioned above appears if you keep <code>darwin/universal</code> in the list of platforms to target. (The Linux and Windows builds succeeded when I tested it.)</p><h2 id="goreleaser">GoReleaser<a aria-hidden="true" class="anchor" hidden="" href="#goreleaser">#</a></h2><p><a href="https://goreleaser.com/">GoReleaser</a> is an awesome tool that automates releases, including creating executables and installers. I couldn’t get Wails to work with it though.</p><p>Here’s part of the <code>.goreleaser.yaml</code> I tried:</p><div class="highlight"><pre class="chroma" tabindex="0"><code class="language-yaml" data-lang="yaml"><span class="line"><span class="cl"><span class="nt">builds</span><span class="p">:</span></span></span><span class="line"><span class="cl">- <span class="nt">id</span><span class="p">:</span><span class="s2">"wails-build"</span></span></span><span class="line"><span class="cl"><span class="nt">goos</span><span class="p">:</span></span></span><span class="line"><span class="cl">- <span class="l">linux</span></span></span><span class="line"><span class="cl">- <span class="l">windows</span></span></span><span class="line"><span class="cl"><span class="nt">tool</span><span class="p">:</span><span class="s2">"go1.23.12"</span></span></span><span class="line"><span class="cl"><span class="c"># how: https://go.dev/doc/manage-install</span></span></span><span class="line"><span class="cl"><span class="c"># why: https://github.com/wailsapp/wails/issues/4605</span></span></span><span class="line"><span class="cl"><span class="nt">hooks</span><span class="p">:</span></span></span><span class="line"><span class="cl"><span class="nt">post</span><span class="p">:</span></span></span><span class="line"><span class="cl">- <span class="l">wails build -clean -nsis -compiler 'go1.23.12' -platform 'linux/amd64,linux/arm64,windows/amd64,windows/arm64,windows/386'</span></span></span><span class="line"><span class="cl">- <span class="l">cp ./build/bin/. ./dist</span></span></span></code></pre></div><p>I then tested this with <code>goreleaser release --snapshot --clean</code> and got this error:</p><pre tabindex="0"><code>  ⨯ release failed after 6s
+    error=
+    │ post hook failed: shell: 'wails build -clean -nsis -compiler 'go1.23.12' -platform linux/amd64,linux/arm64,windows/amd64,windows/arm64,windows/386': exit status 1: Wails CLI v2.11.0
+    │ # Build Options
+    │
+    │ Platform(s)        | linux/amd64,linux/arm64,windows/amd64,windows/arm64,windows/386
+    │ Compiler           | /home/chris/go/bin/go1.23.12
+    │ Skip Bindings      | false
+    │ Build Mode         | production
+    │ Devtools           | false
+    │ Frontend Directory | /home/chris/repos/my-app/frontend
+    │ Obfuscated         | false
+    │ Skip Frontend      | false
+    │ Compress           | false
+    │ Package            | true
+    │ Clean Bin Dir      | true
+    │ LDFlags            |
+    │ Tags               | []
+    │ Race Detector      | false
+    │ # Building target: linux/amd64
+    │
+    │   • Generating bindings:   ERROR
+    │
+    │           fork/exec /tmp/wailsbindings: no such file or directory
+    │   ERROR
+    │
+    │           fork/exec /tmp/wailsbindings: no such file or directory
+</code></pre><p>I got the same error with <code>go1.24.11</code>, and with using Go v1.25.5 by not specifying the <code>tool</code> and <code>compiler</code>. I searched Wails’ repo for any issues, PRs, etc. that might help with this, but I couldn’t find anything promising. There might be a way to get it working, but I might just create releases manually for now.</p><p>Just in case the error only occurs when I run <code>goreleaser release --snapshot --clean</code> and not when it runs in GitHub Actions, I tried the latter as well. The error message changed, but still doesn’t seem to have a workaround:</p><pre tabindex="0"><code>  ⨯ release failed after 5s                         
+    error=
+Error:     │ build failed: exit status 1: main.go:11:12: pattern all:frontend/dist: no matching files found
+    target=linux_386_sse2
+Error: The process '/opt/hostedtoolcache/goreleaser-action/2.13.1/x64/goreleaser' failed with exit code 1
+</code></pre></div></article>
