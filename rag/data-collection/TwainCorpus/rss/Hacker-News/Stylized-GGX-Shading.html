@@ -1,0 +1,150 @@
+<main class="content">
+<p><a class="btn-small" href="../graphics.html">Back to graphics</a></p>
+<h1>Stylized GGX shading — toon specular highlights</h1>
+<div class="graphics-post-date">July 19, 2026</div>
+<p>To achieve a toon look in 3D rendering, the most common way is to threshold the lighting. It transforms the soft color gradients into flat colors.</p>
+<pre><code class="language-glsl">// The rendering equation becomes:
+float Threshold = 0.0; // any value between 0 and 1
+vec3 Radiance = BRDF * LightIntensity * <strong>step</strong>(<strong>Threshold</strong>, dot(Normal, LightDirection));</code></pre>
+<div style="display:flex;gap:2rem;justify-content:center;align-items:flex-start;flex-wrap:wrap;margin:1rem 0;margin-bottom:4rem;">
+<figure style="margin:0;text-align:center;max-width:48%;">
+
+<figcaption>Diffuse Thresholding</figcaption>
+</figure>
+<figure style="margin:0;text-align:center;max-width:48%;">
+
+<figcaption>Specular Thresholding</figcaption>
+</figure>
+</div>
+<p>However, one might want to mix the 2D and 3D looks: <strong>big sharp highlights at low roughness</strong> and <strong>soft gradients at high roughness</strong>.
+        It feels more modern than classic toon shading, and we can rely on PBR for most of our shading, making everyone's lives easier (closer to energy-conservation, easier integration into existing pipelines, physically-based material calibration...). 
+        I call this mixed approach "Stylized GGX Shading".
+        </p>
+<div style="display:flex;gap:0.5rem;justify-content:center;align-items:flex-start;flex-wrap:wrap;margin:1rem 0;margin-bottom:4rem;">
+<figure style="margin:0;text-align:center;max-width:32%;">
+<video autoplay="" loop="" muted="" src="../resources/graphics-posts/stylized-ggx-shading/toon.mp4" style="width:100%;height:auto;display:block;">Toon Shading video</video>
+<figcaption>Toon</figcaption>
+</figure>
+<figure style="margin:0;text-align:center;max-width:32%;">
+<video autoplay="" loop="" muted="" src="../resources/graphics-posts/stylized-ggx-shading/stylized.mp4" style="width:100%;height:auto;display:block;">Stylized GGX Shading video</video>
+<figcaption>Stylized GGX</figcaption>
+</figure>
+<figure style="margin:0;text-align:center;max-width:32%;">
+<video autoplay="" loop="" muted="" src="../resources/graphics-posts/stylized-ggx-shading/ggx.mp4" style="width:100%;height:auto;display:block;">GGX Shading video</video>
+<figcaption>GGX</figcaption>
+</figure>
+</div>
+<p>
+        Many games have explored the combination of PBR and toon shading.
+        For example in <cite>Zelda: Breath of the Wild</cite>, the characters use pure toon shading but the environments rely more on a 3D / PBR look (not completely, e.g. the grass). This makes the characters pop out of the background.
+        </p>
+<p>
+        Another example is <cite>Spellcasters Chronicles</cite>, which I had the chance to work on. During development we tested many things, including this "Stylized GGX Shading" I'm describing here. In the end we landed on something else, but it still uses a mix of 2D and 3D looks. 
+        </p>
+<div style="display:flex;gap:2rem;justify-content:center;align-items:flex-start;flex-wrap:wrap;margin:1rem 0;margin-bottom:4rem;">
+<figure style="margin:0;text-align:center;max-width:48%;">
+
+<figcaption>A screenshot from Zelda: Tears of the Kingdom</figcaption>
+</figure>
+<figure style="margin:0;text-align:center;max-width:48%;">
+
+<figcaption>A screenshot from Spellcasters Chronicles</figcaption>
+</figure>
+</div>
+<h2>Simple version</h2>
+<p>The most common PBR model is the <a class="simple-link" href="https://learnopengl.com/PBR/Theory" target="_blank">GGX Cook-Torrance microfacet model</a>. 
+            The surface's asperity is analytically modeled as a collection of oriented microfacets, and controlled by a roughness parameter.
+            The distribution of these microfacets' normals is described by the Normal Distribution Function (NDF).
+            Real-time engines usually use the Trowbridge-Reitz NDF, which looks like this:
+        </p>
+<pre><code class="language-glsl">// GGX Trowbridge-Reitz NDF
+float D(vec3 Normal, vec3 HalfVector, float Roughness)
+{
+    float a = Roughness * Roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(Normal, HalfVector), 0.0);
+    float NdotH2 = NdotH * NdotH;
+    float denom = NdotH2 * (a2 - 1.0) + 1.0;
+    return a2 / (PI * denom * denom);
+}</code></pre>
+<figure style="margin:0;margin-bottom:3rem;text-align:center;">
+
+<figcaption>GGX Trowbridge-Reitz NDF, at varying roughness</figcaption>
+</figure>
+<p>By slightly modifying this equation, we can expand the specular highlights.</p>
+<pre><code class="language-glsl">// Stylized GGX Trowbridge-Reitz NDF
+float D(vec3 Normal, vec3 HalfVector, float Roughness, float SpecularSize)
+{
+float a = Roughness * Roughness;
+float a2 = a * a;
+float NdotH = max(dot(Normal, HalfVector), 0.0);
+float NdotH2 = NdotH * NdotH;
+float denom = <strong>max(</strong><strong>SpecularSize</strong> * NdotH2 * (a2 - 1.0) + 1.0<strong>, 0.0001)</strong>;
+return a2 / (PI * denom * denom);
+}</code></pre>
+<figure style="margin:0;margin-bottom:3rem;text-align:center;">
+
+<figcaption>Stylized GGX Trowbridge-Reitz NDF, at varying roughness</figcaption>
+</figure>
+<p>I made a <a class="simple-link" href="https://www.desmos.com/calculator/drjmgelnyy" target="_blank">Desmos graph</a> to visualize what's happening (follow the link to play with its parameters). 
+            Abscissa represents the dot product of the surface normal and the half-vector (<code>NdotH</code>). 
+            Ordinate represents the NDF value (the <code>return</code> value). Higher means more reflected energy. 
+<b style="color:black;">Black curve</b> is the original Trowbridge-Reitz NDF, <b style="color:red;">red curve</b> is the stylized one. 
+            Our new "Specular Size" parameter allows us to return more energy at higher angles while preserving the original shape of the NDF.
+        </p>
+<div style="display:flex; gap:2rem; justify-content:center; align-items:flex-start; flex-wrap:wrap; margin:1rem 0; margin-bottom:4rem;">
+<figure style="margin:0; flex:1 1; max-width:48%; text-align:center;">
+
+<figcaption style="margin-top:0.6rem; font-size:0.95rem; color:#555;">Desmos graph animating the Specular Size</figcaption>
+</figure>
+<figure style="margin:0; flex:1 1; max-width:48%; text-align:center;">
+
+<figcaption style="margin-top:0.6rem; font-size:0.95rem; color:#555;">Resulting highlight shape</figcaption>
+</figure>
+</div>
+<h2>Improved version</h2>
+<p>The simple version has the benefit of being extra cheap (1 mul and 1 max), but it impacts rough materials too much, making them appear overly bright. 
+            Here is a slightly more complex equation that preserves the original NDF shape at high roughness, while still expanding the highlights at low roughness.
+        </p>
+<pre><code class="language-glsl">// Stylized GGX Trowbridge-Reitz NDF
+float D(vec3 Normal, vec3 HalfVector, float Roughness, float SpecularSize, float GGXMatching)
+{
+    float a = Roughness * Roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(Normal, HalfVector), 0.0);
+    float NdotH2 = NdotH * NdotH;
+    // The GGXMatching parameter controls how much the stylized NDF matches the GGX one at high roughness. In practice, 4 or 8 works well.
+    float denom = max((SpecularSize * <strong>pow(1.0 - a, GGXMatching) + 1.0)</strong> * NdotH2 * (a2 - 1.0) + 1.0, 0.0001);
+    return a2 / (PI * denom * denom);
+}</code></pre>
+<figure style="margin:0;margin-bottom:3rem;text-align:center;">
+
+<figcaption>Improved Stylized GGX Trowbridge-Reitz NDF. The last three columns better match the original GGX energy distribution.</figcaption>
+</figure>
+<p>Here is the graph animating the roughness (at high roughness the curves flatten). 
+<b style="color:black;">Black curve</b> is the Trowbridge-Reitz NDF, <b style="color:red;">red curve</b> is the simple stylized and <b style="color:green;">green curve</b> is the improved stylized.
+            The improved version matches the red curve at high roughness, and the black curve at low roughness.
+        </p>
+<figure style="margin:0;margin-bottom:4rem;text-align:center;">
+
+<figcaption style="margin-top:0.6rem; font-size:0.95rem; color:#555;">Desmos graph animating the roughness</figcaption>
+</figure>
+<h2>Demo</h2>
+<p>Here is the final look under varying roughness, metalness and specular size.</p>
+<figure style="margin:0;margin-bottom:4rem;text-align:center;max-width:98%;">
+<video autoplay="" loop="" muted="" src="../resources/graphics-posts/stylized-ggx-shading/demo.mp4" style="width:100%;height:auto;display:block;">Stylized GGX Shading video</video>
+<figcaption>Stylized GGX Shading</figcaption>
+</figure>
+<h2>Side notes</h2>
+<p>One might feel like this stylized GGX look is not "toon" enough. 
+            On Spellcasters we tested many additions to this trick:
+            <ul>
+<li>Prune the GI probes by only computing 3 SH coefficients (global, up and down for the sky and ground) instead of our usual 9 coefficients. This lets us reduce the directionality, making it feel more like hand-drawn 2D art. It also saves performance as we can store fewer coefficients. The same kind of idea has been used in <a class="simple-link" href="https://youtu.be/gdBACyIOCtc?t=2331" rel="noreferrer noopener" target="_blank">Hi-Fi Rush</a>.</li>
+<li>Simplify the distant props using a mix of a depth-based <a class="simple-link" href="https://www.kyprianidis.com/p/gpupro/" rel="noreferrer noopener" target="_blank">Kuwahara filter</a>, mip biasing, and simple fog.</li>
+<li>Rim lighting.</li>
+<li>Outlines and inlines.</li>
+<li>And of course, a lot of work went into the textures and modeling.</li>
+</ul>
+</p>
+<p><a class="btn-small" href="../graphics.html" style="margin-top:3rem;">Back to graphics</a></p>
+</main>
