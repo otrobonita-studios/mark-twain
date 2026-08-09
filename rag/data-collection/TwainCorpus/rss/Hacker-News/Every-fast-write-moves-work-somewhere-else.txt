@@ -1,0 +1,307 @@
+Every storage engine has to decide what must finish before it tells a client that a write succeeded. The quickest answer is to return after copying the bytes into memory. A local durable write waits for 
+fdatasync()
+ on an SSD in the database host. Keeping the write after that host disappears means waiting for a network volume, an object store, or several database servers to save their own copies.
+Those choices move latency and durability together because returning after memory is fast, but a machine crash can lose the write. Waiting for a local SSD survives a process or kernel crash, but not the loss of that device or host, while remote storage or several database servers can survive more failures by putting network and copy time into every write.
+One system’s 
+fdatasync()
+ waits for 1 SSD attached to the database host, while another exposes a network volume through the same NVMe interface and waits for a remote storage service. The syscall name is the same, but the latency and the failures the data survives are not.
+Newer storage designs built around object storage make this choice especially interesting to me because many put immutable sorted files in object storage, use a host-local NVMe SSD for a write-ahead log or cache, and organize data with a log-structured merge tree (LSM) layout. Object storage can be a fantastic primitive to build around because the storage service can own the durable copies while compute comes and goes, and writing new immutable files avoids small random updates to shared disk pages.
+After a successful object 
+PUT
+, the storage service owns meeting its advertised durability for those bytes. The database still has to decide which version is current, record that decision so other machines can see it, make reads fast, remove old versions, and recover after a crash. A local write-ahead log can make writes faster, but then the database has to decide whether losing that local copy is acceptable or whether another copy must exist before success.
+I use client 
+PUT
+ for the key-value request sent to the database, and object 
+PUT
+ for the HTTP request sent to object storage. Once I kept those writes separate, it became easier to follow 1 client 
+PUT
+ through memory, a local SSD, remote storage, and a durable majority of database servers. So when I see a very fast number for an operation, I want to know which operation pays for it, what can still be lost after success, and how much unfinished cleanup the system can tolerate.
+I found it useful to start with the costs I would want from an append-only key-value store.
+Operation
+Work before success
+GET
+O(key bytes + returned bytes)
+, 1 index lookup and 1 read for the value
+PUT
+O(key bytes + payload bytes)
+, 1 pass over the payload to hash it, 1 WAL append, and 1 
+fdatasync()
+ shared with other writes
+DELETE
+O(key bytes)
+, append 1 delete record
+These costs look attractive because a normal request never scans every retained object or walks the full write history, and a larger value costs more than a smaller value in an unsurprising way.
+Those small request costs are possible because an index already maps each key to its latest value for 
+GET
+, several 
+PUT
+ requests can share a device flush, and 
+DELETE
+ records that a value is dead without removing the old bytes immediately. The 
+PUT
+ is the easiest place to see where that work moves, so I started there.
+How a client 
+PUT
+ reaches a local SSD
+Here I mean a host-local NVMe SSD, which is attached to the same host as the database rather than reached through a remote storage service. Once a write is synced, it can survive a process or kernel crash, but losing the SSD or the host can still lose the write.
+NVMe names the interface used to send commands to a device, but it does not tell us where the storage lives or which failures the data survives. A remote block volume can also appear as an NVMe device, even though each write crosses a network and a storage service keeps the copies. An NVMe latency number is incomplete without its acknowledgment point. Did the timer stop after copying bytes into memory, after syncing 1 local SSD, or after a remote volume acknowledged the write?
+A local WAL is tempting because the latency gap can be large. 
+AWS describes S3 Express One Zone as having consistent single-digit millisecond read and write request latency and being up to 10x faster than S3 Standard
+, while 
+Turso measured a 4 KB 
+PUT
+ at 6.4 ms on average and 7 ms at p99
+. A local 
+fdatasync()
+ measured at 1 ms would make the local path about 6x faster, while 0.1 ms would make it about 64x faster. A 50x difference can be a real benchmark result, but it is not a property of every NVMe device and object store, and the 2 paths still survive different failures.
+The local write separates copying bytes into memory from making them durable. A write-ahead log, or WAL, is an ordered record of changes that the database can replay after a crash. In a buffered implementation, a client 
+PUT
+ travels through the kernel and device like this.
+---
+config:
+  look: handDrawn
+  handDrawnSeed: 17
+  fontFamily: "SFMono-Regular, Consolas, monospace"
+  flowchart:
+    curve: linear
+---
+flowchart LR
+    C["client PUT"] --> E
+
+    subgraph H["DATABASE HOST"]
+        E["storage engine"] -->|"write WAL"| K["kernel page cache"]
+        K -->|"fdatasync writes pages<br/>and flushes device cache"| D["host-local SSD"]
+    end
+
+    K -.->|"write() can return here"| V["memory only<br/>not durable"]
+    D --> S["success"]
+
+write()
+ can return once the WAL bytes reach page cache, but this design returns success only after 
+fdatasync()
+ reaches the local SSD.
+On Linux, 
+write()
+ usually copies bytes into page cache, then the kernel marks those pages dirty and writes them to the device later. A process exit does not discard page cache, although a kernel crash or machine loss can erase dirty pages that have not reached storage.
+fdatasync()
+ waits for file data and the metadata needed to retrieve it. 
+fsync()
+ also flushes the file’s other metadata. Creating or renaming a file may require syncing its directory because the file contents and the directory entry that names it are separate writes.
+O_DIRECT
+ and 
+io_uring
+ do not change this durability point. 
+O_DIRECT
+ can bypass page cache, and 
+io_uring
+ can submit I/O efficiently, but neither turns an unsynced write into durable data. The filesystem and device still have to complete the writes and flushes required before the API can say that the data survived a crash.
+fdatasync()
+ may finish just before the connection breaks, leaving the WAL committed while the client never receives success. The client can supply an operation ID with the 
+PUT
+, then retry the same ID and bytes to receive the recorded result, while reusing that ID with different bytes fails. Faster hardware shortens this window, but it cannot remove the ambiguity.
+1 flush can cover many writes
+Calling 
+fdatasync()
+ after every small client 
+PUT
+ is the easiest version to reason about, but throughput is now limited by how many flushes the device can finish. A serialized 1 ms flush allows roughly 1,000 flushes per second even when the device can stream far more bytes.
+The WAL writer can share an expensive flush by putting appended records into the current batch and closing it after a fixed number of bytes, writes, or time. It remembers the final byte in that batch, calls 
+fdatasync()
+ on the WAL file, then returns success to every writer covered by that saved position. A write appended after the batch closes waits for the next flush.
+---
+config:
+  look: handDrawn
+  handDrawnSeed: 17
+  fontFamily: "SFMono-Regular, Consolas, monospace"
+  flowchart:
+    curve: linear
+---
+flowchart LR
+    A["PUT A"] --> G
+    B["PUT B"] --> G
+    C["PUT C"] --> G
+    D["PUT D"] --> G
+
+    subgraph H["SAME DATABASE HOST"]
+        G["open WAL batch"] --> O["close on bytes,<br/>writes, or time"]
+        O --> F["1 fdatasync()"]
+        F --> SSD["host-local SSD"]
+        N["next WAL batch"]
+    end
+
+    SSD --> S["success<br/>A, B, C, D"]
+    E["PUT E"] -.->|"arrives after close"| N
+
+PUT A
+ through 
+PUT D
+ share 1 
+fdatasync()
+ and receive success together. 
+PUT E
+ arrived after the batch closed, so it waits for the next SSD flush.
+Several requests now wait on the same real flush, so successful writes still survive the same failures while throughput improves. The earliest request waits longest, a flush error fails the entire batch, and a timed-out request may already have bytes in a batch that later reaches disk.
+Sharing a flush also requires limits for bytes, writes, and time, along with a limit on the pending-write queue because a slow device can otherwise let waiting writes consume all available memory. Under load, a batch often fills naturally while the previous flush is running, so sleeping to collect more writes can add latency without helping throughput.
+The device cost depends on the size of the writes after batching. Moving 1 GiB/s through 256 KiB device writes needs about 4,096 input/output operations per second, while the same byte rate through 16 KiB device writes needs about 65,536. The number of client requests does not tell us that cost by itself because the sizes of writes that reach the device determine the required IOPS.
+Keeping a write beyond the database host
+Returning after local 
+fdatasync()
+ removes the object request from the time the client waits, but it changes what success means. The newest durable WAL records now exist on 1 SSD in 1 database host. If that host disappears before those records are uploaded, a replacement can only recover the older remote copy.
+The database is now stateful in a way an object-only writer was not. A scheduler cannot move it to any machine and assume all successful writes will be there. The system must keep the SSD available, accept a window of data loss, or create another durable copy before success.
+A durable network volume can keep the copy outside the compute host, an object store can keep it independently of the writer, and a replicated WAL can keep a copy on other database servers. Each option puts different work back into the time the client waits.
+A durable network volume can still look like an ordinary block device to the database, while the storage service keeps copies outside the database host. Its 
+fdatasync()
+ includes a network request and whatever copying the service completes before acknowledging the write, so it is different from syncing the local SSD in the earlier diagram. The volume can outlive the database process and its host, although its copies may still live within 1 failure domain.
+Each storage option has a different point where success becomes safe to return, which makes an unlabeled latency chart hard to interpret.
+Success waits for
+Latency includes
+The acknowledged write survives
+Copy into page cache
+Memory copy
+Process exit, but not a kernel crash or machine loss
+fdatasync()
+ to a local SSD
+SSD write and cache flush
+Process and kernel crash, but not SSD or host loss
+fdatasync()
+ to a durable network volume
+Storage network and copies made by the volume service
+Database host loss; further coverage depends on the volume service
+Successful object 
+PUT
+HTTP request and copies made by the object service
+Writer and database host loss; further coverage depends on the object service
+Durable WAL append on 2 of 3 servers
+Network transfer and disk sync on 2 servers
+Loss of 1 server, but not permanent loss of 2 servers before repair
+The same question comes up with object storage, where a service may keep copies on several machines in 1 failure domain or spread them across several failure domains. Both are remote object writes, but they do not survive the same outage, so the number of copies alone does not describe durability. Putting a local WAL in front adds another choice because the database can finish the object upload before success or leave it for later.
+Leaving the upload for later means returning after local 
+fdatasync()
+, which keeps the write path short and lets the database upload full WAL files once they are no longer receiving writes. Losing the local SSD or its host can then lose every acknowledged record after the last uploaded byte, so the age of the oldest record waiting for upload tells us how much recent data is at risk.
+Finishing the object 
+PUT
+ before success closes that window, but now every write includes the remote request. Batching reduces the request count, although the first writes in each batch wait longer for the batch to fill.
+---
+config:
+  look: handDrawn
+  handDrawnSeed: 17
+  fontFamily: "SFMono-Regular, Consolas, monospace"
+  flowchart:
+    curve: linear
+---
+flowchart LR
+    C["100 client writes"] --> W
+
+    subgraph H["DATABASE HOST"]
+        W["WAL buffer"] -->|"local path"| D["host-local SSD"]
+    end
+
+    D --> LS["local success"]
+    D -.->|"later: seal 1 WAL object"| O["object storage"]
+    W -->|"remote path before success:<br/>100 objects or 1 batch"| O
+    O --> RS["remote success"]
+
+Local success leaves the newest WAL records on the database host until the dotted upload completes. Requiring the object 
+PUT
+ before success closes that window and adds the remote request to write latency.
+At 1,000 writes per second, 1 object per write produces 2,592,000,000 object 
+PUT
+ requests in a 30-day month. Batching 100 writes per object reduces that to 25,920,000, while the earliest write in each batch waits longer and a failed request resends more bytes. The storage bill, write latency, and number of bytes resent after a failure all change together.
+Batching changes the request count, but it does not decide what happens when 2 writers try to update the same object. On S3, conditional writes handle that narrower race. 
+If-None-Match: *
+ creates an object only if its key is absent, while 
+If-Match: <etag>
+ updates an object only if its current version matches. 
+The losing request fails its precondition
+, so a caller can update a single object only when the expected version is still current. This does not make several objects visible as a single change or revoke an old writer’s access to other keys.
+When the object 
+PUT
+ fits the write-latency budget, the database can stop here and let the storage service own the durable copies and decide which conditional update wins. When it does not fit, but every successful write still has to survive loss of the database host, the database can replicate its WAL across several hosts and wait for enough of them to sync it.
+Replicating the WAL adds coordination
+The replicated WAL turns 1 stateful database host into 3. A client sends its 
+PUT
+ to the leader, which appends the WAL entry locally and sends the same entry to 2 followers. Success can return after the leader and either follower have synced it, so the write survives loss of 1 server. Compared with 1 local SSD, every commit now includes a network trip and a second device sync.
+Replicas placed close together can produce that durable majority faster than a general object request, while replicas spread across failure domains survive a larger outage and add more network time to the write. Copying the bytes is only part of the problem because the servers also have to decide who may write and which writes have committed.
+The storage engine does not automatically need to run its own leader election because the data is important. Another service can assign a writer and give it a higher writer number, then storage can reject writes carrying an older number. Coordination still exists in that design, but it lives outside the storage engine. The replicas also need a rule for how many durable acknowledgments make a write committed. Consensus enters the storage engine when those servers must choose the writer and preserve 1 committed log themselves, including when some of them cannot communicate with the others.
+In Raft, the leader records its current term, a number that increases after an election, and the write’s position in the log. It sends the write to the other servers, called followers, and commits it after a majority has saved the log through that position on disk.
+---
+config:
+  look: handDrawn
+  handDrawnSeed: 17
+  fontFamily: "SFMono-Regular, Consolas, monospace"
+  flowchart:
+    curve: linear
+---
+flowchart TB
+    C["client PUT"] --> L
+
+    subgraph R["3-NODE REPLICATED WAL"]
+        L["leader<br/>WAL + local SSD"]
+        F1["first follower to finish<br/>WAL + local SSD"]
+        F2["other follower<br/>WAL + local SSD"]
+        L -->|"replicate"| F1
+        L -->|"replicate"| F2
+    end
+
+    L --> Q["first 2 durable copies"]
+    F1 --> Q
+    F2 -.->|"may finish later"| Q
+    Q --> S["success"]
+
+The leader and the first follower to finish create 2 durable WAL copies before success. The other follower may finish later.
+The disk and network operations can overlap, so healthy latency is close to the slower of the 2 operations that must finish rather than the sum of every disk write. Slow writes now include network delays and the time taken by the slower server needed for a majority. When the servers split into groups that cannot communicate, the group without a majority stops accepting writes because it cannot know whether the other group has a newer history.
+A shortcut that often comes up is letting a follower acknowledge from RAM. The 
+Raft paper
+ instead writes the current term, vote, and log to disk before returning the related acknowledgment. The RAM acknowledgment is faster and survives fewer failures because those copies can disappear if the machines restart together or lose power, even though the client already saw success.
+Replicating the write also leaves the system responsible for electing leaders, repairing different logs after a failure, copying missing writes to a server that fell behind, saving full copies for faster restart, adding and removing servers safely, and monitoring replication delay. None of that work appears in the latency of a single healthy write.
+Fast reads require an index and cleanup
+Being able to replay the WAL after a crash does not make 
+GET
+ cheap. Scanning the WAL for every read would make its cost grow with history, so the engine keeps a separate lookup from each key to its latest value or disk location.
+O(key bytes + returned bytes)
+ assumes the engine already knows where the current value lives. A hash index can give us that lookup without keeping keys in order. A B-tree supports ordered reads and range scans, while adding work that grows with the height of the tree and requiring page updates and occasional splits. An LSM writes recent keys into memory and sorted files, then merges and rewrites those files later.
+An LSM and multi-version concurrency control (MVCC) describe different parts of a database and can exist together. The LSM controls how keys move through memory and sorted files, while MVCC controls which versions readers and writers can see. An LSM later merges sorted files, an append-only blob store copies live values out of files containing dead bytes, and a page-based MVCC engine cleans up row versions that are no longer visible. Each algorithm leaves old bytes behind after a logical delete or replacement.
+An 
+O(key bytes)
+ delete can append a delete record and update the lookup, while freeing the old value may later require reading the file index, copying values that are still current, switching reads to replacement files, and deleting files that no reader still uses.
+Big O shows growth, not durability latency
+Coming back to the original costs, the same client 
+PUT
+ remains 
+O(key bytes + payload bytes)
+ whether it stops at a local SSD, an object service, or a majority of database servers. Big O tells us how work grows as the key or value gets larger, but it does not show the difference between a device flush, a remote HTTP request, and a network round trip followed by 2 device flushes.
+The growth term stays the same across these 3 paths, while the work before success changes.
+Request path
+Work that grows with the request
+Work before success that Big O hides
+PUT
+ to a local WAL
+O(key bytes + payload bytes)
+1 WAL append and a share of 1 local 
+fdatasync()
+PUT
+ to object storage
+O(key bytes + payload bytes)
+Network round trip and object-service acknowledgment, shared across writes when batched
+PUT
+ to a replicated WAL
+O(key bytes + payload bytes)
+Network transfer and durable WAL append on a majority
+For 
+GET
+ and 
+DELETE
+, the bounds rule out listing every object during a normal read, replaying the full WAL to find a key, or scanning all stored data to delete 1 value. They still do not say whether the fixed work takes microseconds or milliseconds, so a latency result needs the success point and percentile beside it.
+The work left for later needs limits too, so a WAL file has a maximum size even though uploading it is 
+O(file bytes)
+. Cleanup may eventually inspect or rewrite the whole dataset, but each run needs a byte limit and a saved position so it can resume after a crash. The pending queue also needs a limit because writes can create old bytes faster than cleanup removes them, and without one the cheap request path only hides a queue that keeps growing.
+LLMs make it much faster to write the uploader, cleanup loop, or replicated log without deciding how much unfinished work the system may keep or when it must slow writes down. They also cannot choose when success is safe to return, what a timeout means, or which crash may lose data. Those decisions still have to be written down and tested around 
+fdatasync()
+, making an object current, replacing a writer, and copying a write to a majority of servers.
+Following the write from memory to a local SSD, remote storage, and replicas made the tradeoff easier for me to reason about. The faster path usually stops after less work and survives fewer failures, while moving success later can buy more durability and may also make the database responsible for coordination, repair, and cleanup. The 
+GET
+, 
+PUT
+, and 
+DELETE
+ numbers only become useful once those choices are written beside them.
