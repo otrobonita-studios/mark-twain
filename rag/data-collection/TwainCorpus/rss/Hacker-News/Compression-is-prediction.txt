@@ -1,0 +1,1183 @@
+Skip to main content
+Search…
+Control
+⌃
+K
+Newsletter
+RSS
+Related posts
+Quantization from the ground up
+A complete guide to what quantization is, how it works, and how it's used to compress large language models
+I was reading about compression recently when I stumbled upon something crazy: that compressors and LLMs are, at their core, trying to solve 
+the exact same problem
+.
+
+In this post, I’m going to walk us through the basics of compression to understand its deep relationship with language modeling. It’s probably going to blow your mind.
+
+Bookmark this section
+How compression works
+
+There are many ways of shrinking data. Take 
+minification
+, for example: it works by stripping code down to the bare minimum that machines need to parse. Human-readable variables are reduced to single letters; whitespace and comments are removed.
+
+Click “Minify” to see it in action:
+
+sum-numbers.js
+// Sum every number in the list
+function
+sumNumbers
+(
+numbers
+)
+{
+let
+total
+=
+0
+;
+for
+(
+const
+number
+of
+numbers
+)
+{
+total
++=
+number
+;
+}
+return
+total
+;
+}
+Original source, 
+156
+ characters:
+// Sum every number in the list
+function sumNumbers(numbers) {
+  let total = 0;
+  for (const number of numbers) {
+    total += number;
+  }
+  return total;
+}
+Minified to 
+62
+ characters — 
+60
+ percent smaller — by removing the comment, shortening the variable names to single letters, and stripping the whitespace, braces, and semicolons.
+Minify
+Start over
+
+The resulting file is considerably smaller, and yet you’d almost never hear minification mentioned in the field of data compression. Why is that?
+
+Minification is fairly straightforward: it just tosses out any syntax that’s not required by machines. But “true” compression relies on 
+redundancy
+ to condense data.
+
+Consider the string 
+“AAAAAAAAABBBBCCDAAADDDDDDDDD”
+of nine A’s, four B’s, two C’s, one D, three A’s, then nine D’s
+: there’s a 
+lot
+ of redundancy here. We could encode this as a shorter string by noting the total run of each character in order:
+
+Original string: 
+9 A's, 4 B's, 2 C's, 1 D, 3 A's, 9 D's
+ — 
+28
+ characters, 
+224
+ bits.
+Replacing each run with its character and how many times it repeats gives 
+A9B4C2D1A3D9
+ — 
+12
+ 
+characters, 
+96
+ bits, 
+57
+ percent smaller.
+TOTAL: 
+224
+ bits
+A
+AAAAAAAA
+9
+9
+B
+BBB
+4
+4
+C
+C
+2
+2
+D
+1
+1
+A
+AA
+3
+3
+D
+DDDDDDDD
+9
+9
+Encode
+
+Using standard 8-bit ASCII encoding, our original string requires 
+224 bits
+, whereas our compressed string (“A9B4C2D1A3D9”) needs only 
+96
+. Not bad!
+
+The above technique is just one compression method (it’s called 
+run-length encoding
+), but we can do much better. Actual compressors like gzip, Brotli, etc, rely on several methods to shrink data. Let’s take a look.
+
+Bookmark this section
+The anatomy of a compressor
+
+There are roughly three “organs” of modern compression tools: 
+transforms
+, 
+models
+, and 
+entropy coders
+. I’m talking about these terms as if they were clear and distinct things, but the lines can get a little blurry, and they are 
+rarely
+ used in isolation.
+
+Transforms
+Model
+Entropy Coder
+100101110
+
+Transforms
+ are the preprocessing steps that make our data easier to compress. The method we saw earlier
+(run-length encoding) is an example of a transform, but it’s worth noting that transforms don’t 
+always
+ shrink the
+data. Sometimes they can be used to create 
+more
+ redundancy, and the more redundancy, the more we can compress later
+on. We aren’t going to focus on transforms in this article, but they’re still an important part of any compression tool.
+
+Models
+ describe the 
+shape
+ of our data based on the frequencies of each 
+symbol
+ (whatever unit we’re
+using to look for redundancies: letters, numbers, tokens, or even binary code). For now, you can think of a model as a
+table that maps each 
+symbol
+ to its 
+probability
+, but as we’ll see later on, they can get 
+a lot
+ more
+sophisticated.
+
+Here’s an example based on our earlier string:
+
+Original string: 
+9 A's, 4 B's, 2 C's, 1 D, 3 A's, 9 D's
+ — 
+28
+ characters.
+Counted by symbol: 
+12 A's, 10 D's, 4 B's, 2 C's
+.
+A
+A
+A
+A
+A
+A
+A
+A
+A
+B
+B
+B
+B
+C
+C
+D
+A
+A
+A
+D
+D
+D
+D
+D
+D
+D
+D
+D
+Each symbol in the string and its probability, most frequent first.
+Symbol
+Probability
+A
+0.429
+D
+0.357
+B
+0.143
+C
+0.071
+
+Entropy coders
+ are almost always the final step in any compression algorithm and are what produce the final
+compressed artifact: a 
+raw bitstream
+, which is just a bare sequence of bits with none of the structure a file format
+would wrap around it.
+
+I want to focus on the last two steps, because this is important. Our data 
+model
+ hands the 
+entropy coder
+ a set of 
+probabilities
+ to encode your data as efficiently as possible. Probabilities go in, compressed bitstream comes out:
+
+Model
+Symbol
+Probability
+A
+0.429
+D
+0.357
+B
+0.143
+C
+0.071
+Entropy Coder
+100101110
+
+Now, let’s be honest: this is all still a bit hand-wavy. What does an 
+entropy coder
+ even DO with all these probabilities? How does that help it do the squishing?
+
+Bookmark this section
+Squishing data with probabilities
+
+Every 
+entropy coder
+ is a unique snowflake, and the way they use probabilities to compress your data differs 
+wildly
+. To keep things simple, we’re going to focus on just one for now: 
+arithmetic coding
+. I’m choosing it because it best illustrates how better 
+probabilities
+ make for better 
+compression
+.
+
+It’s also just really neat.
+
+Bookmark this section
+Arithmetic coding
+
+What if I told you that you could represent an entire dataset with a 
+single number
+? Does this sound crazy? I thought so too, but that’s exactly what 
+arithmetic coding
+ promises.
+
+Let’s say we want to compress the string 
+“ABABAAC”
+A B A B A A C
+. We can find the probabilities of each symbol (character) by dividing the total count by the total length of the string, which is 7:
+
+Original string: 
+1 A, 1 B, 1 A, 1 B, 2 A's, 1 C
+ — 
+7
+ characters.
+Counted by symbol: 
+4 A's, 2 B's, 1 C
+.
+A
+B
+A
+B
+A
+A
+C
+Each symbol in the string and its probability, most frequent first.
+Symbol
+Probability
+A
+0.571
+B
+0.286
+C
+0.143
+
+We can represent these probabilities on a range from 0-1.
+
+The range from 0 to 1, divided into one section per symbol, each as wide as that symbol’s probability and ordered widest first: 
+A covers 0 to 0.571, B covers 0.571 to 0.857, C covers 0.857 to 1
+.
+0
+0.571
+0.857
+1
+A
+B
+C
+prob:
+0.571
+prob:
+0.286
+prob:
+0.143
+
+With this setup, we’re ready to do the actual compressing.
+
+For each symbol in our string, starting with “A”, we shrink our range to fit within 
+that symbol’s section.
+ Importantly, we’re still dividing that new range with the same probabilities, but they now have 
+new, smaller
+ ranges.
+
+Click the arrows to encode each symbol and see how the range shrinks over time:
+
+Interactive, step-by-step illustration of arithmetic coding for the string A B A B A A C, where every symbol shares one probability distribution. It starts at the full range from 0 to 1 with nothing encoded. Each step highlights the slice the next symbol encodes into, then reveals the range that slice becomes. The last step zooms in on the final range.
+Range:
+ 
+[
+0.00000
+, 
+1.00000
+)
+Nothing encoded yet. Full range 0 to 1. Next, encode A.
+Previous character
+A
+B
+A
+B
+A
+A
+C
+Next character
+Range:
+ 
+[
+0.00000
+, 
+1.00000
+)
+
+Once we run out of symbols, we end up with a 
+teeny weeny baby range
+: 
+[0.38730, 0.38855)
+.
+
+The mixed brackets are intentional.
+ Square brackets [ ] mean endpoint 
+included
+, round brackets ( ) mean endpoint
+
+excluded
+. So [0, 1) is “all numbers from 0 to 1, including 0 but excluding 1”.
+
+The final number that will represent our 
+entire data
+ can be any number in this range, and ideally, it should be the number that requires the fewest bits possible. You can calculate this with a 
+bit of math
+, but because I’m nice I’ll just give you the answer: 
+0.3876953125
+. So let’s compare: Our original string, 
+“ABABAAC”
+A B A B A A C
+, in its raw 8-bit ASCII code requires 56 bits in total, whereas our final number requires only 10.
+
+Our final number is 
+not
+ a floating point—it’s a 
+binary fraction
+. Floating points are binary fractions too, but
+they come in fixed widths, so you’d pay 32 or 64 bits whether you need them or not. Ours only needs 10.
+
+So, we have our magical number, but how do we use this to decode our original message? Buckle up, this is going to seem like a magic trick.
+
+Bookmark this section
+Decompressing arithmetic codes
+
+In addition to our magic number, our decompressor also receives the same probabilities we used to compress so it can rebuild that starting range of [0, 1). To decode our original message, it finds which section our magic number falls into and records that symbol. Then it shrinks the range to fit within that section, and repeats the whole process.
+
+Give it a try:
+
+Interactive, step-by-step illustration of arithmetic decoding of the number 0.3876953125. Symbol probabilities split the range from 0 to 1 into slices: A 57 percent, B 29 percent, C 14 percent. Each step zooms in on the current range, shows where the number falls inside it — that slice is the decoded symbol — and then reveals the range that slice becomes. The last step decodes the last symbol, recovering the whole string.
+Range:
+ 
+[
+0.00000
+, 
+1.00000
+)
+Ready to decode the number 0.3876953125. Full range 0 to 1. Press next to decode the first symbol.
+Previous character
+Next character
+Range:
+ 
+[
+0.00000
+, 
+1.00000
+)
+
+Pretty neat, huh?
+
+We’ve now seen how an 
+entropy coder
+ can compress our data using a set of probabilities. As cool as arithmetic coding is (it’s not just me, right?), much of the heavy-lifting comes from the 
+model
+. Remember: compression loves 
+redundancy
+. Given this, what do you think would happen if our symbols had more repetition?
+
+Bookmark this section
+How probabilities affect compression
+
+Here’s a new string where the letter A dominates, with a probability of 0.833.
+
+Original string: 
+10 A's, 1 B, 1 C
+ — 
+12
+ characters.
+Counted by symbol: 
+10 A's, 1 B, 1 C
+.
+A
+A
+A
+A
+A
+A
+A
+A
+A
+A
+B
+C
+Each symbol in the string and its probability, most frequent first.
+Symbol
+Probability
+A
+0.833
+B
+0.083
+C
+0.083
+
+It turns out, this skewed probability distribution makes a 
+big
+ difference. Let’s see how it stacks up against our old string when we apply arithmetic coding:
+
+A
+B
+A
+B
+A
+A
+C
+A B A B A A C
+A
+A
+A
+A
+A
+A
+A
+A
+A
+A
+B
+C
+A A A A A A A A A A B C
+Length
+7 symbols
+12 symbols
+Raw ASCII
+56 bits
+96 bits
+Compressed output size
+~10 bits
+~10 bits
+Avg bits / symbol
+1.38 bits
+0.82 bits
+ 
+Final number
+0.3876953125
+0.1474609375
+
+Our first string managed to compress to an average of 1.38 bits/symbol, whereas our longer string compressed to 0.82 bits/symbol. When your data is more skewed (i.e. the higher the probabilities of some of your symbols), the better the compression ratio.
+
+This 
+avg bits/symbol
+ is a very important number. It’s called 
+entropy
+, and it is the 
+bedrock
+ of compression.
+
+“Wait, isn’t entropy a physics thing?” you might ask. Yes! But what we’re talking about is 
+Shannon entropy
+, which
+is related to data compression (in the field of information theory). What’s cool is that its mathematical formula is
+nearly identical to the Gibbs formula for entropy in thermodynamics. Wild, huh?
+
+Bookmark this section
+Entropy
+
+Consider the following sentence:
+
+“Yesterday I saw an animal when I was walking downtown. It was a 
+_____
+.”
+
+How many guesses do you think it would take you to fill in the blank? If it was a common animal like 
+bird
+, you might get it on the first try. But what if the answer was 
+bear
+? That would probably take quite a few guesses.
+
+Let’s say these are the possible answers, along with their probabilities written as fractions:
+
+1/2
+1/4
+1/8
+1/16
+1/16
+bird
+squirrel
+cat
+fox
+bear
+
+Knowing the probabilities, we can actually calculate how many guesses it would take to guess correctly, on average, per animal.
+
+Now, notice that each animal is 
+half as likely
+ as the one before, with the exception of fox and bear (these are probabilities, so our numbers need to add up to 1). If we were to guess each animal in order, from most probable to least, we’d have a 50/50 chance of being right each time. As such, we can determine the number of guesses it would take to guess a given animal (on average) using a yes/no decision tree. We start with the most likely animal at the top, and work our way down:
+
+A yes/no decision tree over the animals. 
+Is it a bird? If yes, bird, 1 guess. If no, is it a squirrel? If yes, squirrel, 2 guesses. If no, is it a cat? If yes, cat, 3 guesses. If no, is it a fox? If yes, fox, 4 guesses. If no, bear, 4 guesses.
+
+Let’s get back to compression. Symbols with higher probabilities help us compress better, and we see the same pattern in our decision tree: the more probable animals require fewer guesses. If we treat the animals as 
+symbols
+ and swap the yes’s and no’s for 
+1’s and 0’s
+, the number of guesses becomes exactly the number of 
+bits
+ needed to represent each one. If we record the 1’s and 0’s we take to reach each animal you’ll see that the more common animals get shorter “codewords” (unique sequences of bits), and rarer animals get longer ones.
+
+A yes/no tree over the animals. Each yes branch is labeled 1 and each no branch is labeled 0, so an animal’s code word is the branch labels that reach it. 
+Is it a bird? If yes, bird, code word 1. If no, is it a squirrel? If yes, squirrel, code word 01. If no, is it a cat? If yes, cat, code word 001. If no, is it a fox? If yes, fox, code word 0001. If no, bear, code word 0000.
+
+Assigning codewords to symbols like this is actually another type of 
+entropy coder
+ called 
+Huffman coding
+, which is used in popular tools like gzip and Brotli. Instead of encoding our data into a single number, like with 
+arithmetic coding
+, the Huffman method creates codewords to represent each symbol.
+
+But there’s a problem: what happens when our probabilities aren’t neatly divided in half? If 
+cat
+ had a probability of 0.3973, then the likelihood of the answer being a 
+cat
+ or 
+not a cat
+ isn’t 50/50 anymore. Every path down the tree is a whole number of “guesses”, so we’re forced to round, and rounding means paying for bits we don’t need. How can we tell the 
+absolute fewest
+ number of bits required to represent a given symbol?
+
+Turns out we can calculate this with a little bit of math:
+
+number of bits
+=
+−log
+2
+(
+probability
+)
+negative log base 2 of 
+probability
+
+Quick refresher: 
+logarithms
+ are the reverse of exponents. For example,
+ 
+2
+4
+2
+ to the power of 
+4
+ 
+asks “What is 2 to the power of 4?”. On the flip side,
+ 
+log
+2
+(
+16
+)
+log base 2 of 
+16
+ 
+asks “2 to the power of 
+what number
+ equals 16?”
+
+If we plug in our animal probabilities, you’ll see we get the same number of 
+bits
+ as 
+guesses
+ from our decision tree:
+
+Symbol
+−log
+2
+(
+P
+)
+negative log base 2 of 
+P
+Bits
+bird
+−log
+2
+(
+0.5
+)
+negative log base 2 of 
+0.5
+1
+squirrel
+−log
+2
+(
+0.25
+)
+negative log base 2 of 
+0.25
+2
+cat
+−log
+2
+(
+0.125
+)
+negative log base 2 of 
+0.125
+3
+fox
+−log
+2
+(
+0.0625
+)
+negative log base 2 of 
+0.0625
+4
+bear
+−log
+2
+(
+0.0625
+)
+negative log base 2 of 
+0.0625
+4
+
+If we get the average 
+−log
+2
+(
+probability
+)
+negative log base 2 of 
+probability
+ of all our symbols, that tells us our 
+entropy
+.
+
+The most important thing to understand about 
+entropy
+ is that it’s the 
+floor
+. This is the smallest number of bits per symbol we can achieve for a given set of data. It ain’t getting any more squished.
+
+Note: this floor only applies when you don’t want to 
+lose data
+, but compressors like JPEG or MP3 
+can
+ get smaller
+by throwing out details that won’t be missed. This is called 
+lossy compression
+. Everything discussed here is about
+
+lossless
+ compression, where no data is lost, but both rely on models and probabilities to shrink data.
+
+But wait, if there’s really a 
+limit
+ to how much you can compress data, why isn’t there just one mega God-compressor that we use on everything? Well, that’s because 
+entropy
+ is specific to a set of 
+probabilities
+. If we can make our probability distribution more skewed, we can compress things more.
+
+But how do we do that?
+
+Bookmark this section
+Context matters
+
+Up until now, we’ve been working with a very simple type of 
+model
+ that only cares about a symbol’s frequency. 
+count / total_symbols
+ = its probability.
+
+But 
+context
+ can greatly affect a symbol’s probability. For example, in the entire English language, the letter U has a probability of ~0.028. However, when preceded by a Q, this shoots up to ~0.999.
+
+Wowza.
+
+On top of that, 
+higher probabilities
+ compress into 
+fewer bits
+. We saw this before in the 
+arithmetic coding
+ section, but now we can prove it with math:
+
+U:
+ 
+−log
+2
+(
+0.028
+)
+negative log base 2 of 
+0.028
+ ≈ 5.158 bits
+
+U (preceded by Q):
+ 
+−log
+2
+(
+0.999
+)
+negative log base 2 of 
+0.999
+ ≈ 0.001 bits
+
+Using a single context to determine the probability of a symbol is called an 
+order-1
+ 
+model
+. It answers the question, “Given (some context), what is the probability of (symbol)?” With 
+order-1
+, you factor in the previous symbol as your context, but you could expand this to 
+order-2
+, 
+order-3
+, 
+order-4
+, and so on, which look at the previous N symbols.
+
+But how do we feed this into an 
+entropy coder
+? Previously our 
+model
+ was just a table of probabilities per symbol, but with context, we suddenly have a 
+whole set
+ of tables, one for each preceding symbol. So what do we do?
+
+Let’s see what happens when we apply 
+arithmetic coding
+ to the string “TO BE OR NOT TO BE” using an 
+order-1
+ 
+model
+. Notice that with each symbol we encode, our new ranges contain a different set of probabilities.
+
+Give it a try:
+
+Interactive, step-by-step illustration of arithmetic coding for the string T O space B E space O R space N O T space T O space B E, where each symbol's probability is conditioned on the previous symbol. It starts at the full range from 0 to 1 with nothing encoded. Each step highlights the slice the next symbol encodes into, then reveals the range that slice becomes. The last step zooms in on the final range.
+Range:
+ 
+[
+0.00000
+, 
+1.00000
+)
+Nothing encoded yet. Full range 0 to 1. Next, encode T.
+Previous character
+T
+O
+B
+E
+O
+R
+N
+O
+T
+T
+O
+B
+E
+Next character
+Range:
+ 
+[
+0.00000
+, 
+1.00000
+)
+
+Ok, but how much does using order-N 
+models
+ actually impact compression?
+
+Take a look:
+
+(no context)
+order-1
+Length
+18 symbols
+18 symbols
+Raw ASCII
+144 bits
+144 bits
+Compressed output size
+~47 bits
+~21 bits
+Avg bits / symbol
+2.59 bits
+1.16 bits
+ 
+Final number
+0.049991400929
+0.058705
+
+Wow! Using an 
+order-1
+ 
+model
+ cut our compressed output by more than 
+half!
+ Clearly, adding context gives us stronger probabilities. In other words, it helps us 
+predict
+ what symbol comes next.
+
+Do you know what else is really good at prediction?
+
+Bookmark this section
+Language modeling and compression
+
+To say that there’s an overlap between LLMs and compression would be a huge understatement. In fact, in 2023, 
+Google DeepMind released a paper
+ arguing that language modeling and compression are 
+two views of the same thing
+.
+
+This might seem like an odd claim. After all, when you think of using LLMs, you probably think of typing a prompt into an AI chatbot and it responding with an answer. How is that 
+compression
+?
+
+Well, it’s not, but stick with me.
+
+You might have heard LLMs described as “fancy autocomplete”, and this is essentially true. When you submit a prompt to an LLM, that becomes the context the 
+model
+ uses to return a 
+set of probabilities
+ for the next possible words. It then chooses one of those options and appends it to the context. Rinse and repeat. That’s how LLMs generate text.
+
+Give it a whirl:
+
+Step 1: the model predicted a probability distribution over the next token.
+PROMPT
+The
+rain
+in
+Spain
+falls
+mainly
+on
+the
+plain
+The
+rain
+in
+Spain
+Predicted words
+falls
+0.65
+stays
+0.15
+comes
+0.10
+pours
+0.06
+goes
+0.04
+Choose next token
+Back
+
+While we’re here, let’s get some terminology straight. With LLMs, what it returns aren’t technically “words” but 
+tokens
+: numbers that represent words or parts of words. Tokens are the vocabulary an LLM uses to parse context and generate responses.
+
+Now consider this: while 
+entropy coders
+ are what produce the final raw bitstream, there’s nothing in them that you can tweak to get better results. They are fixed, deterministic, and lossless. If you want better compression, you need to tweak the 
+model
+ so we get higher probabilities per symbol. In other words, we need a better 
+predictor
+. And when it comes to prediction, LLMs are basically as good as it gets:
+
+Model (LLM)
+Symbol (token)
+Probability
+falls
+0.65
+stays
+0.15
+comes
+0.10
+pours
+0.06
+goes
+0.04
+Entropy Coder
+100101110
+
+Using LLMs for compression is similar to how they’re used to generate text, except that we 
+don’t choose the next word
+. Why? Because we’re not trying to generate 
+new
+ text. We already know what the next word is! Here’s how it works: based on the previous tokens (i.e. based on the 
+context
+), the 
+model
+ says, “These are the tokens I think come next, and their probabilities.” Then it looks at what the 
+real
+ next symbol is. Whatever probability the 
+model
+ assigned is what determines the cost, in bits. If the 
+model
+ is well-trained, the token it thinks has the highest probability will be the 
+actual
+ next symbol.
+
+As you click through the demo, notice how the total bits (at the top) increases based on the probability for each token encoded. Again, the number of bits required to represent each token is determined by 
+−log
+2
+(
+probability
+)
+negative log base 2 of 
+probability
+.
+
+0.00
+ bits
+ 
++
+ 
+−log
+2
+(
+0.00
+)
+negative log base 2 of 
+0.00
+Token 1 of 9: the model predicted a distribution over the next token.
+PROMPT
+The
+rain
+in
+Spain
+falls
+mainly
+on
+the
+plain
+Predicted words
+The
+0.45
+A
+0.25
+In
+0.15
+It
+0.10
+This
+0.05
+Encode “The”
+
+Now, if the 
+model
+ is 
+not
+ well-trained, it pays a price. For example, if our context is “The rain in”, a poorly trained model might give “Bermuda” a probability of 0.82, but the 
+actual
+ next word is “Spain”, which it assigned a probability of 0.02. Remember, lower probabilities require more bits, so the 
+model
+ is dinged for guessing wrong:
+
+Bermuda
+the model’s confident guess
+−log
+2
+(
+0.82
+)
+negative log base 2 of 
+0.82
+ =
+ 
+0.29
+ bits
+Spain
+the actual next word
+−log
+2
+(
+0.02
+)
+negative log base 2 of 
+0.02
+ =
+ 
+5.64
+ bits
+
+We can see these differences with 
+arithmetic coding
+ as well. Remember: when we encode each symbol, we’re left with a smaller and smaller range. Encoding symbols with 
+small
+ probabilities (like when our model makes poor guesses) makes our ranges 
+even tinier
+. Our final number needs to fit inside those ranges, and the smaller the range, the more 
+precision
+ is needed. More precision = more digits = more bits.
+
+Two mock arithmetic-coding diagrams. The good model keeps encoding a high-probability slice, so its range stays wide across three levels. The bad model keeps encoding a low-probability slice, so its range collapses to a sliver.
+Good model
+The final range encodes to the number 
+0.61328125
+(
+9
+ bits)
+Bad model
+The final range encodes to the number 
+0.8193759582936763763427734375
+(
+28
+ bits)
+
+The actual total is rounded up, since computers can’t do “partial” bits.
+
+That said, even archaic LLMs that are considered crappy by today’s standards can achieve some impressive compression ratios. Here’s how an 
+order-1
+ 
+model
+ stacks up against GPT-2 with arithmetic coding in compressing a famous Charles Dickens quote:
+
+“It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity, it was the season of Light, it was the season of Darkness.”
+order-1
+434
+ bits
+ · 
+24
+% of original
+GPT-2
+176
+ bits
+ · 
+10
+% of original
+
+So if LLMs are so great at compression, why aren’t we using them everywhere?
+
+Bookmark this section
+Compression in the wild
+
+Unfortunately, how good a 
+model
+ is at compressing alone doesn’t give us the full picture. See, the goal of compression tools isn’t just to shrink data as much as possible. It’s to shrink the data as much as possible, 
+given certain resource constraints.
+
+Take HTTP responses: when your browser requests a webpage, it sends a header like 
+Accept-Encoding: gzip, br
+, telling the server which compression formats it can decode (gzip, Brotli, etc). The server picks one to compress the response before sending it.
+
+Let’s assume a server uses gzip to compress its response. When your browser receives this response, it uses a small, built-in 
+model
+ to decode the gzip-compressed bitstream into HTML, CSS, and JavaScript. The overhead is 
+tiny
+. If we were to instead use an LLM for this job, both the browser 
+and
+ the server would need a copy of the LLM, which could be multi-gigabytes large. That’s a high price for good compression, and we haven’t even 
+run
+ the thing. Compressing (and decompressing) data would demand a 
+lot
+ of resources and degrade page load speed to an 
+unusable degree
+. Imagine: for every stylesheet, every script, every JSON payload running an LLM to compress and decompress. Yuck.
+
+For a task as trivial as squishing HTTP responses, LLMs are comically overkill: once you factor in the model’s size, you’d be shipping gigabytes to save a few KB. But even if you were trying to compress datasets that dwarf the size of the LLM, the astronomical amount of compute required would 
+still
+ make this impractical.
+
+Bookmark this section
+Two sides, same coin
+
+Compressing data down to its 
+entropy
+ is, at this point, a solved problem. 
+Arithmetic coding
+, developed in the late 1970s, lands within a couple bits of the limit, and these days 
+entropy coders
+ compete on speed and memory, not ratio.
+
+The open question is how small we can make our 
+entropy
+. Better 
+models
+—better 
+predictors
+—help us lower this number. LLMs are fantastic at this (setting aside the overhead cost), but what’s really interesting is that they’re trained to minimize that exact 
+bits-per-symbol number
+. With LLMs this is called 
+cross-entropy
+, but it’s the same underlying formula. So while in compression 
+entropy
+ measures how small we can 
+shrink
+ things, in language modeling, it’s a number we reduce to make our model 
+better at prediction
+. If you’d like to dig into the nitty-gritty of this, check out 
+this article
+ by Chris Olah.
+
+At the end of the day, though, both LLMs and compression algorithms are predictors. They’re two expressions of the same underlying math. Compression is prediction, and LLMs are compressors.
