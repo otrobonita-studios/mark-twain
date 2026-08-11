@@ -1,0 +1,562 @@
+Programming the Gigatron
+
+This page is about my own attempt to understand and program 
+the Gigatron TTL Color Micro-computer
+. I made use of the files on
+
+kervinck/gigatron-rom
+ at
+GitHub.
+
+Disclaimer: this is not an official Gigatron page and I am not responsible
+for errors it contains. This page could become outdated in case a new revision
+of the ROM is released.
+
+CPU
+
+The CPU implemented by the TTL IC's of the Gigatron has a
+
+Harvard
+architecture
+, which means that it does not have a shared bus for the ROM
+and the RAM. Actually, the ROM is only used to store instructions and there
+are no instruction to access the ROM directly. (Nevertheless, there is 
+a clever trick
+ by which it is possible to 'read' data from the ROM.) The
+CPU is an 8-bit processor with a 14-bit program counter and a 15-bit RAM range.
+It has three 8-bit registers and an 8-bit input and output.
+
+CPU instructions
+
+I rewrote 
+the 
+gtemu.c
+ program
+ such that it would print out what the
+different instruction actually do in some pseudo-C. After a lot of revisions,
+this resulted in the following table. The numbers on the rows and columns need
+to be added together to get the instruction number. I changed the order of the
+rows such that similar (or the same) instrucions are grouped together. The
+'function' 
+hi
+ returns the high byte of the value. It should be noted
+that the value used to access the RAM is 'clipped' to 0x7fff as there is only
+32 kilobyte of RAM. The program counter is incremented after all instructions,
+except the instructions that modify it. In case an instruction performs two
+operations, a semi-collon is used for separation.
+
+   # 00                    # 20                        # 40                        # 60                        # 80                        # a0                        # c0                       # e0
+---+-----------------------+---------------------------+---------------------------+---------------------------+---------------------------+---------------------------+--------------------------+---------------------------------
+00 # A = oper              # A &= oper                 # A |= oper                 # A ^= oper                 # A += oper                 # A -= oper                 # RAM[oper] = oper         # PC = (Y>>8)|oper                 
+04 # A = oper              # A &= oper                 # A |= oper                 # A ^= oper                 # A += oper                 # A -= oper                 # RAM[X] = oper            # if (A < 0) PC = hi(PC)|oper      
+08 # A = oper              # A &= oper                 # A |= oper                 # A ^= oper                 # A += oper                 # A -= oper                 # RAM[(Y>>8)|oper] = oper  # if (A > 0) PC = hi(PC)|oper      
+0c # A = oper              # A &= oper                 # A |= oper                 # A ^= oper                 # A += oper                 # A -= oper                 # RAM[(Y>>8)|X] = oper     # if (A != 0) PC = hi(PC)|oper     
+10 # X = oper              # X = A & oper              # X = A | oper              # X = A ^ oper              # X = A + oper              # X = A - oper              # RAM[oper] = oper; X = A  # if (A == 0) PC = hi(PC)|oper     
+14 # Y = oper              # Y = A & oper              # Y = A | oper              # Y = A ^ oper              # Y = A + oper              # Y = A - oper              # RAM[oper] = oper; Y = A  # if (A <= 0) PC = hi(PC)|oper     
+18 # OUT = oper            # OUT = A & oper            # OUT = A | oper            # OUT = A ^ oper            # OUT = A + oper            # OUT = A - oper            # RAM[oper] = oper         # if (A >= 0) PC = hi(PC)|oper     
+1c # OUT = oper; X++       # OUT = A & oper; X++       # OUT = A | oper; X++       # OUT = A ^ oper; X++       # OUT = A + oper; X++       # OUT = A - oper; X++       # RAM[(Y>>8)|X++] = oper   # PC = hi(PC)|oper                 
+01 # A = RAM[oper]         # A &= RAM[oper]            # A |= RAM[oper]            # A ^= RAM[oper]            # A += RAM[oper]            # A -= RAM[oper]            # RAM[oper] = undef        # PC = (Y>>8)|RAM[oper]            
+05 # A = RAM[X]            # A &= RAM[X]               # A |= RAM[X]               # A ^= RAM[X]               # A += RAM[X]               # A -= RAM[X]               # RAM[X] = undef           # if (A < 0) PC = hi(PC)|RAM[oper] 
+09 # A = RAM[(Y>>8)|oper]  # A &= RAM[(Y>>8)|oper]     # A |= RAM[(Y>>8)|oper]     # A ^= RAM[(Y>>8)|oper]     # A += RAM[(Y>>8)|oper]     # A -= RAM[(Y>>8)|oper]     # RAM[(Y>>8)|oper] = undef # if (A > 0) PC = hi(PC)|RAM[oper] 
+0d # A = RAM[(Y>>8)|X]     # A &= RAM[(Y>>8)|X]        # A |= RAM[(Y>>8)|X]        # A ^= RAM[(Y>>8)|X]        # A += RAM[(Y>>8)|X]        # A -= RAM[(Y>>8)|X]        # RAM[(Y>>8)|X] = undef    # if (A != 0) PC = hi(PC)|RAM[oper]
+11 # X = RAM[oper]         # X = A & RAM[oper]         # X = A | RAM[oper]         # X = A ^ RAM[oper]         # X = A + RAM[oper]         # X = A - RAM[oper]         # RAM[oper] = undef; X = A # if (A == 0) PC = hi(PC)|RAM[oper]
+15 # Y = RAM[oper]         # Y = A & RAM[oper]         # Y = A | RAM[oper]         # Y = A ^ RAM[oper]         # Y = A + RAM[oper]         # Y = A - RAM[oper]         # RAM[oper] = undef; Y = A # if (A <= 0) PC = hi(PC)|RAM[oper]
+19 # OUT = RAM[oper]       # OUT = A & RAM[oper]       # OUT = A | RAM[oper]       # OUT = A ^ RAM[oper]       # OUT = A + RAM[oper]       # OUT = A - RAM[oper]       # RAM[oper] = undef        # if (A >= 0) PC = hi(PC)|RAM[oper]
+1d # OUT = RAM[(Y>>8)|X++] # OUT = A & RAM[(Y>>8)|X++] # OUT = A | RAM[(Y>>8)|X++] # OUT = A ^ RAM[(Y>>8)|X++] # OUT = A + RAM[(Y>>8)|X++] # OUT = A - RAM[(Y>>8)|X++] # RAM[(Y>>8)|X++] = undef  # PC = hi(PC)|RAM[oper]            
+02 # /*nop*/               # /*nop*/                   # /*nop*/                   # A = 0                     # A *= 2                    # A = 0                     # RAM[oper] = A            # PC = (Y>>8)|A                    
+06 # /*nop*/               # /*nop*/                   # /*nop*/                   # A = 0                     # A *= 2                    # A = 0                     # RAM[X] = A               # if (A < 0) PC = hi(PC)|A         
+0a # /*nop*/               # /*nop*/                   # /*nop*/                   # A = 0                     # A *= 2                    # A = 0                     # RAM[(Y>>8)|oper] = A     # if (A > 0) PC = hi(PC)|A         
+0e # /*nop*/               # /*nop*/                   # /*nop*/                   # A = 0                     # A *= 2                    # A = 0                     # RAM[(Y>>8)|X] = A        # if (A != 0) PC = hi(PC)|A        
+12 # X = A                 # X = A                     # X = A                     # X = 0                     # X = 2*A                   # X = 0                     # RAM[oper] = A; X = A     # if (A == 0) PC = hi(PC)|A        
+16 # Y = A                 # Y = A                     # Y = A                     # Y = 0                     # Y = 2*A                   # Y = 0                     # RAM[oper] = A; Y = A     # if (A <= 0) PC = hi(PC)|A        
+1a # OUT = A               # OUT = A                   # OUT = A                   # OUT = 0                   # OUT = 2*A                 # OUT = 0                   # RAM[oper] = A            # if (A >= 0) PC = hi(PC)|A        
+1e # OUT = A; X++          # OUT = A; X++              # OUT = A; X++              # OUT = 0; X++              # OUT = 2*A; X++            # OUT = 0; X++              # RAM[(Y>>8)|X++] = A      # PC = hi(PC)|A                    
+03 # A = IN                # A &= IN                   # A |= IN                   # A ^= IN                   # A += IN                   # A -= IN                   # RAM[oper] = IN           # PC = (Y>>8)|IN                   
+07 # A = IN                # A &= IN                   # A |= IN                   # A ^= IN                   # A += IN                   # A -= IN                   # RAM[X] = IN              # if (A < 0) PC = hi(PC)|IN        
+0b # A = IN                # A &= IN                   # A |= IN                   # A ^= IN                   # A += IN                   # A -= IN                   # RAM[(Y>>8)|oper] = IN    # if (A > 0) PC = hi(PC)|IN        
+0f # A = IN                # A &= IN                   # A |= IN                   # A ^= IN                   # A += IN                   # A -= IN                   # RAM[(Y>>8)|X] = IN       # if (A != 0) PC = hi(PC)|IN       
+13 # X = IN                # X = A & IN                # X = A | IN                # X = A ^ IN                # X = A + IN                # X = A - IN                # RAM[oper] = IN; X = A    # if (A == 0) PC = hi(PC)|IN       
+17 # Y = IN                # Y = A & IN                # Y = A | IN                # Y = A ^ IN                # Y = A + IN                # Y = A - IN                # RAM[oper] = IN; Y = A    # if (A <= 0) PC = hi(PC)|IN       
+1b # OUT = IN              # OUT = A & IN              # OUT = A | IN              # OUT = A ^ IN              # OUT = A + IN              # OUT = A - IN              # RAM[oper] = IN           # if (A >= 0) PC = hi(PC)|IN       
+1f # OUT = IN; X++         # OUT = A & IN; X++         # OUT = A | IN; X++         # OUT = A ^ IN; X++         # OUT = A + IN; X++         # OUT = A - IN; X++         # RAM[(Y>>8)|X++] = IN     # PC = hi(PC)|IN                   
+
+Next, I wrote a progam to parse 
+the 
+theloop.asm
+ file
+ to discover which instructions are actually
+used. This resulted in the following output given below. In the first column
+the hexadecimal instruction number, in the second column the number of times
+the instruction is mentioned in the file, in the third column the pseudo-C
+code, and in the last column the mnemonic being used in the file. 
+$00
+
+stands for the operand.
+
+inst    #  pseudo-C                      mnemonic     
+-------------------------------------------------------------
+02    586: /*nop*/                       //   nop
+
+00  54305: A = oper                      //   ld   $00
+01    505: A = RAM[oper]                 //   ld   [$00]
+03      1: A = IN                        //   ld   in
+05     26: A = RAM[X]                    //   ld   [x]
+09      2: A = RAM[(Y<<8)|oper]          //   ld   [y,$00]
+0d     32: A = RAM[(Y<<8)|X]             //   ld   [y,x]
+10      1: X = oper                      //   ld   $00,x
+11     27: X = RAM[oper]                 //   ld   [$00],x
+12     11: X = A                         //   ld   ac,x
+14    326: Y = oper                      //   ld   $00,y
+15     19: Y = RAM[oper]                 //   ld   [$00],y
+16      2: Y = A                         //   ld   ac,y
+18     14: OUT = oper                    //   ld   $00,out
+19      6: OUT = RAM[oper]               //   ld   [$00],out
+
+20     33: A &= oper                     //   anda $00     
+21      8: A &= RAM[oper]                //   anda [$00]
+25      2: A &= RAM[X]                   //   anda [x]
+29      2: A &= RAM[(Y<<8)|oper]         //   anda [y,$00]
+30      9: X = A & oper                  //   anda $00,x
+
+40     14: A |= oper                     //   ora  $00
+41     17: A |= RAM[oper]                //   ora  [$00]
+45      3: A |= RAM[X]                   //   ora  [x]
+50      6: X = A | oper                  //   ora  $00,x
+5d      3: OUT = A | RAM[(Y<<8)|X++]     //   ora  [y,x++],out
+
+60     16: A ^= oper                     //   xora $bf
+61     11: A ^= RAM[oper]                //   xora [$00]
+69      5: A ^= RAM[(Y<<8)|oper]         //   xora [y,$00]
+
+80    402: A += oper                     //   adda $00
+81     28: A += RAM[oper]                //   adda [$00]
+82     36: A *= 2                        //   adda ac
+85      2: A += RAM[X]                   //   adda [x]
+89      6: A += RAM[(Y<<8)|oper]         //   adda [y,$00]
+8d      4: A += RAM[(Y<<8)|X]            //   adda [y,x]
+90     11: X = A + oper                  //   adda $00,x
+91      1: X = A + RAM[oper]             //   adda [$00],x
+92      2: X = 2*A                       //   adda ac,x
+95      1: Y = A + RAM[oper]             //   adda [$00],y
+
+a0     28: A -= oper                     //   suba $00
+a1      3: A -= RAM[oper]                //   suba [$00]
+a5      5: A -= RAM[X]                   //   suba [x]
+b0      3: X = A - oper                  //   suba $00,x
+
+c0      4: RAM[oper] = oper              //   st   $00,[$00]
+c2    662: RAM[oper] = A                 //   st   [$00]
+c3      2: RAM[oper] = IN                //   st   in,[$00]
+c6      8: RAM[X] = A                    //   st   [x]
+ca      6: RAM[(Y<<8)|oper] = A          //   st   [y,$00]
+ce      9: RAM[(Y<<8)|X] = A             //   st   [y,x]
+d2      7: RAM[oper] = A; X = A          //   st   [$00],x
+d6      8: RAM[oper] = A; Y = A          //   st   [$00],y
+de     27: RAM[(Y<<8)|X++] = A           //   st   [y,x++]
+dc     52: RAM[(Y<<8)|X++] = oper        //   st   $00,[y,x++]
+
+e0    314: PC = (Y<<8)|oper              //   jmp  y,$00
+e1      2: PC = (Y<<8)|RAM[oper]         //   jmp  y,[$00]
+e2     13: PC = (Y<<8)|A                 //   jmp  y,ac
+
+e4      3: if (A > 0) PC = hi(PC)|oper   //   bgt  $00
+e8     14: if (A < 0) PC = hi(PC)|oper   //   blt  $00
+ec     30: if (A != 0) PC = hi(PC)|oper  //   bne  $00
+f0     10: if (A == 0) PC = hi(PC)|oper  //   beq  $00
+f4      5: if (A >= 0) PC = hi(PC)|oper  //   bge  $00
+f8      2: if (A <= 0) PC = hi(PC)|oper  //   ble  $00
+fc    497: PC = hi(PC)|oper              //   bra  $00
+fd      2: PC = hi(PC)|RAM[oper]         //   bra  [$00]
+fe    612: PC = hi(PC)|A                 //   bra  ac
+
+vCPU
+
+The virtual CPU has 
+a Von Neumann architecture
+.
+
+vCPU instructions
+
+The ROM implements a virtual 16-bit CPU, which runs when the CPU is not busy
+with generating the VGA signal. At first I did not understand how these
+instructions are encoded. It took me some time to understand that they are
+simply offset in one of the memory segments. This means that there are
+actually 256 instructions implemented by the vCPU, many of which do nothing
+usefull (or might have make the gigatron crash). Later, I discovered that
+the offset mechanism is actual mentioned in 
+one of the blogs
+ on 
+the website
+.
+
+The vCPU has an accumulator (below denoted by 
+vA
+, stored at
+memory location 0x18 and 0x19), a program counter (below denoted by
+
+vPC
+, stored in memory locations 0x16 and 0x17), a stack pointer
+(below denoted by 
+vSP
+, stored in memory location 0x1c), and
+a return address (below denoted by 
+vLR
+, stored in memory locations
+0x1a and 0x1b).
+
+The vCPU instructions are described in 
+GCL-language.txt
+. Using pseudo-C, the instructions, followed
+by their opcodes in brackets, can be described as follows:
+
+ST(0x5e) oper            RAM[oper] = lo(vA);
+STW(0x2b) oper           RAM[oper] = lo(vA); RAM[oper+1] = hi(vA);
+STLW(0xec) oper          RAM[vSP+oper] = lo(vA); RAM[vSP+oper+1] = hi(vA);
+LD(0x1a) oper            vA = RAM[oper];
+LDI(0x59) oper           vA = oper;
+LDWI(0x11) op1 op2       vA = op1 | (op2<<8);
+LDW(0x21) oper           vA = RAM[oper] | (RAM[oper+1]<<8)
+LDLW(0xee) oper          vA = RAM[vSP+oper] | (RAM[vSP+oper+1]<<8)
+ADDI(0xe3) oper          vA += oper
+ADDW(0x99) oper          vA += RAM[oper] | (RAM[oper+1]<<8)
+SUBI(0xe6) oper          vA -= oper
+SUBW(0xb8) oper          vA -= RAM[oper] | (RAM[oper+1]<<8)
+ANDI(0x83) oper          vA &= oper
+ANDW(0xf8) oper          vA &= RAM[oper] | (RAM[oper+1]<<8)
+ORI(0x88) oper           vA |= oper
+ORW(0xfa) oper           vA |= RAM[oper] | (RAM[oper+1]<<8);
+XORI(0x8c) oper          vA ^= oper;
+XORW(0xfc) oper          vA ^= RAM[oper] | (RAM[oper+1]<<8);
+INC(0x93) oper           RAM[oper]++;
+PEEK(0xad)               vA = RAM[vA];
+DEEK(0xf6)               vA = RAM[vA] | (RAM[vA+1]<<8);
+POKE(0xf3) oper          RAM[RAM[oper]|(RAM[oper+1]<<8)] = lo(vA);
+DOKE(0xf3) oper          addr = RAM[oper]|(RAM[oper+1]<<8); RAM[addr] = lo(vA); RAM[addr+1] = hi(vA);
+LSLW(0xe9)               vA = vA << 1
+BCC(0x35) EQ(0x3f) addr  if (vA == 0) vPC = hi(vPC)|addr;
+BCC(0x35) GT(0x4d) addr  if (vA > 0) vPC = hi(vPC)|addr;
+BCC(0x35) LT(0x50) addr  if (vA < 0) vPC = hi(vPC)|addr;
+BCC(0x35) GE(0x53) addr  if (vA >= 0) vPC = hi(vPC)|addr;
+BCC(0x35) LE(0x56) addr  if (vA <= 0) vPC = hi(vPC)|addr;
+BCC(0x35) NE(0x73) addr  if (vA != 0) vPC = hi(vPC)|addr;
+BRA(0x90)                vPC = hi(vPC)|addr;
+LUP((0x7f) oper          vA = ROM[vA | (oper<<8)];
+
+CALL(0xcf) oper          vLR = vPC+2; vPC = RAM[oper] | (RAM[oper+1]<<8);
+RET(0xff)                vPC = vLR-2
+PUSH(0x75)               RAM[--vSP] = lo(vLR); RAM[--vSP] = hi(vLR);
+POP(0x63)                vLR = RAM[vSP] | (RAM[vSP+1]<<8); vSP += 2;
+ALLOC(0xdf) oper         vSP += oper;
+DEF(0xcd) oper           vA = vCP+2; vCP = hi(vCP)|oper;
+
+SYS(0xb4) ticks          syscall(RAM[0x22] | (RAM[0x23]<<8))
+
+The 
+SYS
+ instruction executes the system call whoes address is stored
+in 
+sysFn
+ (memory locations 0x22 and 0x23). The arguments for the
+system call are stored in 
+sysArgs
+ (the eight memory locations 0x24 to
+0x2b). The system calls are:
+
+SYS_Random_34
+ (addres = 0x04a7):
+
+SYS_LSRW7_30
+ (addres = 0x04b9):
+
+SYS_LSRW8_24
+ (addres = 0x04c6):
+
+SYS_LSLW8_24
+ (addres = 0x04cd):
+
+SYS_Draw4_30
+ (addres = 0x04d4):
+
+SYS_VDrawBits_134
+ (addres = 0x04e1):
+
+SYS_LSRW1_48
+ (addres = 0x0600):
+
+SYS_LSRW2_52
+ (addres = 0x0619):
+
+SYS_LSRW3_52
+ (addres = 0x0636):
+
+SYS_LSRW4_50
+ (addres = 0x0652):
+
+SYS_LSRW5_50
+ (addres = 0x066d):
+
+SYS_LSRW6_48
+ (addres = 0x0687):
+
+SYS_LSLW4_46
+ (addres = 0x06a0):
+
+SYS_Read3_40
+ (addres = 0x06c0):
+
+SYS_PayloadCopy_34
+ (addres = 0x06e7):
+
+SYS_RacerUpdateVideoX_40
+ (addres = 0xd700):
+
+SYS_RacerUpdateVideoY_40
+ (addres = 0xd719):
+
+SYS_LoaderProcessInput_48
+ (addres = 0xd731):
+
+SYS_Reset_36
+ (addres = 0x009a):
+
+SYS_Exec_88
+ (addres = 0x00ad):
+
+SYS_Out_22
+ (addres = 0x00f4):
+
+SYS_In_24
+ (addres = 0x00f9):
+
+SYS_NextByteIn_32
+ (addres = 0x02e9):
+
+GLC to vCPU instructions
+
+The table below describes the 'mapping' between GLC language elements and
+vCPU instructions.
+
+if<>0          BCC EQ addr
+if=;0          BCC NE addr
+if>=0          BCC LT addr
+if<=0          BCC GT addr
+if>0           BCC LE addr
+if<0           BCC GE addr
+if<>0loop      BCC EQ addr
+if=;0loop      BCC NE oper
+if>=0loop      BCC LT addr
+if<=0loop      BCC GT addr
+if>0loop       BCC LE addr
+if<0lopp       BCC GE addr
+else           BRA addr
+push           PUSH
+pop            POP
+ret            RET
+call           CALL oper
+peek           PEEK
+X              LDW addr(X)
+[0..255]       LDI oper
+[256..65,535]  LDWI oper oper
+[0..255];      LDW oper
+X=             STW addr(X)
+[0..255]=      STW oper
+X+             ADDW addr(X)
+[0..255]+      ADDI oper
+X;-            SUBW addr(X)
+[0..255]-      SUBI oper
+X&             ANDW addr(X)
+[0..255]&      ANDI oper
+X|             ORIW addr(X)
+[0..255]|      ORI oper
+X^             XORIW addr(X)
+[0..255]^      XORI oper
+
+[0..255]<<     LSLW (repeated)
+[0..255]--     ALLOC (-oper&255)
+[0..255]++     ALLOC oper
+[0..255]%=     STLW oper
+[0..255]%=     LDLW oper
+[0..255]#      oper
+[0..255]?      LUP oper
+[0..255].      ST oper
+[0..255],      LD oper
+X.             POKE addr(X)
+X<             ST addr(X)
+X>             ST addr(X)+1
+X,             LDW addr(X) PEEK
+[0..255]<++    INC oper
+X<++           INC addr(X)
+X>++           INC addr(X)+1
+X<,            LD addr(X)
+X>,            LD addr(X)+1
+X!             CALL addr(X)
+
+Grammar for gt-C
+
+Below the grammar for gt-C, a very small subset of C, is given, will server as
+a basis for writing a compiler.
+
+primary_expr
+        : ident
+        | int
+        | char
+        | "(" expr ")"
+        .
+
+postfix_expr
+        : postfix_expr "[" expr "]"  [array]
+        | postfix_expr "(" assignment_expr LIST OPT ")"  [call]
+        | postfix_expr "++"  [post_inc]
+        | postfix_expr "--"  [post_dec]
+        | primary_expr
+        .
+
+unary_expr
+        : "++" unary_expr  [pre_inc]
+        | "--" unary_expr  [pre_dec]
+        | "-" cast_expr  [min]
+        | "~" cast_expr  [invert]
+        | "!" cast_expr  [not]
+        | postfix_expr
+        .
+
+cast_expr
+        : "(" simple_type ")" cast_expr  [cast]
+        | unary_expr
+        .
+
+l_expr2 : l_expr2 "+" cast_expr  [add]
+        | l_expr2 "-" cast_expr  [sub]
+        | cast_expr 
+        .
+l_expr3 : l_expr3 "<<" l_expr2  [ls]
+        | l_expr3 ">>" l_expr2  [rs]
+        | l_expr2
+        .
+l_expr4 : l_expr4 "<=" l_expr3  [le]
+        | l_expr4 ">=" l_expr3  [ge]
+        | l_expr4 "<"  l_expr3  [lt]
+        | l_expr4 ">"  l_expr3  [gt]
+        | l_expr4 "==" l_expr3  [eq]
+        | l_expr4 "!=" l_expr3  [ne]
+        | l_expr3
+        .
+l_expr5 : l_expr5 "^"  l_expr4 [bexor] | l_expr4 .
+l_expr6 : l_expr6 "&"  l_expr5 [band]  | l_expr5 .
+l_expr7 : l_expr7 "|"  l_expr6 [bor]   | l_expr6 .
+l_expr8 : l_expr8 "&&" l_expr7 [land]  | l_expr7 .
+l_expr9 : l_expr9 "||" l_expr8 [lor]   | l_expr8 .
+
+conditional_expr
+        : l_expr9 "?" l_expr9 ":" conditional_expr  [if_expr]
+        | l_expr9
+        .
+
+assignment_expr
+        : unary_expr "=" assignment_expr  [ass]
+        | unary_expr "+=" assignment_expr  [add_ass]
+        | unary_expr "-=" assignment_expr  [sub_ass]
+        | unary_expr "<<=" assignment_expr  [sl_ass]
+        | unary_expr ">>=" assignment_expr  [sr_ass]
+        | unary_expr "&=" assignment_expr  [and_ass]
+        | unary_expr "|=" assignment_expr  [or_ass]
+        | unary_expr "^=" assignment_expr  [exor_ass]
+        | conditional_expr
+        .
+
+expr    : assignment_expr LIST.
+
+simple_type 
+        : "word" [word]
+        | "byte" [byte]
+        .
+
+func_decl
+        : ("void"[void]|simple_type) ident "(" (simple_type ident)LIST OPT ")"
+           "{" statement SEQ OPT "}" [funcdef]
+        .
+
+statement
+        : "{" statement SEQ OPT "}"
+        | simple_type ident ("=" conditional_expr) OPT ";" [vardecl]
+        | expr OPT ";" [expr]
+        | "if" "(" expr ")" statement  ("else" statement) OPT  [if]
+        | "while" "(" expr ")" statement  [while]
+        | "do" statement "while" "(" expr ")" ";"  [do]
+        | "for" "(" (simple_type OPT ident "=" expr)OPT ";" 
+                    expr OPT ";" 
+                    expr OPT ")" statement  [for]
+        | "continue" ";"  [cont]
+        | "break" ";"  [break]
+        | "return" expr OPT ";"  [ret]
+        .
+
+root    : ( func_decl | statement ) SEQ OPT eof
+        .
+
+First target program
+
+The first target program, I am going to work on, is a program for
+
+Conway's Game
+of Life
+. It does not use all the grammar constructs defined in the above
+grammar.
+
+// Clear the screen
+for (word h = 0; h < 200; h++)
+    for (word v = 0; v < 200; v++)
+        setScreen(h, v, 0);
+
+// Initialize some random part
+for (word h = 90; h < 110; h++)
+    for (word v = 90; v < 110; v++)
+        if (random() < 110)
+            setScreen(h, v, 0x3f);
+
+while (true)
+{
+    for (word h = 1; h < 199; h++)
+        for (word v = 1; v < 199; v++)
+        {
+            word c = 0;
+            word vk = v - 1;
+            if (getScreen(h-1,vk) < 0) c++;
+            vk++;
+            if (getScreen(h-1,vk) < 0) c++;
+            vk++;
+            if (getScreen(h-1,vk) < 0) c++;
+            vk -= 2;
+            if (getScreen(h,vk) < 0) c++;
+            vk++;
+            word m = getScreen(h, vk) & 0x3f;
+            vk++;
+            if (getScreen(h,vk) & 0x3f != 0) c++;
+            vk -= 2;
+            if (getScreen(h+1,vk) & 0x3f != 0) c++;
+            vk++;
+            if (getScreen(h+1,vk) & 0x3f != 0) c++;
+            vk++;
+            if (getScreen(h+1,vk) & 0x3f != 0) c++;
+            if (m != 0)
+            {
+                if (c == 2 || c == 3)
+                    m = 0xff
+                else
+                    m = 0xd0;
+            }
+            else
+            {
+                 if (c == 3)
+                     m = 0x3f;
+                 else
+                     m = 0;
+            }
+            setScreen(h, v, m);
+        }
+}
+
+My life as an hacker
+ |
+
+Home and email address
