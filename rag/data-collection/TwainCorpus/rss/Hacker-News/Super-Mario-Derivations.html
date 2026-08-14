@@ -1,0 +1,99 @@
+<article class="column">
+
+<div class="post-body prose"><p>One of the most surprising aspects of the Nix language is that it is <em>lazy</em>, especially if you have never used a lazy language before. This laziness is what makes much of <a href="https://github.com/NixOS/nixpkgs">Nixpkgs</a> possible, and its complexity.</p>
+<p>One of the simplest ways to observe the laziness is by understanding that only the attributes you access are evaluated.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--expr</span> <span class="s1">'let pkgs = 
+</span><span class="gp">   { hello = "hi";</span><span class="s1">broken = throw "never forced"; }; 
+</span><span class="go">   in pkgs.hello'
+"hi"
+</span></code></pre></div></div>
+<p>The more whackier version of this is you can have <em>endless</em> recursion in an attribute set. Nixpkgs is filled with these bottomless attribute sets:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">-f</span> <span class="s1">'&lt;nixpkgs&gt;'</span> <span class="s1">'pkgs.hello'</span> <span class="nt">--raw</span>
+<span class="go">/nix/store/18bbdvag5v2f3d4y37pdbkzvh7s71cw4-hello-2.12.2
+
+</span><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">-f</span> <span class="s1">'&lt;nixpkgs&gt;'</span> <span class="s1">'pkgs.pkgs.pkgs.hello'</span> <span class="nt">--raw</span>
+<span class="go">/nix/store/18bbdvag5v2f3d4y37pdbkzvh7s71cw4-hello-2.12.2
+
+</span><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">-f</span> <span class="s1">'&lt;nixpkgs&gt;'</span> <span class="s1">'pkgs.python3Packages.pkgs.hello'</span> <span class="nt">--raw</span>
+<span class="go">/nix/store/18bbdvag5v2f3d4y37pdbkzvh7s71cw4-hello-2.12.2
+</span></code></pre></div></div>
+<p>The same store path every time. <code class="language-plaintext highlighter-rouge">pkgs</code> contains itself, and so does every package set inside it. 🤯</p>
+<p>If laziness is what lets a recursive attribute set terminate, then the recursion doesn’t have to bottom out <strong>at all</strong>:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--expr</span> <span class="se">\</span>
+<span class="gp">    'let countdown = n: { value = n;</span>next <span class="o">=</span> countdown <span class="o">(</span>n + 1<span class="o">)</span><span class="p">;</span> <span class="o">}</span><span class="p">;</span>
+<span class="go">     in (countdown 0).next.next.next.value'
+3
+</span></code></pre></div></div>
+<p>That attribute set is infinitely deep. Indexing three levels into it costs exactly three levels of evaluation, and the rest of the infinite tree is never built because nobody asked.</p>
+<p>So an attribute path is a walk through a lazily-generated tree. Which made me wonder: what if the attribute path were <em>input to something</em>? 🤔</p>
+<p>I decided to take that idea and make the attribute path a sequence of button presses in <a href="https://en.wikipedia.org/wiki/Super_Mario_Bros._3">Super Mario Bros. 3</a>. Each node in the tree is a frame of the game, and each child is a button press that produces a new frame. Game states are recursive by nature.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix build <span class="s1">'.#level1.rightb.rightb.rightab.rightb'</span>
+<span class="gp">$</span>file <span class="nt">-L</span> result
+<span class="go">result: PNG image data, 256 x 240, 8-bit/color RGB, non-interlaced
+</span></code></pre></div></div>
+<p><code class="language-plaintext highlighter-rouge">.rightb</code> is right + B, which in Super Mario Bros. 3 is “run right”. <code class="language-plaintext highlighter-rouge">.rightab</code> is run and jump. The output is the frame you’d be looking at if you’d pressed those buttons in that order, on real hardware, in that game.<sup class="sn-ref">1</sup><span class="sidenote"><span class="sn-num">1</span><span class="sn-p">The prefix <code class="language-plaintext highlighter-rouge">.#level1</code> is a precanned sequence of button presses that gets you to the start of level 1-1. </span></span></p>
+<p>Append <code class="language-plaintext highlighter-rouge">.play</code> anywhere along the path and you get the whole run stitched into a recording:</p>
+<p></p>
+<p>The coolest thing though is that every one of those frames <strong>is a separate derivation in my store</strong>.</p>
+<p>The code is at <a href="https://github.com/fzakaria/nes-nix">fzakaria/nes-nix</a>. It is generalized and the ROM is a flake input you point wherever you like for any other game.</p>
+<p>The flake computes a derivation based on the attribute path such that each press is its own derivation, and it takes <strong>the previous press’s savestate as an input</strong>. Each derivation <em>never</em> re-emulates its ancestors’ frames.<sup class="sn-ref">2</sup><span class="sidenote"><span class="sn-num">2</span><span class="sn-p">A screenshot of the frame is also produced, which is used when we want to stitch a video sequence together. </span></span></p>
+<figure class="graphviz"></figure>
+<p>The practical consequence is that the store becomes the emulator’s savestate history:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># 3 derivations, cold
+</span><span class="gp">$</span>nix build <span class="s1">'.#game.start4.wait2.right'</span>
+<span class="c"># 1 derivation, prefix reused
+</span><span class="gp">$</span>nix build <span class="s1">'.#game.start4.wait2.left'</span>
+<span class="c"># 1 derivation, all of it reused
+</span><span class="gp">$</span>nix build <span class="s1">'.#game.start4.wait2.right.right'</span>
+</code></pre></div></div>
+<p>Branching off the middle of a hundred-press run costs one press as does appending to the end of it.</p>
+<p>We can look at it the other way. The dependency graph <em>is</em> the input sequence, so we can ask Nix what buttons produced a frame:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix-store <span class="nt">--query</span> <span class="nt">--tree</span> 
+<span class="gp">     $</span><span class="o">(</span>nix <span class="nb">eval</span> <span class="nt">--raw</span> <span class="s1">'.#game.start.wait4.start.drvPath'</span><span class="o">)</span>
+<span class="go">/nix/store/32n4ni0zg01b9c9v64x67am37rdmmr9y-nes-start.drv
+└───/nix/store/j5vy3385pgs9dzw0y7sdrdmn7xnrxgji-nes-wait4.drv
+    └───/nix/store/w4zz5aqj5zxqhnialabdc7p3sy80v6dc-nes-start.drv
+        └───/nix/store/k9wfz8w5157d0xdwaw1vvhf019dvw5s0-nes-boot.drv
+</span></code></pre></div></div>
+<p>So what is <code class="language-plaintext highlighter-rouge">.play</code> actually doing?</p>
+<p>Almost nothing. Every frame along the path is already sitting in the store as the output of its own press, so the recording never emulates anything. It is a directory of symlinks to the frames for <code class="language-plaintext highlighter-rouge">ffmpeg</code> to process.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix build <span class="s1">'.#level1.rightb.rightb.rightab.play'</span>
+<span class="gp">$</span><span class="nb">ls</span> <span class="nt">-l</span> result/frames | <span class="nb">head</span> <span class="nt">-4</span>
+<span class="gp">0000.png -&gt;</span>/nix/store/3p2fxwngh…-nes-boot
+<span class="gp">0001.png -&gt;</span>/nix/store/4ha88l0dk…-nes-start
+<span class="gp">0002.png -&gt;</span>/nix/store/nh4zfsq6x…-nes-wait4
+<span class="gp">0003.png -&gt;</span>/nix/store/ghbgn28f1…-nes-start
+</code></pre></div></div>
+<figure class="graphviz"></figure>
+<p>How far can we take this input-sequence game input idea?</p>
+<p>Nix <strong>by default</strong> gives out at around 2,400 presses, with:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--raw</span> <span class="s2">".#game.right.right.right…drvPath"</span>
+<span class="gp">error: stack overflow;</span>max-call-depth exceeded
+</code></pre></div></div>
+<p><code class="language-plaintext highlighter-rouge">max-call-depth</code> defaults to 10,000 and evaluating each press costs roughly four nested calls.</p>
+<p>It’s a guard against runaway recursion, not a structural limit, and we can raise it to 10 million and get 20,000 presses:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span><span class="nb">ulimit</span> <span class="nt">-s</span> unlimited
+<span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--raw</span> <span class="nt">--option</span> max-call-depth 10000000 <span class="se">\</span>
+<span class="gp">      ".#</span>game.<span class="si">$(</span>
+<span class="go">        python3 -c 'print(".".join(["right"]*20000))')
+      .drvPath"
+/nix/store/p4nm0a4p4k9bdjqsag1jj0baah9mj6hb-nes-right.drv
+</span></code></pre></div></div>
+<p>20,000 presses, takes roughly fourteen seconds to evaluate on my laptop. The cost is linear in the number of presses, and it is roughly 0.7ms “per press”.</p>
+<figure class="plotnine"></figure>
+<p>The next bottleneck though is that the kernel gives out at 21,845 presses on my machine. An attribute path is a single <code class="language-plaintext highlighter-rouge">argv</code> element, and Linux caps the size of the argument list in total and individual arguments.</p>
+<p>The per-argument limit is 131,072 bytes (<code class="language-plaintext highlighter-rouge">MAX_ARG_STRLEN</code>), and each press is six bytes long (<code class="language-plaintext highlighter-rouge">right.</code>), so 21,845 presses is the maximum that can be passed to <code class="language-plaintext highlighter-rouge">nix eval</code> as a single argument.</p>
+<p>The escape hatch is to stop passing the run as an argument. and we can feed in the input-sequence as from a file:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix build <span class="nt">--impure</span> <span class="nt">--expr</span> <span class="se">\</span>
+<span class="go">    '(builtins.getFlake (toString ./.))
+      .packages.x86_64-linux.game.sequenceFile 
+        ./runs/world1-1.txt'
+</span></code></pre></div></div>
+<p>This produces the byte-identical derivation to the equivalent attribute path, so a run kept in a file still shares the same store paths.</p>
+<p>All of this was to simply <em>evaluate</em> the Nix expression. Now we have to build it. Although Nix is great at building derivations in parallel, the recursion here is tail-recursive and therefore serial.</p>
+<p>I benchmarked the build time of a growing list of button presses and the cost is also linear, as we would expect, with the number of presses. The cost per press is roughly 1.27 seconds with substituters enabled and 0.28 seconds with them disabled. The round-trips cost for checking whether the derivation is in the cache costs noticeably more than emulating the frames does.<sup class="sn-ref">3</sup><span class="sidenote"><span class="sn-num">3</span><span class="sn-p">We can set <code class="language-plaintext highlighter-rouge">preferLocalBuild</code> or <code class="language-plaintext highlighter-rouge">allowSubstitutes</code> if we want to avoid this cost. </span></span></p>
+<figure class="plotnine"></figure>
+<p>We’re used to the attribute path being a <em>name</em>, simply a coordinate into a catalogue of things that exist. Laziness means it’s really a <em>program</em>: a sequence of steps the evaluator walks, generating whatever it needs as it goes.</p>
+<p>Nixpkgs happens to use that machinery to describe software, but nothing about it requires that the tree be a catalogue at all. Coupled with the fact that the store turns out to be a decent persistence layer for reproducible state-machines, makes a our “package manager” reasonable to use for playing Mario. 🍄</p>
+</div>
+</article>
