@@ -1,0 +1,129 @@
+<body onload="styleCode()">
+<div id="container">
+<div id="header">
+
+<h1><a href="https://leancrew.com/all-this/">And now it’s all this</a></h1>
+<h2>I just said what I said and it was wrong
+            Or was taken wrong</h2>
+</div> <!-- header -->
+<div id="content">
+<p class="navigation">
+
+<a href="https://leancrew.com/all-this/2026/08/ill-follow-the-sun/">Previous post</a> </p>
+<h1><a href="https://leancrew.com/all-this/2026/08/a-planet-position-widget/">A planet position widget</a></h1>
+<p class="postdate">August 12, 2026 at 12:16 PM by Dr. Drang</p>
+<p>After I learned how to <a href="https://leancrew.com/all-this/2026/08/a-two-month-calendar-on-my-desktop/">make a Mac widget with TerminalWidget</a> and how to <a href="https://leancrew.com/all-this/2026/08/ill-follow-the-sun/">determine the locations of celestial objects with Astropy</a>, the natural thing for me to do was combine the two into a widget that tracks the planets.</p>
+<p></p>
+<p>I’m using the ancient definition of planet, which includes the Sun and Moon but not anything past Saturn. The numbers are the azimuth and altitude, in that order, and are given to the nearest degree. The idea is to tell me what may be visible and where it is. This particular screenshot was taken just after 10:00 last night; there was no reason to go outside because everything was below the horizon.</p>
+<p>I was torn on whether to include the Sun. Few of us need help finding the Sun in the sky, and you can’t see anything other than the Moon when the Sun is up. But I decided to include it anyway, partly for completeness, and partly because the visibility of some bodies depends on their separation from the Sun.</p>
+<p>Let’s start with the code that generates the widget’s text. It’s a Python script called <code>planets</code>:</p>
+<pre><code>python:
+ 1:  import astropy.units as u
+ 2:  from astropy.time import Time
+ 3:  from astropy.coordinates import get_body, AltAz, EarthLocation
+ 4:  from subprocess import run
+ 5:  
+ 6:  def direction(az):
+ 7:    'Return a string indication of the azimuth (given in degrees).'
+ 8:  
+ 9:    dirs = 'N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW'.split()
+10:    i = int(((az + 11.25) % 360) / 22.5)
+11:    return dirs[i]
+12:  
+13:  # Current time in UTC.
+14:  ut = Time.now()
+15:  
+16:  # Observation location.
+17:  home = EarthLocation(lat=41.81433*u.deg, lon=-88.07093*u.deg, height=208*u.m)
+18:  
+19:  # Bodies of interest.
+20:  planets = 'Moon Sun Mercury Venus Mars Jupiter Saturn'.split()
+21:  
+22:  # Current positions of all the bodies.
+23:  pos = {}
+24:  const = {}
+25:  for p in planets:
+26:      pos[p] = get_body(p, ut).transform_to(AltAz(obstime=ut, location=home))
+27:      const[p] = pos[p].get_constellation()
+28:  
+29:  # Assemble the results.
+30:  output = []
+31:  for p in planets:
+32:      output.append(f'{p:&gt;8s}: {pos[p].az.value:3.0f} \
+33:  {direction(pos[p].az.value):3s} {pos[p].alt.value:3.0f} {const[p]}')
+34:  
+35:  # Pipe the results through TerminalWidget.
+36:  tw = '/Applications/TerminalWidget.app/Contents/MacOS/TerminalWidget\
+37:   --target planets --font Menlo --bg eeeeee --fg 000000 --text -'.split()
+38:  run(tw, input='\n'.join(output).encode())
+39:  
+40:  # print('\n'.join(output))
+</code></pre>
+<p>There’s no shebang line because of how it gets called by <code>launchd</code>, which we’ll get to later.</p>
+<p>After <code>planets</code> imports the necessary modules, Lines 6–11 define the <code>direction</code> function, which takes the azimuth and returns a string with the corresponding point of the compass. I have this because 223°, which is how Astropy reports the azimuth, doesn’t immediately say “southwest” to me. The function assumes a 16-point compass, like this one:</p>
+<p></p>
+<p class="caption">Image from <a href="https://en.wikipedia.org/wiki/Points_of_the_compass">Wikipedia</a>.</p>
+<p>The points are separated by 22.5°, which is why there’s a division by 22.5 in Line 10. The other parts of Line 10 adjust for the fact that North starts at 348.75° (-11.25°), the azimuth resets at 360°, and the index of a list must be an integer. Astropy may already have a function that does what <code>direction</code> does, but I thought it would be easier (and more fun) to write the function myself than to search through the documentation.</p>
+<p>Lines 14 and 17 define the time and place of observation. <code>planets</code> will be run every half hour to update the widget, so what’s being displayed is never more than 30 minutes out of date. The <code>home</code> location you see above is actually the Morton Arboretum; my version of the script uses the latitude and longitude of my house.</p>
+<p>Line 20 defines the <code>planets</code> list, and Lines 23–27 create a pair of dictionaries, <code>pos</code> and <code>const</code>, which contain the <a href="https://docs.astropy.org/en/stable/api/astropy.coordinates.AltAz.html"><code>AltAz</code></a> position and constellation of each planet. The <a href="https://docs.astropy.org/en/stable/api/astropy.coordinates.get_body.html"><code>get_body</code> function</a> (Line 26) gets the position, and the <a href="https://docs.astropy.org/en/stable/api/astropy.coordinates.get_constellation.html"><code>get_constellation</code> function</a> (Line 27) uses that position to figure out the constellation the body is in.</p>
+<p>Lines 30–33 create the list of <code>output</code> lines, and Lines 36–38 use the <a href="https://docs.python.org/3.13/library/subprocess.html#subprocess.run"><code>run</code> function</a> of the <code>subprocess</code> module to send the output lines to TerminalWidget. The <code>tw</code> list contains both the full path to the <code>TerminalWidget</code> executable and all the options passed to it. The <code>input</code> parameter to <code>run</code> is the previously defined <code>output</code>, converted to a single string separated by linefeeds and encoded as bytes.</p>
+<p>Line 40 is basically a debugging line that I’ve left in for future development. While writing <code>planets</code>, I had Lines 36–38 commented out and Line 40 uncommented so I could see the results immediately in the Terminal.</p>
+<p><code>planets</code> is run by <code>launchd</code> every 30 minutes, on the hour and half-hour, via this launch agent, <code>com.leancrew.planets.plist</code>:</p>
+<pre><code>xml:
+ 1:  &lt;?xml version="1.0" encoding="UTF-8"?&gt;
+ 2:  &lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+ 3:  &lt;plist version="1.0"&gt;
+ 4:  &lt;dict&gt;
+ 5:    &lt;key&gt;Label&lt;/key&gt;
+ 6:    &lt;string&gt;com.leancrew.planets&lt;/string&gt;
+ 7:    &lt;key&gt;ProgramArguments&lt;/key&gt;
+ 8:    &lt;array&gt;
+ 9:      &lt;string&gt;/path/to/python&lt;/string&gt;
+10:      &lt;string&gt;/path/to/planets&lt;/string&gt;
+11:    &lt;/array&gt;
+12:    &lt;key&gt;StartCalendarInterval&lt;/key&gt;
+13:    &lt;array&gt;
+14:      &lt;dict&gt;
+15:        &lt;key&gt;Minute&lt;/key&gt;
+16:        &lt;integer&gt;0&lt;/integer&gt;
+17:      &lt;/dict&gt;
+18:      &lt;dict&gt;
+19:        &lt;key&gt;Minute&lt;/key&gt;
+20:        &lt;integer&gt;30&lt;/integer&gt;
+21:      &lt;/dict&gt;
+22:    &lt;/array&gt;
+23:  &lt;/dict&gt;
+24:  &lt;/plist&gt;
+</code></pre>
+<p>The first item in the <code>ProgramArguments</code> array is the full path to the Python executable (this is why <code>planets</code> doesn’t need a shebang line), and the second item is the full path to the <code>planets</code> script itself. The schedule for running <code>planets</code> is in the <code>StartCalendarInterval</code> array—whenever the minute is 0 or 30, the script is run.</p>
+<p>As I write this, a solar eclipse is nearly underway. Here in the Chicago area, it’s going to be a very partial eclipse—only 1% of the Sun will be blocked. Since 100% of the Sun is being blocked by clouds, I won’t be able to see any of the eclipse. But my planets widget is showing me, more or less, that it’s happening above the clouds.</p>
+<p></p>
+<p>Rounding the Sun and Moon’s positions to the nearest degree isn’t precise enough to determine an eclipse, but it’s a decent hint.</p>
+<p class="navigation">
+
+<a href="https://leancrew.com/all-this/2026/08/ill-follow-the-sun/">Previous post</a> </p>
+</div> <!-- content -->
+<div id="sidebar">
+<h1>Site search</h1>
+
+<!-- <hr /> -->
+<h1>Meta</h1>
+<ul>
+<li>drdrang at leancrew</li>
+<li><a href="https://leancrew.com/all-this/archive/">Blog archive</a></li>
+<li><a href="https://leancrew.com/all-this/feed/">RSS feed</a></li>
+<li><a href="https://leancrew.com/all-this/feed.json">JSON feed</a></li>
+<!-- <li><a href="http://www.twitter.com/drdrang">Twitter stream</a></li> -->
+<li><a href="https://fosstodon.org/@drdrang" rel="me">Mastodon</a></li>
+<li><a href="http://github.com/drdrang">GitHub repositories</a></li>
+</ul>
+<h1>Recent posts</h1>
+
+<h1>Credits</h1>
+<p style="margin-top: 1em;">This work is licensed under a
+  <a href="http://creativecommons.org/licenses/by-sa/3.0/" rel="license">Creative Commons Attribution-Share Alike 3.0 Unported License</a>.</p>
+<p style="margin-top: 1em;">© 2005–2026, Dr. Drang</p>
+</div> <!-- sidebar -->
+ <!-- footer -->
+</div> <!-- container -->
+</body>
