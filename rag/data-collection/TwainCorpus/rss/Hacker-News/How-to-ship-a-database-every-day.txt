@@ -1,0 +1,491 @@
+Sharding: up to 256TB in one index
+NEW: Scale a single namespace up to 256TB with namespace sharding
+How to ship a database every day
+August 14, 2026
+•
+Tarun Pothulapati (Engineer)
+Every day, turbopuffer customers ask for things: new query plans, new APIs, new
+index structures. In response, we deploy dozens of database upgrades per day
+across our clusters, many of them the same day we open the PR. Shipping fast is
+how we
+
+make every customer feel like they're our only customer
+.
+
+We don't want to limit where you can run turbopuffer, so we support many
+
+regions
+ across three deployment models:
+
+public SaaS
+, 
+single-tenant SaaS
+,
+and 
+BYOC
+. In total, we operate
+100+ clusters, twice as many as we had 6 months ago, and growing as we add more
+public regions and many more BYOC deployments.
+
+ ╔═ turbopuffer cloud account ═════════════════════╗       ╔═ customer cloud account ═══╗
+ ║                                                 ║░      ║                            ║░
+ ║  ┏━ public ━━━━━━━━━━┓ ┏━ single-tenant ━━━━━┓  ║░      ║  ┏━ BYOC ━━━━━━━━━━━━━━━┓  ║░
+ ║  ┃ AWS | GCP         ┃ ┃ AWS | GCP           ┃  ║░      ║  ┃ AWS | GCP | Azure    ┃  ║░
+ ║  ┃ shared resources  ┃ ┃ dedicated resources ┃  ║░      ║  ┃ customer's resources ┃  ║░
+ ║  ┃                   ┃ ┃                     ┃  ║░      ║  ┃                      ┃  ║░
+ ║  ┃ tpuf operator     ┃ ┃ tpuf operator       ┃  ║░      ║  ┃ no tpuf operator     ┃  ║░
+ ║  ┃ access            ┃ ┃ access              ┃  ║░      ║  ┃ access               ┃  ║░
+ ║  ┗━━━━━━━━━━━━━━━━━━━┛ ┗━━━━━━━━━━━━━━━━━━━━━┛  ║░      ║  ┗━━━━━━━━━━━━━━━━━━━━━━┛  ║░
+ ║                                                 ║░      ║                            ║░
+ ╚═════════════════════════════════════════════════╝░      ╚════════════════════════════╝░
+  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░       ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+╔═ tpuf account ═══════════╗
+║ ┏ public ━━━━━━━━━━━━━━┓ ║
+║ ┃ AWS | GCP            ┃ ║
+║ ┃ shared resources     ┃ ║
+║ ┃ tpuf operator access ┃ ║
+║ ┗━━━━━━━━━━━━━━━━━━━━━━┛ ║
+║ ┏ single-tenant ━━━━━━━┓ ║
+║ ┃ AWS | GCP            ┃ ║
+║ ┃ dedicated resources  ┃ ║
+║ ┃ tpuf operator access ┃ ║
+║ ┗━━━━━━━━━━━━━━━━━━━━━━┛ ║
+╚══════════════════════════╝
+
+╔═ customer account ═══════╗
+║ ┏ BYOC ━━━━━━━━━━━━━━━━┓ ║░
+║ ┃ AWS|GCP|Azure        ┃ ║░
+║ ┃ customer's resources ┃ ║░
+║ ┃ no tpuf operator     ┃ ║░
+║ ┃ access               ┃ ║░
+║ ┗━━━━━━━━━━━━━━━━━━━━━━┛ ║░
+╚══════════════════════════╝░
+ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+
+The problem with BYOC
+
+BYOC clusters live inside our customers' cloud accounts, to which we hold no
+credentials by default. We can't just SSH or 
+kubectl
+ in. Some BYOC vendors
+solve this by asking the customer to carve out a dedicated cloud account and
+grant the vendor standing admin credentials inside it. That keeps the rest of
+the customer's cloud account isolated, but every dedicated account creates
+security monitoring + compliance + billing overhead that we generally prefer to
+avoid.
+
+We don't want different control planes for BYOC and SaaS, so we have to design
+for the lowest common denominator. We must be able to operate 
+every
+ cluster
+without reaching in.
+
+How do you operate a database cluster you can't touch?
+
+The only way this works is if 
+every
+ operation we need to perform on a cluster
+can run without us reaching in. The cluster must be able to independently drive
+its operations to a terminal state, even if it loses its connection to the
+central control plane.
+
+The solution to this is standard Kubernetes stuff. On every cluster, we run a
+local cluster agent that implements a simple state machine. A single Kubernetes
+
+CRD
+ called 
+TurbopufferOperation
+
+expresses every operation kind, from 
+upgrade
+ to 
+tidy
+. A Kubernetes
+controller drives each custom resource (CR) from state to state via a
+reconciliation loop until it reaches a terminal state. Operations advance on
+their own by default, but BYOC customers can gate operations on
+
+approval
+
+or
+
+maintenance windows
+.
+These are baked into the CRD as waiting states that advance when approvals are
+given or the window opens.
+
+╔═ operation lifecycle ═══════════════════════════════════════════╗
+║                                                                 ║░
+║    ┏━━━━━━━━━━━━━━━━━━━┓                                        ║░
+║    ┃ REQUIRES_APPROVAL ┃                                        ║░
+║    ┗━━━━━━━━┯━━━━━━━━━━┛                                        ║░
+║             │ approve (auto or manual)                          ║░
+║             ▼                                                   ║░
+║    ┏━━━━━━━━━━━━━━━━━━━┓     ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓    ║░
+║    ┃      PENDING      ┃ ──▶ ┃ AWAITING_MAINTENANCE_WINDOW ┃    ║░
+║    ┗━━━━━━━━┯━━━━━━━━━━┛ ◀── ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛    ║░
+║             │ start()                                           ║░
+║             ▼                                                   ║░
+║    ┏━━━━━━━━━━━━━━━━━━━┓     ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓    ║░
+║    ┃      RUNNING      ┃ ──▶ ┃ AWAITING_EXTERNAL_EXECUTION ┃    ║░
+║    ┗━━━━━━━━┯━━━━━━━━━━┛ ◀── ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛    ║░
+║             │ poll()                                            ║░
+║        ┌────┴────┐                                              ║░
+║        ▼         ▼                                              ║░
+║    ┏━━━━━━━┓ ┏━━━━━━━┓                                          ║░
+║    ┃SUCCESS┃ ┃FAILURE┃                                          ║░
+║    ┗━━━━━━━┛ ┗━━━━━━━┛                                          ║░
+║                                                                 ║░
+╚═════════════════════════════════════════════════════════════════╝░
+ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+╔═ operation lifecycle ════╗
+║ ┏━━━━━━━━━━━━━━━━━━━━━━┓ ║░
+║ ┃  REQUIRES_APPROVAL   ┃ ║░
+║ ┗━━━━━━━━━━━┯━━━━━━━━━━┛ ║░
+║             ▼ approve    ║░
+║ ┏━━━━━━━━━━━━━━━━━━━━━━┓ ║░
+║ ┃       PENDING        ┃ ║░
+║ ┗━━━━━━━━━━━┯━━━━━━━━━━┛ ║░
+║             ▼ start()    ║░
+║ ┏━━━━━━━━━━━━━━━━━━━━━━┓ ║░
+║ ┃       RUNNING        ┃ ║░
+║ ┗━━━━┯━━━━━━━━━━━┯━━━━━┛ ║░
+║      ▼ poll()    ▼       ║░
+║ ┏━━━━━━━━━┓ ┏━━━━━━━━━┓  ║░
+║ ┃ SUCCESS ┃ ┃ FAILURE ┃  ║░
+║ ┗━━━━━━━━━┛ ┗━━━━━━━━━┛  ║░
+╚══════════════════════════╝░
+ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+
+The key is to define states that are generic enough to model every operation
+kind, both existing and future, but finite enough that the reconciler can always
+drive them toward a terminal state. We never need to reach in to do work, and
+the state lives as a durable object in the cluster's own
+
+etcd
+. If the agent crashes
+or loses its connection to the control plane, it can still drive that work to
+completion.
+
+The local, durable state machine means we don't have to reach into a cluster to
+
+drive
+ its work, but how does a cluster 
+get
+ its work?
+
+You use Terraform, right?
+
+The default here would be to reach for infrastructure-as-code (IaC) tools like
+Terraform and Helm. These tools are great for provisioning infrastructure. We
+use them for that! But they're the wrong control plane for operating a fleet of
+databases.
+
+First, we do not have a dedicated DevOps function at turbopuffer. We ask our
+database engineers to deploy their code to the infra. Most of them haven't used
+IaC tools much in the past, so it doesn't make sense to put those tools in their
+critical path.
+
+Second, Terraform's default model would require us to run 
+terraform apply
+ from
+our own infrastructure with the customer's infra as the target, which we can't
+do for BYOC. A GitOps flow for Terraform could solve this by having the customer
+automatically trigger 
+terraform apply
+ from within their cloud account whenever
+a Git repo is updated. For database upgrades, this could theoretically work:
+just bump the Docker image in the Terraform config. But who owns the repo? If
+it's ours, BYOC customers who want an approval gate have no control over merges.
+If it's theirs, we're back to needing write access into their systems or waiting
+on humans to merge the PR.
+
+Either way, many of our operations have a less declarative shape. Things like
+one-off namespace reindexing, compacting a 
+WAL
+, or
+garbage collecting the 
+LSM
+ are jobs to be done, not
+states to be arrived at. Every ad hoc operation would need to be a git commit
+with a new manifest to create the job, then a commit to garbage collect the
+completed jobs. Terraform files make great declarative manifests, but terrible
+job queues.
+
+How the agent fetches work (and how we keep track of it)
+
+We can't reach into a cluster, and we won't use GitOps, but the cluster still
+needs to be able to 
+pull
+ its work from the control plane and 
+push
+ its status
+back out. The system must be fully tolerant of a lost connection between cluster
+and control plane; a control plane outage should not take down an otherwise
+healthy cluster. In the event of a lost connection, the cluster should be able
+to pick up its new operations once it reconnects, while the control plane should
+be able to catch up on the state of the cluster.
+
+To accomplish these aims, we built a custom central control plane consisting of
+an API server backed by a PlanetScale MySQL database.
+
+Each cluster agent is given a cluster-specific API key. To fetch its operations,
+the agent regularly polls the API server via an authenticated 
+GET
+ request, to
+which the API server responds with that cluster's pending operations. Once the
+agent gets its operations, it stores them as custom resources and starts running
+them through its reconciliation loop. This is idempotent: each operation's CR is
+named with that operation's ID, so if for some reason a later 
+GET
+ returns the
+same operation again, the agent will just find the existing CR and resume from
+the state stored in 
+etcd
+ instead of creating a duplicate.
+
+As the operations advance, the cluster agent will periodically 
+POST
+ its
+buffered status transitions back to the API server, which mirrors them into a
+
+status_transitions
+ table in MySQL as an append-only log.
+
+     tpuf engineers
+            │
+            ▼
+╔═ control plane ═══════╗                       ╔═ cluster ══════════════════╗
+║                       ║░                      ║                            ║░
+║ ┏━━━━━━━━━━━━━━━━━━━┓ ║░                      ║ ┏━ cluster agent ━━━━━━━━┓ ║░
+║ ┃         UI        ┃ ║░                      ║ ┃┌──────────────────────┐┃ ║░
+║ ┗━━━━━━━━━┯━━━━━━━━━┛ ║░                      ║ ┃│    k8s controller    │┃ ║░
+║           ▼           ║░                      ║ ┃│  (sync + reconciler) │┃ ║░
+║ ┏━━━━━━━━━━━━━━━━━━━┓ ║◀─── GET operations ───║ ┃└───────────┬──────────┘┃ ║░
+║ ┃     API server    ┃ ║░                      ║ ┃            ▼           ┃ ║░
+║ ┗━━━━━━━━━┯━━━━━━━━━┛ ║◀── POST transitions ──║ ┃┌──────────────────────┐┃ ║░
+║           ▼           ║░                      ║ ┃│ TurbopufferOperation │┃ ║░
+║ ┏━━━━━━━━━━━━━━━━━━━┓ ║░                      ║ ┃│          CRs         │┃ ║░
+║ ┃MySQL (PlanetScale)┃ ║░                      ║ ┃└──────────────────────┘┃ ║░
+║ ┗━━━━━━━━━━━━━━━━━━━┛ ║░                      ║ ┗━━━━━━━━━━━━━━━━━━━━━━━━┛ ║░
+║                       ║░                      ║                            ║░
+╚═══════════════════════╝░                      ╚════════════════════════════╝░
+ ░░░░░░░░░░░░░░░░░░░░░░░░░                       ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+     tpuf engineers
+            │
+            ▼
+╔═ control plane ════════════╗
+║ ┏━━━━━━━━━━━━━━━━━━━━━━━━┓ ║░
+║ ┃           UI           ┃ ║░
+║ ┗━━━━━━━━━━━┯━━━━━━━━━━━━┛ ║░
+║             ▼              ║░
+║ ┏━━━━━━━━━━━━━━━━━━━━━━━━┓ ║░
+║ ┃       API server       ┃ ║░
+║ ┗━━━━━━━━━━━┯━━━━━━━━━━━━┛ ║░
+║             ▼              ║░
+║ ┏━━━━━━━━━━━━━━━━━━━━━━━━┓ ║░
+║ ┃         MySQL          ┃ ║░
+║ ┃     (PlanetScale)      ┃ ║░
+║ ┗━━━━━━━━━━━━━━━━━━━━━━━━┛ ║░
+╚════════════════════════════╝░
+ ░░░░░▲░░░░░░░░░░░▲░░░░░░░░░░░░
+      │GET work   │POST state
+      │           │
+╔═ cluster ══════════════════╗
+║ ┏━ cluster agent ━━━━━━━━┓ ║░
+║ ┃┌──────────────────────┐┃ ║░
+║ ┃│    k8s controller    │┃ ║░
+║ ┃│  (sync + reconciler) │┃ ║░
+║ ┃└───────────┬──────────┘┃ ║░
+║ ┃            ▼           ┃ ║░
+║ ┃┌──────────────────────┐┃ ║░
+║ ┃│ TurbopufferOperation │┃ ║░
+║ ┃│          CRs         │┃ ║░
+║ ┃└──────────────────────┘┃ ║░
+║ ┗━━━━━━━━━━━━━━━━━━━━━━━━┛ ║░
+╚════════════════════════════╝░
+ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+
+If the agent's 
+POST
+ fails to get a response, the agent puts the transitions
+back into its buffer and tries again. The 
+POST
+ may have landed even if the
+response didn't come back, so the same transition could show up twice in the
+log. That doesn't matter: an operation's current state is just its latest
+transition.
+
+This is how we keep the central control plane in sync with each cluster even in
+the event of temporary connection loss. The database maintains the source of
+truth for the desired operations we want to run on every cluster, and holds a
+mirror of the status of those operations so we can rebuild a cluster's state
+from afar.
+
+But a database is a dangerous interface. We said we didn't want to ship code
+with YAML — it would be insane to replace that with 
+INSERT INTO
+ SQL
+statements.
+
+An interface we actually like using
+
+We deploy every day, multiple times per day, and debug and maintain the clusters
+in between deploys. If you're a turbopuffer database engineer, you want the
+control plane to be as reliable and easy to use as your favorite code editor.
+
+The control plane has a custom Remix/React dashboard that fronts the API server.
+The UX is inspired by Linear: everything has a hotkey, so you can operate it
+entirely from the keyboard. The information hierarchy is structured, and the
+selection state is clear, so you know exactly which clusters you're working on.
+
+Upgrades are the most common operation, and the UI reflects that. We can quickly
+see each cluster's deployed commit 
+SHA
+ and how far it
+has drifted from the latest passing SHA, with metadata pulled from GitHub
+(commit message, PR number, commit date) so we don't have to decipher the SHA.
+Upgrades are typically done in groups, so we can select multiple clusters across
+all deployment models, choose a target commit SHA, and upgrade all of them from
+the keyboard. We can similarly kick off all other operations from this UI.
+
+Your browser does not support the video tag.
+0:00
+ / 
+0:00
+Select clusters, pick a target SHA, and roll out upgrades from the keyboard.
+0:00
+ / 
+0:00
+
+We don't expect our engineers to be in the dashboard all the time, so we stream
+status transitions for each operation into a dedicated Slack thread. If an
+operation fails, it fails loudly into the channel for people to react to and
+fix. This gets our attention without us having to babysit.
+
+When an approval is needed for operations on a BYOC cluster, the same Slack
+integration automatically notifies the customer through their dedicated Slack
+support channel so they can approve.
+
+01
+ / 
+02
+Upgrade threads show commit diffs, rollout status, and the conversation around the operation.
+01
+ / 
+02
+←
+→
+
+The control plane also provides a convenient jumping-off point for all the
+debugging and monitoring interfaces we use. If we want to watch an operation
+closely, we can jump from the control plane directly into Datadog logs, traces,
+or metrics scoped to its cluster(s). When a customer reports high latency, we
+can quickly pull up the memory/CPU profile in Polar Signals for their query
+pods. When a customer wants a 
+limit
+ bumped for a namespace, we
+can inspect the namespace and update the config right there (really!). When all
+the tools you need are right at hand, you feel more connected to your infra, and
+on-call sucks a lot less.
+
+Your browser does not support the video tag.
+0:00
+ / 
+0:00
+Jump from the control plane to logs, traces, and metrics already scoped to the right context.
+0:00
+ / 
+0:00
+
+This dashboard is not just a vibe-coded sidecar to the control plane. We treat
+it as first-class software and invest engineering effort into it, so the
+complexity of operating the clusters stays mostly hidden behind a simple, fast,
+keyboard-driven interface.
+
+Fleet operations
+
+While the control plane has scaled very well, we started to feel the toil of
+fleet-wide upgrades: manually selecting clusters and a target SHA, kicking off
+the upgrade, monitoring it, and making sure things looked ok before proceeding
+to the rest. The larger our fleet got, the more painful it became to sequence
+and babysit a rollout that could last hours.
+
+Now, any operation can be submitted as a fleet operation, and the control
+plane's fleet controller will roll it out across a sequence of waves containing
+one or more clusters. Between waves, a gate checks that every cluster in the
+wave upgraded successfully and that our monitors are quiet. If a monitor fires
+or any cluster fails, the fleet controller pauses the rollout and notifies us in
+Slack, limiting the fallout from a bad deploy.
+
+Importantly, nothing changes for the cluster agent. It has no concept of a fleet
+or fleet operation. It still polls the API server for its pending operations,
+and its status transitions are still mirrored back into the same MySQL table.
+Every operation is still the same CRD driven by the same local state machine.
+Orchestrating 100s of them is effectively just a loop over existing primitives.
+
+Simplicity scales
+
+turbopuffer's 
+architecture
+ is easy to reason about and
+easy to be on call for. It would be a shame if it wasn't also easy to deploy to.
+The design decisions we make in the control plane all funnel toward simplicity:
+a single control plane for all deployment models, a single CRD for every
+operation, a single UI to manage the entire fleet.
+
+This simplicity has allowed us to scale the control plane from managing just a
+few public regions to 100+ clusters across dozens of regions and multiple
+deployment models. We believe its simplicity will allow us to maintain our
+shipping speed even as we scale to 1000s.
+
+turbopuffer
+turbopuffer is a fast search engine that hosts 
+1T+
+ 
+documents, handles 
+10M+ writes/s
+, and serves
+ 
+25k+ queries/s
+. We are ready for far more. We hope you'll trust us with your queries.
+Get started
+Company
+Pricing
+Store
+Press & media
+System status
+Support
+Slack
+Docs
+Email
+Sales
+Follow
+Blog
+RSS
+Events
+© 2026 turbopuffer Inc.
+Terms of service
+Data Processing Agreement
+Privacy Policy
+Security & Compliance
+Docs search
+esc
+Guides
+Quickstart
+Get started with turbopuffer in minutes
+Vector Search
+Perform approximate nearest neighbor searches
+Full-Text Search
+Learn how to use BM25 full-text search
+Hybrid Search
+Combine vector and full-text search strategies
+API Docs
+Write
+Create, update, or delete documents
+Query
+Query documents with filters and ranking
+Overview
+Authentication, headers, and request encoding
+Namespace metadata
+Get metadata about a namespace
