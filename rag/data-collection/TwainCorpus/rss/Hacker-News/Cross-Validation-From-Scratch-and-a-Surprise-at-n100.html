@@ -1,0 +1,354 @@
+<article class="post-content pa0 ph4-l">
+
+<section class="post-body pt5 pb4">
+<blockquote>
+<p>Textbooks say LOOCV has the lowest bias but highest variance compared to 10 and 5-fold. Coded a K-Fold CV from scratch for learning to test that on simulated data 🔍📊 — and at n=1000 it holds up. At n=100? Not so much. 🤔</p>
+</blockquote>
+<p>
+The above image was generated via chatGPT. Uploaded all the text of this blog post and asked it to generate a cartoon. Very impressive! It used to be spelling error and gibberish of text in the past, but now cohesive words on image. Just wow.</p>
+<h2 id="motivations">Motivations
+  
+</h2>
+<p>Crossvalidation is such a crucial step in Machine Learning (and traditional methods) that nowadays is incorporated in easy to use sklearn or tidymodels without us needing to build one from scratch. As with my other learning experience, the best way to learn the concept (other than learning the concept 🤣) is to code it from the ground up and see how it works! In K-Fold CV, the training data is split into K chunks; the model is trained K times, each time holding out a different chunk. Performance is averaged across all K folds, giving a more stable estimate. A special case is Leave-One-Out CV (LOOCV), where each individual observation serves as its own validation set. It’s thorough but computationally expensive. I was told that, bias LOOCV &lt; 10-fold &lt; 5-fold; whereas variance LOOCV &gt; 10-fold &gt; 5-fold. Is that true? Also, what’s with the repeats, does that really reduce variance? Let’s check them out.</p>
+<h2 id="objectives">Objectives:
+  
+</h2>
+<ul>
+<li>
+<a href="#simulate">Simulate data with a known data-generating process</a></li>
+<li>
+<a href="#kfold">Implement K-Fold cross-validation from scratch</a></li>
+<li>
+<a href="#rmse">Assessing RMSE</a></li>
+<li>
+<a href="#compare">Compare candidate models using CV RMSE</a></li>
+<li>
+<a href="#verify">Verify the best model on a held-out test set</a></li>
+<li>
+<a href="#opportunities">Opportunities For Improvement</a></li>
+<li>
+<a href="#lessons">Lessons Learnt</a></li>
+</ul>
+<h2 id="simulate">Simulate Data
+  
+</h2>
+<div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span><span style="color:#900;font-weight:bold">library</span>(tidyverse)
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span><span style="color:#900;font-weight:bold">set.seed</span>(<span style="color:#099">1</span>)
+</span></span><span style="display:flex;"><span>n <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">1000</span>
+</span></span><span style="display:flex;"><span>x <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">rnorm</span>(n)
+</span></span><span style="display:flex;"><span>w <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">rnorm</span>(n)
+</span></span><span style="display:flex;"><span>y <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">0.5</span><span style="color:#000;font-weight:bold">*</span>x^2 <span style="color:#000;font-weight:bold">+</span> <span style="color:#099">-0.5</span><span style="color:#000;font-weight:bold">*</span>w <span style="color:#000;font-weight:bold">+</span> <span style="color:#099">0.3</span><span style="color:#000;font-weight:bold">*</span>w<span style="color:#000;font-weight:bold">*</span>x <span style="color:#000;font-weight:bold">+</span> <span style="color:#900;font-weight:bold">rnorm</span>(n)
+</span></span><span style="display:flex;"><span>df <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">tibble</span>(x,y,w)
+</span></span><span style="display:flex;"><span>idx <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">sample</span>(<span style="color:#099">1</span><span style="color:#000;font-weight:bold">:</span>n, size<span style="color:#000;font-weight:bold">=</span><span style="color:#099">0.8</span><span style="color:#000;font-weight:bold">*</span>n)
+</span></span><span style="display:flex;"><span>train <span style="color:#000;font-weight:bold">&lt;-</span> df[idx, ]
+</span></span><span style="display:flex;"><span>test <span style="color:#000;font-weight:bold">&lt;-</span> df[<span style="color:#000;font-weight:bold">-</span>idx, ]
+</span></span></code></pre></div><p>The above code simulates a dataset with 1000 observations, where the response variable <code>y</code> is generated based on a known data-generating process involving predictors <code>x</code> and <code>w</code>. The dataset is then split into a training set (80%) and a test set (20%). Let’s visualize.</p>
+<div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span>df <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(w_cut <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">cut_interval</span>(w, n<span style="color:#000;font-weight:bold">=</span><span style="color:#099">5</span>)) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">ggplot</span>(<span style="color:#900;font-weight:bold">aes</span>(x<span style="color:#000;font-weight:bold">=</span>x, y<span style="color:#000;font-weight:bold">=</span>y, color<span style="color:#000;font-weight:bold">=</span>w_cut, group<span style="color:#000;font-weight:bold">=</span>w_cut)) <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">geom_point</span>(alpha<span style="color:#000;font-weight:bold">=</span><span style="color:#099">0.5</span>) <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">theme_bw</span>() <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">geom_smooth</span>(method <span style="color:#000;font-weight:bold">=</span> <span style="color:#d14">"gam"</span>, se<span style="color:#000;font-weight:bold">=</span><span style="color:#999">F</span>)
+</span></span></code></pre></div>
+<p>Wow, very interesting visualization where the relationships are definitely not linear here. It’s some form of interaction between <code>x</code> and <code>w</code>. Let’s see if we can recover the underlying data-generating process using K-Fold Cross-Validation.</p>
+<h2 id="kfold">K-Fold Cross-Validation From Scratch
+  
+</h2>
+<div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span>folds <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">5</span>
+</span></span><span style="display:flex;"><span>segment_portion <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">nrow</span>(train)<span style="color:#000;font-weight:bold">/</span>folds
+</span></span><span style="display:flex;"><span>formula_list <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">list</span>(<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y~x"</span>),<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y~I(x^2)"</span>),<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y~I(x^2)+w+w:x"</span>),<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y~I(x^3)+w+w:x"</span>),
+</span></span><span style="display:flex;"><span>                     <span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y~w:x"</span>),<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y~w"</span>),<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y~x+w+x:w"</span>),<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y~I(x^2)+w:x"</span>),
+</span></span><span style="display:flex;"><span>                     <span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y~I(x^2)+w"</span>))
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>cv_log <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">tibble</span>()
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span><span style="color:#900;font-weight:bold">for </span>(formula in formula_list) {
+</span></span><span style="display:flex;"><span><span style="color:#900;font-weight:bold">print</span>(formula)
+</span></span><span style="display:flex;"><span>predict_log <span style="color:#000;font-weight:bold">&lt;-</span> y_log <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">vector</span>(mode<span style="color:#000;font-weight:bold">=</span><span style="color:#d14">"numeric"</span>,length<span style="color:#000;font-weight:bold">=</span>segment_portion<span style="color:#000;font-weight:bold">*</span>folds)
+</span></span><span style="display:flex;"><span>start <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">1</span>
+</span></span><span style="display:flex;"><span>end <span style="color:#000;font-weight:bold">&lt;-</span> segment_portion 
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span><span style="color:#900;font-weight:bold">for </span>(fold in <span style="color:#099">1</span><span style="color:#000;font-weight:bold">:</span>folds) {
+</span></span><span style="display:flex;"><span>    val_i <span style="color:#000;font-weight:bold">&lt;-</span> train[start<span style="color:#000;font-weight:bold">:</span>end,]
+</span></span><span style="display:flex;"><span>    train_i <span style="color:#000;font-weight:bold">&lt;-</span> train[<span style="color:#000;font-weight:bold">-</span><span style="color:#900;font-weight:bold">c</span>(start<span style="color:#000;font-weight:bold">:</span>end),]
+</span></span><span style="display:flex;"><span>    model_i <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">lm</span>(formula,train_i)
+</span></span><span style="display:flex;"><span>    predict_i <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">predict</span>(model_i, val_i)
+</span></span><span style="display:flex;"><span>    predict_log[start<span style="color:#000;font-weight:bold">:</span>end] <span style="color:#000;font-weight:bold">&lt;-</span> predict_i
+</span></span><span style="display:flex;"><span>    y_log[start<span style="color:#000;font-weight:bold">:</span>end] <span style="color:#000;font-weight:bold">&lt;-</span> val_i<span style="color:#000;font-weight:bold">$</span>y
+</span></span><span style="display:flex;"><span>    start <span style="color:#000;font-weight:bold">&lt;-</span> end <span style="color:#000;font-weight:bold">+</span> <span style="color:#099">1</span>
+</span></span><span style="display:flex;"><span>    end <span style="color:#000;font-weight:bold">&lt;-</span> start <span style="color:#000;font-weight:bold">+</span> segment_portion <span style="color:#000;font-weight:bold">-</span> <span style="color:#099">1</span>
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>val_df <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">tibble</span>(predict<span style="color:#000;font-weight:bold">=</span>predict_log,y<span style="color:#000;font-weight:bold">=</span>y_log) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(formula<span style="color:#000;font-weight:bold">=</span><span style="color:#900;font-weight:bold">deparse</span>(formula))
+</span></span><span style="display:flex;"><span>cv_log <span style="color:#000;font-weight:bold">&lt;-</span> cv_log <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">bind_rows</span>(val_df)
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><pre tabindex="0"><code>## y ~ x
+## y ~ I(x^2)
+## y ~ I(x^2) + w + w:x
+## y ~ I(x^3) + w + w:x
+## y ~ w:x
+## y ~ w
+## y ~ x + w + x:w
+## y ~ I(x^2) + w:x
+## y ~ I(x^2) + w
+</code></pre><p>Alright, what we’ve done above is a manual implementation of K-Fold Cross-Validation. We loop through each formula in our list, and for each formula, we split the training data into 5 folds. For each fold, we train the model on the other 4 folds and validate it on the current fold. We store the predictions and actual values for later evaluation.</p>
+<p>We basically want to see which formula has the lowest RMSE across the folds. Let’s calculate that next. From the DGP formula, we know that the best model should be <code>y~I(x^2)+w+w:x</code>. Let’s see if we can recover that using K-Fold CV.</p>
+<h2 id="rmse">Assessing RMSE
+  
+</h2>
+<div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span>cv_log <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">group_by</span>(formula) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">summarize</span>(rmse <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">sqrt</span>(<span style="color:#900;font-weight:bold">mean</span>((y<span style="color:#000;font-weight:bold">-</span>predict)^2))) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">arrange</span>(rmse) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(rmse <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">format</span>(rmse, digits <span style="color:#000;font-weight:bold">=</span> <span style="color:#099">8</span>))
+</span></span></code></pre></div><pre tabindex="0"><code>## # A tibble: 9 × 2
+##   formula              rmse     
+##   &lt;chr&gt;                &lt;chr&gt;    
+## 1 y ~ I(x^2) + w + w:x 1.0397338
+## 2 y ~ I(x^2) + w       1.1008693
+## 3 y ~ I(x^2) + w:x     1.1607225
+## 4 y ~ I(x^2)           1.2144857
+## 5 y ~ x + w + x:w      1.2826723
+## 6 y ~ I(x^3) + w + w:x 1.2912046
+## 7 y ~ w                1.3578304
+## 8 y ~ w:x              1.3732478
+## 9 y ~ x                1.4451807
+</code></pre><p>Here our loss function is RMSE since <code>y</code> is a continuous data and we’re trying to predict that. The formula with the lowest RMSE is indeed <code>y~I(x^2)+w+w:x</code>, which matches the underlying data-generating process. OK at least, right now we are able to recover the underlying DGP using 5-Fold Cross-Validation. But is there a difference between 5 fold, 10 fold, or even LOOCV? If there is a difference, how do we even assess that? 
+<a href="https://www.kenkoonwong.com/blog/tmle/" rel="noopener" target="_blank">In the past we were able to assess bias and variance based on a true ATE</a>, but what on earth is a true RMSE !?!</p>
+<p>To check whether the textbook claim (bias LOOCV &lt; 10-fold &lt; 5-fold; variance LOOCV &gt; 10-fold &gt; 5-fold) holds up, we ran a small simulation with help from Claude Sonnet 5. Since we control the data-generating process, we can compare the “correct formula” (assuming the correct formula has the lowest RMSE as above) with 500 different simulated dataset against a “true” RMSE estimated from a large test set (n=10000) — large enough, by the law of large numbers, to treat as ground truth. Averaging across simulations gives bias (how far off CV runs from the true error) and variance (how much CV’s estimate swings from sample to sample) for each method. Is this legit? 🤔 If the textbook claim is correct, we should be able to observe bias LOOCV &lt; 10-fold &lt; 5-fold; variance LOOCV &gt; 10-fold &gt; 5-fold. Let’s see if we can observe that in the simulation below.</p>
+<h2 id="compare">Compare Candidate Models
+  
+</h2>
+<div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span><span style="color:#998;font-style:italic"># set.seed(1)</span>
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span><span style="color:#998;font-style:italic"># k-fold CV RMSE for a given formula and dataset (k = n gives LOOCV)</span>
+</span></span><span style="display:flex;"><span>cv_rmse <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">function</span>(data, formula, k) {
+</span></span><span style="display:flex;"><span>  n <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">nrow</span>(data)
+</span></span><span style="display:flex;"><span>  folds <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">sample</span>(<span style="color:#900;font-weight:bold">rep</span>(<span style="color:#099">1</span><span style="color:#000;font-weight:bold">:</span>k, length.out <span style="color:#000;font-weight:bold">=</span> n))
+</span></span><span style="display:flex;"><span>  preds <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">numeric</span>(n)
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">for </span>(i in <span style="color:#099">1</span><span style="color:#000;font-weight:bold">:</span>k) {
+</span></span><span style="display:flex;"><span>    train_i <span style="color:#000;font-weight:bold">&lt;-</span> data[folds <span style="color:#000;font-weight:bold">!=</span> i, ]
+</span></span><span style="display:flex;"><span>    val_i   <span style="color:#000;font-weight:bold">&lt;-</span> data[folds <span style="color:#000;font-weight:bold">==</span> i, ]
+</span></span><span style="display:flex;"><span>    model_i <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">lm</span>(formula, train_i)
+</span></span><span style="display:flex;"><span>    preds[folds <span style="color:#000;font-weight:bold">==</span> i] <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">predict</span>(model_i, val_i)
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">sqrt</span>(<span style="color:#900;font-weight:bold">mean</span>((data<span style="color:#000;font-weight:bold">$</span>y <span style="color:#000;font-weight:bold">-</span> preds)^2))
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span><span style="color:#998;font-style:italic"># "true" RMSE: fit on train, evaluate on a large fresh draw from the DGP</span>
+</span></span><span style="display:flex;"><span>true_rmse <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">function</span>(train, formula, n_test <span style="color:#000;font-weight:bold">=</span> <span style="color:#099">10000</span>) {
+</span></span><span style="display:flex;"><span>  x <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">rnorm</span>(n_test); w <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">rnorm</span>(n_test)
+</span></span><span style="display:flex;"><span>  y <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">0.5</span><span style="color:#000;font-weight:bold">*</span>x^2 <span style="color:#000;font-weight:bold">-</span> <span style="color:#099">0.5</span><span style="color:#000;font-weight:bold">*</span>w <span style="color:#000;font-weight:bold">+</span> <span style="color:#099">0.3</span><span style="color:#000;font-weight:bold">*</span>w<span style="color:#000;font-weight:bold">*</span>x <span style="color:#000;font-weight:bold">+</span> <span style="color:#900;font-weight:bold">rnorm</span>(n_test)
+</span></span><span style="display:flex;"><span>  test <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">tibble</span>(x, y, w)
+</span></span><span style="display:flex;"><span>  model <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">lm</span>(formula, train)
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">sqrt</span>(<span style="color:#900;font-weight:bold">mean</span>((test<span style="color:#000;font-weight:bold">$</span>y <span style="color:#000;font-weight:bold">-</span> <span style="color:#900;font-weight:bold">predict</span>(model, test))^2))
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>formula_true <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y ~ I(x^2) + w + w:x"</span>)
+</span></span><span style="display:flex;"><span>n_sim   <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">500</span>
+</span></span><span style="display:flex;"><span>n_train <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">100</span>
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>results <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">vector</span>(<span style="color:#d14">"list"</span>, n_sim)
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span><span style="color:#900;font-weight:bold">for </span>(s in <span style="color:#099">1</span><span style="color:#000;font-weight:bold">:</span>n_sim) {
+</span></span><span style="display:flex;"><span>  x <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">rnorm</span>(n_train); w <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">rnorm</span>(n_train)
+</span></span><span style="display:flex;"><span>  y <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">0.5</span><span style="color:#000;font-weight:bold">*</span>x^2 <span style="color:#000;font-weight:bold">-</span> <span style="color:#099">0.5</span><span style="color:#000;font-weight:bold">*</span>w <span style="color:#000;font-weight:bold">+</span> <span style="color:#099">0.3</span><span style="color:#000;font-weight:bold">*</span>w<span style="color:#000;font-weight:bold">*</span>x <span style="color:#000;font-weight:bold">+</span> <span style="color:#900;font-weight:bold">rnorm</span>(n_train)
+</span></span><span style="display:flex;"><span>  train_s <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">tibble</span>(x, y, w)
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>  results[[s]] <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">tibble</span>(
+</span></span><span style="display:flex;"><span>    sim      <span style="color:#000;font-weight:bold">=</span> s,
+</span></span><span style="display:flex;"><span>    true_err <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">true_rmse</span>(train_s, formula_true),
+</span></span><span style="display:flex;"><span>    loocv    <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">cv_rmse</span>(train_s, formula_true, k <span style="color:#000;font-weight:bold">=</span> n_train),
+</span></span><span style="display:flex;"><span>    cv5      <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">cv_rmse</span>(train_s, formula_true, k <span style="color:#000;font-weight:bold">=</span> <span style="color:#099">5</span>),
+</span></span><span style="display:flex;"><span>    cv10     <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">cv_rmse</span>(train_s, formula_true, k <span style="color:#000;font-weight:bold">=</span> <span style="color:#099">10</span>)
+</span></span><span style="display:flex;"><span>  )
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>sim_df <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">bind_rows</span>(results)
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>sim_long <span style="color:#000;font-weight:bold">&lt;-</span> sim_df <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">pivot_longer</span>(cols <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">c</span>(loocv, cv5, cv10), names_to <span style="color:#000;font-weight:bold">=</span> <span style="color:#d14">"method"</span>, values_to <span style="color:#000;font-weight:bold">=</span> <span style="color:#d14">"cv_estimate"</span>)
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>sim_long <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">group_by</span>(method) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">summarize</span>(
+</span></span><span style="display:flex;"><span>    mean_cv_estimate <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">mean</span>(cv_estimate),
+</span></span><span style="display:flex;"><span>    mean_true_error   <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">mean</span>(true_err),
+</span></span><span style="display:flex;"><span>    bias     <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">mean</span>(cv_estimate <span style="color:#000;font-weight:bold">-</span> true_err),
+</span></span><span style="display:flex;"><span>    variance <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">var</span>(cv_estimate),
+</span></span><span style="display:flex;"><span>    .groups  <span style="color:#000;font-weight:bold">=</span> <span style="color:#d14">"drop"</span>
+</span></span><span style="display:flex;"><span>  ) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">arrange</span>(bias) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(variance <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">format</span>(variance, digit <span style="color:#000;font-weight:bold">=</span> <span style="color:#099">8</span>))
+</span></span></code></pre></div><pre tabindex="0"><code>## # A tibble: 3 × 5
+##   method mean_cv_estimate mean_true_error     bias variance     
+##   &lt;chr&gt;             &lt;dbl&gt;           &lt;dbl&gt;    &lt;dbl&gt; &lt;chr&gt;        
+## 1 loocv              1.00            1.00 0.000703 0.00053227867
+## 2 cv10               1.00            1.00 0.000945 0.00053192050
+## 3 cv5                1.00            1.00 0.00124  0.00053176441
+</code></pre><p>Wow, looking at the results, we can see that the textbook claim holds up. LOOCV has the lowest bias, but the highest variance. 10-fold CV is in between, and 5-fold CV has the highest bias but lowest variance. But, noticed that we had to increase our digit to 8 to see the difference in variance, it’s really miniscule. Mainly because our n=1000 is already quite large, so the variance is already quite small. If we reduce n to 100, how would that look?</p>
+<pre tabindex="0"><code>## # A tibble: 3 × 5
+##   method mean_cv_estimate mean_true_error     bias variance    
+##   &lt;chr&gt;             &lt;dbl&gt;           &lt;dbl&gt;    &lt;dbl&gt; &lt;chr&gt;       
+## 1 loocv              1.02            1.02 -0.00400 0.0063905148
+## 2 cv10               1.02            1.02 -0.00138 0.0065753049
+## 3 cv5                1.03            1.02  0.00244 0.0068098389
+</code></pre><p>!?!?!?!?! 🤷‍♂️ with n=100, the bias and variance order heuristics no longer hold up? Why is this? I don’t know. If you do, please let me know. I even increased the n_sim to 1000, but still same patern. Intersting how I had to push the n up to 850 in order to observe the textbook variance order again, though again it’s quite miniscule.</p>
+<h2 id="verify">Verify On Test Set
+  
+</h2>
+<div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span>test <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(predict <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">predict</span>(<span style="color:#900;font-weight:bold">lm</span>(<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y ~ I(x^2) + w + w:x"</span>), train), test)) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(residual <span style="color:#000;font-weight:bold">=</span> y<span style="color:#000;font-weight:bold">-</span>predict) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(res_square <span style="color:#000;font-weight:bold">=</span> residual^2) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">pull</span>(res_square) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mean</span>() <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">sqrt</span>()
+</span></span></code></pre></div><pre tabindex="0"><code>## [1] 1.018281
+</code></pre><p>Alright! The RMSE on test set is quite similar to our average validation sets! 🙌 Let’s visualize the predicted and actual y of the model on test set.</p>
+<div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span>test <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(predict <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">predict</span>(<span style="color:#900;font-weight:bold">lm</span>(<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y ~ I(x^2) + w + w:x"</span>), train), test)) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">ggplot</span>(<span style="color:#900;font-weight:bold">aes</span>(x<span style="color:#000;font-weight:bold">=</span>predict, y<span style="color:#000;font-weight:bold">=</span>y)) <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">geom_point</span>(alpha<span style="color:#000;font-weight:bold">=</span><span style="color:#099">0.5</span>) <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">theme_bw</span>() <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">geom_smooth</span>(method <span style="color:#000;font-weight:bold">=</span> <span style="color:#d14">"lm"</span>) <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">labs</span>(title<span style="color:#000;font-weight:bold">=</span><span style="color:#d14">"Predicted vs Actual y on Test Set"</span>, x<span style="color:#000;font-weight:bold">=</span><span style="color:#d14">"Predicted y"</span>, y<span style="color:#000;font-weight:bold">=</span><span style="color:#d14">"Actual y"</span>)
+</span></span></code></pre></div>
+<div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span><span style="color:#900;font-weight:bold">summary</span>(<span style="color:#900;font-weight:bold">lm</span>(y <span style="color:#000;font-weight:bold">~</span> predict, data<span style="color:#000;font-weight:bold">=</span>test <span style="color:#000;font-weight:bold">|&gt;</span> <span style="color:#900;font-weight:bold">mutate</span>(predict <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">predict</span>(<span style="color:#900;font-weight:bold">lm</span>(<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y ~ I(x^2) + w + w:x"</span>), train), test))))
+</span></span></code></pre></div><pre tabindex="0"><code>## 
+## Call:
+## lm(formula = y ~ predict, data = mutate(test, predict = predict(lm(as.formula("y ~ I(x^2) + w + w:x"), 
+##     train), test)))
+## 
+## Residuals:
+##      Min       1Q   Median       3Q      Max 
+## -2.98185 -0.61410 -0.05514  0.62883  2.28837 
+## 
+## Coefficients:
+##             Estimate Std. Error t value Pr(&gt;|t|)    
+## (Intercept)  0.08581    0.08390   1.023    0.308    
+## predict      0.80885    0.07562  10.696   &lt;2e-16 ***
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 
+## Residual standard error: 1.007 on 198 degrees of freedom
+## Multiple R-squared:  0.3662,	Adjusted R-squared:  0.363 
+## F-statistic: 114.4 on 1 and 198 DF,  p-value: &lt; 2.2e-16
+</code></pre><p>Slope here is 0.81, not 1 — even with the correct formula, coefficients are still estimated from a finite, noisy sample, so predict is really “true signal + estimation error.” Regressing y on a noisy version of itself pulls the slope below 1 — a known effect called attenuation (same idea as errors-in-variables bias). More training data shrinks that estimation error, so the slope should creep closer to 1. Intercept stays near 0 because the estimation error isn’t systematically biased in one direction — just noisy — so predictions still center correctly on average. If this is true, then if we increase our n to 10000, we should see slope is closer to 1 and intercept closer to 0. Let’s test this theory out.</p>
+<div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span><span style="color:#900;font-weight:bold">set.seed</span>(<span style="color:#099">1</span>)
+</span></span><span style="display:flex;"><span>n <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">10000</span>
+</span></span><span style="display:flex;"><span>x <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">rnorm</span>(n)
+</span></span><span style="display:flex;"><span>w <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">rnorm</span>(n)
+</span></span><span style="display:flex;"><span>y <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">0.5</span><span style="color:#000;font-weight:bold">*</span>x^2 <span style="color:#000;font-weight:bold">+</span> <span style="color:#099">-0.5</span><span style="color:#000;font-weight:bold">*</span>w <span style="color:#000;font-weight:bold">+</span> <span style="color:#099">0.3</span><span style="color:#000;font-weight:bold">*</span>w<span style="color:#000;font-weight:bold">*</span>x <span style="color:#000;font-weight:bold">+</span> <span style="color:#900;font-weight:bold">rnorm</span>(n)
+</span></span><span style="display:flex;"><span>df <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">tibble</span>(x,y,w)
+</span></span><span style="display:flex;"><span>idx <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">sample</span>(<span style="color:#099">1</span><span style="color:#000;font-weight:bold">:</span>n, size<span style="color:#000;font-weight:bold">=</span><span style="color:#099">0.8</span><span style="color:#000;font-weight:bold">*</span>n)
+</span></span><span style="display:flex;"><span>train <span style="color:#000;font-weight:bold">&lt;-</span> df[idx, ]
+</span></span><span style="display:flex;"><span>test <span style="color:#000;font-weight:bold">&lt;-</span> df[<span style="color:#000;font-weight:bold">-</span>idx, ]
+</span></span><span style="display:flex;"><span>formula <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y ~ I(x^2) + w + w:x"</span>)
+</span></span><span style="display:flex;"><span>folds <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">10</span>
+</span></span><span style="display:flex;"><span>segment_portion <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">nrow</span>(train)<span style="color:#000;font-weight:bold">/</span>folds
+</span></span><span style="display:flex;"><span>predict_log <span style="color:#000;font-weight:bold">&lt;-</span> y_log <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">vector</span>(mode<span style="color:#000;font-weight:bold">=</span><span style="color:#d14">"numeric"</span>,length<span style="color:#000;font-weight:bold">=</span>segment_portion<span style="color:#000;font-weight:bold">*</span>folds)
+</span></span><span style="display:flex;"><span>start <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#099">1</span>
+</span></span><span style="display:flex;"><span>end <span style="color:#000;font-weight:bold">&lt;-</span> segment_portion 
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span><span style="color:#900;font-weight:bold">for </span>(fold in <span style="color:#099">1</span><span style="color:#000;font-weight:bold">:</span>folds) {
+</span></span><span style="display:flex;"><span>    val_i <span style="color:#000;font-weight:bold">&lt;-</span> train[start<span style="color:#000;font-weight:bold">:</span>end,]
+</span></span><span style="display:flex;"><span>    train_i <span style="color:#000;font-weight:bold">&lt;-</span> train[<span style="color:#000;font-weight:bold">-</span><span style="color:#900;font-weight:bold">c</span>(start<span style="color:#000;font-weight:bold">:</span>end),]
+</span></span><span style="display:flex;"><span>    model_i <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">lm</span>(formula,train_i)
+</span></span><span style="display:flex;"><span>    predict_i <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">predict</span>(model_i, val_i)
+</span></span><span style="display:flex;"><span>    predict_log[start<span style="color:#000;font-weight:bold">:</span>end] <span style="color:#000;font-weight:bold">&lt;-</span> predict_i
+</span></span><span style="display:flex;"><span>    y_log[start<span style="color:#000;font-weight:bold">:</span>end] <span style="color:#000;font-weight:bold">&lt;-</span> val_i<span style="color:#000;font-weight:bold">$</span>y
+</span></span><span style="display:flex;"><span>    start <span style="color:#000;font-weight:bold">&lt;-</span> end <span style="color:#000;font-weight:bold">+</span> <span style="color:#099">1</span>
+</span></span><span style="display:flex;"><span>    end <span style="color:#000;font-weight:bold">&lt;-</span> start <span style="color:#000;font-weight:bold">+</span> segment_portion <span style="color:#000;font-weight:bold">-</span> <span style="color:#099">1</span>
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>val_df <span style="color:#000;font-weight:bold">&lt;-</span> <span style="color:#900;font-weight:bold">tibble</span>(predict<span style="color:#000;font-weight:bold">=</span>predict_log,y<span style="color:#000;font-weight:bold">=</span>y_log) 
+</span></span><span style="display:flex;"></span><span style="display:flex;"><span>val_df <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">summarize</span>(rmse <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">sqrt</span>(<span style="color:#900;font-weight:bold">mean</span>((y<span style="color:#000;font-weight:bold">-</span>predict)^2))) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">arrange</span>(rmse) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(rmse <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">format</span>(rmse, digits <span style="color:#000;font-weight:bold">=</span> <span style="color:#099">8</span>))
+</span></span></code></pre></div><pre tabindex="0"><code>## # A tibble: 1 × 1
+##   rmse     
+##   &lt;chr&gt;    
+## 1 1.0126176
+</code></pre><div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span>test <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(predict <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">predict</span>(<span style="color:#900;font-weight:bold">lm</span>(<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y ~ I(x^2) + w + w:x"</span>), train), test)) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(residual <span style="color:#000;font-weight:bold">=</span> y<span style="color:#000;font-weight:bold">-</span>predict) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(res_square <span style="color:#000;font-weight:bold">=</span> residual^2) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">pull</span>(res_square) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mean</span>() <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">sqrt</span>()
+</span></span></code></pre></div><pre tabindex="0"><code>## [1] 0.9884315
+</code></pre><div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span>test <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">mutate</span>(predict <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">predict</span>(<span style="color:#900;font-weight:bold">lm</span>(<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y ~ I(x^2) + w + w:x"</span>), train), test)) <span style="color:#000;font-weight:bold">|&gt;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">ggplot</span>(<span style="color:#900;font-weight:bold">aes</span>(x<span style="color:#000;font-weight:bold">=</span>predict, y<span style="color:#000;font-weight:bold">=</span>y)) <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">geom_point</span>(alpha<span style="color:#000;font-weight:bold">=</span><span style="color:#099">0.5</span>) <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">theme_bw</span>() <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">geom_smooth</span>(method <span style="color:#000;font-weight:bold">=</span> <span style="color:#d14">"lm"</span>) <span style="color:#000;font-weight:bold">+</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#900;font-weight:bold">labs</span>(title<span style="color:#000;font-weight:bold">=</span><span style="color:#d14">"Predicted vs Actual y on Test Set"</span>, x<span style="color:#000;font-weight:bold">=</span><span style="color:#d14">"Predicted y"</span>, y<span style="color:#000;font-weight:bold">=</span><span style="color:#d14">"Actual y"</span>)
+</span></span></code></pre></div>
+<div class="highlight"><pre style="background-color:#fff;-moz-tab-size:4;-o-tab-size:4;tab-size:4;" tabindex="0"><code class="language-r" data-lang="r"><span style="display:flex;"><span><span style="color:#900;font-weight:bold">summary</span>(<span style="color:#900;font-weight:bold">lm</span>(y <span style="color:#000;font-weight:bold">~</span> predict, data<span style="color:#000;font-weight:bold">=</span>test <span style="color:#000;font-weight:bold">|&gt;</span> <span style="color:#900;font-weight:bold">mutate</span>(predict <span style="color:#000;font-weight:bold">=</span> <span style="color:#900;font-weight:bold">predict</span>(<span style="color:#900;font-weight:bold">lm</span>(<span style="color:#900;font-weight:bold">as.formula</span>(<span style="color:#d14">"y ~ I(x^2) + w + w:x"</span>), train), test))))
+</span></span></code></pre></div><pre tabindex="0"><code>## 
+## Call:
+## lm(formula = y ~ predict, data = mutate(test, predict = predict(lm(as.formula("y ~ I(x^2) + w + w:x"), 
+##     train), test)))
+## 
+## Residuals:
+##      Min       1Q   Median       3Q      Max 
+## -3.08711 -0.67088  0.01239  0.69015  2.86620 
+## 
+## Coefficients:
+##             Estimate Std. Error t value Pr(&gt;|t|)    
+## (Intercept)  0.02778    0.02527   1.099    0.272    
+## predict      0.96577    0.02369  40.762   &lt;2e-16 ***
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 
+## Residual standard error: 0.9884 on 1998 degrees of freedom
+## Multiple R-squared:  0.454,	Adjusted R-squared:  0.4538 
+## F-statistic:  1662 on 1 and 1998 DF,  p-value: &lt; 2.2e-16
+</code></pre><p>There you have it! The RMSE on test set is quite similar to our average validation sets! 🙌  The slope is now 0.97, much closer to 1, and the intercept is 0.02, much closer to 0. This confirms our theory that with more training data, the estimation error decreases, leading to better predictions.</p>
+<h2 id="opportunities">Opportunities For Improvement
+  
+</h2>
+<ul>
+<li>apply crossvalidation from scratch on hyperparameter tuning such as xgboost hyperparam, lasso/ridge/elasticnet/glmnet</li>
+<li>learn about nested resampling that uses an additional layer of resampling that separates the tuning activities from the process used to estimate the efficacy of the model. 
+<a href="https://www.tidymodels.org/learn/work/nested-resampling/" rel="noopener" target="_blank">see here</a></li>
+<li>learn to code grouped and stratified cv from scratch</li>
+<li>learn a bit more on time-series CV</li>
+<li>need to try n_sim of 10000 and see if the bias and variance order holds up for n=100, since the simulation is quite slow, I didn’t run it to completion. Update: I did complete an n_sim of 10000 of n=100 and LOOCV still had the lowest variance.</li>
+</ul>
+<h2 id="lessons">Lessons learnt
+  
+</h2>
+<ul>
+<li>Learnt that we have to use <code>I</code> to indicate that we want to include polynomial terms in the formula, otherwise R will interpret them as interaction terms.</li>
+<li>Learnt <code>deparse</code> is useful to convert a formula object into a character string for logging purposes.</li>
+</ul>
+<p>If you like this article:</p>
+<ul>
+<li>please feel free to send me a 
+<a href="https://www.kenkoonwong.com/blog/" rel="noopener" target="_blank">comment or visit my other blogs</a></li>
+<li>please feel free to follow me on 
+<a href="https://bsky.app/profile/kenkoonwong.bsky.social" rel="noopener" target="_blank">BlueSky</a>, 
+<a href="https://twitter.com/kenkoonwong/" rel="noopener" target="_blank">twitter</a>, 
+<a href="https://github.com/kenkoonwong/" rel="noopener" target="_blank">GitHub</a> or 
+<a href="https://rstats.me/@kenkoonwong" rel="noopener" target="_blank">Mastodon</a></li>
+<li>if you would like collaborate please feel free to 
+<a href="https://www.kenkoonwong.com/contact/" rel="noopener" target="_blank">contact me</a></li>
+</ul>
+<details class="f6 fw7 input-reset" closed="">
+<dl class="f6 lh-copy">
+<dt class="fw7">Posted on:</dt>
+<dd class="fw5 ml0">August 5, 2026</dd>
+</dl>
+<dl class="f6 lh-copy">
+<dt class="fw7">Length:</dt>
+<dd class="fw5 ml0">12 minute read, 2385 words</dd>
+</dl>
+<dl class="f6 lh-copy">
+<dt class="fw7">Categories:</dt>
+<dd class="fw5 ml0"> <a href="https://www.kenkoonwong.com/categories/r">r</a> <a href="https://www.kenkoonwong.com/categories/r">R</a> <a href="https://www.kenkoonwong.com/categories/crossvalidation">crossvalidation</a> <a href="https://www.kenkoonwong.com/categories/resampling">resampling</a> <a href="https://www.kenkoonwong.com/categories/bias">bias</a> <a href="https://www.kenkoonwong.com/categories/variance">variance</a> </dd>
+</dl>
+<dl class="f6 lh-copy">
+<dt class="fw7">Tags:</dt>
+<dd class="fw5 ml0"> <a href="https://www.kenkoonwong.com/tags/r">r</a> <a href="https://www.kenkoonwong.com/tags/r">R</a> <a href="https://www.kenkoonwong.com/tags/crossvalidation">crossvalidation</a> <a href="https://www.kenkoonwong.com/tags/resampling">resampling</a> <a href="https://www.kenkoonwong.com/tags/bias">bias</a> <a href="https://www.kenkoonwong.com/tags/variance">variance</a> </dd>
+</dl>
+<dl class="f6 lh-copy">
+<dt class="fw7">See Also:</dt>
+<dd class="fw5 ml0"><a href="/blog/aa1/">Learning Amino Acids Part 1: Non-Polar Amino Acids, Rodrigues Rotation, and Lennard-Jones Potential</a></dd>
+<dd class="fw5 ml0"><a href="/blog/haddock/">Exploring the CovR/S Two-Component System in Streptococcus pyogenes</a></dd>
+<dd class="fw5 ml0"><a href="/blog/survival/">Learning &amp; Exploring Survival Analysis Part 1 - A Note To Myself</a></dd>
+</dl>
+</details>
+</section>
+
+</article>
