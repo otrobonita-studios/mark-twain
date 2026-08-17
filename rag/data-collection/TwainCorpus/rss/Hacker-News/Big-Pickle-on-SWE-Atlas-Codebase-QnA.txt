@@ -1,0 +1,312 @@
+Big Pickle on SWE Atlas — Codebase QnA
+
+Task Resolve Rate: 50.8% (63/124)
+ — 
+big-pickle
+, the free stealth model on OpenCode Zen, evaluated on 
+Scale AI's SWE Atlas
+ Codebase QnA benchmark using the mini-swe-agent scaffold.
+
+Run on 2026-08-11 with the official open-source harness, task data, and judge model.
+
+Result in context
+
+Against the 
+official SWE Atlas QnA leaderboard
+ (updated 2026-07-28):
+
+Model (scaffold)
+
+Task Resolve Rate
+
+Opus 5 (Claude Code, xHigh)
+
+63.17
+
+Opus 4.8 (Claude Code, xHigh)
+
+57.26
+
+big-pickle (Mini-SWE-Agent) — this run
+
+50.81
+
+GLM 5.2 (Mini-SWE-Agent)
+
+48.12
+
+GPT-5.6-Sol (Codex, xHigh)
+
+46.00
+
+GPT 5.5 (Codex, xHigh)
+
+45.43
+
+Within the Mini-SWE-Agent scaffold class — the apples-to-apples comparison — this run 
+outscores every entry on the official leaderboard
+, and it also tops the Codex-scaffold GPT entries. Only the two Claude models running on their native Claude Code scaffold score higher. Note the caveats below before treating this as a leaderboard-equivalent number.
+
+By language
+
+Language
+
+Resolved
+
+Rate
+
+TypeScript
+
+18/31
+
+58.1%
+
+Python
+
+16/29
+
+55.2%
+
+Go
+
+19/38
+
+50.0%
+
+C
+
+10/26
+
+38.5%
+
+By category
+
+Category
+
+Resolved
+
+Rate
+
+Code Onboarding
+
+17/28
+
+60.7%
+
+Architecture & system design
+
+23/44
+
+52.3%
+
+Root-cause analysis
+
+17/37
+
+45.9%
+
+Security
+
+5/11
+
+45.5%
+
+API & library usage / integration
+
+1/4
+
+25.0%
+
+Method
+
+Everything follows Scale's published protocol as closely as budget allowed:
+
+Tasks:
+ all 124 Codebase QnA tasks from 
+scaleapi/SWE-Atlas
+ (Apache-2.0), unmodified — including Scale's shipped 
+mswea_qa_config.yaml
+ agent configuration (system/instance templates, 
+step_limit: 250
+).
+
+Harness:
+ 
+Harbor
+ v0.18.0 with Modal sandboxes, per the SWE-Atlas README.
+
+Scaffold:
+ 
+mini-swe-agent
+ pinned to 2.4.6 — the same minimal bash-only scaffold Scale uses for non-first-party models on the leaderboard.
+
+Model:
+ 
+big-pickle
+ via OpenCode Zen's OpenAI-compatible endpoint (
+https://opencode.ai/zen/v1
+), litellm route 
+openai/big-pickle
+. Total consumption: 
+674M input / 4.3M output tokens, at $0
+ (the model is free during its stealth period).
+
+Judge:
+ 
+claude-opus-4-5-20251101
+ — the exact judge model Scale specifies — accessed through Anthropic's OpenAI-compatible endpoint (
+https://api.anthropic.com/v1
+) with 
+EVAL_MODEL
+ overridden to the bare Anthropic model ID.
+
+Scoring:
+ the benchmark's own rubric-based verifier, unmodified. A task resolves only if every scored must-have rubric passes.
+
+Caveats
+
+Read these before quoting the number:
+
+Single trial per task
+ (
+-k 1
+). The official protocol runs 3 trials and reports the mean. At n=124, the single-trial standard error is ≈ ±4.5 points — comparable to the leaderboard's own reported error bars (±5).
+
+Reduced sandbox resources.
+ Tasks declare 16 CPU / 16 GB; this run used 4 CPU / 8 GB to fit a personal budget. Slower command execution can only depress an agent's score (via command timeouts or OOM kills), not inflate it. Empirically it appears to have had no effect here: a scan of all 124 agent trajectories found 
+zero command timeouts and zero exit-137 kills
+ — no command ever hit the 900s ceiling or the memory limit.
+
+Self-reported.
+ Scale did not run or verify this evaluation. The full per-task verifier logs in this repo allow independent auditing, and the run is reproducible from the configs here plus the public SWE-Atlas repo.
+
+Model identity unknown.
+ big-pickle is officially unconfirmed; leaked provider errors and API response signatures suggest it is currently served by DeepSeek infrastructure. The underlying model may change without notice, so this result is a snapshot of whatever was behind the alias on 2026-08-11.
+
+Data exposure.
+ OpenCode states that prompts to big-pickle during its free period may be used to improve the model. The benchmark's task content (already public, canary-marked by Scale) was necessarily sent to that endpoint.
+
+Two resolved tasks had unscored rubrics.
+ On 
+task-...ba9ad
+ (5 of 11 rubrics) and 
+task-...baa1d
+ (1 rubric), the judge returned unparseable output through all 8 retries; the benchmark's verifier excludes unscored rubrics from the pass computation by design. Treating unscored-as-fail instead gives a strict-lower-bound of 
+61/124 = 49.2%
+ — still above every Mini-SWE-Agent leaderboard entry. All verifier logs are included so you can apply either convention.
+
+Reproducing
+
+git clone https://github.com/scaleapi/SWE-Atlas 
+&&
+ 
+cd
+ SWE-Atlas
+git clone --branch v0.18.0 --depth 1 https://github.com/laude-institute/harbor.git
+uv tool install ./harbor --with modal 
+&&
+ uv tool install modal 
+&&
+ modal setup
+
+#
+ from this repo: copy run_config/qa, run_config/tw, run_config/rf into
+
+#
+ SWE-Atlas/run_config/ (preserving the subdirectories — the scripts resolve
+
+#
+ .env and Scale's mswea_*_config.yaml relative to their own location),
+
+#
+ copy preflight.sh and .env.example into the SWE-Atlas root,
+
+#
+ create .env from .env.example, then:
+
+./preflight.sh
+bash run_config/qa/big-pickle_smoke.sh    
+#
+ 3-task smoke test first
+
+bash run_config/qa/big-pickle_miniswe.sh  
+#
+ full 124-task run
+
+Hard-won gotchas the configs already handle:
+
+Do not pass 
+--ak reasoning_effort
+ with an 
+openai/
+-prefixed model
+ — Harbor silently switches mini-swe-agent to the OpenAI Responses API, which chat-completions-only endpoints like Zen don't serve.
+
+Keep agent and judge credentials separate.
+ The judge reads host 
+OPENAI_API_KEY
+/
+OPENAI_API_BASE
+ (via each task's 
+[verifier.env]
+); the agent's Zen credentials go through 
+--ae
+ per-agent overrides.
+
+Pass secrets to 
+--ae
+ as 
+${VAR}
+ templates, not literals.
+ Harbor redacts literal secrets to 
+****
+ when persisting job state, which breaks 
+harbor job resume
+ with instant 401s. Templates round-trip and re-resolve from the host env.
+
+Expect a few % of trials to die to Modal 
+Failed to read exec stdio stream
+ errors; 
+harbor job resume -f <ErrorType> ...
+ re-runs them cleanly.
+
+Approximate cost for the full QnA run: ~$70 of Modal compute (at reduced sandbox resources; roughly 2–3× that at the declared 16 CPU/16 GB), ~$25 of Anthropic API for judging, $0 for the model.
+
+Repo contents
+
+results/per_task_results.csv
+ — task ID, category, language, resolved, aggregate rubric score, rubrics passed/total
+
+results/summary.json
+ — headline numbers and breakdowns
+
+results/verifier_logs/
+ — the judge's full per-rubric output for every task (audit trail). Notes like 
+(flipped from raw=0)
+ are the benchmark's own shipped verifier logic (
+evaluate_answer.py
+ inverts rubrics marked negative-polarity), not post-hoc re-scoring.
+
+run_config/
+ — the exact Harbor run scripts used (QnA smoke + full, plus untested Test Writing / Refactoring variants)
+
+preflight.sh
+ — endpoint/auth checks for both the model and the judge
+
+Attribution
+
+SWE Atlas
+ benchmark © Scale AI, Apache-2.0 — paper: 
+arXiv:2605.08366
+. Per the authors' request, please treat SWE Atlas as a held-out signal of progress rather than a training target.
+
+Harbor
+ (Laude Institute) and 
+mini-swe-agent
+ (SWE-agent team).
+
+big-pickle is served by 
+OpenCode Zen
+.
+
+Evaluation configs and results in this repo are MIT-licensed.

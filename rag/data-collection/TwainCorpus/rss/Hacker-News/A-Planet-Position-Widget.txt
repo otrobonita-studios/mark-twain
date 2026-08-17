@@ -1,0 +1,208 @@
+And now it’s all this
+
+I just said what I said and it was wrong
+
+            Or was taken wrong
+
+Previous post
+
+A planet position widget
+
+August 12, 2026 at 12:16 PM by Dr. Drang
+
+After I learned how to 
+make a Mac widget with TerminalWidget
+ and how to 
+determine the locations of celestial objects with Astropy
+, the natural thing for me to do was combine the two into a widget that tracks the planets.
+
+I’m using the ancient definition of planet, which includes the Sun and Moon but not anything past Saturn. The numbers are the azimuth and altitude, in that order, and are given to the nearest degree. The idea is to tell me what may be visible and where it is. This particular screenshot was taken just after 10:00 last night; there was no reason to go outside because everything was below the horizon.
+
+I was torn on whether to include the Sun. Few of us need help finding the Sun in the sky, and you can’t see anything other than the Moon when the Sun is up. But I decided to include it anyway, partly for completeness, and partly because the visibility of some bodies depends on their separation from the Sun.
+
+Let’s start with the code that generates the widget’s text. It’s a Python script called 
+planets
+:
+
+python:
+ 1:  import astropy.units as u
+ 2:  from astropy.time import Time
+ 3:  from astropy.coordinates import get_body, AltAz, EarthLocation
+ 4:  from subprocess import run
+ 5:  
+ 6:  def direction(az):
+ 7:    'Return a string indication of the azimuth (given in degrees).'
+ 8:  
+ 9:    dirs = 'N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW'.split()
+10:    i = int(((az + 11.25) % 360) / 22.5)
+11:    return dirs[i]
+12:  
+13:  # Current time in UTC.
+14:  ut = Time.now()
+15:  
+16:  # Observation location.
+17:  home = EarthLocation(lat=41.81433*u.deg, lon=-88.07093*u.deg, height=208*u.m)
+18:  
+19:  # Bodies of interest.
+20:  planets = 'Moon Sun Mercury Venus Mars Jupiter Saturn'.split()
+21:  
+22:  # Current positions of all the bodies.
+23:  pos = {}
+24:  const = {}
+25:  for p in planets:
+26:      pos[p] = get_body(p, ut).transform_to(AltAz(obstime=ut, location=home))
+27:      const[p] = pos[p].get_constellation()
+28:  
+29:  # Assemble the results.
+30:  output = []
+31:  for p in planets:
+32:      output.append(f'{p:>8s}: {pos[p].az.value:3.0f} \
+33:  {direction(pos[p].az.value):3s} {pos[p].alt.value:3.0f} {const[p]}')
+34:  
+35:  # Pipe the results through TerminalWidget.
+36:  tw = '/Applications/TerminalWidget.app/Contents/MacOS/TerminalWidget\
+37:   --target planets --font Menlo --bg eeeeee --fg 000000 --text -'.split()
+38:  run(tw, input='\n'.join(output).encode())
+39:  
+40:  # print('\n'.join(output))
+
+There’s no shebang line because of how it gets called by 
+launchd
+, which we’ll get to later.
+
+After 
+planets
+ imports the necessary modules, Lines 6–11 define the 
+direction
+ function, which takes the azimuth and returns a string with the corresponding point of the compass. I have this because 223°, which is how Astropy reports the azimuth, doesn’t immediately say “southwest” to me. The function assumes a 16-point compass, like this one:
+
+Image from 
+Wikipedia
+.
+
+The points are separated by 22.5°, which is why there’s a division by 22.5 in Line 10. The other parts of Line 10 adjust for the fact that North starts at 348.75° (-11.25°), the azimuth resets at 360°, and the index of a list must be an integer. Astropy may already have a function that does what 
+direction
+ does, but I thought it would be easier (and more fun) to write the function myself than to search through the documentation.
+
+Lines 14 and 17 define the time and place of observation. 
+planets
+ will be run every half hour to update the widget, so what’s being displayed is never more than 30 minutes out of date. The 
+home
+ location you see above is actually the Morton Arboretum; my version of the script uses the latitude and longitude of my house.
+
+Line 20 defines the 
+planets
+ list, and Lines 23–27 create a pair of dictionaries, 
+pos
+ and 
+const
+, which contain the 
+AltAz
+ position and constellation of each planet. The 
+get_body
+ function
+ (Line 26) gets the position, and the 
+get_constellation
+ function
+ (Line 27) uses that position to figure out the constellation the body is in.
+
+Lines 30–33 create the list of 
+output
+ lines, and Lines 36–38 use the 
+run
+ function
+ of the 
+subprocess
+ module to send the output lines to TerminalWidget. The 
+tw
+ list contains both the full path to the 
+TerminalWidget
+ executable and all the options passed to it. The 
+input
+ parameter to 
+run
+ is the previously defined 
+output
+, converted to a single string separated by linefeeds and encoded as bytes.
+
+Line 40 is basically a debugging line that I’ve left in for future development. While writing 
+planets
+, I had Lines 36–38 commented out and Line 40 uncommented so I could see the results immediately in the Terminal.
+
+planets
+ is run by 
+launchd
+ every 30 minutes, on the hour and half-hour, via this launch agent, 
+com.leancrew.planets.plist
+:
+
+xml:
+ 1:  <?xml version="1.0" encoding="UTF-8"?>
+ 2:  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+ 3:  <plist version="1.0">
+ 4:  <dict>
+ 5:    <key>Label</key>
+ 6:    <string>com.leancrew.planets</string>
+ 7:    <key>ProgramArguments</key>
+ 8:    <array>
+ 9:      <string>/path/to/python</string>
+10:      <string>/path/to/planets</string>
+11:    </array>
+12:    <key>StartCalendarInterval</key>
+13:    <array>
+14:      <dict>
+15:        <key>Minute</key>
+16:        <integer>0</integer>
+17:      </dict>
+18:      <dict>
+19:        <key>Minute</key>
+20:        <integer>30</integer>
+21:      </dict>
+22:    </array>
+23:  </dict>
+24:  </plist>
+
+The first item in the 
+ProgramArguments
+ array is the full path to the Python executable (this is why 
+planets
+ doesn’t need a shebang line), and the second item is the full path to the 
+planets
+ script itself. The schedule for running 
+planets
+ is in the 
+StartCalendarInterval
+ array—whenever the minute is 0 or 30, the script is run.
+
+As I write this, a solar eclipse is nearly underway. Here in the Chicago area, it’s going to be a very partial eclipse—only 1% of the Sun will be blocked. Since 100% of the Sun is being blocked by clouds, I won’t be able to see any of the eclipse. But my planets widget is showing me, more or less, that it’s happening above the clouds.
+
+Rounding the Sun and Moon’s positions to the nearest degree isn’t precise enough to determine an eclipse, but it’s a decent hint.
+
+Previous post
+
+Site search
+
+Meta
+
+drdrang at leancrew
+
+Blog archive
+
+RSS feed
+
+JSON feed
+
+Mastodon
+
+GitHub repositories
+
+Recent posts
+
+Credits
+
+This work is licensed under a
+  
+Creative Commons Attribution-Share Alike 3.0 Unported License
+.
+
+© 2005–2026, Dr. Drang

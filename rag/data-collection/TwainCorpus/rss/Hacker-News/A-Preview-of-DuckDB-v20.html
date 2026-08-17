@@ -1,0 +1,427 @@
+<main class="main-posts">
+<div class="newswrap">
+<div class="postwrap">
+<div class="postcontent">
+<div class="singleentry singleentry-posts contains_toc">
+<div class="content">
+<div class="contentwidth">
+<h1>A Preview of DuckDB v2.0</h1>
+<div class="infoline">
+
+<div>
+<span class="author">Mark Raasveldt and Hannes Mühleisen</span>
+<div class="publishedinfo">
+<span class="date">2026-08-17</span>
+<span class="bullet">|</span>
+<span class="readingtime">15 min</span>
+</div>
+</div>
+</div>
+<div class="excerpt">
+<p><em>TL;DR: DuckDB v2.0 is coming this fall. In this post, we preview its headline features: DuckDB as a server, triggers, the VARIANT type, asynchronous I/O, a new SQL parser, a new storage format, and much more.</em></p>
+</div>
+<p>DuckDB v2.0 will be named “Cyanoptera” after the <a href="https://en.wikipedia.org/wiki/Cinnamon_teal">cinnamon teal</a> <em>(Anas cyanoptera),</em> a strikingly reddish-brown duck found in the western Americas.</p>
+<p>A major version bump is not something we do lightly, and it is not just ceremony: v2.0 ships a new SQL parser, a new default storage format, a reworked C API, and a small number of carefully chosen breaking changes. But above all, it is a feature release, built from over 10,000 commits since we released v1.5 in March. Where last year was the year of the lakehouse, this release kicks off the year of DuckDB as a server. We previewed many of these features in the <a href="https://www.youtube.com/watch?v=iFPKNQu0FtE">“State of the Duck” talk at DuckCon #7</a>, if you prefer to watch instead of read.</p>
+<p>DuckDB is moving rather quickly, and we can only cover a small fraction of the changes here. Condensing all new features down to a shortlist is always a fight over what gets in, and yes, we know that what follows is technically a listicle <em>(Ten Things Coming to DuckDB v2.0, Number Eight Will Shock You).</em> We are not proud of the format, but it works, so here it is, starting with the SQL-level features and working down into the engine.</p>
+<h2 id="1-duckdb-as-a-server-quack-and-connect">
+<a href="#1-duckdb-as-a-server-quack-and-connect" style="text-decoration: none;">1. DuckDB as a Server: Quack and <code class="language-plaintext highlighter-rouge">CONNECT</code></a>
+</h2>
+<p>DuckDB has been an in-process database since day one. But people have asked us – very persistently – for a client/server mode, and we have finally caved. The <a href="https://github.com/duckdb/duckdb-quack"><code class="language-plaintext highlighter-rouge">quack</code> extension</a> implements DuckDB's native protocol for talking to other DuckDBs. It was <a href="/2026/05/12/quack-remote-protocol.html">released as a preview</a> shortly before DuckCon #7, graduates to stable in v2.0, and it is a big part of where DuckDB is headed: any DuckDB process can serve its databases over the network, and any other DuckDB can attach to it and route queries there using the new <code class="language-plaintext highlighter-rouge">CONNECT</code> statement. For example:</p>
+<!-- markdownlint-disable MD001 -->
+<div class="duck-diagram">
+<div class="duck-diagram-box">
+<h4 id="duckdb-server">
+<a href="#duckdb-server" style="text-decoration: none;"> DuckDB server</a>
+</h4>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CALL</span> <span class="nf">quack_serve</span><span class="p">(</span>
+    <span class="k">token</span> <span class="o">=</span> <span class="s1">'my_token'</span>
+<span class="p">);</span>
+</code></pre></div> </div>
+</div>
+<div class="duck-diagram-arrow">quack:</div>
+<div class="duck-diagram-box">
+<h4 id="duckdb-client">
+<a href="#duckdb-client" style="text-decoration: none;"> DuckDB client</a>
+</h4>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">ATTACH</span> <span class="s1">'quack:server.example.com'</span>
+    <span class="k">AS</span> <span class="n">qk</span> <span class="p">(</span><span class="k">TOKEN</span> <span class="s1">'my_token'</span><span class="p">);</span>
+
+<span class="k">CONNECT</span> <span class="n">qk</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="nf">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">events</span><span class="p">;</span>
+<span class="c1">-- executes on the server,</span>
+<span class="c1">-- results stream back</span>
+<span class="k">DISCONNECT</span><span class="p">;</span>
+</code></pre></div> </div>
+</div>
+</div>
+<!-- markdownlint-enable MD001 -->
+<p><code class="language-plaintext highlighter-rouge">CONNECT</code> is the successor to the <code class="language-plaintext highlighter-rouge">remote.query($$...$$)</code> workaround we showed when Quack was first revealed – we looked at that syntax and said: no, this cannot be it. And <code class="language-plaintext highlighter-rouge">CONNECT</code> is not limited to Quack: it points your session at any remote database that supports it, and the new remote pushdown optimizer (<a href="https://github.com/duckdb/duckdb/pull/22914">#22914</a>) ships SQL directly to PostgreSQL and MySQL instead of pulling tables over the wire:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CONNECT</span> <span class="s1">'postgres://localhost/mydb'</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="nf">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">orders</span><span class="p">;</span> <span class="c1">-- runs on the PostgreSQL server</span>
+<span class="k">DISCONNECT</span><span class="p">;</span>
+</code></pre></div></div>
+<p>If you have worked with analytical systems in the past, you may assume that DuckDB cannot handle transactional workloads. But DuckDB has been built as a transactional, multi-connection database with full MVCC and transaction isolation since day one. Most users just never needed that in a single-user scenario. It turns out DuckDB handles transactions well: it's fast enough to compete with general-purpose databases like PostgreSQL on quite a few workloads, and the client/server pattern finally lets that machinery shine in multi-tenant, long-running deployments.</p>
+<p>Running DuckDB long-term also comes with new challenges, which is why v2.0 pushes on better metrics, logs, and observability (see, e.g., the metrics layer rework in <a href="https://github.com/duckdb/duckdb/pull/22799">#22799</a>) that let you look at a DuckDB instance and see what it is actually doing. People even built standalone clients for the Quack protocol within weeks of the preview. We thought we were extending DuckDB to talk to other DuckDBs; the world said no, no, no, and built their own clients. Who would have thought.</p>
+<h2 id="2-variant-becomes-a-first-class-citizen">
+<a href="#2-variant-becomes-a-first-class-citizen" style="text-decoration: none;">2. <code class="language-plaintext highlighter-rouge">VARIANT</code> Becomes a First-Class Citizen</a>
+</h2>
+<p>The <code class="language-plaintext highlighter-rouge">VARIANT</code> type shipped in <a href="/2026/03/09/announcing-duckdb-150.html">DuckDB v1.5</a>, and the way to think about it is JSON on steroids. Basically, imagine if JSON were fast. Like JSON, a <code class="language-plaintext highlighter-rouge">VARIANT</code> column can store differently-shaped data in every row. Unlike JSON, it is not a text format: DuckDB automatically detects the common structure hidden in your semi-structured data and “shreds” it, so it compresses well in storage and executes fast in queries, all without you ever declaring a schema. This makes <code class="language-plaintext highlighter-rouge">VARIANT</code> a natural fit for real-time log ingestion, where streams of JSON-ish records share structure but evolve over time.</p>
+<p>In v2.0, this pipeline works end to end: shredded execution straight from storage (<a href="https://github.com/duckdb/duckdb/pull/20912">#20912</a>), extraction pushdown into scans (<a href="https://github.com/duckdb/duckdb/pull/22478">#22478</a>), shredded <code class="language-plaintext highlighter-rouge">VARIANT</code> reading <em>and</em> writing for Parquet, and a family of <code class="language-plaintext highlighter-rouge">variant_*</code> functions:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">events</span> <span class="p">(</span><span class="n">payload</span> <span class="nb">VARIANT</span><span class="p">);</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">events</span>
+<span class="k">VALUES</span> <span class="p">(</span><span class="s1">'{"user": {"id": 42, "tags": ["a", "b"]}}'</span><span class="p">::</span><span class="nb">JSON</span><span class="p">::</span><span class="nb">VARIANT</span><span class="p">);</span>
+
+<span class="k">SELECT</span> <span class="nf">variant_type</span><span class="p">(</span><span class="n">payload</span><span class="p">),</span> <span class="nf">variant_keys</span><span class="p">(</span><span class="n">payload</span><span class="p">)</span>
+<span class="k">FROM</span> <span class="n">events</span><span class="p">;</span>
+
+<span class="k">SELECT</span> <span class="o">*</span>
+<span class="k">FROM</span> <span class="n">events</span>
+<span class="k">WHERE</span> <span class="nf">variant_contains</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span> <span class="p">{</span><span class="s1">'user'</span><span class="p">:</span> <span class="p">{</span><span class="s1">'id'</span><span class="p">:</span> <span class="mi">42</span><span class="p">}}::</span><span class="nb">VARIANT</span><span class="p">);</span>
+</code></pre></div></div>
+<p>Longer term, likely soon after v2.0 (but don't hold us to it), we plan to back the regular <code class="language-plaintext highlighter-rouge">JSON</code> type with <code class="language-plaintext highlighter-rouge">VARIANT</code>, so existing JSON workloads get all of these benefits without changing a single query.</p>
+<h2 id="3-triggers">
+<a href="#3-triggers" style="text-decoration: none;">3. Triggers</a>
+</h2>
+<p>Triggers have been a long-standing feature request, and DuckDB v2.0 delivers them in full: <code class="language-plaintext highlighter-rouge">BEFORE</code> and <code class="language-plaintext highlighter-rouge">AFTER</code> triggers, <code class="language-plaintext highlighter-rouge">FOR EACH ROW</code> and <code class="language-plaintext highlighter-rouge">FOR EACH STATEMENT</code>, transition tables via <code class="language-plaintext highlighter-rouge">REFERENCING OLD/NEW TABLE</code>, multiple triggers per event, <code class="language-plaintext highlighter-rouge">RETURNING</code> on triggered tables, and <code class="language-plaintext highlighter-rouge">DROP TRIGGER</code>.</p>
+<p>The classic use case is audit tables: something happens in the system, and a trigger records what changed. For example:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">target</span> <span class="p">(</span><span class="n">id</span> <span class="nb">INTEGER</span><span class="p">,</span> <span class="n">val</span> <span class="nb">INTEGER</span><span class="p">);</span>
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">audit</span> <span class="p">(</span><span class="n">id</span> <span class="nb">INTEGER</span><span class="p">,</span> <span class="n">old_val</span> <span class="nb">INTEGER</span><span class="p">,</span> <span class="n">new_val</span> <span class="nb">INTEGER</span><span class="p">);</span>
+
+<span class="k">CREATE</span> <span class="k">TRIGGER</span> <span class="n">trg_audit</span> <span class="k">AFTER</span> <span class="k">UPDATE</span> <span class="k">ON</span> <span class="n">target</span>
+<span class="k">REFERENCING</span> <span class="k">OLD</span> <span class="k">TABLE</span> <span class="k">AS</span> <span class="n">o</span> <span class="k">NEW</span> <span class="k">TABLE</span> <span class="k">AS</span> <span class="n">n</span>
+<span class="k">FOR</span> <span class="k">EACH</span> <span class="k">STATEMENT</span>
+    <span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">audit</span>
+    <span class="k">SELECT</span> <span class="n">n.id</span><span class="p">,</span> <span class="n">o.val</span><span class="p">,</span> <span class="n">n.val</span>
+    <span class="k">FROM</span> <span class="n">o</span>
+    <span class="k">JOIN</span> <span class="n">n</span> <span class="k">ON</span> <span class="n">o.id</span> <span class="o">=</span> <span class="n">n.id</span><span class="p">;</span>
+
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">target</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">20</span><span class="p">);</span>
+<span class="k">UPDATE</span><span class="n"> target</span> <span class="k">SET</span> <span class="n">val</span> <span class="o">=</span> <span class="n">val</span> <span class="o">*</span> <span class="mi">10</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="o">&lt;=</span> <span class="mi">2</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">audit</span><span class="p">;</span>
+</code></pre></div></div>
+<table>
+<thead>
+<tr>
+<th style="text-align: right">id</th>
+<th style="text-align: right">old_val</th>
+<th style="text-align: right">new_val</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right">1</td>
+<td style="text-align: right">10</td>
+<td style="text-align: right">100</td>
+</tr>
+<tr>
+<td style="text-align: right">2</td>
+<td style="text-align: right">20</td>
+<td style="text-align: right">200</td>
+</tr>
+</tbody>
+</table>
+<p>Triggers fit naturally with long-running DuckDB services, and we are also planning to use them internally to build several upcoming features. They are fully exposed at the SQL level too, so you can build your own cool stuff with them.</p>
+<h2 id="4-sql-dialect-additions">
+<a href="#4-sql-dialect-additions" style="text-decoration: none;">4. SQL Dialect Additions</a>
+</h2>
+<p>As always, DuckDB's SQL dialect keeps growing. A few favorites from this release cycle:</p>
+<p>With <strong><code class="language-plaintext highlighter-rouge">NEAREST</code> joins</strong> (<a href="https://github.com/duckdb/duckdb/pull/24137">#24137</a>), top-k similarity search becomes a join clause, handy for vector and embedding workloads:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SELECT</span> <span class="n">q.user_id</span><span class="p">,</span> <span class="n">t.product_id</span>
+<span class="k">FROM</span> <span class="n">users</span> <span class="n">q</span>
+    <span class="k">INNER</span> <span class="k">JOIN</span> <span class="n">products</span> <span class="n">t</span> <span class="k">APPROX</span> <span class="k">NEAREST</span> <span class="mi">2</span>
+    <span class="k">BY</span> <span class="k">SIMILARITY</span> <span class="nf">array_cosine_similarity</span><span class="p">(</span><span class="n">q.embedding</span><span class="p">,</span> <span class="n">t.embedding</span><span class="p">);</span>
+</code></pre></div></div>
+<p><strong>DML inside CTEs</strong> (<a href="https://github.com/duckdb/duckdb/pull/21634">#21634</a>, <a href="https://github.com/duckdb/duckdb/pull/21997">#21997</a>, <a href="https://github.com/duckdb/duckdb/pull/24217">#24217</a>) lets you use <code class="language-plaintext highlighter-rouge">INSERT</code>, <code class="language-plaintext highlighter-rouge">UPDATE</code>, <code class="language-plaintext highlighter-rouge">DELETE</code>, and <code class="language-plaintext highlighter-rouge">COPY</code> as pipeline steps:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">WITH</span> <span class="n">moved</span> <span class="k">AS</span> <span class="k">MATERIALIZED</span> <span class="p">(</span>
+    <span class="k">DELETE</span> <span class="k">FROM</span> <span class="n">staging</span> <span class="k">RETURNING</span> <span class="o">*</span>
+<span class="p">)</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">archive</span> <span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">moved</span><span class="p">;</span>
+</code></pre></div></div>
+<p><strong>Nested schemas</strong> (<a href="https://github.com/duckdb/duckdb/pull/23492">#23492</a>, <a href="https://github.com/duckdb/duckdb/pull/24222">#24222</a>) allow schemas within schemas:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">SCHEMA</span> <span class="n">finance</span><span class="p">;</span>
+<span class="k">CREATE</span> <span class="k">SCHEMA</span> <span class="n">finance.reports</span><span class="p">;</span>
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">finance.reports.q3</span> <span class="p">(</span><span class="n">revenue</span> <span class="nb">DECIMAL</span><span class="p">);</span>
+</code></pre></div></div>
+<p>The new <strong>variable syntax</strong> (<a href="https://github.com/duckdb/duckdb/pull/21194">#21194</a>) lets you write <code class="language-plaintext highlighter-rouge">$x</code> anywhere an expression is allowed, no more <a href="/docs/current/sql/functions/utility.html#getvariablevariable_name"><code class="language-plaintext highlighter-rouge">getvariable(...)</code> verbiage</a>:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SET</span> <span class="k">VARIABLE</span> <span class="n">threshold</span> <span class="o">=</span> <span class="mi">100</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders</span> <span class="k">WHERE</span> <span class="n">amount</span> <span class="o">&gt;</span> <span class="err">$</span><span class="n">threshold</span><span class="p">;</span>
+</code></pre></div></div>
+<p>The <strong>JSON mutation functions</strong> <code class="language-plaintext highlighter-rouge">json_set</code>, <code class="language-plaintext highlighter-rouge">json_insert</code>, <code class="language-plaintext highlighter-rouge">json_replace</code>, and <code class="language-plaintext highlighter-rouge">json_remove</code> (<a href="https://github.com/duckdb/duckdb/pull/23786">#23786</a>) finally let you modify JSON documents in place:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SELECT</span> <span class="n">json_set</span><span class="p">(</span><span class="s1">'{"a":1}'</span><span class="p">,</span> <span class="s1">'$.b'</span><span class="p">,</span> <span class="s1">'2'</span><span class="p">);</span>
+</code></pre></div></div>
+<table>
+<thead>
+<tr>
+<th>json_set('{"a":1}', '$.b', '2')</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>{"a":1,"b":2}</td>
+</tr>
+</tbody>
+</table>
+<p>And <strong>recursive CTEs with <a href="/2025/05/23/using-key.html"><code class="language-plaintext highlighter-rouge">USING KEY</code></a> aggregation</strong> (<a href="https://github.com/duckdb/duckdb/pull/19481">#19481</a>) enable iterative algorithms in pure SQL, backed by the rewritten recursive CTE engine described below:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">WITH</span> <span class="k">RECURSIVE</span> <span class="n">tbl</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="k">USING</span> <span class="k">KEY</span> <span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="nf">avg</span><span class="p">(</span><span class="n">b</span><span class="p">))</span> <span class="k">AS</span> <span class="p">(</span>
+    <span class="k">SELECT</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">5</span>
+    <span class="nb">UNION</span>
+    <span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">-</span> <span class="mi">1</span> <span class="k">FROM</span> <span class="n">tbl</span> <span class="k">WHERE</span> <span class="n">b</span> <span class="o">&gt;</span> <span class="mi">0</span>
+<span class="p">)</span>
+<span class="k">TABLE</span> <span class="n">tbl</span><span class="p">;</span>
+</code></pre></div></div>
+<table>
+<thead>
+<tr>
+<th style="text-align: right">a</th>
+<th style="text-align: right">b</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right">1</td>
+<td style="text-align: right">2.5</td>
+</tr>
+</tbody>
+</table>
+<p>There is more: SQL-standard <code class="language-plaintext highlighter-rouge">FETCH FIRST 2 ROWS ONLY</code> (<a href="https://github.com/duckdb/duckdb/pull/23533">#23533</a>), <code class="language-plaintext highlighter-rouge">OVERLAY()</code> (<a href="https://github.com/duckdb/duckdb/pull/22456">#22456</a>), <code class="language-plaintext highlighter-rouge">UNNEST</code> in <code class="language-plaintext highlighter-rouge">GROUP BY</code> (<a href="https://github.com/duckdb/duckdb/pull/23644">#23644</a>), and well-defined <code class="language-plaintext highlighter-rouge">MERGE</code> / <code class="language-plaintext highlighter-rouge">UPDATE ... FROM</code> semantics for multi-matched rows (<a href="https://github.com/duckdb/duckdb/pull/24058">#24058</a>).</p>
+<h2 id="5-asynchronous-io">
+<a href="#5-asynchronous-io" style="text-decoration: none;">5. Asynchronous I/O</a>
+</h2>
+<p>Interacting with object stores like S3 is central to the DuckDB experience: your data has to come from somewhere, and it often sits in object storage. DuckDB has long been able to read from object stores in parallel, but synchronous access placed a limit on how fast this could go. DuckDB v2.0 introduces asynchronous I/O throughout the engine. We described the design in detail in <a href="/2026/07/31/asynchronous-io.html">a dedicated blog post</a>.</p>
+<p>Thanks to asynchronous access, the I/O layer now scales independently from the query processing layer, which means far more parallelism for remote reads and dramatically faster queries on network storage. Parquet support came first (<a href="https://github.com/duckdb/duckdb/pull/23662">#23662</a>), with CSV (<a href="https://github.com/duckdb/duckdb/pull/23961">#23961</a>) and DuckDB's own file format (<a href="https://github.com/duckdb/duckdb/pull/24654">#24654</a>) following, along with asynchronous Parquet writes (<a href="https://github.com/duckdb/duckdb/pull/23283">#23283</a>) and new <code class="language-plaintext highlighter-rouge">MMAP</code> and <code class="language-plaintext highlighter-rouge">DIRECT_IO</code> modes (<a href="https://github.com/duckdb/duckdb/pull/22988">#22988</a>). Local storage benefits a little too, but network storage is where you will see the big gains.</p>
+<h2 id="6-faster-queries-across-the-board">
+<a href="#6-faster-queries-across-the-board" style="text-decoration: none;">6. Faster Queries Across the Board</a>
+</h2>
+<p>As with every release, a lot of work went into making your existing queries faster without you doing anything. To pick some highlights: partial aggregates are now pushed below joins (<a href="https://github.com/duckdb/duckdb/pull/22572">#22572</a>) and redundant aggregations are reused (<a href="https://github.com/duckdb/duckdb/pull/24543">#24543</a>), the recursive CTE engine has been rewritten (<a href="https://github.com/duckdb/duckdb/pull/22211">#22211</a>), aggregations now spill to disk when they outgrow memory (<a href="https://github.com/duckdb/duckdb/pull/24499">#24499</a>), and the Windows CLI got approximately 2.2× faster at multi-threaded result materialization (<a href="https://github.com/duckdb/duckdb/pull/24036">#24036</a>).</p>
+<p>How much faster can this get? Here is a microbenchmark you can run on a laptop: single-source reachability over a graph with one million edges, written as a plain <a href="/docs/current/sql/query_syntax/with.html">recursive CTE</a>.</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">edges</span> <span class="k">AS</span>
+    <span class="k">SELECT</span> <span class="p">(</span><span class="py">range</span> <span class="o">%</span> <span class="mi">100_000</span><span class="p">)::</span><span class="nb">INTEGER</span> <span class="k">AS</span> <span class="n">src</span><span class="p">,</span>
+           <span class="p">((</span><span class="py">range</span> <span class="o">*</span> <span class="mi">13</span> <span class="o">+</span> <span class="mi">7</span><span class="p">)</span> <span class="o">%</span> <span class="mi">100_000</span><span class="p">)::</span><span class="nb">INTEGER</span> <span class="k">AS</span> <span class="n">dst</span>
+    <span class="k">FROM</span> <span class="nf">range</span><span class="p">(</span><span class="mi">1_000_000</span><span class="p">);</span>
+
+<span class="k">WITH</span> <span class="k">RECURSIVE</span> <span class="n">reachable</span><span class="p">(</span><span class="n">node</span><span class="p">)</span> <span class="k">AS</span> <span class="p">(</span>
+    <span class="k">SELECT</span> <span class="mi">0</span>
+    <span class="nb">UNION</span>
+    <span class="k">SELECT</span> <span class="n">dst</span> <span class="k">FROM</span> <span class="n">edges</span><span class="p">,</span> <span class="n">reachable</span> <span class="k">WHERE</span> <span class="n">src</span> <span class="o">=</span> <span class="n">node</span>
+<span class="p">)</span>
+<span class="k">SELECT</span> <span class="nf">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">reachable</span><span class="p">;</span>
+</code></pre></div></div>
+<table>
+<thead>
+<tr>
+<th>Version</th>
+<th style="text-align: right">Run time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DuckDB v1.5.4</td>
+<td style="text-align: right">4.90 s</td>
+</tr>
+<tr>
+<td>DuckDB v2.0 (preview)</td>
+<td style="text-align: right">0.12 s</td>
+</tr>
+</tbody>
+</table>
+<p>As you can see, DuckDB v2.0 is about 40× faster (!) for the same recursive query.</p>
+<p>Row-group pruning has been massively expanded: <a href="/docs/current/sql/indexes.html#min-max-index-zonemap %}">min-max indexes (zone maps)</a> and <a href="/2025/03/07/parquet-bloom-filters-in-duckdb.html">Parquet Bloom filters</a> now skip data for structs, lists, decimals, UUIDs, <code class="language-plaintext highlighter-rouge">IN</code> filters, and even function predicates:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">-- these now prune row groups instead of scanning them:</span>
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">logs</span> <span class="k">WHERE</span> <span class="nf">contains</span><span class="p">(</span><span class="n">message</span><span class="p">,</span> <span class="s1">'ERROR'</span><span class="p">);</span>
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">WHERE</span> <span class="nf">substr</span><span class="p">(</span><span class="n">code</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span> <span class="o">=</span> <span class="s1">'NL-'</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="s1">'data/*.parquet'</span> <span class="k">WHERE</span> <span class="n">id</span> <span class="k">IN</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">9</span><span class="p">);</span>
+</code></pre></div></div>
+<p>Query planning also becomes <strong>partition-aware</strong> (<a href="https://github.com/duckdb/duckdb/pull/22336">#22336</a>). <a href="/docs/current/lakehouse_formats.html">Lakehouse formats</a> (DuckLake, Iceberg and plain Hive-partitioned Parquet on S3) are all partitioned, and exploiting that partitioning is often the difference between scanning a dataset and skipping most of it. In v2.0, the planner and optimizer take full advantage of existing partitioning, and partitioned writes have been reworked as well (<a href="https://github.com/duckdb/duckdb/pull/22225">#22225</a>, <a href="https://github.com/duckdb/duckdb/pull/22620">#22620</a>).</p>
+<h2 id="7-storage-format-v20">
+<a href="#7-storage-format-v20" style="text-decoration: none;">7. Storage Format v2.0</a>
+</h2>
+<p>DuckDB v2.0 bumps the default <a href="/docs/current/internals/storage.html">storage format version</a> to v2.0.0 (<a href="https://github.com/duckdb/duckdb/pull/22875">#22875</a>). The headline change is buffer-managed ART indexes (<a href="https://github.com/duckdb/duckdb/pull/21458">#21458</a>, <a href="https://github.com/duckdb/duckdb/pull/23605">#23605</a>): indexes are no longer pinned in memory, which means large indexed tables open instantly and their indexes are paged in on demand.</p>
+<p>Column metadata is now loaded lazily (<a href="https://github.com/duckdb/duckdb/pull/22333">#22333</a>), so wide tables open faster too. The <code class="language-plaintext highlighter-rouge">DICT_FSST</code> string compression method is enabled by default (<a href="https://github.com/duckdb/duckdb/pull/23733">#23733</a>), deletes are stored compactly (<a href="https://github.com/duckdb/duckdb/pull/24336">#24336</a>), and the storage layer performs much stronger corruption validation on read. In short: databases with big indexes and wide tables open faster and use far less memory.</p>
+<h2 id="8-a-brand-new-sql-parser">
+<a href="#8-a-brand-new-sql-parser" style="text-decoration: none;">8. A Brand New SQL Parser</a>
+</h2>
+<p>DuckDB has famously always used a parser derived from PostgreSQL's. We have decided that enough is enough: v2.0 ships our own modern, extensible PEG-based parser (<a href="https://github.com/duckdb/duckdb/pull/22194">#22194</a>), an idea we first explored in our 2024 post on <a href="/2024/11/22/runtime-extensible-parsers.html">runtime-extensible parsers</a>. This change ties into the extension ecosystem: extensions can now hook into the grammar itself, so expect extensions that expose entirely new SQL syntax. It also brings better error messages with precise source locations, and the first dialect compatibility mode:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SET</span> <span class="n">dialect_compatibility_mode</span> <span class="o">=</span> <span class="s1">'spark'</span><span class="p">;</span>
+</code></pre></div></div>
+<p>You should not actually notice anything from the parser swap as we designed it to be compatible with the old one. If you do notice, please file an issue.</p>
+<h2 id="9-timezones-calendars-and-collations-without-icu">
+<a href="#9-timezones-calendars-and-collations-without-icu" style="text-decoration: none;">9. Timezones, Calendars, and Collations Without ICU</a>
+</h2>
+<p>Timezone-aware timestamps, calendars, and collations in DuckDB have always been powered by the ICU library. ICU is a fine library, but we only ever used a small slice of it, while still carrying it around in every DuckDB distribution. In v2.0, the ICU library is gone entirely: the <code class="language-plaintext highlighter-rouge">icu</code> extension now implements timezones, calendars, and collations itself (<a href="https://github.com/duckdb/duckdb/pull/24463">#24463</a>, <a href="https://github.com/duckdb/duckdb/pull/24403">#24403</a>), with the timezone data built directly from the IANA database and compressed down to around 45 kB. Everything keeps working exactly as before:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SELECT</span> <span class="s1">'2026-08-14 12:00:00'</span><span class="p">::</span><span class="nb">TIMESTAMPTZ</span> <span class="k">AT</span> <span class="nb">TIME</span> <span class="k">ZONE</span> <span class="s1">'Europe/Paris'</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="k">names</span> <span class="k">ORDER</span> <span class="k">BY</span> <span class="k">name</span> <span class="k">COLLATE</span> <span class="n">de</span><span class="p">;</span>
+</code></pre></div></div>
+<p>Besides being much smaller and easier to keep up to date, the new implementation is also simply faster. Here's a quick microbenchmark on a MacBook that converts 25 million timestamps to a timezone and filters 5 million strings with a German collation:</p>
+<table>
+<thead>
+<tr>
+<th>Query</th>
+<th style="text-align: right">v1.5.4 (ICU)</th>
+<th style="text-align: right">v2.0 (native)</th>
+<th style="text-align: right">Speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code class="language-plaintext highlighter-rouge">ts AT TIME ZONE 'Europe/Paris'</code>, 25 M rows</td>
+<td style="text-align: right">0.24 s</td>
+<td style="text-align: right">0.11 s</td>
+<td style="text-align: right">2.2×</td>
+</tr>
+<tr>
+<td>Filter with <code class="language-plaintext highlighter-rouge">COLLATE de</code>, 5 M rows</td>
+<td style="text-align: right">0.15 s</td>
+<td style="text-align: right">0.06 s</td>
+<td style="text-align: right">2.6×</td>
+</tr>
+</tbody>
+</table>
+<h2 id="10-write-extensions-once-host-them-yourself">
+<a href="#10-write-extensions-once-host-them-yourself" style="text-decoration: none;">10. Write Extensions Once, Host Them Yourself</a>
+</h2>
+<p>Extensions are one of the best things about DuckDB, but today, most of them, including our own, build against the <a href="/docs/current/clients/cpp.html">unstable C++ API</a>. That means extension authors have to re-target and rebuild for every DuckDB release, and community extensions can silently disappear when their authors stop keeping up. DuckDB v2.0 broadens the <em>stable</em> C API far enough that extensions can be written once, built once, published once, and keep working, essentially until the end of time.</p>
+<p>To make this sustainable over the long run, the C API is now generated from a declarative, versioned specification (<a href="https://github.com/duckdb/duckdb/pull/24135">#24135</a>): every function in <code class="language-plaintext highlighter-rouge">duckdb.h</code>, <code class="language-plaintext highlighter-rouge">duckdb_extension.h</code>, and the extension ABI is described in YAML in the <a href="https://github.com/duckdb/duckdb/tree/main/api_spec"><code class="language-plaintext highlighter-rouge">api_spec/</code> directory</a>, with its full lifecycle on record, and CI verifies the committed headers against the spec so API and ABI can no longer drift apart. The release also brings unified symbol versioning (<a href="https://github.com/duckdb/duckdb/pull/24435">#24435</a>), custom allocation handlers (<a href="https://github.com/duckdb/duckdb/pull/23945">#23945</a>), and static linking of C API extensions into your application (<a href="https://github.com/duckdb/duckdb/pull/22251">#22251</a>).</p>
+<p>So what does building an extension against the stable C API look like? Here is a complete extension: a single file that registers a vectorized scalar function, compiled once against <code class="language-plaintext highlighter-rouge">duckdb_extension.h</code>.</p>
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#include</span> <span class="cpf">"duckdb_extension.h"</span>
+<span class="n">DUCKDB_EXTENSION_EXTERN</span>
+
+<span class="c1">// a scalar function that adds two BIGINTs, one vector at a time</span>
+<span class="k">static</span> <span class="kt">void</span> <span class="nf">AddNumbers</span><span class="p">(</span><span class="n">duckdb_function_info</span> <span class="n">info</span><span class="p">,</span> <span class="n">duckdb_data_chunk</span> <span class="n">input</span><span class="p">,</span> <span class="n">duckdb_vector</span> <span class="n">output</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">idx_t</span> <span class="n">count</span> <span class="o">=</span> <span class="n">duckdb_data_chunk_get_size</span><span class="p">(</span><span class="n">input</span><span class="p">);</span>
+    <span class="kt">int64_t</span> <span class="o">*</span><span class="n">a</span> <span class="o">=</span> <span class="p">(</span><span class="kt">int64_t</span> <span class="o">*</span><span class="p">)</span> <span class="n">duckdb_vector_get_data</span><span class="p">(</span><span class="n">duckdb_data_chunk_get_vector</span><span class="p">(</span><span class="n">input</span><span class="p">,</span> <span class="mi">0</span><span class="p">));</span>
+    <span class="kt">int64_t</span> <span class="o">*</span><span class="n">b</span> <span class="o">=</span> <span class="p">(</span><span class="kt">int64_t</span> <span class="o">*</span><span class="p">)</span> <span class="n">duckdb_vector_get_data</span><span class="p">(</span><span class="n">duckdb_data_chunk_get_vector</span><span class="p">(</span><span class="n">input</span><span class="p">,</span> <span class="mi">1</span><span class="p">));</span>
+    <span class="kt">int64_t</span> <span class="o">*</span><span class="n">result</span> <span class="o">=</span> <span class="p">(</span><span class="kt">int64_t</span> <span class="o">*</span><span class="p">)</span> <span class="n">duckdb_vector_get_data</span><span class="p">(</span><span class="n">output</span><span class="p">);</span>
+    <span class="k">for</span> <span class="p">(</span><span class="n">idx_t</span> <span class="n">row</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">row</span> <span class="o">&lt;</span> <span class="n">count</span><span class="p">;</span> <span class="n">row</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+        <span class="n">result</span><span class="p">[</span><span class="n">row</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span><span class="p">[</span><span class="n">row</span><span class="p">]</span> <span class="o">+</span> <span class="n">b</span><span class="p">[</span><span class="n">row</span><span class="p">];</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="n">DUCKDB_EXTENSION_ENTRYPOINT</span><span class="p">(</span><span class="n">duckdb_connection</span> <span class="n">con</span><span class="p">,</span>
+                            <span class="n">duckdb_extension_info</span> <span class="n">info</span><span class="p">,</span>
+                            <span class="n">duckdb_extension_access</span> <span class="o">*</span><span class="n">access</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">duckdb_scalar_function</span> <span class="n">f</span> <span class="o">=</span> <span class="n">duckdb_create_scalar_function</span><span class="p">();</span>
+    <span class="n">duckdb_scalar_function_set_name</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="s">"add_numbers"</span><span class="p">);</span>
+    <span class="n">duckdb_logical_type</span> <span class="n">bigint</span> <span class="o">=</span> <span class="n">duckdb_create_logical_type</span><span class="p">(</span><span class="n">DUCKDB_TYPE_BIGINT</span><span class="p">);</span>
+    <span class="n">duckdb_scalar_function_add_parameter</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">bigint</span><span class="p">);</span>
+    <span class="n">duckdb_scalar_function_add_parameter</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">bigint</span><span class="p">);</span>
+    <span class="n">duckdb_scalar_function_set_return_type</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">bigint</span><span class="p">);</span>
+    <span class="n">duckdb_destroy_logical_type</span><span class="p">(</span><span class="o">&amp;</span><span class="n">bigint</span><span class="p">);</span>
+    <span class="n">duckdb_scalar_function_set_function</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">AddNumbers</span><span class="p">);</span>
+    <span class="n">duckdb_register_scalar_function</span><span class="p">(</span><span class="n">con</span><span class="p">,</span> <span class="n">f</span><span class="p">);</span>
+    <span class="n">duckdb_destroy_scalar_function</span><span class="p">(</span><span class="o">&amp;</span><span class="n">f</span><span class="p">);</span>
+    <span class="k">return</span> <span class="nb">true</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">LOAD</span><span class="n"> add_numbers</span><span class="p">;</span>
+<span class="k">SELECT</span> <span class="n">add_numbers</span><span class="p">(</span><span class="mi">40</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span>
+</code></pre></div></div>
+<blockquote>
+<p>For brevity, we skipped <code class="language-plaintext highlighter-rouge">NULL</code> handling here. See the <a href="https://github.com/duckdb/duckdb/tree/main/extension/demo_capi"><code class="language-plaintext highlighter-rouge">demo_capi</code> extension</a> for the full version.</p>
+</blockquote>
+<p>The binary this compiles to keeps working across DuckDB versions. You do not need re-target or rebuild it every time a new DuckDB version comes out. And nowadays, with all the AI tooling around, building an extension has never been easier.</p>
+<p>So you have written your extension. But how should you distribute it? Until now, DuckDB could only install extensions from the built-in repositories (<code class="language-plaintext highlighter-rouge">core</code>, <code class="language-plaintext highlighter-rouge">core_nightly</code>, <code class="language-plaintext highlighter-rouge">community</code>, …). In v2.0, you will be able to register your own trusted repositories (<a href="https://github.com/duckdb/duckdb/pull/24777">#24777</a>, currently work-in-progress), so an organization can host and sign its own extensions and have them install and load just like the built-in ones:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">SET</span> <span class="n">allow_extension_repositories</span> <span class="o">=</span> <span class="s1">'allowed'</span><span class="p">;</span>
+<span class="k">CREATE</span> <span class="k">EXTENSION</span> <span class="k">REPOSITORY</span> <span class="n">my_repo</span> <span class="k">FROM</span> <span class="s1">'https://extensions.example.org'</span><span class="p">;</span>
+<span class="k">INSTALL</span><span class="n"> my_ext</span> <span class="k">FROM</span> <span class="n">my_repo</span><span class="p">;</span>
+<span class="k">LOAD</span><span class="n"> my_repo</span><span class="o">/</span><span class="n">my_ext</span><span class="p">;</span>
+</code></pre></div></div>
+<p>A repository is a name, a URL prefix, and one or more RSA public keys that are trusted to sign the extensions served from it. The prefix can point at anything DuckDB can read: a local path, <code class="language-plaintext highlighter-rouge">https</code>, <code class="language-plaintext highlighter-rouge">s3</code>, you name it. At <code class="language-plaintext highlighter-rouge">CREATE</code> time, DuckDB fetches the repository's public keys and pins them into the repository definition, printing each key's SHA-256 fingerprint so you can compare it against one published out of band. If you would rather not trust the network at all, you can pass the key directly:</p>
+<div class="language-sql highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">CREATE</span> <span class="k">EXTENSION</span> <span class="k">REPOSITORY</span> <span class="n">my_repo</span> <span class="k">FROM</span> <span class="s1">'s3://my-bucket/extensions'</span>
+    <span class="k">USING</span> <span class="k">PUBLIC</span> <span class="k">KEY</span> <span class="s1">'-----BEGIN PUBLIC KEY----- ...'</span><span class="p">;</span>
+</code></pre></div></div>
+<p>Pinned repositories survive restarts, support key rotation by trusting multiple keys, and can be audited at any time through the <code class="language-plaintext highlighter-rouge">duckdb_extension_repositories()</code> table function, or removed again with <code class="language-plaintext highlighter-rouge">DROP EXTENSION REPOSITORY</code>. Together with the stable C API, the extension story rounds out nicely: write your extension once, sign it, host it wherever you like, and <code class="language-plaintext highlighter-rouge">INSTALL</code> it anywhere.</p>
+<h2 id="final-thoughts">
+<a href="#final-thoughts" style="text-decoration: none;">Final Thoughts</a>
+</h2>
+<p>These are only a few highlights, and this post is only a preview. Some details may still shift before the release this fall, and there are many more features and improvements that we could not cover here. DuckDB v2.0 will also come with a small set of breaking changes, including the new default storage format and the completed lambda syntax transition, which we will cover in detail in the release announcement.</p>
+<p>There have been more than 10,000 commits by many contributors since we released v1.5. We would like to thank our community for the detailed issue reports, feedback, and contributions that shaped this release. If you want a taste before the fall, the <a href="/install/preview.html">preview builds</a> have most of these features today, and if something breaks, you know where <a href="https://github.com/duckdb/duckdb/issues">the issue tracker</a> is.</p>
+</div>
+</div>
+<div class="toc_sidebar">
+<div class="toc_menu">
+<h5>In this article</h5>
+<ul class="section-nav" id="toc">
+<li class="toc-entry toc-h2"><a href="#1-duckdb-as-a-server-quack-and-connect">1. DuckDB as a Server: Quack and CONNECT</a></li>
+<li class="toc-entry toc-h2"><a href="#2-variant-becomes-a-first-class-citizen">2. VARIANT Becomes a First-Class Citizen</a></li>
+<li class="toc-entry toc-h2"><a href="#3-triggers">3. Triggers</a></li>
+<li class="toc-entry toc-h2"><a href="#4-sql-dialect-additions">4. SQL Dialect Additions</a></li>
+<li class="toc-entry toc-h2"><a href="#5-asynchronous-io">5. Asynchronous I/O</a></li>
+<li class="toc-entry toc-h2"><a href="#6-faster-queries-across-the-board">6. Faster Queries Across the Board</a></li>
+<li class="toc-entry toc-h2"><a href="#7-storage-format-v20">7. Storage Format v2.0</a></li>
+<li class="toc-entry toc-h2"><a href="#8-a-brand-new-sql-parser">8. A Brand New SQL Parser</a></li>
+<li class="toc-entry toc-h2"><a href="#9-timezones-calendars-and-collations-without-icu">9. Timezones, Calendars, and Collations Without ICU</a></li>
+<li class="toc-entry toc-h2"><a href="#10-write-extensions-once-host-them-yourself">10. Write Extensions Once, Host Them Yourself</a></li>
+<li class="toc-entry toc-h2"><a href="#final-thoughts">Final Thoughts</a></li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+<section class="blog recentposts">
+<div class="wrap">
+<h2 class="headline-2">
+			
+				Recent Posts
+			
+		</h2>
+<div class="newstileswrap">
+<div class="postpreview release" data-source="duckdb.org" data-title="Thank You for 40&amp;nbsp;000 Stars on GitHub">
+
+<div class="postimg custom">
+
+</div>
+<div class="postdetails">
+<h3>Thank You for 40 000 Stars on GitHub</h3>
+<div class="meta">
+<div class="date">2026-08-05</div>
+<div class="readingtime">4 min</div>
+</div>
+<div class="byline">
+
+<div class="author"><span>The DuckDB team</span></div>
+</div>
+</div>
+</div>
+<div class="postpreview deep-dive" data-source="duckdb.org" data-title="Asynchronous I/O in DuckDB: Work, Thread, Work">
+
+<div class="postimg custom">
+
+</div>
+<div class="postdetails">
+<h3>Asynchronous I/O in DuckDB: Work, Thread, Work</h3>
+<div class="meta">
+<div class="date">2026-07-31</div>
+<div class="readingtime">21 min</div>
+</div>
+<div class="byline">
+
+<div class="author"><span>Pedro Holanda</span></div>
+</div>
+</div>
+</div>
+<div class="postpreview release" data-source="duckdb.org" data-title="Announcing DuckDB 1.5.5">
+
+<div class="postimg custom">
+
+</div>
+<div class="postdetails">
+<h3>Announcing DuckDB 1.5.5</h3>
+<div class="meta">
+<div class="date">2026-07-22</div>
+<div class="readingtime">2 min</div>
+</div>
+<div class="byline">
+
+<div class="author"><span>The DuckDB team</span></div>
+</div>
+</div>
+</div>
+</div>
+<a class="button transparent arrow-right" href="https://duckdb.org/news/">
+			All blog posts 
+</a>
+</div>
+</section>
+</div>
+</div>
+</main>

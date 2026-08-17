@@ -1,0 +1,107 @@
+Pointers Gone Wild
+
+Speeding Up the Plush Garbage Collector
+
+August 17th, 2026
+
+Those who have been reading this blog or following me on X know that I tend to jump between side-projects. A while back, I made a conscious decision to allow myself to follow my motivation and explore new ideas, because I think it's important for side-projects to feel fun, and never become a chore. That being said, every once in a while I find myself thinking about a project that I set aside a while back, and how I could push it further.
+
+Last year, I wrote a series of blog posts about 
+Plush
+, which is a 
+toy Lox-like language
+ I created. I put it together to play with different interpreter and virtual machine design ideas. Notably, it has actor-based parallelism, and it's designed so that there is no global VM lock on any critical path, and no situation in which the entire VM has to pause for anything. Later on, I implemented some 
+basic optimizations
+ in the Plush interpreter, and then I wrote a 
+copying Garbage Collector (GC)
+ for the VM. The GC itself is nothing special, but what makes it kind of cool is that each actor has its own fully independent GC. Each actor can run a collection cycle without any synchronization being involved whatsoever. What's a bit unfortunate, though, is that the performance of this GC ended up being pretty disappointing.
+
+I had a personal goal for the Plush GC. I wanted it to be able to collect one million live objects in under 20 milliseconds, with the idea that this would be fast enough to build a 3D game engine in Plush without GC pauses ever being noticeable. I wrote a small 
+gc_many_objs.psh
+ microbenchmark that allocates a linked list with a million nodes and then triggers GC in a loop, but the performance came nowhere near my goal. On my MacBook Air M5, the collection time of this implementation comes to roughly 117ms, which is several times too slow. The reason is that I took a convenient shortcut in implementing my copying GC. A traditional 
+Cheney copying collector
+ copies objects from one memory block (the from-space) to another (the to-space), and it uses a forwarding pointer that lives in the header of each object, while also using the to-space as a work list to transitively traverse the graph of live objects during the copying process.
+
+In Plush, each actor has its own private allocator that it uses to allocate objects, as well as a message allocator that's used as a buffer to receive messages from other actors. When an object is sent as a message, the sender copies it into the receiver's message allocator. This exists to decouple the sender from the receiver. It means the sender and receiver don't have to lock and synchronize for messages to be exchanged. I wanted to be able to reuse one copying algorithm for both the GC and for copying messages into the receiver's message allocator. For that, I didn't want to use forwarding pointers from the sender's heap, which would mutate objects in the sender. Instead, I used a hash map which tracks the correspondence between objects and their copies. I thought this wouldn't have too much of a performance impact, because hashing pointers is fast, but I was wrong.
+
+An actor's two allocators, and the two copies a message goes through.
+
+My friend and colleague Laurent Huberdeau pointed out something basic that I didn't know until that point, which is that the default Rust 
+HashMap
+ uses a secure hashing function, designed specifically to protect against HashDoS. This doesn't affect its functionality, but it does affect performance. Thankfully there's an equivalent 
+FxHashMap
+ in the 
+rustc_hash
+ crate, which is maintained by the rust-lang project and is a drop-in replacement. Laurent also found a redundant hash table lookup which could be avoided. These simple changes made the copying GC run more than twice as fast, down to 43ms on my M5 laptop. Much faster, though still far from my original goal of 20ms.
+
+Profiling shows that most of the overhead still comes from the hash table. There is worse news, though: the forwarding pointer hash table itself takes up more space than the live data being copied during collection. It makes sense if you think about it. We're copying a linked list. The list nodes are pretty small, with only a next pointer and a value field in each. The hash table entries themselves are a pair of pointers, but what's more, a hash map needs some amount of extra capacity (empty slots) to perform well, otherwise you can run into hash collisions and performance collapses. On top of that, hash functions are meant to be unpredictable. The output should appear to have a quasi-random distribution. If you think about it, that's actually terrible from a cache performance perspective. It means that during the GC, we end up touching memory all over the place, more than the data we're copying, in an unpredictable pattern. Not great.
+
+The same copy done two ways: through a hash table, and with a forwarding address.
+
+There are other inefficiencies in this GC. In a traditional Cheney GC, the to-space is traversed linearly and serves as a work list. We use the to-space itself to keep track of which objects we've copied and then we traverse the pointers in these objects to copy other objects that are also live. If you don't have that, then you need to keep a separate work list. This can be a simple dynamic array that serves as a stack. It's not the end of the world, but it can also add extra allocations, extra memory usage and memory accesses, etc. The worst part of my implementation, though, is that after objects were forwarded, I traversed the hash map a second time to go through the forwarded objects and replace pointers to from-space objects with pointers to their copies in the to-space. However, as stated earlier, the hash map stores pointers in a quasi-random order, so now we're accessing the from-space and the to-space in an unpredictable order as well. Welp.
+
+I think that somewhere in my mind I kind of got used to the assumption that hash maps are an efficient data structure. Introductory CS classes will teach you that you can get 
+O(1)
+ time complexity on average. They work well for so many uses. If you're trying to optimize memory usage and cache-friendliness for maximum throughput, though, it turns out that maybe they're not. I originally said that the reason I didn't want to use forwarding pointers is that I was using the same copying algorithm to copy objects when sending messages, and I didn't want to overwrite objects (or object headers) from the sender's heap during that process. There's a simple solution for that problem though, which is that for this special case, we can keep a list of forwarded objects, and come back to undo the forwarding pointer writes after copying. Sounds inefficient, but in practice, messages sent to other actors are probably not massive graphs of objects most of the time, and normal GC use can just skip this step.
+
+At this point I decided to rewrite the Plush GC to simply follow the traditional Cheney copying algorithm, with a toggle that allows us to store an undo-list to remove forwarding pointers and restore object headers for the message send special case. This brings our GC time for a million live objects all the way down to 7ms, which is about 16.7x as fast as the naive implementation we started with. That's an amazing performance improvement, and it's well below my 20ms goal. In fact, I have an example program that renders a rotating cityscape with about 2200 polygons. It triggers GC regularly because it does 3D vector and matrix operations and allocates tons of temporary objects. For this program in particular, the GC time is below 1ms.
+
+Just for historical context, Cheney published 
+a paper
+ about what is now known as the Cheney algorithm in 1970. At the time, he was working on a 
+Ferranti Atlas 2
+ computer. This was a transistorized supercomputer from the early 1960s. It occupied an entire large room, used core memory, and surprisingly, already had an early form of cache. Regardless of cache efficiency though, memory was a precious resource back then, and using a forwarding pointer is much more memory-efficient than using an auxiliary data structure. I hope that this conclusion isn't too underwhelming, because we've sort of gone full circle to the conclusion that the original Cheney GC algorithm with forwarding pointers is much more efficient. Another indication that we should respect the wisdom of our elders and their sacred publications. Still, I think it's good to understand what, exactly, makes something efficient or not, and how much of a difference things like cache efficiency and predictable memory access patterns can make. It's also good to know that Rust's 
+HashMap
+ traded a security footgun for somewhat of a performance footgun.
+
+Typical Atlas 2 Installation, from the Ferranti Computer Systems brochure.
+
+In addition to making the GC run faster, I made another improvement, which serves both to remove a restriction in Plush and to reduce memory usage. Previously, I didn't have any logic to grow an actor's message allocator. This meant that message size was limited to 16MB, a hardcoded constant. The message allocator uses bump pointer allocation like a normal GC heap, and it's slightly tricky to resize it because if you reallocate the backing storage, that invalidates pointers to queued messages. This means you can only reallocate the backing storage when the queue is empty, and all messages have been consumed by the receiver. That, in turn, requires senders and the receiver to coordinate. If one actor is trying to send a large message, it would need to communicate to the receiver that its message allocator needs to be upsized, and meanwhile, all other senders would have to wait. There's a simpler solution though.
+
+There's a cool 
+mmap
+ trick that I believe I learned from Alan Wu. This has been used in YJIT, my own UVM project, and also in many other runtimes. You can use 
+mmap
+ to pre-reserve a large contiguous chunk of virtual address space with the 
+MAP_PRIVATE | MAP_ANONYMOUS
+ flags and 
+PROT_NONE
+ protection. This is essentially telling the OS not to map any other memory or resources in this chunk of virtual address space, but the memory is not physically backed by any RAM, and so it uses up no RSS. Later on, you can come back and 
+mprotect
+ pages from this space as 
+PROT_READ | PROT_WRITE
+ to make them accessible to your program. This gives you zeroed memory that you can read and write, but the OS doesn't map these pages to physical RAM until you write some data there.
+
+The thing to know is that virtual address space is very large, currently 128TB (that's terabytes) on macOS and Linux (based on 48-bit addressing), and so the size of your initial reservation can be very generous. Even 512GB is only a tiny fraction of the 128TB available. The implication here is that you can essentially have the equivalent of a C++ 
+std::vector
+ or a Rust 
+Vec
+ that can be dynamically resized at will, but you can always take pointers inside this dynamically-sized vector. Resizing the vector and increasing its capacity doesn't invalidate old pointers. You can even shrink that vector, returning pages to the OS, without changing any addresses. Cool, huh? In the context of Plush, this means that a sender can trivially grow the receiver's message allocator, without any coordination with the receiver or other senders being involved. The receiver can later shrink its message allocator if it has grown too big, returning memory to the OS, without needing to consume all messages in the queue.
+
+Growing a Vec against growing a reserved range with stable addresses.
+
+With the rewritten GC and the 
+mmap
+ trick, Plush has a GC that is not only much faster (presumably good enough for a real-time game with lots of allocations), but also uses less memory. The collection itself doesn't use a bulky hash map, but the baseline RSS is also much smaller. A trivial program with no actors uses 9.6MB of peak RSS and starts up in less than 10ms. A trivial program with 2000 actors uses 224MB of peak RSS and starts up in 0.23s. Not bad.
+
+In terms of next steps, I have several ideas on how to improve the performance of Plush, or bring it a bit closer to a "real" programming language. One thing that stands out is that Plush uses a Rust tagged union to represent its 
+Value
+ type (also known as a "fat value" representation). This makes for nice readable code, but it also means we're using 16 bytes per value when alignment is taken into account. Most dynamic languages use a tagging scheme. That comes with some compromises, but it could shrink memory usage quite a bit. Plush also uses a stack-based interpreter, whereas a register-based interpreter could be much faster. I've also been wondering how feasible it would be to get an LLM to write a naive JIT compiler for Plush.
+
+As a side note, you may have been wondering why I chose a copying GC for Plush. Maybe a mark-and-sweep GC would actually be faster. My motivation was that copying GCs can do very fast bump allocation (great for a dynamic language that allocates a lot), and they have the neat property that collection time is proportional to the live data being copied rather than total heap size. There's also a theoretical cache advantage with related data being close together in memory. It could be that those assumptions are wrong and mark-and-sweep can win. If you're curious and want to play around I added 
+benchmarks/gc_many_objs.psh
+ and 
+benchmarks/gc_alloc_speed.psh
+ to 
+the Plush repo
+. Your favorite coding agent can potentially refactor Plush to use a mark-and-sweep GC in less than 20 minutes. If someone wants to try that experiment, I would be curious to know the result. Just make sure to run the benchmarks with 
+cargo run --release
+ and also run 
+cargo test
+ to make sure that the tests still pass.
+
+Subscribe to my mailing list and follow this blog:
+
+Enjoyed this post? Share it with your online community!
+
+    Copyright © 2011–2026 Maxime Chevalier-Boisvert. All rights reserved.
