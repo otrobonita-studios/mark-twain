@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
 import path from 'path';
 import fs from 'fs';
@@ -66,9 +67,10 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Message is required and must be a string' }, { status: 400, headers: corsHeaders });
     }
 
+    const anthropicApiKey = (process.env.ANTHROPIC_API_KEY || "").trim();
     const geminiApiKey = (process.env.GEMINI_API_KEY || "").trim();
-    if (!geminiApiKey) {
-      return NextResponse.json({ error: 'GEMINI_API_KEY is not configured in environment variables' }, { status: 500, headers: corsHeaders });
+    if (!anthropicApiKey && !geminiApiKey) {
+      return NextResponse.json({ error: 'Neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is configured in environment variables' }, { status: 500, headers: corsHeaders });
     }
 
     // 1. Generate Query Embedding
@@ -170,47 +172,88 @@ Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyIn
     // Limit conversation history to the last 12 messages to avoid context window exhaustion
     const maxHistoryLength = 12;
     const historyToUse = (history || []).slice(-maxHistoryLength);
-    const sdkHistory = historyToUse.map(item => ({
-      role: item.role === 'user' ? 'user' : 'model',
-      parts: [{ text: item.content || '' }]
-    }));
 
-    // 7. Initialize Gemini Client and Generate Content
-    const ai = new GoogleGenAI({ 
-      apiKey: geminiApiKey,
-      httpOptions: {
-        headers: {
-          'Referer': 'https://otrobonita-official.firebaseapp.com'
+    let textResponse = "";
+    let translation = "";
+
+    if (anthropicApiKey) {
+      // 7a. Generate via Anthropic Claude
+      const anthropic = new Anthropic({ apiKey: anthropicApiKey });
+      const modelName = process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022";
+
+      const anthropicMessages = [
+        ...historyToUse.map(item => ({
+          role: item.role === 'user' ? 'user' : 'assistant',
+          content: item.content || ''
+        })),
+        { role: 'user', content: userPrompt }
+      ];
+
+      const response = await anthropic.messages.create({
+        model: modelName,
+        max_tokens: 1024,
+        system: systemInstruction,
+        messages: anthropicMessages,
+      });
+
+      textResponse = response.content?.[0]?.text || '';
+
+      if (!simplify && textResponse) {
+        try {
+          const transResponse = await anthropic.messages.create({
+            model: process.env.ANTHROPIC_TRANSLATION_MODEL || "claude-3-5-haiku-20241022",
+            max_tokens: 1024,
+            messages: [{
+              role: 'user',
+              content: `Translate the following 19th-century vintage text into clear, direct, and simplified modern English for international non-native English speakers. Keep the meaning and general sentiment identical, but remove all archaic slang, idioms, or outdated syntax:\n\n"${textResponse}"`
+            }]
+          });
+          translation = transResponse.content?.[0]?.text || '';
+        } catch (transErr) {
+          console.error("Translation generation failed:", transErr);
         }
       }
-    });
-    const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    } else {
+      // 7b. Fallback to Gemini
+      const sdkHistory = historyToUse.map(item => ({
+        role: item.role === 'user' ? 'user' : 'model',
+        parts: [{ text: item.content || '' }]
+      }));
 
-    const chat = ai.chats.create({
-      model: modelName,
-      config: {
-        systemInstruction: systemInstruction,
-      },
-      history: sdkHistory
-    });
+      const ai = new GoogleGenAI({ 
+        apiKey: geminiApiKey,
+        httpOptions: {
+          headers: {
+            'Referer': 'https://otrobonita-official.firebaseapp.com'
+          }
+        }
+      });
+      const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
-    const response = await chat.sendMessage({
-      message: userPrompt
-    });
+      const chat = ai.chats.create({
+        model: modelName,
+        config: {
+          systemInstruction: systemInstruction,
+        },
+        history: sdkHistory
+      });
 
-    const textResponse = response.text;
+      const response = await chat.sendMessage({
+        message: userPrompt
+      });
 
-    // Generate modern speaking translation for international viewers (only if simplify is false)
-    let translation = "";
-    if (!simplify) {
-      try {
-        const translationResponse = await ai.models.generateContent({
-          model: modelName,
-          contents: `Translate the following 19th-century vintage text into clear, direct, and simplified modern English for international non-native English speakers. Keep the meaning and general sentiment identical, but remove all archaic slang, idioms, or outdated syntax:\n\n"${textResponse}"`
-        });
-        translation = translationResponse.text;
-      } catch (transErr) {
-        console.error("Translation generation failed:", transErr);
+      textResponse = response.text;
+
+      if (!simplify && textResponse) {
+        try {
+          const translationResponse = await ai.models.generateContent({
+            model: modelName,
+            contents: `Translate the following 19th-century vintage text into clear, direct, and simplified modern English for international non-native English speakers. Keep the meaning and general sentiment identical, but remove all archaic slang, idioms, or outdated syntax:\n\n"${textResponse}"`
+          });
+          translation = translationResponse.text;
+        } catch (transErr) {
+          console.error("Translation generation failed:", transErr);
+        }
       }
     }
 
