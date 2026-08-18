@@ -1,6 +1,4 @@
 import { NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
-import { GoogleGenAI } from '@google/genai';
 import path from 'path';
 import fs from 'fs';
 import { getEmbedding } from '../../../lib/embeddings';
@@ -67,11 +65,9 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Message is required and must be a string' }, { status: 400, headers: corsHeaders });
     }
 
-    const anthropicApiKey = (process.env.ANTHROPIC_API_KEY || "").trim();
     const deepseekApiKey = (process.env.DEEPSEEK_API_KEY || "").trim();
-    const geminiApiKey = (process.env.GEMINI_API_KEY || "").trim();
-    if (!anthropicApiKey && !deepseekApiKey && !geminiApiKey) {
-      return NextResponse.json({ error: 'No LLM API key (ANTHROPIC_API_KEY, DEEPSEEK_API_KEY, or GEMINI_API_KEY) is configured in environment variables' }, { status: 500, headers: corsHeaders });
+    if (!deepseekApiKey) {
+      return NextResponse.json({ error: 'DEEPSEEK_API_KEY is not configured (Vercel team Shared Environment Variable).' }, { status: 500, headers: corsHeaders });
     }
 
     // 1. Generate Query Embedding
@@ -177,142 +173,67 @@ Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyIn
     let textResponse = "";
     let translation = "";
 
-    if (anthropicApiKey) {
-      // 7a. Generate via Anthropic Claude
-      const anthropic = new Anthropic({ apiKey: anthropicApiKey });
-      const modelName = process.env.ANTHROPIC_MODEL_NAME || process.env.ANTHROPIC_MODEL || "claude-3-5-haiku-20241022";
+    const deepseekModelRaw = process.env.DEEPSEEK_MODEL || process.env.DEEPSEEK_MODEL_VERSION || "deepseek-v4-flash";
+    const deepseekModel =
+      deepseekModelRaw === "deepseek-chat" ||
+      deepseekModelRaw === "deepseek-reasoner" ||
+      deepseekModelRaw.startsWith("DeepSeek-") ||
+      deepseekModelRaw.includes("/")
+        ? "deepseek-v4-flash"
+        : deepseekModelRaw;
+    const deepseekMessages = [
+      { role: "system", content: systemInstruction },
+      ...historyToUse.map((item) => ({
+        role: item.role === "user" ? "user" : "assistant",
+        content: item.content || "",
+      })),
+      { role: "user", content: userPrompt },
+    ];
 
-      const anthropicMessages = [
-        ...historyToUse.map(item => ({
-          role: item.role === 'user' ? 'user' : 'assistant',
-          content: item.content || ''
-        })),
-        { role: 'user', content: userPrompt }
-      ];
-
-      const response = await anthropic.messages.create({
-        model: modelName,
+    const dsRes = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${deepseekApiKey}`,
+      },
+      body: JSON.stringify({
+        model: deepseekModel,
+        messages: deepseekMessages,
         max_tokens: 1024,
-        system: systemInstruction,
-        messages: anthropicMessages,
-      });
+      }),
+    });
 
-      textResponse = response.content?.[0]?.text || '';
+    if (!dsRes.ok) {
+      const errText = await dsRes.text();
+      throw new Error(`DeepSeek API error: ${dsRes.status} - ${errText}`);
+    }
 
-      if (!simplify && textResponse) {
-        try {
-          const transResponse = await anthropic.messages.create({
-            model: process.env.ANTHROPIC_TRANSLATION_MODEL || modelName,
-            max_tokens: 1024,
-            messages: [{
-              role: 'user',
-              content: `Translate the following 19th-century vintage text into clear, direct, and simplified modern English for international non-native English speakers. Keep the meaning and general sentiment identical, but remove all archaic slang, idioms, or outdated syntax:\n\n"${textResponse}"`
-            }]
-          });
-          translation = transResponse.content?.[0]?.text || '';
-        } catch (transErr) {
-          console.error("Translation generation failed:", transErr);
-        }
-      }
-    } else if (deepseekApiKey) {
-      // 7b. Generate via DeepSeek API
-      const deepseekModel = process.env.DEEPSEEK_MODEL_VERSION || process.env.DEEPSEEK_MODEL || "deepseek-chat";
-      const deepseekMessages = [
-        { role: 'system', content: systemInstruction },
-        ...historyToUse.map(item => ({
-          role: item.role === 'user' ? 'user' : 'assistant',
-          content: item.content || ''
-        })),
-        { role: 'user', content: userPrompt }
-      ];
+    const dsData = await dsRes.json();
+    textResponse = dsData.choices?.[0]?.message?.content || "";
 
-      const dsRes = await fetch("https://api.deepseek.com/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${deepseekApiKey}`
-        },
-        body: JSON.stringify({
-          model: deepseekModel,
-          messages: deepseekMessages,
-          max_tokens: 1024
-        })
-      });
-
-      if (!dsRes.ok) {
-        const errText = await dsRes.text();
-        throw new Error(`DeepSeek API error: ${dsRes.status} - ${errText}`);
-      }
-
-      const dsData = await dsRes.json();
-      textResponse = dsData.choices?.[0]?.message?.content || "";
-
-      if (!simplify && textResponse) {
-        try {
-          const transRes = await fetch("https://api.deepseek.com/chat/completions", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${deepseekApiKey}`
-            },
-            body: JSON.stringify({
-              model: deepseekModel,
-              messages: [{
-                role: 'user',
-                content: `Translate the following 19th-century vintage text into clear, direct, and simplified modern English for international non-native English speakers. Keep the meaning and general sentiment identical, but remove all archaic slang, idioms, or outdated syntax:\n\n"${textResponse}"`
-              }],
-              max_tokens: 1024
-            })
-          });
-          if (transRes.ok) {
-            const transData = await transRes.json();
-            translation = transData.choices?.[0]?.message?.content || "";
-          }
-        } catch (transErr) {
-          console.error("Translation generation failed:", transErr);
-        }
-      }
-    } else {
-      // 7c. Fallback to Gemini
-      const sdkHistory = historyToUse.map(item => ({
-        role: item.role === 'user' ? 'user' : 'model',
-        parts: [{ text: item.content || '' }]
-      }));
-
-      const ai = new GoogleGenAI({ 
-        apiKey: geminiApiKey,
-        httpOptions: {
+    if (!simplify && textResponse) {
+      try {
+        const transRes = await fetch("https://api.deepseek.com/chat/completions", {
+          method: "POST",
           headers: {
-            'Referer': 'https://otrobonita-official.firebaseapp.com'
-          }
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${deepseekApiKey}`,
+          },
+          body: JSON.stringify({
+            model: deepseekModel,
+            messages: [{
+              role: "user",
+              content: `Translate the following 19th-century vintage text into clear, direct, and simplified modern English for international non-native English speakers. Keep the meaning and general sentiment identical, but remove all archaic slang, idioms, or outdated syntax:\n\n"${textResponse}"`,
+            }],
+            max_tokens: 1024,
+          }),
+        });
+        if (transRes.ok) {
+          const transData = await transRes.json();
+          translation = transData.choices?.[0]?.message?.content || "";
         }
-      });
-      const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
-
-      const chat = ai.chats.create({
-        model: modelName,
-        config: {
-          systemInstruction: systemInstruction,
-        },
-        history: sdkHistory
-      });
-
-      const response = await chat.sendMessage({
-        message: userPrompt
-      });
-
-      textResponse = response.text;
-
-      if (!simplify && textResponse) {
-        try {
-          const translationResponse = await ai.models.generateContent({
-            model: modelName,
-            contents: `Translate the following 19th-century vintage text into clear, direct, and simplified modern English for international non-native English speakers. Keep the meaning and general sentiment identical, but remove all archaic slang, idioms, or outdated syntax:\n\n"${textResponse}"`
-          });
-          translation = translationResponse.text;
-        } catch (transErr) {
-          console.error("Translation generation failed:", transErr);
-        }
+      } catch (transErr) {
+        console.error("Translation generation failed:", transErr);
       }
     }
 

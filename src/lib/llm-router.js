@@ -253,7 +253,7 @@ export async function completeVision({ contents, config, maxTokens = 4096 }) {
   const model =
     process.env.ANTHROPIC_MODEL_NAME ||
     process.env.ANTHROPIC_MODEL ||
-    "claude-3-5-haiku-20241022";
+    "claude-haiku-4-5";
   const { system, messages } = geminiContentsToAnthropic(contents, config);
 
   const response = await client.messages.create({
