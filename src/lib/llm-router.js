@@ -12,10 +12,39 @@ const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
 const DEFAULT_LM_STUDIO_URL = "http://127.0.0.1:1234/v1";
 
+function lmStudioBase() {
+  return (process.env.LM_STUDIO_BASE_URL || DEFAULT_LM_STUDIO_URL).replace(/\/$/, "");
+}
+
+async function lmStudioReachable() {
+  try {
+    const res = await fetch(`${lmStudioBase()}/models`, {
+      signal: AbortSignal.timeout(800),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveProvider() {
   const override = (process.env.LLM_PROVIDER || "").trim().toLowerCase();
   if (override === "deepseek" || override === "lmstudio") return override;
-  if (process.env.VERCEL || process.env.VERCEL_ENV) return "deepseek";
+  if (process.env.VERCEL || process.env.VERCEL_ENV || process.env.K_SERVICE) {
+    return "deepseek";
+  }
+  return "lmstudio";
+}
+
+/** Local: LM Studio if it answers, else DeepSeek when the key exists (laptop without models). */
+export async function resolveProviderAsync() {
+  const override = (process.env.LLM_PROVIDER || "").trim().toLowerCase();
+  if (override === "deepseek" || override === "lmstudio") return override;
+  if (process.env.VERCEL || process.env.VERCEL_ENV || process.env.K_SERVICE) {
+    return "deepseek";
+  }
+  if (await lmStudioReachable()) return "lmstudio";
+  if ((process.env.DEEPSEEK_API_KEY || "").trim()) return "deepseek";
   return "lmstudio";
 }
 
@@ -193,7 +222,7 @@ async function openAIChat({ url, apiKey, model, messages, jsonMode, maxTokens })
 }
 
 export async function completeText({ contents, config, maxTokens = 4096 }) {
-  const provider = resolveProvider();
+  const provider = await resolveProviderAsync();
   const jsonMode =
     config?.responseMimeType === "application/json" || Boolean(config?.responseSchema);
   const messages = geminiContentsToOpenAIMessages(contents, config);
