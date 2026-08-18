@@ -1,0 +1,533 @@
+Earlier this year, I blogged about work I did to 
+improve VRAM management
+
+for games. Now, after many months of floating around in mailing lists, the kernel patches
+are finally merged upstream and queued for Linux 7.3! Hooray!
+
+To celebrate, letâs look a bit deeper at one sentence I wrote in my previous post:
+
+[Games] should perform much more stable - as long as the game itself doesnât
+  use more VRAM than you actually have.
+
+So, one may ask: What if they do, in fact, use more VRAM than you actually have?
+
+Typical expectations for this seem to be that once this happens youâre pretty much screwed.
+Games will start crashing left and right, performance plummets to unplayable levels,
+a good gaming experience becomes impossible.
+
+But is that really just an unavoidable fact of life? What 
+really
+ makes running out of
+VRAM suck so hard? And, most importantly: How can we make it suck as little as possible?
+
+Setting expectations
+
+In theory, running out of VRAM should exclusively be a performance issue, not a stability one.
+Support for overcommitting VRAM has existed for as long as GPU drivers have: If the driver
+overcommits VRAM, you are generally allowed to request as much VRAM as youâd like,
+and youâll get as much as the kernel driver decides it can fit into the physical memory that exists on GPU.
+
+On the performance side, the big-picture reason for bad performance when you run out of VRAM is fairly simple.
+As soon as the game requests more VRAM than is physically present, some of the gameâs memory will
+have to be moved/evicted to CPU RAM instead. For the GPU, accessing CPU RAM is much slower than VRAM:
+Not only is CPU RAM slower than a dedicated GPUâs VRAM in general, all memory accesses also
+have to go over the PCI bus. The PCI bus adds latency and is typically also the limiting factor in bandwidth when
+fetching from CPU memory.
+
+Due to PCI speed limitations, there are some truly unavoidable performance constraints when overcommitting VRAM.
+Assuming the GPU is hooked up via a PCIe 4.0x16 connection, you get a little less than 32GiB/s of bandwidth. Each
+millisecond, that PCIe bus can transfer ~32.2MiB of data. For a minimum framerate of 30 frames per second (33.3ms
+per frame), the absolute maximum amount of data the GPU is able to access is ~1,075.5MiB, a tiny bit over 1GiB of
+data. In other words, if so much memory gets evicted that the GPU needs to fetch more than 1GiB from evicted memory
+in one single frame, it is simply impossible to still hit 30 FPS.
+
+Not all memory is equal
+
+At the same time, just reading a little bit of CPU memory on the GPU is not immediately a death sentence for performance.
+In fact, GPU drivers sometimes decide to let things like command buffer data and related allocations live in CPU
+RAM even when thereâs plenty of VRAM available! Whenever the GPU executes these commands, it has to access CPU memory, and yet
+in these cases everything runs completely fine. So what makes these accesses different - why are they fine and yet
+running out of VRAM seems catastrophic?
+1
+
+One thing that influences the calculus significantly is caching. Since the access latency in case of a cache hit is the same
+regardless of whether the cached memory lives on CPU or GPU, the high initial cost of fetching over the PCI bus can be
+amortized by cache hits (to some extent). We can estimate latency differences between fetching CPU RAM and VRAM by writing microbenchmarks
+that measure access latency for different buffer sizes
+(using an adversarial access pattern to minimize cache hitrates as far as possible). The result you get may
+look something like this (captured on RDNA3):
+
+As expected, if the buffer fits into L2 (or any higher-level cache), access latencies are exactly the same for
+memory backed by CPU RAM and memory backed by VRAM, because the data gets fetched directly from cache in either case.
+At a size of 6MB (the L2 cache size on RDNA3), CPU memory latencies go up to about 2400 cycles per access,
+while device memory latencies stay within the same rough ballpark.
+Note that VRAM accesses also go through the Infinity Cache, but CPU memory accesses do not (they hit PCIe directly on an L2 miss).
+I suspect this is because the Infinity Cache sits directly on top of VRAM, so any access that doesnât hit VRAM also doesnât reach
+the Infinity Cache.
+
+Obviously, memory doesnât start off with being cached anywhere, so the first access will still have considerably higher
+latency. Also, losing the Infinity Cache definitely hurts as well: PCIe fetches seem to have somewhere around 7.3x as much
+latency than an Infinity Cache hit, and around 4.6x as much latency as a fetch from VRAM.
+This increased latency needs really high cache hitrates to fully amortize the cost of going over PCIe.
+That means there is only a small set of use cases where using CPU memory has such minuscule slowdowns
+that youâd actively decide to use it in favor of VRAM when you have the choice. When youâre evicting memory from VRAM, there
+will almost unavoidably be at least some degree of slower performance.
+
+Still, even though slowdown is unavoidable, there is going to be memory where eviction matters more and memory
+where eviction has a lesser effect on overall perf. Memory that is accessed in very cache-friendly ways is not
+affected by the slowdown of CPU RAM as much. If the access patterns arenât cache-friendly but the memory isnât accessed very
+often, things may also still be fine since the GPU only rarely needs to actually fetch data from CPU RAM. There might be many
+memory allocations where the GPU will only access a small part of the total allocation size, and never even read the rest.
+If these allocations were to be evicted, you might evict multiple GiBs of data, but still remain well below the 1GiB hard limit of data
+that is 
+actually
+ accessed per frame.
+
+All of these variables make it surprisingly hard to predict how performance actually pans out in practice when memory is being
+evicted. But in short: Depending on how much the evicted memory gets accessed and how well these accesses cache, you might just be able to run out
+of VRAM without (completely) ruining performance!
+
+Confronting reality
+
+Weâve theorycrafted ourselves all the way towards having performant VRAM overcommitment now. Great! Letâs just boot up SteamOS, start some game and crank
+up the setti-
+
+radv/amdgpu: Not enough memory for command submission.
+
+oh.
+
+As it turns out, running out of VRAM in practice does carry plenty of stability issues with it.
+
+This error isnât quite like a regular âcouldnât allocate, out of memoryâ error, though. Note that the message specifically complains about
+command submission: RADV prints this message when the kernel returns 
+-ENOMEM
+ when trying to submit commands
+2
+, but merely submitting
+commands does not allocate any new resources! All the command buffers were allocated in advance, and clearly their allocation succeeded.
+Even though all memory was successfully allocated, using it in a GPU submission suddenly results in âout of memoryâ errors being thrown.
+
+Itâs time for another kernel adventure! Surely getting the kernel to accept the submission canât be that hard - after all, the kernel already
+accepted all the allocations
+3
+!
+
+The horrors of kernel locking
+
+One thing the 
+amdgpu
+ driver has to do on every submission, before it can direct the GPU to start executing commands, is to make sure that
+all memory that may potentially be referenced by the GPU commands is accessible. With more modern bindless graphics APIs, you have to assume
+all allocated memory may at some point get referenced. Therefore, 
+amdgpu
+ will try to make sure all allocated memory is also accessible.
+
+Each memory allocation carries information about which type of memory (for our purposes here, system RAM or GPU VRAM) it can be properly accessed
+from. Most allocations can be accessed from either CPU RAM or VRAM, and 
+amdgpu
+ will be happy with the memory allocation being in either of these
+memory types. Some allocations, however, have to be placed in VRAM and VRAM only. If these memory allocations have been evicted to system RAM because
+some other application allocated VRAM in the meantime, 
+amdgpu
+ will have to move them back into VRAM. Because there is no free VRAM available at all,
+moving the allocation back requires evicting something else. For some reason, that failed and the kernel
+reported an out-of-memory condition.
+
+In order to explain why evicting something randomly fails, weâll have to take a small detour to look at how the kernel handles (CPU-side) locking for GPU allocations.
+In order to evict a memory allocation, you have to acquire a lock associated with that allocation. However, during a submission, you also have to lock
+every allocation thatâs referenced in a submission, to prevent some other application from moving the allocation somewhere else while youâre busy preparing
+GPU work. But if another GPU submission is doing the same thing concurrently, you can end up in a situation like this:
+
+If one submit wants to evict an allocation that another submit has already locked, but that other submit also needs to lock an allocation from the first one
+to make progress, we have a textbook ABBA deadlock condition.
+
+But fear not, the kernel knows how to detect and resolve deadlocks! The details about how deadlock detection works are
+explained in 
+this kernel documentation page
+, but in very broad strokes, the
+kernel associates locking operations with a âtransactionâ (which basically just keeps track of which locks were acquired). If two transactions would
+deadlock, one of the transactions is marked as âwoundedâ, and the next time it tries to acquire a lock, the 
+-EDEADLCK
+ error is returned.
+This error requests the transaction to be aborted: All locks acquired during the transaction should be released, and the transaction is restarted
+from scratch. In the context of command submission, this just means the driver will restart the process of going over all memory allocations and making
+sure theyâre accessible.
+
+So whereâs the catch? There isnât one. This approach is rock solid and works really well.
+
+At least as long as itâs actually implemented everywhere.
+
+In the graphics subsystem, the gritty internals of the wound-abort-retry loop are abstracted using a small helper library called 
+drm_exec
+. Instead of
+having to manually track which allocations are locked, and release the locks once you run into 
+-EDEADLCK
+, you simply use the 
+drm_exec_lock_obj
+ helper.
+If you study the 
+locking code in TTM
+,
+the shared Linux GPU memory management layer, you will notice a profound lack of usage of 
+drm_exec
+.
+
+Instead, there even is a comment noting that 
+-EDEADLCK
+ will cause eviction to fail. There we go, we found our issue! As soon as this deadlock
+condition is encountered because of intense memory pressure during command submission, the kernel bails out and rejects the submission instead of
+retrying.
+
+There already are some patchsets to hook up the 
+drm_exec
+ helper in TTM,
+
+sent all the way back in 2024
+, but those never made it in for a few reasons,
+among which were some remaining bugs that hadnât been figured out. My work had been cut out for me here: Rebase the patchset on top of
+my kernel version and figure out what those remaining bugs are.
+
+Rebasing the patchset wasnât too much of a hassle, and figuring out the bugs only took one single week of intense suffering with games randomly hanging 3 minutes
+into heavy VRAM contention. Not the worst!
+
+I tried 
+resending
+ the patchset with fixes for all bugs I found in the
+hopes it would get in this time, but thereâs going to be more work needing to be done with it before it can be merged.
+
+Now that running out of VRAM at least wonât crash your apps at random, we can at least properly crank up the settings and look at perf. The initial
+result gave me an absolutely glorious performance graph like this:
+
+Hold On Where Did All The Perf Go
+
+Figuring out why performance is so garbage requires figuring out what the system is actually 
+doing
+ thatâs this slow. For broad âwhatâs the kernel driver doing??â
+questions like that, I like using 
+gpuvis
+. gpuvis uses kernel tracepoints to build a timeline of things that happened
+(including âGPU work submission started/stoppedâ, from which the time taken for each submission can be inferred).
+
+Booting up gpuvis with a trace taken while the system is running out of VRAM, the timeline shows a situation like this:
+
+Turns out, most of that time isnât actually spent on handling the submission (thatâs the gfx_0.0.0 activity), but instead moving around memory in preparation
+for that submission (sdma0 activity)!
+
+The reason why there are so many buffer moves all the time becomes more obvious if you use gpuvisâs event list, together with a filter to show only captured
+move events for a particular buffer object (I chose one at random here, most buffer objects have a similar pattern):
+
+The list shows quite clearly that contending processes (in this case, 
+gamescope
+ and the game itself) will constantly take turns evicting and moving
+back the same piece of memory, over and over. Thatâs really bad! And itâs very reminiscent of something I wrote in my first blogpost:
+
+Generally, two competing applications can be expected to roughly take turns executing GPU work - first one application submits work, then the other, then the first again, and so on.
+With that approach, memory would keep being moved back and forth after every single submission. One application gets kicked out and immediately moved back in, kicking the other out (which moves memory back in the next step). All this moving ended up with
+
+worse
+ performance than if the memory had never been moved in the first place.
+
+This described an old issue where overly aggressive VRAM allocation would lead to ping-pong-like moves happening constantly. But that issue had since been
+fixed by simply not trying to claim VRAM when there isnât any free VRAM left, and the kernel only started being somewhat aggressive when I implemented
+VRAM protection with dmem cgroups. Obviously, this must have reintroduced the ping-ponging somehow.
+
+Conceptually, the design of the dmem cgroup VRAM protection should never result in ping-pong moves, because the kernel is only supposed to evict memory that
+does not have any cgroup VRAM protection associated with it. Without any VRAM protection, you should 
+typically
+ not be allowed to evict protected VRAM.
+
+The single exception to this rule is memory that absolutely has to live in VRAM for things to work properly. These kinds of memory allocations are always
+allowed to be moved to VRAM to ensure system stability. Typically, almost nothing coming from an application is really required to live in VRAM for correct operation,
+but there is one buffer object coming from an application that does: The buffer containing image data to be scanned out to the display
+4
+.
+
+Display hardware is funky
+
+Not only does the display hardware like scanned-out images to be in VRAM, it also completely skips past the GPUâs virtual memory architecture and
+works with physical addresses exclusively. In consequence, scanned-out images also have to be 
+contiguous
+ in physical memory.
+
+With virtual memory and the power of page tables, typical application buffers are only contiguous in 
+virtual
+ memory, and may be scattered around
+all over physical memory
+5
+. The first page of a buffer at virtual address 
+0x5000
+ may be mapped in the page tables to point to physical address
+
+0x1234000
+, but the second page at virtual address 
+0x6000
+ might point to physical address 
+0x4321000
+, somewhere completely different!
+
+Here is a diagram visualizing the mapping of virtual allocations to physical ones in case where there is a lot of fragmentation (which typically
+is the case when youâre very low on VRAM):
+
+The arrows show page table mappings to physical memory segments for the different segments of the first allocation.
+Theyâre left out for all other allocations for readability.
+
+If youâre allocating display scanout data, this fragmentation is not an option as the physical memory has to be contiguous. This has very, very
+unfortunate interactions with eviction of other data specifically. Letâs assume the scanout data has already been evicted, but now itâs
+time for that data to be scanned out, so it has to be moved back into VRAM.
+
+Simply evicting one buffer wonât be sufficient, even if that buffer is the same size as the display scanout data, because evicting it does not
+result in enough 
+contiguous
+ physical space to place the scanout data in! To make matters worse, the eviction algorithm does not take into
+account physical memory constraints at all. It is a very simplistic loop along the lines of
+
+while
+ 
+(
+true
+)
+ 
+{
+
+evict
+(
+getLeastRecentlyUsedBuffer
+())
+
+if
+ 
+(
+tryAllocate
+(
+newBuffer
+)
+ 
+==
+ 
+SUCCESS
+)
+
+break
+;
+
+}
+
+Using this algorithm (assuming the allocations are arranged in LRU order), even if you evict the first 3 allocations (green, blue, and red), there wonât be a large
+enough space to hold the scanout buffer! Even the largest possible free space is ever so slightly too small, as is visible in this updated diagram:
+
+To find a large enough physically contiguous memory region in our example, every single allocation in VRAM would end up being evicted! In
+real-world scenarios, I observed up to 4GiB of VRAM being nuked just to make space for scanout images (which are ~32MiB of pixel data per image for a R11G11B10
+pixel format). Thatâs going to hurt real hard! Simply the act of moving all that data out from VRAM would already cost at least ~130ms, according to
+the PCIe transfer rate estimated earlier.
+
+Throwing heuristics at the problem
+
+While scanout is definitely the most egregious failure case here, this issue is more general: There are always going to be certain memory allocations
+that will be moved to VRAM over and over, potentially kicking out some memory that an application might prefer to stay in VRAM. Resisting this and
+trying to move the evicted memory back in will most likely backfire.
+
+Even though dmem cgroup protection is not a complete solution to this problem, it does reduce the problem scope by a lot. With cgroup protection, you
+can be sure that any random app wonât try to kick out important game resources willy-nilly. Any memory that does get moved back into VRAM by force
+probably has a good reason to be in VRAM. Therefore, even with dmem cgroup protection, we should be careful and not try to reclaim evicted memory back
+by force.
+
+With some iterative testing, I think Iâve arrived at a set of heuristics that work reasonably well for most cases a game would encounter in the wild
+(not being too aggressive when stuff gets evicted by important system allocations is one thing, but it also needs to be reasonably quick at reclaiming
+evicted memory if e.g. the game is paused and the Steam menu runs instead, evicting lots of game memory, and then the game is resumed).
+
+The heuristics work something like this:
+
+When the kernel detects an applicationâs memory is being evicted, it enters a âhard throttleâ phase for a few milliseconds. During this phase, it does
+not try moving any memory for that app back into VRAM whatsoever (as long as all memory can be properly accessed, of course).
+
+After this period, it switches a âsoft throttleâ phase, during which it may reclaim free space by moving things back into VRAM, but does not
+try evicting any memory that other apps have allocated. This period may last up to a few seconds, to make extra sure everything reached a stable state.
+
+If the âsoft throttleâ phase has completed without any further memory being evicted again, the system is assumed to have reached a fairly stable state
+and restrictions on evicting other applicationsâ memory are removed.
+
+IME, this achieves an acceptable balance between not shooting oneself in the foot with overaggressive eviction of other apps, while still recovering
+reasonably fast when lots of your memory was suddenly evicted, for example because the game was paused and the user browsed around on Steam instead of
+playing.
+
+Getting somewhere
+
+With those heuristics in place, letâs finally try cranking up the settings for real this time.
+
+I ended up going with Indiana Jones: The Great Circle, since it conveniently exposes a setting for streaming pool sizes that you
+can mess with to modify VRAM consumption pretty much directly.
+
+Lo and behold, even if the settings are turned up to a somewhat ridiculous point, where the game requests 9GiB of 8GiB VRAM (aka. a whole 1GiB of
+overcommitted game resources living in CPU memory), performance isnât cratering into oblivion anymore! A 19.6ms per frame average is what Iâd still
+call perfectly playable.
+
+I can also bump the settings to 
+even more ridiculous
+ levels and double the amount of overcommitted memory, with the game requesting 10GiB of VRAM
+on this 8GiB system (and thus 2GiB of resources being overcommitted). Frametime variance goes up quite a lot at this point, with spikes
+reaching above 33.3ms happening frequently. The overall average is around 29.8ms which isnât the 
+worst
+, but especially paired with the variance,
+this would start being noticeable in gameplay.
+
+While this is already a huge step forward, we arenât quite there yet. The experience under VRAM overcommit can sometimes still be a bit hit-or-miss,
+and frametimes may noticeably vary depending on which objects in the game youâre looking at.
+
+Remember that for actually good eviction performance, it matters a lot how the evicted memory is used by the GPU.
+Right now, this isnât taken into account at all! If we were able to base our eviction decisions more on how well the applicationâs accesses work
+with CPU memory, a lot of this variance might simply disappear.
+
+Handing over the controls
+
+The complicated thing about the applicationâs memory access patterns is that they are only really known to the application.
+Therefore, the driver isnât really able to take them into account as-is. Ideally there would be some API where the application
+can supply hints to the driver about how well a particular memory allocation is suited to being evicted.
+
+Something exactly like 
+vkSetDeviceMemoryPriorityEXT
+!
+The 
+VK_EXT_pageable_device_local_memory
+ extension provides precisely what we need here, by allowing applications to communicate any priority
+they want for any piece of device memory they want. As long as applications provide reasonable hints through this extension, implementing
+prioritization in the kernel and then utilizing app-provided priorities has the potential to stabilize things by a lot!
+
+Hooking up priorities in the kernel turns out to be a lot less of an issue than you might expect. The kernel already maintains a Least-Recently-Used
+list of memory allocations that, on eviction, are traversed in order. For each entry on that LRU list, eviction is attempted until there is enough
+free space for whatever the eviction was for.
+
+This LRU list provides a good heuristic for which applicationâs memory should be evicted first. Applications that havenât submitted anything in a long
+while are unlikely to need the memory soon, and since their memory is Not Recently Used, it will appear early in the LRU list and be evicted first.
+
+When an application uses a set of buffers, that set of buffers is moved to the very end of the LRU list in one bulk. However, the order of allocations
+within that bulk is not explicitly controlled at all. That means once the kernel closes in on some application to evict its memory, which specific
+pieces of memory get evicted is more or less undefined
+6
+. A simplified visualization could look something like this:
+
+If the kernel walks the LRU list like this, it would evict the buffer with a priority value of 2 first, even though there are much lower-priority buffers
+elsewhere in the LRU list. If only the first buffer of priority 2 gets evicted, things might be okay, but if the highly important buffer with priority 4
+ends up evicted as well, there are likely going to be problems.
+
+Given that we already know specific priorities for the individual allocations, this LRU list is a very simple place to integrate them. Itâs as simple as ordering
+the list entries within a single application by their priority
+7
+:
+
+Now, when the kernel goes over the LRU list to find something to evict, the very first thing it will find and try to evict are the lowest-priority buffers.
+The highest-priority buffers are last in the list, and thus only get evicted when evicting all the lower-priority buffers was not enough.
+
+Memory priority adoption in apps
+
+Unfortunately, not all applications actually set priorities via 
+VK_EXT_pageable_device_local_memory
+. As for native Vulkan applications,
+I havenât observed any idTech game using the extension directly, at least :/
+
+The D3D side looks a lot better, because 
+vkd3d-proton
+ already uses 
+VK_EXT_pageable_device_local_memory
+ when available, and translates both the
+
+ID3D12Device::MakeResident
+/
+ID3D12Device::Evict
+ API calls as well as priorities set via 
+ID3D12Device1::SetResidencyPriority
+ to priority values
+set using the Vulkan 
+vkSetDeviceMemoryPriority
+ command. Lots of D3D12 games utilize at least one of these APIs, so the hints these games provide will now be
+utilized.
+
+I donât have super solid numbers for how much memory exactly is overcommitted by most D3D12 apps, as they donât typically expose the total amount of
+VRAM they request in an easy-to-access way like idTechâs performance overlay does. However, properly honoring memory priorities generally seems to have
+a good chance to improve the experience. Performance generally appears more stable over time (because youâre not relying on luck with which buffers the
+kernel evicts as much). In some spots I had a good comparison point at, I suspect it increased performance compared to the kernel evicting random
+things by up to 30% in the very best case - but again, take this number with a 
+mountain
+ of salt as it depends almost entirely on luck with regards to eviction.
+
+Conclusion
+
+When all is said and done, how well does running out of VRAM hold up?
+
+Iâd say itâs quite alright! In many cases, you may be surprised how much performance you can retain even when evicting a gigabyte or more of memory!
+Then again, thatâs of course a rather optimistic case, and the wrong thing ending up in CPU RAM can very quickly cause very significant slowdowns. Eviction is
+tricky to get just right, and to an extent, performance will always be dragged down. If a game is struggling to hit 30fps even with everything
+in VRAM, needing to evict something on top of all that could sometimes just unavoidably result in that 30fps target being missed.
+
+Regardless, what I hope this blogpost can demonstrate is that even if you end up with some memory evicted to system RAM, the slowdown can be manageable. Thereâs
+measures that drivers (particularly, the kernel driver) can take to make overcommit work as fast as possible, and even applications can do their
+part in coordinating with the driver stack to mitigate the effects of their memory being evicted. With everything in place, VRAM overcommit isnât
+really as big of a deal as one may think it is at first sight.
+
+All the work I described here has already been released in SteamOS for some time now (itâs both in Stable and Preview. As long as your system is up-to-date, itâs good to go!).
+
+A note on upstreaming
+
+Of course, Iâm already working on upstreaming all this work so itâs available to everyone! However, thereâs a lot of moving parts and a lot of deep
+refactors of some pretty core concepts at play here, so it will likely need time to cook before everything is merged upstream.
+
+At the same time, I donât want to put up a blogpost talking about lots of cool code just to finish it with âactually you canât see for yourself,
+go wait until itâs all upstream lolâ, either.
+
+As a middle ground, I have rebased the kernel work onto a recent upstream version of the kernel and published a git branch
+
+here
+.
+While it should theoretically yield similar effects, it did 
+not
+ go through as rigorous testing the SteamOS kernel did. There will likely
+be bugs and instabilities that werenât there in the SteamOS version. 
+Use at your own risk
+, basically.
+I donât expect to be maintaining this branch in any significant capacity, as Iâd rather focus on getting the patches into upstream properly.
+
+In order to pass through application priority hints to the kernel, you will also need a custom Mesa branch I pushed
+
+here
+.
+Similar considerations as the kernel branch apply here, as well.
+
+Questions of my own
+
+While I would claim to have a fairly good overview of the driver side of memory management at this point, I am not very familiar with how
+applications decide on supplying memory management heuristics internally, at all. I would suspect optimizing cases where youâve already run out of
+VRAM isnât exactly the top item on developer TODOs (who knows, maybe the memory scarcity is changing that? :P), so maybe thereâs some
+unexplored room for performance improvements there?
+
+If you, dear reader, happen to know about VRAM management for larger games/engines (especially when running out), Iâd love to chat! I have a hunch that
+thereâs still perf to be gained by making apps and drivers coordinate better, but Iâm also plainly interested in how things look from an application
+developerâs point of view.
+
+Footnotes
+
+One reason is simply that command buffers specifically are very small, which is not a consideration for evicted VRAM (you donât have a choice on
+  how much to evict). Thatâs not the only reason though: Caching/access pattern considerations apply to command buffers and evicted VRAM alike.Â 
+↩
+
+See the RADV source 
+here
+.Â 
+↩
+
+Itâs possible for all allocations to succeed even though it is impossible to actually use that memory in a submission, if you exhaust both
+  CPU RAM and VRAM. This is normal, and would result in the same error being printed, but itâs not what happened here - in my case, there
+  really was enough memory available.Â 
+↩
+
+Technically, the display hardware can handle scanning out from system RAM! But there are ugly tradeoffs associated with moving between VRAM and system RAM,
+  so letâs ignore that for simplicity.Â 
+↩
+
+Itâs better for performance if buffers are physically contiguous, but contiguity is not a strict requirement.Â 
+↩
+
+In practice, the buffers that were allocated first are probably among the first ones to be evicted, and the most recently allocated buffers are last.Â 
+↩
+
+Sorting is only really feasible with the priority values of one single application, because priorities are only really meaningful in relation to other
+  priorities in the same context. Different applications most likely have different interpretations/scales of what exactly some specific absolute priority value means.Â 
+↩
