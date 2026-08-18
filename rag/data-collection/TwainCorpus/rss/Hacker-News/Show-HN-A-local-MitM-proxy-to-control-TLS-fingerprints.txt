@@ -1,0 +1,1354 @@
+impersonate-proxy
+
+A local MITM proxy that lets you control TLS fingerprints (JA3/JA4), HTTP/2 fingerprints, HTTP header order, User-Agent, and source IP headers — all from a single YAML config file.
+
+A 
+Chrome extension
+ is included for toggling the proxy and switching fingerprint profiles directly from the browser toolbar without restarting the proxy.
+
+Intended for 
+authorized security testing
+ of WAF bot-detection systems. Route curl, browsers, or Playwright through the proxy to observe how different fingerprint combinations are classified.
+
+How it works
+
+curl / browser / Playwright
+        │  HTTP CONNECT (to proxy)
+        ▼
+┌─────────────────────────────────────────┐
+│            impersonate-proxy            │
+│                                         │
+│  MITM TLS ◄──────────────► uTLS         │
+│  (our CA cert)          (custom JA3/4)  │
+│                                         │
+│  Header rewriter (UA, order, add/del)   │
+│  HTTP/2 framer  (SETTINGS, WINDOW_UPDATE│
+│                  pseudo-header order)   │
+└─────────────────────────────────────────┘
+        │  Custom TLS ClientHello + HTTP/2
+        ▼
+   Target server / WAF
+
+Layer
+
+What you can control
+
+TLS
+
+Cipher suites, extensions, their order (JA3 / JA4) via uTLS presets or a fully custom 
+custom_hello
+ spec
+
+HTTP/1.1
+
+Header order, User-Agent, add/remove any header, IP spoofing (
+X-Forwarded-For
+ / 
+True-Client-IP
+)
+
+HTTP/2
+
+SETTINGS values & order, WINDOW_UPDATE, pseudo-header order (HTTP/2 fingerprint)
+
+Prerequisites
+
+macOS
+ or 
+Linux
+ (amd64 / arm64)
+
+Go 1.22+
+
+macOS
+
+brew install go
+
+Linux
+
+The distro-packaged Go is often outdated. Install the official binary directly:
+
+#
+ Download and extract (replace 1.22.5 with the latest from https://go.dev/dl/)
+
+curl -OL https://go.dev/dl/go1.22.5.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf go1.22.5.linux-amd64.tar.gz
+
+#
+ Add to PATH (add this line to ~/.bashrc or ~/.zshrc to make it permanent)
+
+export
+ PATH=
+$PATH
+:/usr/local/go/bin
+
+Verify:
+
+go version
+
+#
+ go version go1.22.5 linux/amd64
+
+ARM64 (Raspberry Pi, AWS Graviton, etc.):
+ replace 
+linux-amd64
+ with 
+linux-arm64
+ in the download URL.
+
+Setup
+
+1. Clone and build
+
+git clone https://github.com/ytkoka/impersonate-proxy.git
+
+cd
+ impersonate-proxy
+make build
+
+2. Generate the MITM CA certificate
+
+The CA is generated automatically on first run. Start the proxy once to create 
+ca.crt
+ and 
+ca.key
+:
+
+make run
+
+#
+ 2026/04/22 12:00:00 generated CA certificate → ca.crt
+
+#
+ 2026/04/22 12:00:00 listening on 127.0.0.1:8080  preset=chrome
+
+Stop it with 
+Ctrl-C
+.
+
+3. Trust the CA certificate
+
+Clients need to trust your MITM CA so they don't reject the proxy-generated leaf certificates.
+
+macOS system keychain
+ (affects all apps):
+
+make trust-ca        
+#
+ runs: sudo security add-trusted-cert ...
+
+Linux system trust
+ (affects all apps; requires ca-certificates package):
+
+#
+ Debian / Ubuntu
+
+sudo cp ca.crt /usr/local/share/ca-certificates/impersonate-proxy.crt
+sudo update-ca-certificates
+
+#
+ RHEL / Fedora / Amazon Linux
+
+sudo cp ca.crt /etc/pki/ca-trust/source/anchors/impersonate-proxy.crt
+sudo update-ca-trust
+
+curl only
+ (no system-wide change):
+
+curl --cacert ca.crt ...
+
+Playwright / Node.js
+:
+
+export
+ NODE_EXTRA_CA_CERTS=
+"
+$(
+pwd
+)
+/ca.crt
+"
+
+Firefox
+: Preferences → Privacy & Security → View Certificates → Authorities → Import 
+ca.crt
+
+Configuration
+
+Edit 
+config.yaml
+ before starting the proxy. All fields have defaults — you only need to specify what you want to override.
+
+listen
+: 
+"
+127.0.0.1:8080
+"
+
+mgmt_listen
+: 
+"
+127.0.0.1:8081
+"
+  
+#
+ management API used by the Chrome extension (empty to disable)
+
+ca_cert
+: 
+"
+ca.crt
+"
+
+ca_key
+:  
+"
+ca.key
+"
+
+tls
+:
+  
+#
+ TLS fingerprint preset (controls JA3 / JA4)
+
+#
+ Options: chrome | firefox | safari | edge | ios | random | golang
+
+preset
+: 
+"
+chrome
+"
+
+http
+:
+  
+#
+ Override User-Agent (leave empty to pass through the client's UA)
+
+user_agent
+: 
+"
+Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36
+"
+
+#
+ Spoof source IP: sets both X-Forwarded-For and True-Client-IP to this value,
+
+#
+ replacing any values the client may have already set (leave empty to disable)
+
+#
+ client_ip: "1.2.3.4"
+
+#
+ Emit headers in this order; headers not listed are appended after
+
+header_order
+:
+    - 
+"
+Host
+"
+
+    - 
+"
+User-Agent
+"
+
+    - 
+"
+Accept
+"
+
+    - 
+"
+Accept-Language
+"
+
+    - 
+"
+Accept-Encoding
+"
+
+    - 
+"
+Connection
+"
+
+#
+ Add or overwrite headers
+
+add_headers
+:
+    
+Accept-Language
+: 
+"
+ja,en-US;q=0.9,en;q=0.8
+"
+
+#
+ Remove headers before forwarding
+
+remove_headers
+: 
+[]
+
+http2
+:
+  
+enabled
+: 
+true
+
+#
+ SETTINGS frame entries — id and order both affect the HTTP/2 fingerprint.
+
+#
+ RFC 7540 §11.3 IDs:
+
+#
+   1=HEADER_TABLE_SIZE  2=ENABLE_PUSH  3=MAX_CONCURRENT_STREAMS
+
+#
+   4=INITIAL_WINDOW_SIZE  5=MAX_FRAME_SIZE  6=MAX_HEADER_LIST_SIZE
+
+settings
+:
+    - 
+{ id: 1, val: 65536 }    
+#
+ Chrome defaults shown here
+
+    - 
+{ id: 2, val: 0 }
+
+    - 
+{ id: 4, val: 6291456 }
+
+    - 
+{ id: 6, val: 262144 }
+
+#
+ Connection-level WINDOW_UPDATE increment
+
+window_update
+: 
+15663105
+
+#
+ Order of pseudo-headers in the HEADERS frame
+
+pseudo_header_order
+: 
+[method, authority, scheme, path]
+
+Management API
+
+When the proxy starts it also exposes a lightweight HTTP API on 
+mgmt_listen
+ (default 
+127.0.0.1:8081
+). The Chrome extension uses this to read and update settings at runtime without restarting the proxy. You can also call it directly with curl:
+
+Endpoint
+
+Method
+
+Description
+
+/api/config
+
+GET
+
+Return active settings as JSON, including the current 
+custom_hello
+
+/api/config
+
+POST
+
+Update TLS preset (including a fully custom 
+custom_hello
+), client IP, and User-Agent
+
+#
+ Read current settings
+
+curl http://127.0.0.1:8081/api/config
+
+#
+ Switch to Firefox fingerprint and set a spoofed IP
+
+curl -s -X POST http://127.0.0.1:8081/api/config \
+  -H 
+"
+Content-Type: application/json
+"
+ \
+  -d 
+'
+{"tls_preset":"firefox","client_ip":"203.0.113.1","user_agent":""}
+'
+
+#
+ Switch to an arbitrary JA3/JA4 fingerprint at runtime — same fields as the
+
+#
+ config.yaml custom_hello block, sent as JSON (see "Custom TLS fingerprint" below)
+
+curl -s -X POST http://127.0.0.1:8081/api/config \
+  -H 
+"
+Content-Type: application/json
+"
+ \
+  -d 
+'
+{
+
+    "tls_preset": "custom",
+
+    "custom_hello": {
+
+      "cipher_suites": [2570, 4865, 4866, 4867, 49195, 49199, 49196, 49200, 52393, 52392, 49171, 49172, 156, 157, 47, 53],
+
+      "curves": ["X25519", "P256", "P384"],
+
+      "versions": ["1.3", "1.2"],
+
+      "extensions": [2570, 0, 23, 65281, 10, 11, 35, 16, 5, 18, 13, 51, 45, 43, 27, 21]
+
+    },
+
+    "client_ip": "",
+
+    "user_agent": ""
+
+  }
+'
+
+Changes take effect immediately for new connections. Set 
+mgmt_listen: ""
+ to disable the API entirely.
+
+Browser fingerprint reference
+
+Browser
+
+TLS preset
+
+HTTP/2 SETTINGS
+
+WINDOW_UPDATE
+
+Chrome
+
+chrome
+
+1:65536,2:0,4:6291456,6:262144
+
+15663105
+
+Firefox
+
+firefox
+
+1:65536,4:131072,5:16384
+
+12517377
+
+Safari
+
+safari
+
+1:4096,3:100,4:2097152,6:16384
+
+10485760
+
+Custom TLS fingerprint (
+preset: "custom"
+)
+
+The built-in presets (
+chrome
+, 
+firefox
+, 
+safari
+, …) cover the most common cases. When you need to match a specific browser version or a fingerprint that differs from those presets, set 
+preset: "custom"
+ and provide a 
+custom_hello
+ block.
+
+How JA3 / JA4 map to config fields
+
+Fingerprint component
+
+Config field
+
+Notes
+
+TLS version range
+
+versions
+
+Min/max are derived automatically
+
+Cipher suite list + order
+
+cipher_suites
+
+Use 
+0x0a0a
+ as a GREASE placeholder; uTLS randomises it per connection
+
+Extension type IDs + order
+
+extensions
+
+Order directly controls the JA3 extensions component; values matching the GREASE pattern (
+0xXAXA
+) are randomised per connection
+
+Supported groups (curves)
+
+curves
+
+Also controls which key shares are sent
+
+JA3 and JA4 are one-way hashes — you cannot reverse a hash back to a spec. Find the underlying parameters for the target browser with 
+tls.peet.ws
+ or Wireshark, then paste them into 
+custom_hello
+.
+
+Chrome 131 example
+
+tls
+:
+  
+preset
+: 
+"
+custom
+"
+
+custom_hello
+:
+    
+cipher_suites
+:      
+#
+ hex IDs; 0x0a0a = GREASE placeholder (randomised per connection)
+
+      - 
+0x0a0a
+
+      - 
+0x1301
+          
+#
+ TLS_AES_128_GCM_SHA256
+
+      - 
+0x1302
+          
+#
+ TLS_AES_256_GCM_SHA384
+
+      - 
+0x1303
+          
+#
+ TLS_CHACHA20_POLY1305_SHA256
+
+      - 
+0xc02b
+          
+#
+ ECDHE-ECDSA-AES128-GCM-SHA256
+
+      - 
+0xc02f
+          
+#
+ ECDHE-RSA-AES128-GCM-SHA256
+
+      - 
+0xc02c
+          
+#
+ ECDHE-ECDSA-AES256-GCM-SHA384
+
+      - 
+0xc030
+          
+#
+ ECDHE-RSA-AES256-GCM-SHA384
+
+      - 
+0xcca9
+          
+#
+ ECDHE-ECDSA-CHACHA20-POLY1305
+
+      - 
+0xcca8
+          
+#
+ ECDHE-RSA-CHACHA20-POLY1305
+
+      - 
+0xc013
+          
+#
+ ECDHE-RSA-AES128-SHA
+
+      - 
+0xc014
+          
+#
+ ECDHE-RSA-AES256-SHA
+
+      - 
+0x009c
+          
+#
+ RSA-AES128-GCM-SHA256
+
+      - 
+0x009d
+          
+#
+ RSA-AES256-GCM-SHA384
+
+      - 
+0x002f
+          
+#
+ RSA-AES128-SHA
+
+      - 
+0x0035
+          
+#
+ RSA-AES256-SHA
+
+curves
+:             
+#
+ X25519 | X25519Kyber768 | P256 | P384 | P521
+
+      - 
+"
+X25519Kyber768
+"
+
+      - 
+"
+X25519
+"
+
+      - 
+"
+P256
+"
+
+versions
+:           
+#
+ TLS versions to advertise
+
+      - 
+"
+1.3
+"
+
+      - 
+"
+1.2
+"
+
+extensions
+:         
+#
+ extension type IDs in order (controls JA3 extensions component)
+
+      - 
+0x0a0a
+          
+#
+ GREASE
+
+      - 
+0
+               
+#
+ server_name (SNI)
+
+      - 
+23
+              
+#
+ extended_master_secret
+
+      - 
+65281
+           
+#
+ renegotiation_info
+
+      - 
+10
+              
+#
+ supported_groups
+
+      - 
+11
+              
+#
+ ec_point_formats
+
+      - 
+35
+              
+#
+ session_ticket
+
+      - 
+16
+              
+#
+ ALPN
+
+      - 
+5
+               
+#
+ status_request
+
+      - 
+18
+              
+#
+ signed_certificate_timestamp
+
+      - 
+13
+              
+#
+ signature_algorithms
+
+      - 
+51
+              
+#
+ key_share
+
+      - 
+45
+              
+#
+ psk_key_exchange_modes
+
+      - 
+43
+              
+#
+ supported_versions
+
+      - 
+27
+              
+#
+ compress_certificate
+
+      - 
+17513
+           
+#
+ application_settings (ALPS)
+
+      - 
+0x0a0a
+          
+#
+ GREASE
+
+      - 
+21
+              
+#
+ padding
+
+Supported extension type IDs
+
+ID
+
+Name
+
+Notes
+
+0xXAXA
+ (any GREASE pattern)
+
+GREASE
+
+Randomised per connection
+
+0
+
+server_name (SNI)
+
+5
+
+status_request
+
+OCSP stapling
+
+10
+
+supported_groups
+
+Uses the 
+curves
+ list
+
+11
+
+ec_point_formats
+
+Fixed: uncompressed (0)
+
+13
+
+signature_algorithms
+
+Chrome-like defaults
+
+16
+
+ALPN
+
+Advertises 
+h2
+, 
+http/1.1
+
+18
+
+signed_certificate_timestamp
+
+21
+
+padding
+
+BoringSSL-style padding
+
+23
+
+extended_master_secret
+
+27
+
+compress_certificate
+
+28
+
+record_size_limit
+
+Fixed: 0x4001
+
+35
+
+session_ticket
+
+43
+
+supported_versions
+
+Uses the 
+versions
+ list
+
+45
+
+psk_key_exchange_modes
+
+PSK with DHE
+
+50
+
+signature_algorithms_cert
+
+Chrome-like defaults
+
+51
+
+key_share
+
+Key shares for X25519 and P256 (from 
+curves
+)
+
+17513
+
+application_settings (ALPS)
+
+Advertises 
+h2
+
+65281
+
+renegotiation_info
+
+other
+
+GenericExtension
+
+Sent with empty payload
+
+Runtime updates:
+ 
+preset: "custom"
+ is not limited to 
+config.yaml
+ — it can also be switched to at runtime via the management API (
+POST /api/config
+ with a 
+custom_hello
+ object, see 
+Management API
+) or from the Chrome extension's TLS Preset dropdown, without restarting the proxy.
+
+Usage
+
+Start the proxy
+
+make run
+
+#
+ Kills any previous instance on port 8080, rebuilds, and starts.
+
+To switch fingerprint profiles, edit 
+config.yaml
+ and re-run 
+make run
+.
+
+curl
+
+#
+ With CA trusted system-wide (after make trust-ca):
+
+curl --proxy http://127.0.0.1:8080 https://tls.peet.ws/api/all
+
+#
+ Without system trust — pass CA explicitly:
+
+curl --proxy http://127.0.0.1:8080 --cacert ca.crt https://tls.peet.ws/api/all
+
+Chrome extension
+
+The 
+chrome-extension/
+ directory contains a Manifest V3 extension that controls the proxy from the browser toolbar.
+
+Installation:
+
+Open 
+chrome://extensions
+ in Chrome
+
+Enable 
+Developer mode
+ (toggle in the top-right corner)
+
+Click 
+Load unpacked
+ and select the 
+chrome-extension/
+ folder
+
+Controls:
+
+Control
+
+What it does
+
+Proxy toggle
+
+Enables / disables Chrome's proxy setting (routes traffic through 
+:8080
+)
+
+TLS Preset
+
+Switches the uTLS fingerprint preset (chrome / firefox / safari / edge / ios / random / golang / 
+custom
+)
+
+Cipher Suites / Curves / TLS Versions / Extensions
+
+Shown when 
+Custom (JA3/JA4)
+ is selected — the same fields as 
+custom_hello
+ in 
+config.yaml
+, letting you dial in an arbitrary JA3/JA4 fingerprint without editing YAML or restarting the proxy
+
+Client IP
+
+Sets 
+X-Forwarded-For
+ and 
+True-Client-IP
+ on every request
+
+User-Agent
+
+Overrides the HTTP 
+User-Agent
+ header
+
+Apply button
+
+POSTs the new settings to the management API; takes effect immediately
+
+API field
+
+Address of the management API (default 
+http://127.0.0.1:8081
+)
+
+User-Agent scope:
+ The extension changes the HTTP 
+User-Agent
+ 
+header
+ only. JavaScript's 
+navigator.userAgent
+ is controlled by Chrome itself and is not affected. To spoof both simultaneously, launch Chrome with 
+--user-agent="..."
+ alongside the proxy settings.
+
+Playwright (Node.js)
+
+const
+ 
+{
+ chromium 
+}
+ 
+=
+ 
+require
+(
+'playwright'
+)
+;
+
+const
+ 
+browser
+ 
+=
+ 
+await
+ 
+chromium
+.
+launch
+(
+)
+;
+
+const
+ 
+context
+ 
+=
+ 
+await
+ 
+browser
+.
+newContext
+(
+{
+
+proxy
+: 
+{
+ 
+server
+: 
+'http://127.0.0.1:8080'
+ 
+}
+,
+
+}
+)
+;
+
+// If CA is not in the system keychain, set before launching:
+
+// NODE_EXTRA_CA_CERTS=./ca.crt node script.js
+
+const
+ 
+page
+ 
+=
+ 
+await
+ 
+context
+.
+newPage
+(
+)
+;
+
+await
+ 
+page
+.
+goto
+(
+'https://tls.peet.ws/api/all'
+)
+;
+
+Playwright (Python)
+
+from
+ 
+playwright
+.
+sync_api
+ 
+import
+ 
+sync_playwright
+
+with
+ 
+sync_playwright
+() 
+as
+ 
+p
+:
+    
+browser
+ 
+=
+ 
+p
+.
+chromium
+.
+launch
+()
+    
+context
+ 
+=
+ 
+browser
+.
+new_context
+(
+proxy
+=
+{
+"server"
+: 
+"http://127.0.0.1:8080"
+})
+    
+page
+ 
+=
+ 
+context
+.
+new_page
+()
+    
+page
+.
+goto
+(
+"https://tls.peet.ws/api/all"
+)
+
+Set 
+NODE_EXTRA_CA_CERTS
+ (Node) or 
+REQUESTS_CA_BUNDLE
+ (Python) if the CA is not trusted system-wide.
+
+Verifying fingerprints
+
+tls.peet.ws
+ returns the full fingerprint breakdown for any request it receives. Pipe the output through 
+jq
+ or Python for a readable view:
+
+curl -s --proxy http://127.0.0.1:8080 --cacert ca.crt \
+  https://tls.peet.ws/api/all 
+|
+ python3 -m json.tool
+
+Key fields to check:
+
+Field
+
+Description
+
+tls.ja3_hash
+
+JA3 fingerprint hash
+
+tls.ja4
+
+JA4 fingerprint string
+
+http2.akamai_fingerprint
+
+HTTP/2 fingerprint string (SETTINGS + WINDOW_UPDATE + pseudo-header order) — field name is defined by the tls.peet.ws API
+
+http1.headers
+
+Header names in the order received by the server
+
+user_agent
+
+User-Agent as seen by the server
+
+ip
+
+Source IP as seen by the server — verify 
+X-Forwarded-For
+ / 
+True-Client-IP
+ spoofing here
+
+Project structure
+
+impersonate-proxy/
+├── main.go                   # Entry point
+├── config/config.go          # YAML config struct and defaults
+├── fp/dialer.go              # uTLS dialer — TLS fingerprint presets
+├── h2fp/conn.go              # HTTP/2 framer — SETTINGS / WINDOW_UPDATE / pseudo-header control
+├── mitm/ca.go                # MITM CA: generate, cache, and serve leaf certs
+├── proxy/proxy.go            # Proxy server: CONNECT handling, protocol branch, runtime config
+├── rewrite/headers.go        # HTTP header rewriting (UA, order, add/remove, IP spoof)
+├── mgmt/server.go            # Management HTTP API (/api/config GET + POST)
+├── chrome-extension/
+│   ├── manifest.json         # Manifest V3
+│   ├── popup.html            # Toolbar popup UI
+│   ├── popup.css
+│   ├── popup.js              # Proxy toggle + management API client
+│   └── icon.svg
+├── config.yaml               # Default configuration
+└── Makefile
+
+Makefile targets
+
+Target
+
+Description
+
+make build
+
+Compile the binary
+
+make run
+
+Build, kill any existing instance, and start
+
+make trust-ca
+
+Add 
+ca.crt
+ to the macOS system keychain (requires sudo)
+
+make clean
+
+Remove the binary, 
+ca.crt
+, and 
+ca.key
+
+Cleanup
+
+Remove the binary and generated CA files:
+
+make clean
+
+If you added the CA to the macOS system keychain, remove it through 
+Keychain Access
+ (search for "impersonate-proxy CA") or:
+
+sudo security delete-certificate -c 
+"
+impersonate-proxy CA
+"
+ /Library/Keychains/System.keychain
+
+Limitations
+
+MITM only
+: The proxy decrypts and re-encrypts traffic. Clients must trust the generated CA.
+
+No HTTP/2 from client
+: The client→proxy leg uses HTTP/1.1 (via CONNECT). Only the proxy→server leg uses HTTP/2 with custom fingerprints.
+
+Chunked request bodies
+: Requests with 
+Transfer-Encoding: chunked
+ bodies are not currently supported.
+
+No QUIC / HTTP/3
+: Out of scope.
+
+User-Agent (HTTP header only)
+: The proxy rewrites the 
+User-Agent
+ HTTP header, but JavaScript's 
+navigator.userAgent
+ is set by the browser independently and is unaffected. Use Chrome's 
+--user-agent
+ launch flag to override both simultaneously.
+
+Legal notice
+
+This tool is intended for 
+authorized security testing only
+ — for example, testing WAF and bot-detection configurations on systems you own or have explicit written permission to test.
+
+Using this tool against systems without authorization may violate applicable laws (such as the Computer Fraud and Abuse Act, Japan's Unauthorized Computer Access Law, or equivalent legislation in your jurisdiction) and the terms of service of the target.
+
+The authors accept no liability for misuse.
+
+Acknowledgements
+
+uTLS
+ — TLS fingerprint customization
+
+tls.peet.ws
+ — Fingerprint inspection API used in examples
+
+JA4+
+ — Fingerprinting standard reference

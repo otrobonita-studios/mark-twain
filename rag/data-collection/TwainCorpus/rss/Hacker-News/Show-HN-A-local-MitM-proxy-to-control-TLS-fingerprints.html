@@ -1,0 +1,804 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">impersonate-proxy</h1></div>
+<p dir="auto"><a href="/ytkoka/impersonate-proxy/blob/main/LICENSE"></a></p>
+<p dir="auto">A local MITM proxy that lets you control TLS fingerprints (JA3/JA4), HTTP/2 fingerprints, HTTP header order, User-Agent, and source IP headers — all from a single YAML config file.</p>
+<p dir="auto">A <strong>Chrome extension</strong> is included for toggling the proxy and switching fingerprint profiles directly from the browser toolbar without restarting the proxy.</p>
+<p dir="auto">Intended for <strong>authorized security testing</strong> of WAF bot-detection systems. Route curl, browsers, or Playwright through the proxy to observe how different fingerprint combinations are classified.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How it works</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="curl / browser / Playwright
+        │  HTTP CONNECT (to proxy)
+        ▼
+┌─────────────────────────────────────────┐
+│            impersonate-proxy            │
+│                                         │
+│  MITM TLS ◄──────────────► uTLS         │
+│  (our CA cert)          (custom JA3/4)  │
+│                                         │
+│  Header rewriter (UA, order, add/del)   │
+│  HTTP/2 framer  (SETTINGS, WINDOW_UPDATE│
+│                  pseudo-header order)   │
+└─────────────────────────────────────────┘
+        │  Custom TLS ClientHello + HTTP/2
+        ▼
+   Target server / WAF"><pre class="notranslate"><code>curl / browser / Playwright
+        │  HTTP CONNECT (to proxy)
+        ▼
+┌─────────────────────────────────────────┐
+│            impersonate-proxy            │
+│                                         │
+│  MITM TLS ◄──────────────► uTLS         │
+│  (our CA cert)          (custom JA3/4)  │
+│                                         │
+│  Header rewriter (UA, order, add/del)   │
+│  HTTP/2 framer  (SETTINGS, WINDOW_UPDATE│
+│                  pseudo-header order)   │
+└─────────────────────────────────────────┘
+        │  Custom TLS ClientHello + HTTP/2
+        ▼
+   Target server / WAF
+</code></pre></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What you can control</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TLS</td>
+<td>Cipher suites, extensions, their order (JA3 / JA4) via uTLS presets or a fully custom <code>custom_hello</code> spec</td>
+</tr>
+<tr>
+<td>HTTP/1.1</td>
+<td>Header order, User-Agent, add/remove any header, IP spoofing (<code>X-Forwarded-For</code> / <code>True-Client-IP</code>)</td>
+</tr>
+<tr>
+<td>HTTP/2</td>
+<td>SETTINGS values &amp; order, WINDOW_UPDATE, pseudo-header order (HTTP/2 fingerprint)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Prerequisites</h2></div>
+<ul dir="auto">
+<li><strong>macOS</strong> or <strong>Linux</strong> (amd64 / arm64)</li>
+<li><strong>Go 1.22+</strong></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">macOS</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="brew install go" dir="auto"><pre>brew install go</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Linux</h3></div>
+<p dir="auto">The distro-packaged Go is often outdated. Install the official binary directly:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Download and extract (replace 1.22.5 with the latest from https://go.dev/dl/)
+curl -OL https://go.dev/dl/go1.22.5.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf go1.22.5.linux-amd64.tar.gz
+
+# Add to PATH (add this line to ~/.bashrc or ~/.zshrc to make it permanent)
+export PATH=$PATH:/usr/local/go/bin" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Download and extract (replace 1.22.5 with the latest from https://go.dev/dl/)</span>
+curl -OL https://go.dev/dl/go1.22.5.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf go1.22.5.linux-amd64.tar.gz
+
+<span class="pl-c"><span class="pl-c">#</span> Add to PATH (add this line to ~/.bashrc or ~/.zshrc to make it permanent)</span>
+<span class="pl-k">export</span> PATH=<span class="pl-smi">$PATH</span>:/usr/local/go/bin</pre></div>
+<p dir="auto">Verify:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="go version
+# go version go1.22.5 linux/amd64" dir="auto"><pre>go version
+<span class="pl-c"><span class="pl-c">#</span> go version go1.22.5 linux/amd64</span></pre></div>
+<blockquote>
+<p dir="auto"><strong>ARM64 (Raspberry Pi, AWS Graviton, etc.):</strong> replace <code>linux-amd64</code> with <code>linux-arm64</code> in the download URL.</p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Setup</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">1. Clone and build</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="git clone https://github.com/ytkoka/impersonate-proxy.git
+cd impersonate-proxy
+make build" dir="auto"><pre>git clone https://github.com/ytkoka/impersonate-proxy.git
+<span class="pl-c1">cd</span> impersonate-proxy
+make build</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">2. Generate the MITM CA certificate</h3></div>
+<p dir="auto">The CA is generated automatically on first run. Start the proxy once to create <code>ca.crt</code> and <code>ca.key</code>:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="make run
+# 2026/04/22 12:00:00 generated CA certificate → ca.crt
+# 2026/04/22 12:00:00 listening on 127.0.0.1:8080  preset=chrome" dir="auto"><pre>make run
+<span class="pl-c"><span class="pl-c">#</span> 2026/04/22 12:00:00 generated CA certificate → ca.crt</span>
+<span class="pl-c"><span class="pl-c">#</span> 2026/04/22 12:00:00 listening on 127.0.0.1:8080  preset=chrome</span></pre></div>
+<p dir="auto">Stop it with <code>Ctrl-C</code>.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">3. Trust the CA certificate</h3></div>
+<p dir="auto">Clients need to trust your MITM CA so they don't reject the proxy-generated leaf certificates.</p>
+<p dir="auto"><strong>macOS system keychain</strong> (affects all apps):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="make trust-ca        # runs: sudo security add-trusted-cert ..." dir="auto"><pre>make trust-ca        <span class="pl-c"><span class="pl-c">#</span> runs: sudo security add-trusted-cert ...</span></pre></div>
+<p dir="auto"><strong>Linux system trust</strong> (affects all apps; requires ca-certificates package):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Debian / Ubuntu
+sudo cp ca.crt /usr/local/share/ca-certificates/impersonate-proxy.crt
+sudo update-ca-certificates
+
+# RHEL / Fedora / Amazon Linux
+sudo cp ca.crt /etc/pki/ca-trust/source/anchors/impersonate-proxy.crt
+sudo update-ca-trust" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Debian / Ubuntu</span>
+sudo cp ca.crt /usr/local/share/ca-certificates/impersonate-proxy.crt
+sudo update-ca-certificates
+
+<span class="pl-c"><span class="pl-c">#</span> RHEL / Fedora / Amazon Linux</span>
+sudo cp ca.crt /etc/pki/ca-trust/source/anchors/impersonate-proxy.crt
+sudo update-ca-trust</pre></div>
+<p dir="auto"><strong>curl only</strong> (no system-wide change):</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="curl --cacert ca.crt ..." dir="auto"><pre>curl --cacert ca.crt ...</pre></div>
+<p dir="auto"><strong>Playwright / Node.js</strong>:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='export NODE_EXTRA_CA_CERTS="$(pwd)/ca.crt"' dir="auto"><pre><span class="pl-k">export</span> NODE_EXTRA_CA_CERTS=<span class="pl-s"><span class="pl-pds">"</span><span class="pl-s"><span class="pl-pds">$(</span>pwd<span class="pl-pds">)</span></span>/ca.crt<span class="pl-pds">"</span></span></pre></div>
+<p dir="auto"><strong>Firefox</strong>: Preferences → Privacy &amp; Security → View Certificates → Authorities → Import <code>ca.crt</code></p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Configuration</h2></div>
+<p dir="auto">Edit <code>config.yaml</code> before starting the proxy. All fields have defaults — you only need to specify what you want to override.</p>
+<div class="highlight highlight-source-yaml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="listen: &quot;127.0.0.1:8080&quot;
+mgmt_listen: &quot;127.0.0.1:8081&quot;  # management API used by the Chrome extension (empty to disable)
+ca_cert: &quot;ca.crt&quot;
+ca_key:  &quot;ca.key&quot;
+
+tls:
+  # TLS fingerprint preset (controls JA3 / JA4)
+  # Options: chrome | firefox | safari | edge | ios | random | golang
+  preset: &quot;chrome&quot;
+
+http:
+  # Override User-Agent (leave empty to pass through the client's UA)
+  user_agent: &quot;Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36&quot;
+
+  # Spoof source IP: sets both X-Forwarded-For and True-Client-IP to this value,
+  # replacing any values the client may have already set (leave empty to disable)
+  # client_ip: &quot;1.2.3.4&quot;
+
+  # Emit headers in this order; headers not listed are appended after
+  header_order:
+    - &quot;Host&quot;
+    - &quot;User-Agent&quot;
+    - &quot;Accept&quot;
+    - &quot;Accept-Language&quot;
+    - &quot;Accept-Encoding&quot;
+    - &quot;Connection&quot;
+
+  # Add or overwrite headers
+  add_headers:
+    Accept-Language: &quot;ja,en-US;q=0.9,en;q=0.8&quot;
+
+  # Remove headers before forwarding
+  remove_headers: []
+
+http2:
+  enabled: true
+
+  # SETTINGS frame entries — id and order both affect the HTTP/2 fingerprint.
+  # RFC 7540 §11.3 IDs:
+  #   1=HEADER_TABLE_SIZE  2=ENABLE_PUSH  3=MAX_CONCURRENT_STREAMS
+  #   4=INITIAL_WINDOW_SIZE  5=MAX_FRAME_SIZE  6=MAX_HEADER_LIST_SIZE
+  settings:
+    - { id: 1, val: 65536 }    # Chrome defaults shown here
+    - { id: 2, val: 0 }
+    - { id: 4, val: 6291456 }
+    - { id: 6, val: 262144 }
+
+  # Connection-level WINDOW_UPDATE increment
+  window_update: 15663105
+
+  # Order of pseudo-headers in the HEADERS frame
+  pseudo_header_order: [method, authority, scheme, path]" dir="auto"><pre><span class="pl-ent">listen</span>: <span class="pl-s"><span class="pl-pds">"</span>127.0.0.1:8080<span class="pl-pds">"</span></span>
+<span class="pl-ent">mgmt_listen</span>: <span class="pl-s"><span class="pl-pds">"</span>127.0.0.1:8081<span class="pl-pds">"</span></span>  <span class="pl-c"><span class="pl-c">#</span> management API used by the Chrome extension (empty to disable)</span>
+<span class="pl-ent">ca_cert</span>: <span class="pl-s"><span class="pl-pds">"</span>ca.crt<span class="pl-pds">"</span></span>
+<span class="pl-ent">ca_key</span>:  <span class="pl-s"><span class="pl-pds">"</span>ca.key<span class="pl-pds">"</span></span>
+
+<span class="pl-ent">tls</span>:
+  <span class="pl-c"><span class="pl-c">#</span> TLS fingerprint preset (controls JA3 / JA4)</span>
+  <span class="pl-c"><span class="pl-c">#</span> Options: chrome | firefox | safari | edge | ios | random | golang</span>
+  <span class="pl-ent">preset</span>: <span class="pl-s"><span class="pl-pds">"</span>chrome<span class="pl-pds">"</span></span>
+
+<span class="pl-ent">http</span>:
+  <span class="pl-c"><span class="pl-c">#</span> Override User-Agent (leave empty to pass through the client's UA)</span>
+  <span class="pl-ent">user_agent</span>: <span class="pl-s"><span class="pl-pds">"</span>Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36<span class="pl-pds">"</span></span>
+
+  <span class="pl-c"><span class="pl-c">#</span> Spoof source IP: sets both X-Forwarded-For and True-Client-IP to this value,</span>
+  <span class="pl-c"><span class="pl-c">#</span> replacing any values the client may have already set (leave empty to disable)</span>
+  <span class="pl-c"><span class="pl-c">#</span> client_ip: "1.2.3.4"</span>
+
+  <span class="pl-c"><span class="pl-c">#</span> Emit headers in this order; headers not listed are appended after</span>
+  <span class="pl-ent">header_order</span>:
+    - <span class="pl-s"><span class="pl-pds">"</span>Host<span class="pl-pds">"</span></span>
+    - <span class="pl-s"><span class="pl-pds">"</span>User-Agent<span class="pl-pds">"</span></span>
+    - <span class="pl-s"><span class="pl-pds">"</span>Accept<span class="pl-pds">"</span></span>
+    - <span class="pl-s"><span class="pl-pds">"</span>Accept-Language<span class="pl-pds">"</span></span>
+    - <span class="pl-s"><span class="pl-pds">"</span>Accept-Encoding<span class="pl-pds">"</span></span>
+    - <span class="pl-s"><span class="pl-pds">"</span>Connection<span class="pl-pds">"</span></span>
+
+  <span class="pl-c"><span class="pl-c">#</span> Add or overwrite headers</span>
+  <span class="pl-ent">add_headers</span>:
+    <span class="pl-ent">Accept-Language</span>: <span class="pl-s"><span class="pl-pds">"</span>ja,en-US;q=0.9,en;q=0.8<span class="pl-pds">"</span></span>
+
+  <span class="pl-c"><span class="pl-c">#</span> Remove headers before forwarding</span>
+  <span class="pl-ent">remove_headers</span>: <span class="pl-s">[]</span>
+
+<span class="pl-ent">http2</span>:
+  <span class="pl-ent">enabled</span>: <span class="pl-c1">true</span>
+
+  <span class="pl-c"><span class="pl-c">#</span> SETTINGS frame entries — id and order both affect the HTTP/2 fingerprint.</span>
+  <span class="pl-c"><span class="pl-c">#</span> RFC 7540 §11.3 IDs:</span>
+  <span class="pl-c"><span class="pl-c">#</span>   1=HEADER_TABLE_SIZE  2=ENABLE_PUSH  3=MAX_CONCURRENT_STREAMS</span>
+  <span class="pl-c"><span class="pl-c">#</span>   4=INITIAL_WINDOW_SIZE  5=MAX_FRAME_SIZE  6=MAX_HEADER_LIST_SIZE</span>
+  <span class="pl-ent">settings</span>:
+    - <span class="pl-s">{ id: 1, val: 65536 }    </span><span class="pl-c"><span class="pl-c">#</span> Chrome defaults shown here</span>
+    - <span class="pl-s">{ id: 2, val: 0 }</span>
+    - <span class="pl-s">{ id: 4, val: 6291456 }</span>
+    - <span class="pl-s">{ id: 6, val: 262144 }</span>
+
+  <span class="pl-c"><span class="pl-c">#</span> Connection-level WINDOW_UPDATE increment</span>
+  <span class="pl-ent">window_update</span>: <span class="pl-c1">15663105</span>
+
+  <span class="pl-c"><span class="pl-c">#</span> Order of pseudo-headers in the HEADERS frame</span>
+  <span class="pl-ent">pseudo_header_order</span>: <span class="pl-s">[method, authority, scheme, path]</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Management API</h3></div>
+<p dir="auto">When the proxy starts it also exposes a lightweight HTTP API on <code>mgmt_listen</code> (default <code>127.0.0.1:8081</code>). The Chrome extension uses this to read and update settings at runtime without restarting the proxy. You can also call it directly with curl:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/api/config</code></td>
+<td><code>GET</code></td>
+<td>Return active settings as JSON, including the current <code>custom_hello</code></td>
+</tr>
+<tr>
+<td><code>/api/config</code></td>
+<td><code>POST</code></td>
+<td>Update TLS preset (including a fully custom <code>custom_hello</code>), client IP, and User-Agent</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# Read current settings
+curl http://127.0.0.1:8081/api/config
+
+# Switch to Firefox fingerprint and set a spoofed IP
+curl -s -X POST http://127.0.0.1:8081/api/config \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{&quot;tls_preset&quot;:&quot;firefox&quot;,&quot;client_ip&quot;:&quot;203.0.113.1&quot;,&quot;user_agent&quot;:&quot;&quot;}'
+
+# Switch to an arbitrary JA3/JA4 fingerprint at runtime — same fields as the
+# config.yaml custom_hello block, sent as JSON (see &quot;Custom TLS fingerprint&quot; below)
+curl -s -X POST http://127.0.0.1:8081/api/config \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{
+    &quot;tls_preset&quot;: &quot;custom&quot;,
+    &quot;custom_hello&quot;: {
+      &quot;cipher_suites&quot;: [2570, 4865, 4866, 4867, 49195, 49199, 49196, 49200, 52393, 52392, 49171, 49172, 156, 157, 47, 53],
+      &quot;curves&quot;: [&quot;X25519&quot;, &quot;P256&quot;, &quot;P384&quot;],
+      &quot;versions&quot;: [&quot;1.3&quot;, &quot;1.2&quot;],
+      &quot;extensions&quot;: [2570, 0, 23, 65281, 10, 11, 35, 16, 5, 18, 13, 51, 45, 43, 27, 21]
+    },
+    &quot;client_ip&quot;: &quot;&quot;,
+    &quot;user_agent&quot;: &quot;&quot;
+  }'" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> Read current settings</span>
+curl http://127.0.0.1:8081/api/config
+
+<span class="pl-c"><span class="pl-c">#</span> Switch to Firefox fingerprint and set a spoofed IP</span>
+curl -s -X POST http://127.0.0.1:8081/api/config \
+  -H <span class="pl-s"><span class="pl-pds">"</span>Content-Type: application/json<span class="pl-pds">"</span></span> \
+  -d <span class="pl-s"><span class="pl-pds">'</span>{"tls_preset":"firefox","client_ip":"203.0.113.1","user_agent":""}<span class="pl-pds">'</span></span>
+
+<span class="pl-c"><span class="pl-c">#</span> Switch to an arbitrary JA3/JA4 fingerprint at runtime — same fields as the</span>
+<span class="pl-c"><span class="pl-c">#</span> config.yaml custom_hello block, sent as JSON (see "Custom TLS fingerprint" below)</span>
+curl -s -X POST http://127.0.0.1:8081/api/config \
+  -H <span class="pl-s"><span class="pl-pds">"</span>Content-Type: application/json<span class="pl-pds">"</span></span> \
+  -d <span class="pl-s"><span class="pl-pds">'</span>{</span>
+<span class="pl-s">    "tls_preset": "custom",</span>
+<span class="pl-s">    "custom_hello": {</span>
+<span class="pl-s">      "cipher_suites": [2570, 4865, 4866, 4867, 49195, 49199, 49196, 49200, 52393, 52392, 49171, 49172, 156, 157, 47, 53],</span>
+<span class="pl-s">      "curves": ["X25519", "P256", "P384"],</span>
+<span class="pl-s">      "versions": ["1.3", "1.2"],</span>
+<span class="pl-s">      "extensions": [2570, 0, 23, 65281, 10, 11, 35, 16, 5, 18, 13, 51, 45, 43, 27, 21]</span>
+<span class="pl-s">    },</span>
+<span class="pl-s">    "client_ip": "",</span>
+<span class="pl-s">    "user_agent": ""</span>
+<span class="pl-s">  }<span class="pl-pds">'</span></span></pre></div>
+<p dir="auto">Changes take effect immediately for new connections. Set <code>mgmt_listen: ""</code> to disable the API entirely.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Browser fingerprint reference</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Browser</th>
+<th>TLS preset</th>
+<th>HTTP/2 SETTINGS</th>
+<th>WINDOW_UPDATE</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Chrome</td>
+<td><code>chrome</code></td>
+<td><code>1:65536,2:0,4:6291456,6:262144</code></td>
+<td>15663105</td>
+</tr>
+<tr>
+<td>Firefox</td>
+<td><code>firefox</code></td>
+<td><code>1:65536,4:131072,5:16384</code></td>
+<td>12517377</td>
+</tr>
+<tr>
+<td>Safari</td>
+<td><code>safari</code></td>
+<td><code>1:4096,3:100,4:2097152,6:16384</code></td>
+<td>10485760</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Custom TLS fingerprint (<code>preset: "custom"</code>)</h3></div>
+<p dir="auto">The built-in presets (<code>chrome</code>, <code>firefox</code>, <code>safari</code>, …) cover the most common cases. When you need to match a specific browser version or a fingerprint that differs from those presets, set <code>preset: "custom"</code> and provide a <code>custom_hello</code> block.</p>
+<p dir="auto"><strong>How JA3 / JA4 map to config fields</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Fingerprint component</th>
+<th>Config field</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TLS version range</td>
+<td><code>versions</code></td>
+<td>Min/max are derived automatically</td>
+</tr>
+<tr>
+<td>Cipher suite list + order</td>
+<td><code>cipher_suites</code></td>
+<td>Use <code>0x0a0a</code> as a GREASE placeholder; uTLS randomises it per connection</td>
+</tr>
+<tr>
+<td>Extension type IDs + order</td>
+<td><code>extensions</code></td>
+<td>Order directly controls the JA3 extensions component; values matching the GREASE pattern (<code>0xXAXA</code>) are randomised per connection</td>
+</tr>
+<tr>
+<td>Supported groups (curves)</td>
+<td><code>curves</code></td>
+<td>Also controls which key shares are sent</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<blockquote>
+<p dir="auto">JA3 and JA4 are one-way hashes — you cannot reverse a hash back to a spec. Find the underlying parameters for the target browser with <a href="https://tls.peet.ws" rel="nofollow">tls.peet.ws</a> or Wireshark, then paste them into <code>custom_hello</code>.</p>
+</blockquote>
+<p dir="auto"><strong>Chrome 131 example</strong></p>
+<div class="highlight highlight-source-yaml notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='tls:
+  preset: "custom"
+  custom_hello:
+    cipher_suites:      # hex IDs; 0x0a0a = GREASE placeholder (randomised per connection)
+      - 0x0a0a
+      - 0x1301          # TLS_AES_128_GCM_SHA256
+      - 0x1302          # TLS_AES_256_GCM_SHA384
+      - 0x1303          # TLS_CHACHA20_POLY1305_SHA256
+      - 0xc02b          # ECDHE-ECDSA-AES128-GCM-SHA256
+      - 0xc02f          # ECDHE-RSA-AES128-GCM-SHA256
+      - 0xc02c          # ECDHE-ECDSA-AES256-GCM-SHA384
+      - 0xc030          # ECDHE-RSA-AES256-GCM-SHA384
+      - 0xcca9          # ECDHE-ECDSA-CHACHA20-POLY1305
+      - 0xcca8          # ECDHE-RSA-CHACHA20-POLY1305
+      - 0xc013          # ECDHE-RSA-AES128-SHA
+      - 0xc014          # ECDHE-RSA-AES256-SHA
+      - 0x009c          # RSA-AES128-GCM-SHA256
+      - 0x009d          # RSA-AES256-GCM-SHA384
+      - 0x002f          # RSA-AES128-SHA
+      - 0x0035          # RSA-AES256-SHA
+    curves:             # X25519 | X25519Kyber768 | P256 | P384 | P521
+      - "X25519Kyber768"
+      - "X25519"
+      - "P256"
+    versions:           # TLS versions to advertise
+      - "1.3"
+      - "1.2"
+    extensions:         # extension type IDs in order (controls JA3 extensions component)
+      - 0x0a0a          # GREASE
+      - 0               # server_name (SNI)
+      - 23              # extended_master_secret
+      - 65281           # renegotiation_info
+      - 10              # supported_groups
+      - 11              # ec_point_formats
+      - 35              # session_ticket
+      - 16              # ALPN
+      - 5               # status_request
+      - 18              # signed_certificate_timestamp
+      - 13              # signature_algorithms
+      - 51              # key_share
+      - 45              # psk_key_exchange_modes
+      - 43              # supported_versions
+      - 27              # compress_certificate
+      - 17513           # application_settings (ALPS)
+      - 0x0a0a          # GREASE
+      - 21              # padding' dir="auto"><pre><span class="pl-ent">tls</span>:
+  <span class="pl-ent">preset</span>: <span class="pl-s"><span class="pl-pds">"</span>custom<span class="pl-pds">"</span></span>
+  <span class="pl-ent">custom_hello</span>:
+    <span class="pl-ent">cipher_suites</span>:      <span class="pl-c"><span class="pl-c">#</span> hex IDs; 0x0a0a = GREASE placeholder (randomised per connection)</span>
+      - <span class="pl-c1">0x0a0a</span>
+      - <span class="pl-c1">0x1301</span>          <span class="pl-c"><span class="pl-c">#</span> TLS_AES_128_GCM_SHA256</span>
+      - <span class="pl-c1">0x1302</span>          <span class="pl-c"><span class="pl-c">#</span> TLS_AES_256_GCM_SHA384</span>
+      - <span class="pl-c1">0x1303</span>          <span class="pl-c"><span class="pl-c">#</span> TLS_CHACHA20_POLY1305_SHA256</span>
+      - <span class="pl-c1">0xc02b</span>          <span class="pl-c"><span class="pl-c">#</span> ECDHE-ECDSA-AES128-GCM-SHA256</span>
+      - <span class="pl-c1">0xc02f</span>          <span class="pl-c"><span class="pl-c">#</span> ECDHE-RSA-AES128-GCM-SHA256</span>
+      - <span class="pl-c1">0xc02c</span>          <span class="pl-c"><span class="pl-c">#</span> ECDHE-ECDSA-AES256-GCM-SHA384</span>
+      - <span class="pl-c1">0xc030</span>          <span class="pl-c"><span class="pl-c">#</span> ECDHE-RSA-AES256-GCM-SHA384</span>
+      - <span class="pl-c1">0xcca9</span>          <span class="pl-c"><span class="pl-c">#</span> ECDHE-ECDSA-CHACHA20-POLY1305</span>
+      - <span class="pl-c1">0xcca8</span>          <span class="pl-c"><span class="pl-c">#</span> ECDHE-RSA-CHACHA20-POLY1305</span>
+      - <span class="pl-c1">0xc013</span>          <span class="pl-c"><span class="pl-c">#</span> ECDHE-RSA-AES128-SHA</span>
+      - <span class="pl-c1">0xc014</span>          <span class="pl-c"><span class="pl-c">#</span> ECDHE-RSA-AES256-SHA</span>
+      - <span class="pl-c1">0x009c</span>          <span class="pl-c"><span class="pl-c">#</span> RSA-AES128-GCM-SHA256</span>
+      - <span class="pl-c1">0x009d</span>          <span class="pl-c"><span class="pl-c">#</span> RSA-AES256-GCM-SHA384</span>
+      - <span class="pl-c1">0x002f</span>          <span class="pl-c"><span class="pl-c">#</span> RSA-AES128-SHA</span>
+      - <span class="pl-c1">0x0035</span>          <span class="pl-c"><span class="pl-c">#</span> RSA-AES256-SHA</span>
+    <span class="pl-ent">curves</span>:             <span class="pl-c"><span class="pl-c">#</span> X25519 | X25519Kyber768 | P256 | P384 | P521</span>
+      - <span class="pl-s"><span class="pl-pds">"</span>X25519Kyber768<span class="pl-pds">"</span></span>
+      - <span class="pl-s"><span class="pl-pds">"</span>X25519<span class="pl-pds">"</span></span>
+      - <span class="pl-s"><span class="pl-pds">"</span>P256<span class="pl-pds">"</span></span>
+    <span class="pl-ent">versions</span>:           <span class="pl-c"><span class="pl-c">#</span> TLS versions to advertise</span>
+      - <span class="pl-s"><span class="pl-pds">"</span>1.3<span class="pl-pds">"</span></span>
+      - <span class="pl-s"><span class="pl-pds">"</span>1.2<span class="pl-pds">"</span></span>
+    <span class="pl-ent">extensions</span>:         <span class="pl-c"><span class="pl-c">#</span> extension type IDs in order (controls JA3 extensions component)</span>
+      - <span class="pl-c1">0x0a0a</span>          <span class="pl-c"><span class="pl-c">#</span> GREASE</span>
+      - <span class="pl-c1">0</span>               <span class="pl-c"><span class="pl-c">#</span> server_name (SNI)</span>
+      - <span class="pl-c1">23</span>              <span class="pl-c"><span class="pl-c">#</span> extended_master_secret</span>
+      - <span class="pl-c1">65281</span>           <span class="pl-c"><span class="pl-c">#</span> renegotiation_info</span>
+      - <span class="pl-c1">10</span>              <span class="pl-c"><span class="pl-c">#</span> supported_groups</span>
+      - <span class="pl-c1">11</span>              <span class="pl-c"><span class="pl-c">#</span> ec_point_formats</span>
+      - <span class="pl-c1">35</span>              <span class="pl-c"><span class="pl-c">#</span> session_ticket</span>
+      - <span class="pl-c1">16</span>              <span class="pl-c"><span class="pl-c">#</span> ALPN</span>
+      - <span class="pl-c1">5</span>               <span class="pl-c"><span class="pl-c">#</span> status_request</span>
+      - <span class="pl-c1">18</span>              <span class="pl-c"><span class="pl-c">#</span> signed_certificate_timestamp</span>
+      - <span class="pl-c1">13</span>              <span class="pl-c"><span class="pl-c">#</span> signature_algorithms</span>
+      - <span class="pl-c1">51</span>              <span class="pl-c"><span class="pl-c">#</span> key_share</span>
+      - <span class="pl-c1">45</span>              <span class="pl-c"><span class="pl-c">#</span> psk_key_exchange_modes</span>
+      - <span class="pl-c1">43</span>              <span class="pl-c"><span class="pl-c">#</span> supported_versions</span>
+      - <span class="pl-c1">27</span>              <span class="pl-c"><span class="pl-c">#</span> compress_certificate</span>
+      - <span class="pl-c1">17513</span>           <span class="pl-c"><span class="pl-c">#</span> application_settings (ALPS)</span>
+      - <span class="pl-c1">0x0a0a</span>          <span class="pl-c"><span class="pl-c">#</span> GREASE</span>
+      - <span class="pl-c1">21</span>              <span class="pl-c"><span class="pl-c">#</span> padding</span></pre></div>
+<p dir="auto"><strong>Supported extension type IDs</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Name</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0xXAXA</code> (any GREASE pattern)</td>
+<td>GREASE</td>
+<td>Randomised per connection</td>
+</tr>
+<tr>
+<td><code>0</code></td>
+<td>server_name (SNI)</td>
+
+</tr>
+<tr>
+<td><code>5</code></td>
+<td>status_request</td>
+<td>OCSP stapling</td>
+</tr>
+<tr>
+<td><code>10</code></td>
+<td>supported_groups</td>
+<td>Uses the <code>curves</code> list</td>
+</tr>
+<tr>
+<td><code>11</code></td>
+<td>ec_point_formats</td>
+<td>Fixed: uncompressed (0)</td>
+</tr>
+<tr>
+<td><code>13</code></td>
+<td>signature_algorithms</td>
+<td>Chrome-like defaults</td>
+</tr>
+<tr>
+<td><code>16</code></td>
+<td>ALPN</td>
+<td>Advertises <code>h2</code>, <code>http/1.1</code></td>
+</tr>
+<tr>
+<td><code>18</code></td>
+<td>signed_certificate_timestamp</td>
+
+</tr>
+<tr>
+<td><code>21</code></td>
+<td>padding</td>
+<td>BoringSSL-style padding</td>
+</tr>
+<tr>
+<td><code>23</code></td>
+<td>extended_master_secret</td>
+
+</tr>
+<tr>
+<td><code>27</code></td>
+<td>compress_certificate</td>
+
+</tr>
+<tr>
+<td><code>28</code></td>
+<td>record_size_limit</td>
+<td>Fixed: 0x4001</td>
+</tr>
+<tr>
+<td><code>35</code></td>
+<td>session_ticket</td>
+
+</tr>
+<tr>
+<td><code>43</code></td>
+<td>supported_versions</td>
+<td>Uses the <code>versions</code> list</td>
+</tr>
+<tr>
+<td><code>45</code></td>
+<td>psk_key_exchange_modes</td>
+<td>PSK with DHE</td>
+</tr>
+<tr>
+<td><code>50</code></td>
+<td>signature_algorithms_cert</td>
+<td>Chrome-like defaults</td>
+</tr>
+<tr>
+<td><code>51</code></td>
+<td>key_share</td>
+<td>Key shares for X25519 and P256 (from <code>curves</code>)</td>
+</tr>
+<tr>
+<td><code>17513</code></td>
+<td>application_settings (ALPS)</td>
+<td>Advertises <code>h2</code></td>
+</tr>
+<tr>
+<td><code>65281</code></td>
+<td>renegotiation_info</td>
+
+</tr>
+<tr>
+<td>other</td>
+<td>GenericExtension</td>
+<td>Sent with empty payload</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<blockquote>
+<p dir="auto"><strong>Runtime updates:</strong> <code>preset: "custom"</code> is not limited to <code>config.yaml</code> — it can also be switched to at runtime via the management API (<code>POST /api/config</code> with a <code>custom_hello</code> object, see <a href="#management-api">Management API</a>) or from the Chrome extension's TLS Preset dropdown, without restarting the proxy.</p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Usage</h2></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Start the proxy</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="make run
+# Kills any previous instance on port 8080, rebuilds, and starts." dir="auto"><pre>make run
+<span class="pl-c"><span class="pl-c">#</span> Kills any previous instance on port 8080, rebuilds, and starts.</span></pre></div>
+<p dir="auto">To switch fingerprint profiles, edit <code>config.yaml</code> and re-run <code>make run</code>.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">curl</h3></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="# With CA trusted system-wide (after make trust-ca):
+curl --proxy http://127.0.0.1:8080 https://tls.peet.ws/api/all
+
+# Without system trust — pass CA explicitly:
+curl --proxy http://127.0.0.1:8080 --cacert ca.crt https://tls.peet.ws/api/all" dir="auto"><pre><span class="pl-c"><span class="pl-c">#</span> With CA trusted system-wide (after make trust-ca):</span>
+curl --proxy http://127.0.0.1:8080 https://tls.peet.ws/api/all
+
+<span class="pl-c"><span class="pl-c">#</span> Without system trust — pass CA explicitly:</span>
+curl --proxy http://127.0.0.1:8080 --cacert ca.crt https://tls.peet.ws/api/all</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Chrome extension</h3></div>
+<p dir="auto">The <code>chrome-extension/</code> directory contains a Manifest V3 extension that controls the proxy from the browser toolbar.</p>
+<p dir="auto"><a href="/ytkoka/impersonate-proxy/blob/main/image/chrome-extension.png" rel="noopener noreferrer" target="_blank"></a></p>
+<p dir="auto"><strong>Installation:</strong></p>
+<ol dir="auto">
+<li>Open <code>chrome://extensions</code> in Chrome</li>
+<li>Enable <strong>Developer mode</strong> (toggle in the top-right corner)</li>
+<li>Click <strong>Load unpacked</strong> and select the <code>chrome-extension/</code> folder</li>
+</ol>
+<p dir="auto"><strong>Controls:</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Proxy toggle</td>
+<td>Enables / disables Chrome's proxy setting (routes traffic through <code>:8080</code>)</td>
+</tr>
+<tr>
+<td>TLS Preset</td>
+<td>Switches the uTLS fingerprint preset (chrome / firefox / safari / edge / ios / random / golang / <strong>custom</strong>)</td>
+</tr>
+<tr>
+<td>Cipher Suites / Curves / TLS Versions / Extensions</td>
+<td>Shown when <strong>Custom (JA3/JA4)</strong> is selected — the same fields as <code>custom_hello</code> in <code>config.yaml</code>, letting you dial in an arbitrary JA3/JA4 fingerprint without editing YAML or restarting the proxy</td>
+</tr>
+<tr>
+<td>Client IP</td>
+<td>Sets <code>X-Forwarded-For</code> and <code>True-Client-IP</code> on every request</td>
+</tr>
+<tr>
+<td>User-Agent</td>
+<td>Overrides the HTTP <code>User-Agent</code> header</td>
+</tr>
+<tr>
+<td>Apply button</td>
+<td>POSTs the new settings to the management API; takes effect immediately</td>
+</tr>
+<tr>
+<td>API field</td>
+<td>Address of the management API (default <code>http://127.0.0.1:8081</code>)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<blockquote>
+<p dir="auto"><strong>User-Agent scope:</strong> The extension changes the HTTP <code>User-Agent</code> <strong>header</strong> only. JavaScript's <code>navigator.userAgent</code> is controlled by Chrome itself and is not affected. To spoof both simultaneously, launch Chrome with <code>--user-agent="..."</code> alongside the proxy settings.</p>
+</blockquote>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Playwright (Node.js)</h3></div>
+<div class="highlight highlight-source-js notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="const { chromium } = require('playwright');
+
+const browser = await chromium.launch();
+const context = await browser.newContext({
+  proxy: { server: 'http://127.0.0.1:8080' },
+});
+// If CA is not in the system keychain, set before launching:
+// NODE_EXTRA_CA_CERTS=./ca.crt node script.js
+const page = await context.newPage();
+await page.goto('https://tls.peet.ws/api/all');" dir="auto"><pre><span class="pl-k">const</span> <span class="pl-kos">{</span> chromium <span class="pl-kos">}</span> <span class="pl-c1">=</span> <span class="pl-en">require</span><span class="pl-kos">(</span><span class="pl-s">'playwright'</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+
+<span class="pl-k">const</span> <span class="pl-s1">browser</span> <span class="pl-c1">=</span> <span class="pl-k">await</span> <span class="pl-s1">chromium</span><span class="pl-kos">.</span><span class="pl-en">launch</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+<span class="pl-k">const</span> <span class="pl-s1">context</span> <span class="pl-c1">=</span> <span class="pl-k">await</span> <span class="pl-s1">browser</span><span class="pl-kos">.</span><span class="pl-en">newContext</span><span class="pl-kos">(</span><span class="pl-kos">{</span>
+  <span class="pl-c1">proxy</span>: <span class="pl-kos">{</span> <span class="pl-c1">server</span>: <span class="pl-s">'http://127.0.0.1:8080'</span> <span class="pl-kos">}</span><span class="pl-kos">,</span>
+<span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+<span class="pl-c">// If CA is not in the system keychain, set before launching:</span>
+<span class="pl-c">// NODE_EXTRA_CA_CERTS=./ca.crt node script.js</span>
+<span class="pl-k">const</span> <span class="pl-s1">page</span> <span class="pl-c1">=</span> <span class="pl-k">await</span> <span class="pl-s1">context</span><span class="pl-kos">.</span><span class="pl-en">newPage</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+<span class="pl-k">await</span> <span class="pl-s1">page</span><span class="pl-kos">.</span><span class="pl-en">goto</span><span class="pl-kos">(</span><span class="pl-s">'https://tls.peet.ws/api/all'</span><span class="pl-kos">)</span><span class="pl-kos">;</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Playwright (Python)</h3></div>
+<div class="highlight highlight-source-python notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch()
+    context = browser.new_context(proxy={"server": "http://127.0.0.1:8080"})
+    page = context.new_page()
+    page.goto("https://tls.peet.ws/api/all")' dir="auto"><pre><span class="pl-k">from</span> <span class="pl-s1">playwright</span>.<span class="pl-s1">sync_api</span> <span class="pl-k">import</span> <span class="pl-s1">sync_playwright</span>
+
+<span class="pl-k">with</span> <span class="pl-en">sync_playwright</span>() <span class="pl-k">as</span> <span class="pl-s1">p</span>:
+    <span class="pl-s1">browser</span> <span class="pl-c1">=</span> <span class="pl-s1">p</span>.<span class="pl-c1">chromium</span>.<span class="pl-c1">launch</span>()
+    <span class="pl-s1">context</span> <span class="pl-c1">=</span> <span class="pl-s1">browser</span>.<span class="pl-c1">new_context</span>(<span class="pl-s1">proxy</span><span class="pl-c1">=</span>{<span class="pl-s">"server"</span>: <span class="pl-s">"http://127.0.0.1:8080"</span>})
+    <span class="pl-s1">page</span> <span class="pl-c1">=</span> <span class="pl-s1">context</span>.<span class="pl-c1">new_page</span>()
+    <span class="pl-s1">page</span>.<span class="pl-c1">goto</span>(<span class="pl-s">"https://tls.peet.ws/api/all"</span>)</pre></div>
+<p dir="auto">Set <code>NODE_EXTRA_CA_CERTS</code> (Node) or <code>REQUESTS_CA_BUNDLE</code> (Python) if the CA is not trusted system-wide.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Verifying fingerprints</h2></div>
+<p dir="auto"><a href="https://tls.peet.ws" rel="nofollow">tls.peet.ws</a> returns the full fingerprint breakdown for any request it receives. Pipe the output through <code>jq</code> or Python for a readable view:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="curl -s --proxy http://127.0.0.1:8080 --cacert ca.crt \
+  https://tls.peet.ws/api/all | python3 -m json.tool" dir="auto"><pre>curl -s --proxy http://127.0.0.1:8080 --cacert ca.crt \
+  https://tls.peet.ws/api/all <span class="pl-k">|</span> python3 -m json.tool</pre></div>
+<p dir="auto">Key fields to check:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tls.ja3_hash</code></td>
+<td>JA3 fingerprint hash</td>
+</tr>
+<tr>
+<td><code>tls.ja4</code></td>
+<td>JA4 fingerprint string</td>
+</tr>
+<tr>
+<td><code>http2.akamai_fingerprint</code></td>
+<td>HTTP/2 fingerprint string (SETTINGS + WINDOW_UPDATE + pseudo-header order) — field name is defined by the tls.peet.ws API</td>
+</tr>
+<tr>
+<td><code>http1.headers</code></td>
+<td>Header names in the order received by the server</td>
+</tr>
+<tr>
+<td><code>user_agent</code></td>
+<td>User-Agent as seen by the server</td>
+</tr>
+<tr>
+<td><code>ip</code></td>
+<td>Source IP as seen by the server — verify <code>X-Forwarded-For</code> / <code>True-Client-IP</code> spoofing here</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Project structure</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="impersonate-proxy/
+├── main.go                   # Entry point
+├── config/config.go          # YAML config struct and defaults
+├── fp/dialer.go              # uTLS dialer — TLS fingerprint presets
+├── h2fp/conn.go              # HTTP/2 framer — SETTINGS / WINDOW_UPDATE / pseudo-header control
+├── mitm/ca.go                # MITM CA: generate, cache, and serve leaf certs
+├── proxy/proxy.go            # Proxy server: CONNECT handling, protocol branch, runtime config
+├── rewrite/headers.go        # HTTP header rewriting (UA, order, add/remove, IP spoof)
+├── mgmt/server.go            # Management HTTP API (/api/config GET + POST)
+├── chrome-extension/
+│   ├── manifest.json         # Manifest V3
+│   ├── popup.html            # Toolbar popup UI
+│   ├── popup.css
+│   ├── popup.js              # Proxy toggle + management API client
+│   └── icon.svg
+├── config.yaml               # Default configuration
+└── Makefile"><pre class="notranslate"><code>impersonate-proxy/
+├── main.go                   # Entry point
+├── config/config.go          # YAML config struct and defaults
+├── fp/dialer.go              # uTLS dialer — TLS fingerprint presets
+├── h2fp/conn.go              # HTTP/2 framer — SETTINGS / WINDOW_UPDATE / pseudo-header control
+├── mitm/ca.go                # MITM CA: generate, cache, and serve leaf certs
+├── proxy/proxy.go            # Proxy server: CONNECT handling, protocol branch, runtime config
+├── rewrite/headers.go        # HTTP header rewriting (UA, order, add/remove, IP spoof)
+├── mgmt/server.go            # Management HTTP API (/api/config GET + POST)
+├── chrome-extension/
+│   ├── manifest.json         # Manifest V3
+│   ├── popup.html            # Toolbar popup UI
+│   ├── popup.css
+│   ├── popup.js              # Proxy toggle + management API client
+│   └── icon.svg
+├── config.yaml               # Default configuration
+└── Makefile
+</code></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Makefile targets</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Target</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>make build</code></td>
+<td>Compile the binary</td>
+</tr>
+<tr>
+<td><code>make run</code></td>
+<td>Build, kill any existing instance, and start</td>
+</tr>
+<tr>
+<td><code>make trust-ca</code></td>
+<td>Add <code>ca.crt</code> to the macOS system keychain (requires sudo)</td>
+</tr>
+<tr>
+<td><code>make clean</code></td>
+<td>Remove the binary, <code>ca.crt</code>, and <code>ca.key</code></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Cleanup</h2></div>
+<p dir="auto">Remove the binary and generated CA files:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="make clean" dir="auto"><pre>make clean</pre></div>
+<p dir="auto">If you added the CA to the macOS system keychain, remove it through <strong>Keychain Access</strong> (search for "impersonate-proxy CA") or:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='sudo security delete-certificate -c "impersonate-proxy CA" /Library/Keychains/System.keychain' dir="auto"><pre>sudo security delete-certificate -c <span class="pl-s"><span class="pl-pds">"</span>impersonate-proxy CA<span class="pl-pds">"</span></span> /Library/Keychains/System.keychain</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Limitations</h2></div>
+<ul dir="auto">
+<li><strong>MITM only</strong>: The proxy decrypts and re-encrypts traffic. Clients must trust the generated CA.</li>
+<li><strong>No HTTP/2 from client</strong>: The client→proxy leg uses HTTP/1.1 (via CONNECT). Only the proxy→server leg uses HTTP/2 with custom fingerprints.</li>
+<li><strong>Chunked request bodies</strong>: Requests with <code>Transfer-Encoding: chunked</code> bodies are not currently supported.</li>
+<li><strong>No QUIC / HTTP/3</strong>: Out of scope.</li>
+<li><strong>User-Agent (HTTP header only)</strong>: The proxy rewrites the <code>User-Agent</code> HTTP header, but JavaScript's <code>navigator.userAgent</code> is set by the browser independently and is unaffected. Use Chrome's <code>--user-agent</code> launch flag to override both simultaneously.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Legal notice</h2></div>
+<p dir="auto">This tool is intended for <strong>authorized security testing only</strong> — for example, testing WAF and bot-detection configurations on systems you own or have explicit written permission to test.</p>
+<p dir="auto">Using this tool against systems without authorization may violate applicable laws (such as the Computer Fraud and Abuse Act, Japan's Unauthorized Computer Access Law, or equivalent legislation in your jurisdiction) and the terms of service of the target.</p>
+<p dir="auto"><strong>The authors accept no liability for misuse.</strong></p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Acknowledgements</h2></div>
+<ul dir="auto">
+<li><a href="https://github.com/refraction-networking/utls">uTLS</a> — TLS fingerprint customization</li>
+<li><a href="https://tls.peet.ws" rel="nofollow">tls.peet.ws</a> — Fingerprint inspection API used in examples</li>
+<li><a href="https://github.com/FoxIO-LLC/ja4">JA4+</a> — Fingerprinting standard reference</li>
+</ul>
+</article>
