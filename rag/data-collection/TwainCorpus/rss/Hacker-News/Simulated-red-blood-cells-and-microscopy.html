@@ -1,0 +1,196 @@
+<article class="markdown-body blog-body">
+<h1 id="red-blood-cell-dynamics-and-microscopy">Red Blood Cell Dynamics and Microscopy</h1>
+<p>August 11, 2026</p>
+<p>A few months after I started my PhD, I was part of a team trying to model how red blood cells (RBCs) flow through a microfluidic device.
+These devices are prime candidates for detecting circulating tumor cells, extremely rare cells that signal cancer metastasis, terribly difficult to catch among the trillions of red blood cells around them.
+To optimize these devices, we first needed a numerical model that could reproduce the correct physics.</p>
+<p>One day, we were comparing two videos, one from a real experiment, and one from our simulations.
+The trajectories were different, meaning the simulations were wrong.
+In the simulations, the fluid was modeled with a particle method called dissipative particle dynamics (DPD), and we had a coarse-grained model for the membrane dynamics.
+At this point, we were not sure whether the mismatch came from the fluid or from the membrane surface model.
+To rule out the fluid part, I was tasked with writing a boundary-integral method (BIM) code, a trusted method for solving Stokes flows, to compare with the DPD method.
+I never got to finish it properly since we discovered that increasing the DPD resolution fixed that part.</p>
+<p>Recently I made simulations of <a href="parti.html">sedimenting particles in a viscous flow</a>, where a cloud of small particles transformed into a torus before breaking up.
+This relies on the same principles for solving the Stokes equations, and it made me want to finally implement the boundary-integral method for a red blood cell.
+I decided to extend my solver to handle the complex membrane dynamics of RBCs, based on my previous research, and combine them with the fluid solver I implemented.</p>
+<p>In particular, I have seen several experimental videos of these cells, none of them looking like the visualizations of my "perfect" cells produced numerically.
+Can we produce similar pictures, with the microscopic artifacts?</p>
+<p>Let's first make a few simulations to obtain RBC shapes observed in experiments.</p>
+<h2 id="from-membrane-energies-to-the-stomatocyte-discocyte-echinocyte-sequence">From membrane energies to the stomatocyte-discocyte-echinocyte sequence</h2>
+<p>Red blood cells are roughly two things: a membrane, enclosing the cytosol, which carries the hemoglobin necessary to transport oxygen efficiently.
+The cytosol can be modeled as a viscous fluid about 5 times more viscous than the plasma.
+The membrane is more complicated: it is composed of a cytoskeleton and a lipid bilayer.
+The former is mainly responsible for shear elasticity, while the latter contributes to bending resistance, area conservation, membrane viscosity, and area-difference elasticity, depending on the surrounding chemical conditions.
+All these terms can be modeled mathematically on a single surface, and discretized onto a triangle mesh.
+I'll spare you all the math and energy functionals, but it's described in detail in my previous research <sup id="fnref:1"><a class="footnote-ref" href="#fn:1">1</a></sup> <sup id="fnref:2"><a class="footnote-ref" href="#fn:2">2</a></sup>, and has been discretized initially in some of my colleague's work <sup id="fnref:3"><a class="footnote-ref" href="#fn:3">3</a></sup> and implemented in Mirheo <sup id="fnref:4"><a class="footnote-ref" href="#fn:4">4</a></sup>.
+I show a few of the force terms below. </p>
+<figure class="image-wrap image-center" style="width: 70%;">
+<div class="mesh-anim mesh-anim-static" data-src="../images/blog/red-blood-cells/discocyte_forces.bin">
+
+
+<div class="mesh-anim-status">Loading…</div>
+</div>
+<figcaption class="image-caption">Force magnitude of each term on a discocyte at equilibrium.</figcaption>
+</figure>
+<p>The energies are relatively simple to implement, and have analytical solutions on spheres.
+Forces are derivatives of these energies with respect to positions, 
+much more involved, but validated against finite differences of the energy.
+I also created functions to compute the Hessian of the energies, which allows computing equilibrium shapes (minimal energy) faster with Newton's method.
+This was of course all facilitated by LLMs (I mainly used <code>Opus 4.8</code> from Claude Code), although I gave tight directives so that the design remained under control, performance stayed reasonable, and I adopted a test-driven development approach.</p>
+<p>After a bit of back and forth with my agent, tweaking, and parameter tuning, I could reproduce the famous SDE sequence (stomatocyte-discocyte-echinocyte), a sequence of shapes that RBCs take due to a change in the chemical environment, causing an imbalance between the two layers of the lipid bilayer:</p>
+<div class="image-row mesh-row">
+<figure class="image-wrap" style="width: 32%;">
+<div class="mesh-anim mesh-anim-static" data-src="../images/blog/red-blood-cells/stomatocyte.bin">
+
+
+<div class="mesh-anim-status">Loading…</div>
+</div>
+<figcaption class="image-caption">Stomatocyte</figcaption>
+</figure>
+<figure class="image-wrap" style="width: 32%;">
+<div class="mesh-anim mesh-anim-static" data-src="../images/blog/red-blood-cells/discocyte.bin">
+
+
+<div class="mesh-anim-status">Loading…</div>
+</div>
+<figcaption class="image-caption">Discocyte</figcaption>
+</figure>
+<figure class="image-wrap" style="width: 32%;">
+<div class="mesh-anim mesh-anim-static" data-src="../images/blog/red-blood-cells/echinocyte.bin">
+
+
+<div class="mesh-anim-status">Loading…</div>
+</div>
+<figcaption class="image-caption">Echinocyte</figcaption>
+</figure>
+</div>
+<p>Fischer <sup id="fnref:5"><a class="footnote-ref" href="#fn:5">5</a></sup> reproduced this sequence experimentally (EDS, reversed!) by changing the albumin concentration. I remember being fascinated by how much the cells deform under this chemical change:</p>
+<figure class="video-wrap" style="width: 50%;">
+<video autoplay="" controls="" loop="" muted="" playsinline="">
+
+    Your browser does not support the video tag.
+  </video>
+<figcaption class="image-caption">Video from Fischer (2022) [^5]</figcaption>
+</figure>
+<p>This is a microscopic view, very different from the crisp idealized surfaces I showed before.
+How do they compare?
+In an ideal world, we would reconstruct the surface from the video. 
+This is far from easy.
+Instead, let's do the reverse: take our perfect surfaces and model the microscopy.</p>
+<h2 id="microscopy-model">Microscopy model</h2>
+<p>The above video uses <a href="https://en.wikipedia.org/wiki/Differential_interference_contrast_microscopy">differential interference contrast (DIC) microscopy</a>.
+This technique is designed to visualize small, transparent objects that are not visible with conventional microscopy.
+It relies on the <a href="https://en.wikipedia.org/wiki/Optical_path_length">optical path length (OPL)</a> accumulated by light through the sample.
+More precisely, a system of prisms decomposes the light source into two beams, separated by a small distance ; these two beams may thus have a different OPL, due to the shape and refractive index of the sample.
+The two beams are then recombined and the resulting intensity is recorded by the camera.
+This intensity depends on the phase difference between the two beams, and thus the image is related to the difference in OPL between them, which for a small  approximates the gradient of the OPL along the shear direction.</p>
+<p>The math is relatively simple.
+First, we can represent the electric field (light) as a wave, with complex numbers:
+
+where  is the angular frequency,  the wavelength and  is the speed of light in vacuum.</p>
+<p>In DIC the key quantity is , as it contains the phase and amplitude of the light beam.
+In particular, the phase changes when the beam goes through a medium with refractive index :
+
+where  is the vacuum wavenumber and  is the physical distance.
+This tells us that the phase "accumulates" at a rate  per distance.
+This is related to the OPL
+
+Thus, if  is the refractive index inside the sample and  that of the medium, the OPL can be written as
+
+where  is the object thickness and .
+The phase shift is thus proportional to the object thickness, carrying image contrast.
+On top of that, light gets absorbed as it goes through the medium.
+In that case the amplitude decreases exponentially with distance, at a rate  depending on the medium.
+This rate can be included as the imaginary part of the refractive index .
+Note that absorption alone would not give us as sharp a view as DIC microscopy - nevertheless it is easy to model and still contributes to the optics.</p>
+<p>In reality, light follows the wave equation and doesn't go straight, due to <em>diffraction</em>.
+To account for this, we need to solve the Helmholtz equation through the sample:
+
+which we solve using the <a href="https://en.wikipedia.org/wiki/Angular_spectrum_method">angular spectrum method</a> and FFT.</p>
+<p>Refraction (the  term) does not commute with the diffraction operation.
+We handle this with a second-order Strang splitting scheme over eight slabs (the thin-phase-object approximation would give a 17% error).</p>
+<p>Finally, the light hitting the sample isn't an ideal plane wave.
+Instead, a real condenser produces a cone of plane waves coming from a spread of angles and from uncorrelated parts of the lamp.
+Thanks to this decorrelation, we can add their contributions only at the end by computing the sum of their intensities.
+This is called Abbe averaging.</p>
+<p>We can now fit all the optics parameters (, , absorption, condenser NA, bias), view parameters (orientation, focus) and physical parameters (stage in the SDE sequence, RBC radius) to match the images in the video.
+Here are the results, after optimizing these parameters with CMA-ES <sup id="fnref:6"><a class="footnote-ref" href="#fn:6">6</a></sup>:</p>
+<div class="image-row">
+<figure class="image-wrap" style="width: 30%;">
+
+<figcaption class="image-caption">Echinocyte</figcaption>
+</figure>
+<figure class="image-wrap" style="width: 30%;">
+
+<figcaption class="image-caption">Discocyte</figcaption>
+</figure>
+<figure class="image-wrap" style="width: 30%;">
+
+<figcaption class="image-caption">Stomatocyte</figcaption>
+</figure>
+</div>
+<p>Left images are from Fischer <sup id="fnref2:5"><a class="footnote-ref" href="#fn:5">5</a></sup>, and right ones are the simulated DIC of our computed SDE shapes.
+We can see the main characteristics of the cells, and we seem to capture the most important physics.
+This is encouraging: we have a model that reproduces experimental data!</p>
+<p>We still haven't seen any hydrodynamics though.
+Let's study an RBC in a shear flow.</p>
+<h2 id="red-blood-cell-in-a-shear-flow">Red blood cell in a shear flow</h2>
+<p>In a shear flow , red blood cells exhibit an impressive range of dynamics.
+One of the most famous types is the so-called <em>tank-treading</em>, where the membrane rotates around a steady shape, like treads on a tank.
+An example is simulated below:</p>
+<figure class="image-wrap image-center" style="width: 60%;">
+<div class="mesh-anim" data-src="../images/blog/red-blood-cells/rbc_shear.bin">
+
+<div class="mesh-anim-controls">
+<button class="mesh-anim-play" disabled="" type="button">Play</button>
+
+</div>
+<div class="mesh-anim-status">Loading…</div>
+</div>
+<figcaption class="image-caption">A tank-treading RBC. <span style="white-space: nowrap;">,</span> <span style="white-space: nowrap;">,</span> <span style="white-space: nowrap;">.</span></figcaption>
+</figure>
+<p>The model used here includes, in addition to the forces we have mentioned above, a Boussinesq-Scriven viscosity model, discretized on the triangle mesh and solved implicitly to accommodate the BIM Stokes solver.
+Furthermore, we model the viscosity contrast between the cytosol and the solvent, appearing as a stresslet term in the BIM solver.
+Again, I spare you the math here, but this results in a linear system of equations that we solve with GMRES, where the volume conservation is imposed as a constraint within the solve. 
+The system is projected onto surface velocities that keep the enclosed volume stationary.</p>
+<p>We now have the dimensionless quantities: the capillary number , the Boussinesq number , and the viscosity contrast , where ,  and  are the viscosity of the membrane, inner fluid and outer fluid, respectively,  is the equivalent radius of the cell and  is the shear modulus of the cytoskeleton.
+I have calibrated the intrinsic parameters of RBC membranes during my PhD, and validated the model in shear flows <sup id="fnref2:2"><a class="footnote-ref" href="#fn:2">2</a></sup>.</p>
+<p>We now have all the ingredients: the RBC dynamics and a microscopy model.
+Combining the two gives the following simulated view:</p>
+<figure class="video-wrap" style="width: 50%;">
+<video autoplay="" controls="" loop="" muted="" playsinline="">
+
+    Your browser does not support the video tag.
+  </video>
+<figcaption class="image-caption">Simulated DIC microscopy.</figcaption>
+</figure>
+<p>We can see the deformation of the rim and the "breathing" pattern of the cell through the DIC microscopy model.</p>
+<p>I am probably still missing some physics here, but this is a good first step towards linking microscopy images to simulations.
+It would be very fun to take this further and try to find an inverse map from the simulated DIC to full RBC shapes, so we can reconstruct RBCs from experimental videos.
+A good problem, I believe, for machine learning.
+To be continued.</p>
+<h2 id="references">References</h2>
+<div class="footnote">
+
+<ol>
+<li id="fn:1">
+<p>Amoudruz, L., 2022. Simulations and control of artificial microswimmers in blood. PhD thesis, ETH Zurich. <a href="https://doi.org/10.3929/ethz-b-000550202">DOI</a> <a class="footnote-backref" href="#fnref:1" title="Jump back to footnote 1 in the text">↩</a></p>
+</li>
+<li id="fn:2">
+<p>Amoudruz, L., Economides, A., Arampatzis, G. and Koumoutsakos, P., 2023. The stress-free state of human erythrocytes: Data-driven inference of a transferable RBC model. Biophysical Journal, 122(8), pp.1517-1525. <a href="https://doi.org/10.1016/j.bpj.2023.03.019">DOI</a> · <a href="../data/publications/amoudruz2023a.pdf">PDF</a> <a class="footnote-backref" href="#fnref:2" title="Jump back to footnote 2 in the text">↩</a><a class="footnote-backref" href="#fnref2:2" title="Jump back to footnote 2 in the text">↩</a></p>
+</li>
+<li id="fn:3">
+<p>Bian, X., Litvinov, S. and Koumoutsakos, P., 2020. Bending models of lipid bilayer membranes: Spontaneous curvature and area-difference elasticity. Computer Methods in Applied Mechanics and Engineering, 359, p.112758. <a href="https://doi.org/10.1016/j.cma.2019.112758">DOI</a> <a class="footnote-backref" href="#fnref:3" title="Jump back to footnote 3 in the text">↩</a></p>
+</li>
+<li id="fn:4">
+<p>Alexeev, D., Amoudruz, L., Litvinov, S. and Koumoutsakos, P., 2020. Mirheo: High-performance mesoscale simulations for microfluidics. Computer Physics Communications, 254, p.107298. <a href="https://doi.org/10.1016/j.cpc.2020.107298">DOI</a> · <a href="../data/publications/alexeev2020a.pdf">PDF</a> <a class="footnote-backref" href="#fnref:4" title="Jump back to footnote 4 in the text">↩</a></p>
+</li>
+<li id="fn:5">
+<p>Fischer, T.M., 2022. The Shape of Human Red Blood Cells Suspended in Autologous Plasma and Serum. Cells, 11(12), p.1941. <a href="https://doi.org/10.3390/cells11121941">DOI</a> <a class="footnote-backref" href="#fnref:5" title="Jump back to footnote 5 in the text">↩</a><a class="footnote-backref" href="#fnref2:5" title="Jump back to footnote 5 in the text">↩</a></p>
+</li>
+<li id="fn:6">
+<p>Hansen, N. and Ostermeier, A., 2001. Completely derandomized self-adaptation in evolution strategies. Evolutionary Computation, 9(2), pp.159-195. <a href="https://doi.org/10.1162/106365601750190398">DOI</a> <a class="footnote-backref" href="#fnref:6" title="Jump back to footnote 6 in the text">↩</a></p>
+</li>
+</ol>
+</div>
+</article>
