@@ -1,0 +1,344 @@
+All posts
+Esc
+We turned off Pub/Sub and nobody noticed
+The message broker
+The eventadapter
+Choosing a second broker
+Dynamic load balancing
+Fairness weighted scheduling
+Chaos
+We are already seeing the benefits
+We turned off Pub/Sub and nobody noticed
+Patrick Hamann
++
+Mike Fisher
+August 11, 2026
+ — 
+17 min read
+Like many modern software stacks, the incident.io platform is predominantly 
+event-driven
+. For example, whenever you send us an alert, post a message to our agent on Slack, or update an entry in your Catalog - these are all events that then get enqueued on a message topic, meaning any of our downstream components that are interested in that event can subscribe and react asynchronously, such as sending a push notification or posting a reply to you in Slack.
+As the platform has grown, so has the number of messages flowing through our system, and thus our dependence on our messaging infrastructure. It’s become mission-critical. At the same time, we've also set stricter availability targets for ourselves, like the 99.99% SLA we now commit to for Enterprise customers of our 
+On-call
+ product.
+Until recently, we only used a single provider - 
+Google Cloud Pub/Sub
+ - as our messaging technology. Meaning any blip in Pub/Sub availability meant a blip in our own availability, which isn’t acceptable. So we recently set out on an adventure to make our messaging system more resilient to failure by introducing a secondary message broker to our stack, adding redundancy, and ultimately increasing the availability of our entire platform.
+The goal was to be able to turn off Pub/Sub with zero customer impact. It turned out to be quite the adventure, but last week, we successfully did exactly that.
+This is the story of that adventure.
+The message broker
+Event-driven systems have many benefits, like allowing us to decouple the rate at which we process messages from the rate of ingestion, or have many different components process the same original customer-initiated event, for example, having a 
+user.created
+ topic, and one system listens for events to send a welcome email and another that sets up their initial database state.
+At the heart of such a system is typically a “message broker”, which is responsible for receiving messages from the publishing components, storing them, and forwarding them to any interested subscribers. At incident.io, we’ve historically used Pub/Sub as our message broker of choice; it’s a 
+well-built
+ managed service with a good feature set, and has allowed us to scale with ease over the years.
+Pub/Sub is solid. Its published SLA is 99.95%, and in practice it has comfortably beaten that for us. The problem was that every event in our platform flowed through one broker, operated by one provider, with no way to route around it. 
+Our message broker had become a single point of failure (SPOF), and this was at tension with our own 99.99% availability targets.
+And a SPOF is ultimately a question about accountability. When an escalation doesn't fire, "
+Sorry, Pub/Sub was down
+" is not an answer we ever want to give a customer. It's our SLA, and it's our job to meet it, whatever our dependencies are doing that day. We already have redundancy in the other layers of our infrastructure, so why should the message broker be treated any differently?
+The eventadapter
+When we say we have an event-driven architecture, we’re not exaggerating; we currently have ~800+ individual message topics, 1000+ unique subscriptions to those topics, and are processing ~240 million messages a day *(
+as of August, 2026).
+This large number of topics also means there are thousands of call sites in our codebase which interact with events, which can be quite daunting when you want to, say, replace the underlying technology you use for messaging 🫠.
+Fortunately, we were standing on the shoulders of giants, and the early engineers at incident were wise enough to build code-level abstractions over message publishing and subscribing, which we call the 
+eventadapter
+. This is a package that exposes some simple but powerful interfaces like:
+// Publisher is the interface for publishing events.
+
+type
+ Publisher 
+interface
+ 
+{
+
+Publish
+(
+ctx context
+.
+Context
+,
+ ev Eventer
+,
+ payload 
+[
+]
+byte
+)
+ 
+(
+string
+,
+ 
+error
+)
+
+}
+
+// Subscriber is implemented by all subscribers.
+
+type
+ Subscriber 
+interface
+ 
+{
+
+Subscribe
+(
+ctx context
+.
+Context
+,
+ topicName 
+string
+,
+ handler SubscribeHandler
+,
+ params SubscribeParams
+)
+ 
+func
+(
+)
+ 
+error
+
+}
+
+// SubscribeHandler is what consumers of the package implement to 
+
+// handle a single event.
+
+type
+ SubscribeHandler
+[
+EV Eventer
+]
+ 
+func
+(
+
+	ctx context
+.
+Context
+,
+ ev 
+*
+EV
+,
+ eventMetadata EventMetadata
+,
+
+)
+ 
+error
+
+// Eventer is the interface implemented by all events.
+
+type
+ Eventer 
+interface
+ 
+{
+
+// Name is how we identify this type of event.
+
+Name
+(
+)
+ 
+string
+
+// A description of what the event means.
+
+Description
+(
+)
+ 
+string
+
+// Validate validates the fields of the event before publishing.
+
+Validate
+(
+)
+ 
+error
+
+// GetOrganisationID returns the organisation ID associated with 
+
+// the event, which we use to add to event telemetry.
+
+GetOrganisationID
+(
+)
+ 
+string
+
+}
+
+The package exposes a couple of concrete implementations of these interfaces, like a 
+eventadapter.InMemory
+ for use in local development or tests, or 
+eventadapter.PubSub
+ for talking to Pub/Sub.
+Fun fact:
+ we originally had to build the 
+InMemory
+ adapter as, in the early days of incident, running the app locally and opening so many parallel connections to Pub/Sub would crash the office wifi. 🙈
+We conditionally choose and construct which version of the adapter to use at runtime in 
+func main()
+ based on the environment, and pass that down as a dependency to our application components.
+Having the luxury of such an abstraction meant that, to introduce a new message broker, what we needed to do was build a new implementation of the 
+eventadapter
+ interface, swap it in at runtime, without any of the calling code owned by other engineers being aware. This allowed us to hide all of the complexity that comes from load balancing across two different brokers behind the abstraction.
+Choosing a second broker
+One trade-off that came with using the existing interface meant that we are also constrained to the semantics and behaviors of that interface - which, even though it's an abstraction, already had some leakiness from the underlying technology. I.e. we needed to choose something that at least had the same feature set and behaviors as Pub/Sub, as these were semantics that we had come to rely on and reason about in our application.
+Our requirements and process for choosing a second message broker are out of scope of this post. There is a broad landscape of brokers: open-source vs proprietary, managed vs unmanaged, streaming vs non-streaming, ephemeral vs persisted, etc. There is no silver bullet, so our main advice is to document your own requirements and use a decision matrix.
+We chose 
+NATS
+ mainly because it’s a CNCF-adopted project, which means we can have confidence in its future and openly read the source code, is Kubernetes-native (which is where we run our workloads), is a single binary (we’re looking at you, Kafka!), and it is written in Go (the rest of our stack is Go!). Additionally, we had some prior experience running it.
+Dynamic load balancing
+Another design principle was that, when 
+operating at 99.99% of availability
+, failover between brokers can’t be manual; with ~4 min 23 secs of downtime budget a month, we don’t have time for someone to wake up at 4 am and switch brokers. This meant that, ideally, we had to use both brokers in an active-active setup continuously: messages get balanced across both, and any persistent error rate from one broker would automatically fail over to the other. 
+So we needed to build a dynamic event load balancer!
+ Let’s dig into how we did that.
+As discussed above, the first thing was to create a new concrete implementation of the 
+eventadapter
+ that we called 
+eventadapter.LoadBalancer
+.
+On the publish side, we pick a broker by hashing the 
+message.ID
+ and rolling a weighted dice against a 
+configurable split
+. The ID is a ULID (like all IDs in our system), hashed with Go's 
+hash/fnv
+ std-library (the 
+Fowler–Noll–Vo hash function
+). Because every message hashes independently, a 50/50 split sends roughly half of 
+all messages
+ to each broker — the even distribution you want from a load balancer.
+💡 
+You may wonder why we sample by message ID here, instead of, say, our typical grouping key, which is organisation ID? Hashing by org ID would mean all of a customer’s events would get pinned to one broker until failover, whereas hashing per-message keeps load even by volume no matter how lopsided any one org is. The trade-off is that there is no per-org or per-operation transport consistency - which we’re happy to live with.
+In normal operation, we’ve chosen to have a 50/50 split across each broker; 
+why invest all this work in a secondary broker if you only use it in an emergency to then find out it's broken
+? Importantly, the split is configurable without a deploy, in case we need to turn either broker off manually.
+Once we determine the preferred broker for a message, we attempt to publish the event, and if a publish attempt fails (maybe it timed out due to a short network blip), we fail over to the other. All attempts to a given broker also flow through a circuit breaker, so if many attempts in a short period of time start to fail as the broker is degraded, we short-circuit the publishes to that broker early and instantly fail over. Giving us the automated failover we need to reach our availability targets! No one gets woken up; publishes just gracefully start flowing to the other provider.
+Fairness weighted scheduling
+You could argue that the publish-side is a pretty standard load balancer; where it gets more interesting is the subscriber-side and how we handle processing concurrency.
+The incident.io system is a single mono-repo Go program that is then deployed to Kubernetes as a collection of different workload-type-based deployments, such as 
+worker-oncall
+ or  
+worker-ai
+, this allows us to do things like horizontally scale the number of replicas that receive inbound HTTP alerts independently of, say, our AI-message processing. We’ve talked about this architecture in more detail before: 
+Keep the monolith, but split the workloads
+.
+In the 
+eventadapater
+ interface, we also have similar controls over the number of concurrent message “handler” functions (or more accurately, goroutines) we run per-machine to process messages for a given topic, a setting called 
+MaxHandlers
+. So that we can do things like: configure 10 handlers to process webhooks per-machine but only 3 handlers for a lower-priority background cron job.
+Therefore, we needed to think about how we could map the concept of concurrent handlers to the new dual-broker world. The rudimentary solution would have been to simply double the number of handlers, one group of handlers per broker. However, that presents a couple of issues:
+It would double the potential throughput of concurrent work on a machine and thus directly increase our resource usage (CPU/memory/network), and each handler needs DB connections to do its work, so we’d also have to increase the connection pool sizes and thus CPU pressure on our database.
+More importantly, we might not always need an even split of handler processes per-broker. I.e. if Pub/Sub were to degrade overnight, and the publish rate flipped to an 80/20 split, the majority of messages would flow through NATS, and we would want the majority of our handlers to be consuming from the NATS queue and not Pub/Sub.
+What we really needed was a dynamic scheduler that pulls messages fairly and prioritizes the broker which has more overall work.
+So, like all good computer scientists, we did some research into prior art in this space and took inspiration from some existing queuing-theory algorithms. The most cited paper in this area is the MaxWeight algorithm (
+Tassiulas and Ephremides (1992)
+), which can be summarized as: “
+select the queue with the largest backlog”
+.
+However, this didn’t align well with our setup, as we had no way to 
+efficiently
+ query each broker for the current queue depth on every pull. That led us to the delay-based variants of MaxWeight, which swap the weight variable from "
+how many messages are queued
+" to "
+how long has the head message been waiting
+", such as Oldest Cell First (OCF, 
+McKeown, Mekkittikul, Anantharam and Walrand (1999)
+), and delay-based back-pressure (
+Ji, Joo and Shroff (2011)
+). These keep the same throughput guarantees, but only need one piece of information per-queue: the age of the message at the head of the queue.
+With our newfound queueing-theory knowledge, we set out to build our scheduler!
+Each broker (and its underlying Go client) is wrapped in a single-slot "Inbox” interface with just two methods: 
+Peek()
+ to peek at the metadata of the head message stored in the inbox slot, and 
+Receive()
+, to pop the head message out of the inbox.
+We then have a scheduler goroutine that is responsible for the pool of message handler goroutines; the handlers are bounded by a 
+weighted semaphore
+, which is sized using the 
+MaxHandlers
+ subscriber setting we discussed before.
+Whenever a slot frees up in the semaphore, the scheduler calls 
+Peek()
+ on both inboxes and dispatches whichever head message has the oldest publish time (a broker-assigned timestamp, so it's immune to clock skew between publishing pods), by calling 
+Receive()
+, which returns the message and then refills the inbox slot from the broker over the network, in time for the next peek. (We’ve glossed over some detail here, such as each broker’s native client also buffers some messages in-memory, to be more efficient).
+Putting this all together gives us all the properties we desired from our scheduler:
+Reusing the existing 
+MaxHandlers
+ concurrency gives us one shared concurrency budget across the subscriber for both brokers, and no change in throughput semantics or resource consumption. I.e. our engineers can continue to set 
+MaxHandlers
+ and don't have to worry about the fact that the consumption is occurring via two brokers.
+Using “oldest message first” scheduling gives us a weighted fairness policy; if we fail over to one broker and its queue backs up, the scheduler will prioritize its inbox to fill the semaphore slots.
+Magic! ✨
+Chaos
+So, we had a working implementation of our event load balancer and were pretty pleased with ourselves. Over the course of the last month we’ve been carefully rolling out the load balancer, first in our staging environment, then production topic-by-topic, until all messages now flow through it - including our most critical On-call escalation events.
+However, as all good reliability engineers know, an unexercised code path or failover mechanism is as useful as not having one. How do we know this would actually protect us against failure in either broker? 
+The only option was to chaos test in production!
+First, with all of our messages flowing 50/50 across both brokers, 
+we intentionally deleted our NATS cluster 
+in our production Kubernetes environment. We watched the messages flow over to Pub/Sub gracefully, without client-facing errors.
+Testing Pub/Sub was a more interesting challenge: we don’t manage it, and can’t really call up Google and ask them to break it intentionally. So we built an automated fault injection system into the load balancer. The fault injector allows us to simulate partial degradation or total outages on either provider, and we can now dynamically increase or decrease the fault tolerance via configuration.
+Equipped with our shiny new chaos tooling, 
+last week we turned off Pub/Sub in production, and no one noticed.
+ The first few publish attempts time out or error and are then automatically retried against NATS; after 30 seconds of failed publish attempts, the circuit breaker opens, and all subsequent publishes short-circuit - not a single message dropped. All of this happened without any of our internal engineers being paged or a single customer noticing. 
+The system worked 🎉
+Importantly, our chaos tooling now allows us to run these failure scenarios in production, continuously, and with ease, just like any other Tuesday.
+We are already seeing the benefits
+We initially set out on this project to make our On-Call product more reliable and eliminate one of the only remaining single points of failure in our system. However, along the way we’ve improved one of our core system primitives and raised the availability bar for our entire platform.
+After a couple of weeks running the system in production, we are already starting to see the benefits:
+With improved telemetry and observability into our publish failures, we are regularly observing timeouts due to network blips to Pub/Sub, which now instantly fail over. Messages that may have previously caused customer-facing errors are now simply retries.
+We can more safely operate and maintain both providers independently, without risk of data loss. Need to upgrade the NATS cluster? Easy! Change the Pub/Sub client? Safe!
+We’d love to hear what you think about the design and, as always, if working on these types of reliability challenges interests you - 
+we’re hiring
+!
+Patrick Hamann
+Product Engineer
+View more
+ 
+from 
+Patrick
+Mike Fisher
+Product Engineer
+View more
+ 
+from 
+Mike
+See related articles
+View all
+Don't add a read replica until you've read this
+Our learnings from implementing a product-wide read replica migrations, including some useful patterns for routing queries to replica and primary
+Johanna Larsson
+July 21, 2026
+We rebuilt our post-mortems from the ground up
+Today we're launching our new post-mortems experience, and I want to walk you through what we've done and why.
+Pete Hamilton
+March 17, 2026
+Bloom filters: the niche trick behind a 16× faster API
+This post is a deep dive into how we improved the P95 latency of an API endpoint from 5s to 0.3s using a niche little computer science trick called a bloom filter.
+Mike Fisher
+November 14, 2025
+View all
+So good, you’ll break things on purpose
+Ready for modern incident management? Book a call with one of our experts today.
+We’d love to talk to you about
+All-in-one incident management
+Our unmatched speed of deployment
+Why we’re loved by users and easily adopted
+How we work for the whole organization
+Get a demo
+Start a free trial
