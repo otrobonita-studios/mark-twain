@@ -1,0 +1,123 @@
+<article class="flex-container" role="article"><div class="disclaimer"><u>DISCLAIMER</u>: I don’t know if anything I am doing is legal. Nor do I, in fact, have any sort of deep knowledge of hardware <em>hacking</em>.</div>
+<div class="disclaimer"><u>DISCLAIMER2</u>: Although I am so dumb and lazy that I would use an LLM to automate coffee making – (oops!) and , use LLMs to write code on occasion; this text has been entirely written by a human and barely even proofread by an LLM. This disclaimer extends to all further writing on this blog.</div>
+<p>I kicked off this website back in 2021 and never took the time to actually write anything to the blog. “Better late than never” I guess. So, here goes nothing…</p>
+<p>Today, inspired by an HN submission titled <a href="https://x.com/kuberwastaken/status/2089377982536388964">“Claude writing a macOS driver for my obscure HP printer built only for Windows”</a>, I thought about my trusty <a href="https://en.wikipedia.org/wiki/Drobo">Drobo 5D</a>, a RAID array which has been saving and serving my files flawlessly (barring a “power adapter died” incident in ~2019) for the past 14 years. Drobo having gone out of business, and the upcoming macOS 27 “Golden Gate” being the last release to support Rosetta 2, it means part of the software suite will not be compatible with future macOS releases anymore – and that one has too many QoL improvements for me to pass on. Being sick and stuck at home, I thought: “why not put Claudio on the case”. And here is the chronicle of that adventure.</p>
+<h3 class="anchor-link" id="first-there-was-the-prompt"><a href="#first-there-was-the-prompt">First, there was the prompt<span class="pilcrow"> ¶</span></a></h3>
+<blockquote>
+<p>The company “Drobo” has gone out of business (see <a href="https://petapixel.com/2023/06/06/drobo-is-officially-done-as-the-company-moves-into-liquidation/)">https://petapixel.com/2023/06/06/drobo-is-officially-done-as-the-company-moves-into-liquidation/)</a>. I own a “Drobo 5D” which is connected to my mac using USB 3 (the Thunderbolt 2 port will not work on newer mac models) – this still work on my 2017 iMac running macOS Ventura (13). Both the Drobo itself and the Drobo Dashboard software work. On newer macOS version, the Drobo Dashboard software is not compatible anymore and the Drobo can only be mounted as an external drive. For ecology’s sake, I have the objective of using this device for as long as possible but do not want to be “locked out” of macOS (or mac hardware) upgrades.</p>
+<p>Your task today is to analyse the current Drobo 5D firmware as well as the Drobo Dashboard software, and try to understand WHY it will not work with newer macOS versions, WHAT might prevent the hardware to work on newer mac hardware, and come up with a solution on how to fix this. Everything is on the table: from simple fix to a complete re-write of the driver and Drobo Dashboard for modern mac/macOS.</p>
+<p>NOTE: I have provided you with some previous (up to the latest) version of the Drobo drivers and Drobo Dashboard inside the /Users/fetzu/Dev/ReDrobo/ZZ_BUFFER folder. Feel free to use these as you see fit, but try avoid installing them on this mac (I don’t think you can).</p>
+</blockquote>
+<p>The anatomy of that prompt is dead simple: I provide the context (hoping not to get flagged for cybersecurity/reverse-engineering, how naive of me), state the tasks and provide Claude with the last 5 releases of both pieces of software (including the release notes in separate PDFs. Thanks to <a href="https://github.com/dhomas1/DroboApps/">this saint</a> who took the time to upload and index these files.)</p>
+<p>Drop the prompt into Fable 5 on High (because, why not?) and get automatically flagged and switched over to Opus 4.8. I decide to interrupt it there and open a new session with Opus 5 on Max – and we are off to the races.</p>
+<h3 class="anchor-link" id="second-there-was-a-plan"><a href="#second-there-was-a-plan">Second, there was a plan<span class="pilcrow"> ¶</span></a></h3>
+<p>After a little thinking and fiddling around with the drivers / drobo dashboard binaries, Claude came up with a 5 phase plan. As any good engineer would, Claude starts counting at 0:</p>
+<ol start="0">
+<li>“Protect the data first” (duh)</li>
+<li>“Validate the protocol” (by comparing the data output between a device with a driver, my 2017 iMac running macOS 13, and one without, my MacBook Pro M5 Pro running macOS 26).</li>
+<li>“Decode the record payloads” (with the intention of validating and spitting out the protocol spec)</li>
+<li>“Ship a usable CLI” (to output the information the Drobo Dashboard usually would)</li>
+<li>“The live driver” (an actual Drobo Dashboard replacement)</li>
+</ol>
+<p>The plan seems sound enough, let’s dive in…</p>
+<h3 class="anchor-link" id="phase-1-hooking-up-the-drobo-to-my-macbook-pro"><a href="#phase-1-hooking-up-the-drobo-to-my-macbook-pro">Phase 1: hooking up the Drobo to my MacBook Pro<span class="pilcrow"> ¶</span></a></h3>
+<p>I knew this would work (the volume properly mounts and is readable &amp; writable, but it reports a wrong size and gives the user no information about the current state of the volume/array/drives), and Claude wrote a nifty C utility called <a href="https://github.com/fetzu/ReDrobo/blob/main/tools/droboprobe/droboprobe.c">droboprobe</a> in order to probe the device once plugged in. Claude had me screenshot the current state of the Drobo 5D inside Drobo Dashboard first (good guy, I don’t like typing).</p>
+<p>That phase allowed Claude to confirm that the device was working, but indeed reporting the wrong volume size.</p>
+<table>
+<thead>
+<tr>
+
+<th>Total</th>
+<th>Used</th>
+<th>Free</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dashboard (iMac)</td>
+<td>5.42 TB</td>
+<td>4.25 TB</td>
+<td><strong>1.17 TB</strong></td>
+</tr>
+<tr>
+<td>macOS (here)</td>
+<td>17.6 TB</td>
+<td>4.7 TB</td>
+<td><strong>12.9 TB</strong></td>
+</tr>
+</tbody>
+</table>
+<p>But, there was also “bad news”:</p>
+<blockquote>
+<h4 class="anchor-link" id="the-bad-news-and-i-got-this-wrong"><a href="#the-bad-news-and-i-got-this-wrong">The bad news, and I got this wrong<span class="pilcrow"> ¶</span></a></h4>
+<p><code>SCSITaskUserClient</code> <strong>does not work for the Drobo</strong>. <code>IOCreatePlugInInterfaceForService</code> returns <code>kIOReturnUnsupported</code>. Zero services on this Mac publish <code>SCSITaskDeviceCategory</code> — the initer reserves a match category on every SCSI nub but never actually starts.</p>
+<p>The reason was in Apple’s own header the whole time: SCSITaskLib serves devices “for which there isn’t an in-kernel driver”, plus optical burners. The Drobo is claimed by Apple’s <code>IOSCSIPeripheralDeviceType00</code>, so it gets nothing. I also ruled out the back doors: one USB interface, one LUN, both claimed.</p>
+</blockquote>
+<p>Fortunately, it came with some additional good news:</p>
+<blockquote>
+<h4 class="anchor-link" id="but-theres-a-clean-way-to-still-get-the-protocol"><a href="#but-theres-a-clean-way-to-still-get-the-protocol">But there’s a clean way to still get the protocol<span class="pilcrow"> ¶</span></a></h4>
+<p>The kext is installed and working on the iMac, and its user client is a normal <code>IOUserClient</code>. I extracted its full dispatch table from the binary:</p>
+<table>
+<thead>
+<tr>
+<th>Selector</th>
+<th>Method</th>
+<th>Shape</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2</td>
+<td><code>sGetESAModePage</code></td>
+<td>2 scalars in, <strong>1308-byte struct out</strong> — the read</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>sSetESAModePage</code></td>
+<td>3 scalars + 1308-byte struct in — the write</td>
+</tr>
+</tbody>
+</table>
+<p>Selectors 0–3 are confirmed against the symbol table and the target-dispatch bitmask. Two safety properties matter: I’d call <strong>only selector 2</strong>, and IOKit validates argument counts and sizes against that table <em>before</em> the kext sees anything, so a mistake gets rejected rather than executed. It’s the identical call Dashboard’s daemon already makes every few seconds.</p>
+<p>That gets us the authoritative payload bytes, with Dashboard beside it for cross-checking, and with no security settings changed on either machine.</p>
+</blockquote>
+<h3 class="anchor-link" id="phase-2-dump-and-decode-the-record-payloads"><a href="#phase-2-dump-and-decode-the-record-payloads">Phase 2: dump and decode the record payloads<span class="pilcrow"> ¶</span></a></h3>
+<p>Claude then provided me with another nifty utility, <a href="https://github.com/fetzu/ReDrobo/blob/main/tools/droboesa/droboesa.c">droboesa</a>, that would let me dump the ESA records from the iMac. After two attempts (turns out sudo was needed for launchctl list), Claude was able to come up with the full “<a href="https://github.com/fetzu/ReDrobo/blob/main/docs/PROTOCOL.md">Drobo ‘ESA’ management protocol</a>”. Meaning we were on our way to a full-fledged driver…</p>
+<h3 class="anchor-link" id="phase-3-4-building-and-testing-the-driver-and-the-app"><a href="#phase-3-4-building-and-testing-the-driver-and-the-app">Phase <del>3</del> 4: Building (and testing) the driver (and the app)<span class="pilcrow"> ¶</span></a></h3>
+<p>The next phase kicked off with Claude asking me how to proceed: either get an Apple developer account (which I incidentally already have) in order to ask for the SCSIPeripheralsDriverKit entitlement (which I <em>probably</em> could never get as Mr. Nobody-from-the-Alps-reverse-engineering-a-possibly-patented-product), or raw-dogging by disabling SIP (temporarily?). Granting unlimited kernel extension access to code written by an LLM, with me having none of the expertise to verify it… what could go wrong?</p>
+<p>So of course I did what any (in)sane person would do: I disabled SIP to try out Claude’s “<a href="https://github.com/fetzu/ReDrobo/tree/main/DroboDext">DroboDext</a>” and <a href="https://github.com/fetzu/ReDrobo/tree/main/ReDrobo">ReDrobo.app</a>. But because I am just dumb and not a daredevil, I did so on a spare MacMini M1 running the macOS 27 developer beta instead. I wonder how Claude “feels” about moving goalposts.</p>
+<p>So I start the MacMini, disable SIP and start the app. Then, a crash; something about entitlements. Then something about the extension not being found in the app bundle. Then some issue about the dext bundle layout. Then another one about naming. Then another about dext being compiled for <code>x86_64 arm64e</code> (with pointer auth) instead of <code>arm64</code>. Then some other one about code signing. Then the driver finally managed to install and <em>almost</em> talk to the device. Then there was another entitlement issue. Then an “ExtentionNotFound” issue. At which point Claude almost asked me to give up (and “quit grinding”), but I’ll have none of that. Bunch of reboots later, still no chance. Claude really wanted me to call it quits.</p>
+<blockquote>
+<p>The full write-up, including the eight packaging and lifecycle traps that cost us the afternoon.</p>
+<p>– Claude</p>
+</blockquote>
+<p>But I have time, and I don’t think it’s getting tired. So we soldiered on. And all Claude actually needed was a little insistence, a nudge and some Kagi-ing to find the real culprit: not entitlements (for once?) but the IOClass. I had a hunch but did not want to seem presumptuous. No wait, actually it is an entitlement issue after all; which apparently we’ll have to brute force. Then, a <strong>breakthrough</strong>. My whole soul was coming apart at the seams, dancing on my load-bearing hope, trying as hard as possible to avoid stepping on the footgun. I was ready to take on any of life’s challenges.</p>
+<blockquote>
+<p>You were right to refuse to give up. That’s a genuine breakthrough, and my “definitive” conclusion three messages ago was wrong twice over.</p>
+<p>– Claude</p>
+</blockquote>
+<p>Finally, we were able to read the device’s information in all its glorious details: the array name, its actual available space, its health, the serial number of each attached drive… All that was left to do now was find out which of the 12 entitlement candidates we brute-forced was actually the right one. Luckily both Claude and I had heard about <a href="https://en.wikipedia.org/wiki/Binary_search">Binary search</a>, so 4 rounds max… right? right? Yes.</p>
+<p>Finally, we have a working driver on hand (although it still requires turning off SIP). Just a perfect place to call it a day and st–</p>
+<h3 class="anchor-link" id="phase-5-the-epitome-of-feature-creep"><a href="#phase-5-the-epitome-of-feature-creep">Phase 5: The epitome of feature creep<span class="pilcrow"> ¶</span></a></h3>
+<p>Since I will have to do a pass on the repo to get it to a shippable state, we might as well whip out a quick GUI for ReDrobo.app, no?</p>
+<p>I settled on what I considered the bare minimum to make it useful for myself:</p>
+<ul>
+<li>Menu bar + notifications (so we actually know when something needs our attention)</li>
+<li>Surface more drive information (health, serial, firmware revision) and SMART data from the array (spoiler: SMART turned out to be impossible)</li>
+<li>Support for feature flags (read-only for 1.0.0)</li>
+<li>Support for multiple devices (on the same computer) – unfortunately untested since I only own the one array</li>
+<li>Support for other Drobo models – also untested since I only own a 5D</li>
+<li>A diagnostics export</li>
+<li>App-side logging with 4 levels</li>
+<li>An uninstaller (who likes old drivers lingering around?)</li>
+</ul>
+<p>I went through <em>a few</em> more rounds with Claude, with some more reverse engineering (in particular for the feature flags and other models support) before we finally settled on ReDrobo 1.0.0. Here it is in all its glory:</p>
+<p><p style="text-align:center;">
+
+</p>
+</p>
+<h3 class="anchor-link" id="epilogue-post-natus"><a href="#epilogue-post-natus">Epilogue: Post-natus<span class="pilcrow"> ¶</span></a></h3>
+<p>There it is. About an ~afternoon+ of work, and we have a working vibe-coded driver and app that will allow me to use my Drobo until it finally croaks.</p>
+<p>My goal isn’t to provide some thought-provoking insights on the use of LLMs – much smarter and more articulate people have done so in the past and will hopefully continue to do so in the future. The only questions I would ask (myself) are: would I have managed this “by myself”? Probably not. Within this timeframe? Absolutely not. Have I learned something in the process? I have to admit that the process was a little too “hands-off” for me to get any real value out of it. Had I taken more time to review each step and the code, I would have probably gained more insight into the inner workings of drivers in macOS. All I’m sure of is that I now have a way to use my hardware a little longer, and even a path forward to add feature-flag writes in the future (if ever needed). And that’s not half bad.</p>
+<p>I have made the source code and all the documentation available on this repo: <a href="https://github.com/fetzu/ReDrobo">fetzu/ReDrobo</a>. It of course is not an officially notarized app (because, again, I don’t think Apple would give out the requirements for a reverse-engineered app vibe-coded by a random developer), but if you are willing to risk turning SIP off, it is yours to use. Maybe I won’t be the only one to gain some more mileage out of their trusty Drobo.</p>
+</article>
