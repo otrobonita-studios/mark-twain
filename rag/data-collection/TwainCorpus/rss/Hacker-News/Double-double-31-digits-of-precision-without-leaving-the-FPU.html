@@ -1,0 +1,1726 @@
+<article><div class="content"><p>If you ever need more precision than what 15 decimal digits of the double format can offer, there is a neat trick: glue two doubles together and treat them as one number. This gives you ~31 decimal digits for roughly 9x the cost of a plain double in a real kernel (4-12x per isolated operation). With no heap allocation and no dependencies, this puts it almost exactly halfway between a double and an arbitrary-precision library perf-wise. This post explains the error-free transformations that make it work, measures it against MPFR, and shows where the trick runs out of steam.</p><h2 id="The-gap-nobody-fills">The gap nobody fills<a aria-label="Link to this section" class="heading-anchor" href="#The-gap-nobody-fills">#</a></h2><p>Floating-point types come in many "flavors".
+For example, a float has ~7 decimal digits, a double ~15, both basically for free.
+An arbitrary-precision library gives you as many digits as you want, at a painful per-operation cost.
+Between "not quite enough" and "orders of magnitude slower" there is a gap and I fell into it while zooming deep into the Mandelbrot set.
+The image at the top of this page shows this gap: the same view rendered twice, blocky on the left where a double has run out of precision, sharp on the right rendered with double-double.</p><p>The <a class="wiki-link" href="https://en.wikipedia.org/wiki/Mandelbrot_set" target="_blank" title="Mandelbrot set at Wikipedia">Mandelbrot set</a> is a famous fractal, full of endlessly repeating spirals and mini copies of itself, that I have <a href="/projects/mamex-mareks-mandelbrot-explorer/">explored before</a>.
+A deep zoom literally runs out of precision.
+Eventually, two neighboring pixel positions are "rounded" to the same double,
+and the image stops being a picture of the fractal and starts being a picture of the number format,
+as you can see in <a href="#figure-1" title="Go to figure 1: Two deep locations rendered in double precision: whole blocks of pixels share one coordinate and thus are colored the same. The gap between neighboring doubles grows with the number's magnitude, so the real axis is the coarse one on the left (re -0.74, im 0.13, wide blocks) and the imaginary axis is the coarse one on the right (re -0.11, im 0.92, tall blocks).">Figure 1</a>.</p><div class="figure" id="figure-1"><ul class="img-gallery img-gallery-fill"><li><figure style="max-width:420px"><a class="img-link" data-size="500x500" href="/blog/double-double-arithmetic/img/zoom-7.7e-15-double.1e55e24d.png" title="seahorse valley: re -0.74, im 0.13"></a></figure></li><li><figure style="max-width:420px"><a class="img-link" data-size="500x500" href="/blog/double-double-arithmetic/img/zoom-top-7.4e-15-double.a99a384b.png" title="top of the set: re -0.11, im 0.92"></a></figure></li></ul><span class="fig-caption">Figure 1: Two deep locations rendered in double precision: whole blocks of pixels share one coordinate and thus are colored the same. The gap between neighboring doubles grows with the number's magnitude, so the real axis is the coarse one on the left (re -0.74, im 0.13, wide blocks) and the imaginary axis is the coarse one on the right (re -0.11, im 0.92, tall blocks).</span></div><p>The canonical answer to "I need more precision than double" is to use a library for arbitrary-precision math, typically <a class="external" href="https://gmplib.org/" target="_blank">GMP</a> or <a class="external" href="https://www.mpfr.org/" target="_blank">MPFR</a>.
+That is the right answer when the precision you need is open-ended.
+But it is not a small leap to take, and you pay for it on every single operation:</p><ul><li><strong>Every value is a heap block.</strong> A value is a pointer to a data array (limbs), so bringing one into existence allocates. An API where each operation returns a new value, which is what many wrappers offer, allocates on every operation.</li><li><strong>Every operation is a loop.</strong> Add or multiply, everything walks the limb array: loads, stores, and data-dependent branches.</li><li><strong>In .NET it is worse still.</strong> GMP and MPFR are native C libraries, so you are looking at P/Invoke, a native binary per platform to ship, and marshalling on the boundary.</li></ul><p>And then there is the license: GMP and MPFR are LGPL, which static linking, closed platforms, or company policy can turn into a hard no, regardless of benchmark results.</p><p>I benchmarked all of that, and the gap turned out to be surprisingly well structured.
+In a real kernel at matched precision, a double-double costs roughly 9x a plain double, and MPFR carrying those same 31 digits costs roughly 9x a double-double again, which is about 81x the double it started from.
+Let MPFR allocate a result per operation and the double-double-to-MPFR gap is closer to 40x instead of 9x.</p><p>The whole trick is:</p><blockquote><strong>Keep two doubles separate, but treat them as one number.</strong></blockquote><p>About 31 decimal digits, no heap, no dependencies, and no native binary to ship.</p><p>The complete type and the benchmarked kernels are in the two appendices.</p><h2 id="The-double-double-idea">The double-double idea<a aria-label="Link to this section" class="heading-anchor" href="#The-double-double-idea">#</a></h2><p>A floating-point type holds the same number of significant digits no matter how large or small the number is.
+The exponent only determines where the decimal point will be.
+Take these two numbers:</p><div class="equation" id="equation-1"><span class="eqId">(1)</span><code class="mainEq" title="A = 111222333444">A = 111222333444</code></div><div class="equation" id="equation-2"><span class="eqId">(2)</span><code class="mainEq" title="B = 0.555666777888">B = 0.555666777888</code></div><p>Each of them has 12 significant digits, so each fits in a double.
+Their exact sum is <code>111222333444.555666777888</code> and has 24 digits, but a double can only hold about 15.
+Evaluate <code>A + B</code> and the digits that do not fit are rounded away, leaving <code>111222333444.55566</code>.</p><p>Now the key idea: What if we do not evaluate the addition?
+If we keep A and B side by side and agree to treat the pair as one number,
+then one of them carries the leading digits and the other carries the rest.</p><p>That is the whole representation:</p><blockquote>A double-double value stores the <strong>unevaluated sum of two doubles</strong>.</blockquote><div class="equation" id="equation-3"><span class="eqId">(3)</span><code class="mainEq" title="x = x_hi + x_lo">x = x<sub>hi</sub> + x<sub>lo</sub></code></div><p>with the invariant that <code class="inlineEq">x<sub>hi</sub></code> is exactly what <code class="inlineEq">x<sub>hi</sub> + x<sub>lo</sub></code> rounds to as a double.
+The high part carries the value, the low part carries the rest (the "error" of the high part after addition).
+Every operation in the next section is just keeping this invariant true.</p><div class="highlighter-rouge" id="code-1"><div class="code-header"><span>Code listing 1: The whole double-double representation. Everything else in this post is arithmetic on these two fields.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre></td><td class="rouge-code"><pre><span class="k">public</span> <span class="k">readonly</span> <span class="k">partial</span> <span class="k">struct</span> DoubleDouble : <span class="nc">IEquatable</span>&lt;DoubleDouble&gt;, <span class="nc">IComparable</span>&lt;DoubleDouble&gt; {
+
+	<span class="k">private</span> <span class="k">readonly</span> <span class="k">double</span> m_hi;
+	<span class="k">private</span> <span class="k">readonly</span> <span class="k">double</span> m_lo;
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// The leading component; equals the value rounded to nearest double.</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">double</span> Hi =&gt; m_hi;
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// The trailing component (the rounding error of &lt;see cref="Hi"/&gt;).</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">double</span> Lo =&gt; m_lo;
+
+}</pre></td></tr></tbody></table></code></div></div><p><strong>One naming note before the math.</strong> The 128-bit type in IEEE 754 (the standard that also defines the <code>double</code>) is called <code>binary128</code>, better known as <a class="external wiki-link" href="https://en.wikipedia.org/wiki/Quadruple-precision_floating-point_format" target="_blank">quadruple-precision</a>.
+It holds one contiguous 113-bit significand and a 15-bit exponent that reaches to ~1e4932.</p><p>A double-double also uses 128 bits of storage, but it is just two ordinary doubles next to each other, resulting in combined ~106 significand bits and unchanged exponent range (still overflowing at ~1e308).<sup class="footnote-ref" id="fnref-1"><a href="#fn-1">[1]</a></sup></p><div class="figure img-gallery" id="figure-2"><a class="img-link" data-size="619x274" href="/blog/double-double-arithmetic/img/fig-bit-layout.314aa382.svg" title="Number of significand bits of each format."></a><span class="fig-caption">Figure 2: Number of significand bits of each format.</span></div><h2 id="Error-free-transformations">Error-free transformations<a aria-label="Link to this section" class="heading-anchor" href="#Error-free-transformations">#</a></h2><p>Everything rests on one insight:</p><blockquote><strong>When a double-arithmetic operation rounds, the amount it rounded away can still be recovered as another double.</strong></blockquote><p>When you add two doubles, the hardware computes the true sum which is then rounded.
+Call the rounded result <code class="inlineEq">s = round(a + b)</code>.
+The part that got rounded away is exactly <code class="inlineEq">(a + b) - s</code>, a formula that looks self-defeating: it needs the exact sum, and the exact sum is the one thing we do not have.
+And yet a handful of ordinary double operations recover the leftover exactly.
+The algorithm is <a class="wiki-link" href="https://en.wikipedia.org/wiki/2Sum" target="_blank" title="Knuth's two-sum at Wikipedia">Knuth's two-sum</a>, and <a href="#code-2" title="Go to code listing 2: Knuth's two-sum: sum + error == a + b exactly, for any two doubles.">Code listing 2</a> is the whole of it, six additions
+and subtractions, with no branches, no bit twiddling and no wider type.</p><div class="highlighter-rouge" id="code-2"><div class="code-header"><span>Code listing 2: Knuth's two-sum: sum + error == a + b exactly, for any two doubles.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+</pre></td><td class="rouge-code"><pre><span class="k">private</span> <span class="k">static</span> (<span class="k">double</span> Sum, <span class="k">double</span> Error) twoSum(<span class="k">double</span> a, <span class="k">double</span> b) {
+	<span class="k">double</span> sum = a + b;
+	<span class="k">double</span> bKept = sum - a;        <span class="cm">// the part of b that made it into the sum</span>
+	<span class="k">double</span> aKept = sum - bKept;    <span class="cm">// and the part of a</span>
+	<span class="k">double</span> aLost = a - aKept;
+	<span class="k">double</span> bLost = b - bKept;
+	<span class="k">return</span> (sum, aLost + bLost);
+}</pre></td></tr></tbody></table></code></div></div><p>Here is every line of that algorithm on our example numbers A and B:</p><div class="highlighter-rouge" id="code-3"><div class="code-header"><span>Code listing 3: Knuth's two-sum on the two example numbers.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+</pre></td><td class="rouge-code"><pre>A = 111222333444
+B = 0.555666777888
+
+A + B, exactly        = 111222333444.555666777888
+
+sum   = A + B         = 111222333444.5556640625      &lt;- what the hardware hands back
+bKept = sum - A       =            0.5556640625
+aKept = sum - bKept   = 111222333444
+aLost = A - aKept     =            0
+bLost = B - bKept     =            0.000002715388
+error = aLost + bLost =            0.000002715388
+
+sum + error           = 111222333444.555666777888    &lt;- exact, to the last digit</pre></td></tr></tbody></table></code></div></div><p>The double sum kept the leading 17 digits of the exact one and dropped the rest, exactly as expected.<sup class="footnote-ref" id="fnref-2"><a href="#fn-2">[2]</a></sup>
+The line to look at is <code>bLost</code>. It is not an approximation of what got dropped, it <em>is</em> what got dropped, and it always fits in one double.
+It has to, because everything below the cut came from the <em>smaller</em> operand, and the smaller operand never had more than 53 bits.
+In the extreme, when the operands are too far apart to overlap at all, the sum rounds to the larger one and the leftover is the smaller one, whole.</p><p>Which makes the last line the property the whole type is built on: <code>(sum, error)</code> is exactly <code>A + B</code>, to the last digit.
+The exactness comes from the arrangement rather than from rounding errors cancelling out; only the first two lines round at all.
+<code>aKept</code> and <code>bKept</code> split <code>sum</code> exactly between them, so the last four lines are exact and <code>aLost + bLost</code> is precisely what the first line threw away.
+For the proofs, see Dekker 1971 and Knuth vol. 2 in <a href="#Further-reading">Further reading</a>.</p><p>Notice that <code>A</code> lost nothing in the example above, and that is not a coincidence.
+Whenever <code class="inlineEq">|a| &gt;= |b|</code> the sum keeps every bit of the larger operand, so <code>aKept</code> and <code>aLost</code> can be dropped from the function entirely.
+That is Dekker's fast two-sum:</p><div class="highlighter-rouge" id="code-4"><div class="code-header"><span>Code listing 4: Dekker's fast two-sum: the same guarantee as Knuth's two-sum in half the operations, valid only when |a| &gt;= |b|.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+</pre></td><td class="rouge-code"><pre><span class="k">private</span> <span class="k">static</span> (<span class="k">double</span> Sum, <span class="k">double</span> Error) quickTwoSum(<span class="k">double</span> a, <span class="k">double</span> b) {
+	<span class="k">double</span> sum = a + b;
+	<span class="k">double</span> bKept = sum - a;
+	<span class="k">return</span> (sum, b - bKept);       <span class="cm">// a kept everything, so only b's loss is left</span>
+}</pre></td></tr></tbody></table></code></div></div><p>Multiplication needs the same thing. The exact product of two 53-bit numbers needs 106 bits, so it splits
+into a high double and a low double. Dekker's original method (Veltkamp splitting) took 17 operations.
+Once the hardware has an FMA, which every mainstream processor does, it takes just two:</p><div class="highlighter-rouge" id="code-5"><div class="code-header"><span>Code listing 5: Exact product via fused multiply-add. This one instruction is why modern double-double is cheap.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+</pre></td><td class="rouge-code"><pre><span class="k">private</span> <span class="k">static</span> (<span class="k">double</span> Product, <span class="k">double</span> Error) twoProduct(<span class="k">double</span> a, <span class="k">double</span> b) {
+	<span class="k">double</span> product = a * b;
+	<span class="k">double</span> error = <span class="nc">Math</span>.FusedMultiplyAdd(a, b, -product);
+	<span class="k">return</span> (product, error);
+}</pre></td></tr></tbody></table></code></div></div><p>The trick is that a fused multiply-add computes <code>a*b + c</code> with a single rounding at the very end.
+Call it as <code>fma(a, b, -product)</code> and it evaluates <code>a*b - product</code> in full. The subtraction cancels
+everything <code>product</code> kept, leaving exactly the tail that <code>a * b</code> threw away, small enough to come back
+without any rounding at all.</p><p>Here are all three side by side:</p><table class="center"><thead><tr><th>Transformation</th><th class="center">Operations</th><th>Precondition</th><th>Gives you</th></tr></thead><tbody><tr><td><code>twoSum</code></td><td class="center">6</td><td>none</td><td>exact sum of two doubles</td></tr><tr><td><code>quickTwoSum</code></td><td class="center">3</td><td>larger operand first</td><td>exact sum of two doubles</td></tr><tr><td><code>twoProduct</code></td><td class="center">2 (one FMA)</td><td>product must not over- or underflow</td><td>exact product of two doubles</td></tr></tbody></table><p>These three are called <strong>error-free transformations</strong>, and they are the entire foundation. They all
+assume round-to-nearest arithmetic and no overflow, which .NET gives you and offers no switch to take
+away. Everything below is bookkeeping on top of them.</p><h2 id="Building-arithmetic-operations-for-double-double">Building arithmetic operations for double-double<a aria-label="Link to this section" class="heading-anchor" href="#Building-arithmetic-operations-for-double-double">#</a></h2><p>With <code>twoSum</code>, <code>quickTwoSum</code>, and <code>twoProduct</code> functions in hand, writing arithmetic operations for <code>DoubleDouble</code> is quite straightforward,
+and one pattern repeats through all of them: use an error-free transformation wherever a rounding would lose
+digits we care about, use plain double arithmetic wherever the digits at stake are already below
+<code class="inlineEq">2<sup>-106</sup></code>, and finish with a <code>quickTwoSum</code> so the result is a normalized pair again.</p><h3 id="Addition">Addition<a aria-label="Link to this section" class="heading-anchor" href="#Addition">#</a></h3><p>Add the two components pairwise, then fold the errors back in.
+The fold itself can round, which is what the second <code>quickTwoSum</code> cleans up.</p><div class="highlighter-rouge" id="code-6"><div class="code-header"><span>Code listing 6: Addition. Relative error stays below 3 * 2^-106 for all inputs.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+</pre></td><td class="rouge-code"><pre><span class="k">public</span> DoubleDouble Add(DoubleDouble right) {
+	(<span class="k">double</span> sum, <span class="k">double</span> error) = twoSum(m_hi, right.m_hi);
+	(<span class="k">double</span> lowSum, <span class="k">double</span> lowError) = twoSum(m_lo, right.m_lo);
+	error += lowSum;
+	(sum, error) = quickTwoSum(sum, error);
+	error += lowError;
+	(sum, error) = quickTwoSum(sum, error);
+	<span class="k">return</span> <span class="k">new</span> DoubleDouble(sum, error);
+}</pre></td></tr></tbody></table></code></div></div><p>There is a cheaper "sloppy" variant in circulation, 11 operations instead of these 20, which folds both
+low parts in one step. It is fine while the operands share a sign, but under cancellation it has no
+relative error bound at all.</p><h3 id="Multiplication">Multiplication<a aria-label="Link to this section" class="heading-anchor" href="#Multiplication">#</a></h3><div class="highlighter-rouge" id="code-7"><div class="code-header"><span>Code listing 7: Multiplication: one exact product, plus the three cross terms.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+</pre></td><td class="rouge-code"><pre><span class="k">public</span> DoubleDouble Multiply(DoubleDouble right) {
+	(<span class="k">double</span> product, <span class="k">double</span> error) = twoProduct(m_hi, right.m_hi);
+	error += m_hi * right.m_lo + m_lo * right.m_hi + m_lo * right.m_lo;
+	(product, error) = quickTwoSum(product, error);
+	<span class="k">return</span> <span class="k">new</span> DoubleDouble(product, error);
+}</pre></td></tr></tbody></table></code></div></div><p>The one exact product of the high halves carries the value; the cross terms are corrections,
+and they do not need to be exact.
+Each of them is smaller than the product it corrects by a factor of at least <code class="inlineEq">2<sup>-53</sup></code>,
+so whatever plain double arithmetic rounds away from them is at <code class="inlineEq">2<sup>-106</sup></code> and below,
+under the precision floor of the type itself.
+Knowing what you are allowed to be sloppy about is most of the art here.</p><p>Squaring is the same with two cross terms instead of three,
+and multiplying by a plain <code>double</code> needs only one - worth having as overloads, because kernels use them constantly (say, a pixel step times a loop index).</p><h3 id="Division">Division<a aria-label="Link to this section" class="heading-anchor" href="#Division">#</a></h3><p>There is no error-free transformation for division.
+Instead, take a double's worth of the quotient, subtract its contribution at full double-double width, and repeat.
+Long division, three digits deep.</p><div class="highlighter-rouge" id="code-8"><div class="code-header"><span>Code listing 8: Division by iterated remainder.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+</pre></td><td class="rouge-code"><pre><span class="k">public</span> DoubleDouble Divide(DoubleDouble right) {
+	<span class="k">double</span> quotient1 = m_hi / right.m_hi;
+	DoubleDouble remainder = Subtract(right.Multiply(quotient1));
+	<span class="k">double</span> quotient2 = remainder.m_hi / right.m_hi;
+	remainder = remainder.Subtract(right.Multiply(quotient2));
+	<span class="k">double</span> quotient3 = remainder.m_hi / right.m_hi;
+
+	(<span class="k">double</span> sum, <span class="k">double</span> error) = quickTwoSum(quotient1, quotient2);
+	<span class="k">return</span> <span class="k">new</span> DoubleDouble(sum, error).Add(FromDouble(quotient3));
+}</pre></td></tr></tbody></table></code></div></div><p>Square root is the same shape: take the double root, then one Newton refinement.
+Both come out accurate to a couple of units in the last place rather than correctly rounded - not the nearest
+representable pair, and not always within one of it.
+The error starts to matter only when the last bits have to be reproducible against a different implementation.</p><h3 id="Comparison-for-free">Comparison, for free<a aria-label="Link to this section" class="heading-anchor" href="#Comparison-for-free">#</a></h3><div class="highlighter-rouge" id="code-9"><div class="code-header"><span>Code listing 9: Comparison is trivial thanks to the normalization invariant.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+</pre></td><td class="rouge-code"><pre><span class="k">public</span> <span class="k">int</span> CompareTo(DoubleDouble other) {
+	<span class="k">int</span> hiComparison = m_hi.CompareTo(other.m_hi);
+	<span class="k">return</span> hiComparison != 0 ? hiComparison : m_lo.CompareTo(other.m_lo);
+}</pre></td></tr></tbody></table></code></div></div><p>This is plain lexicographic ordering; the invariant makes it correct.
+Since the low half is never more than half the gap to the next double, it can never grow large enough to overturn a decision the high halves already made.
+It is also one more reason every operation ends by renormalizing.
+If unnormalized pairs were allowed, <code class="inlineEq">(1, 0.75)</code> and <code class="inlineEq">(1.75, 0)</code> would be the same number and compare as different ones.</p><h3 id="One-pair-four-shapes">One pair, four shapes<a aria-label="Link to this section" class="heading-anchor" href="#One-pair-four-shapes">#</a></h3><p>The invariant leaves the two 53-bit significand windows surprising freedom in their relative positions,
+and the pair behaves a little differently in each arrangement as shown in <a href="#figure-3" title="Go to figure 3: The arrangements a normalized pair can take, and the one it cannot.">Figure 3</a>.</p><div class="figure img-gallery" id="figure-3"><a class="img-link" data-size="619x245" href="/blog/double-double-arithmetic/img/fig-pair-shapes.bf3523a6.svg" title="The arrangements a normalized pair can take, and the one it cannot."></a><span class="fig-caption">Figure 3: The arrangements a normalized pair can take, and the one it cannot.</span></div><ul><li><strong>Single double:</strong> Any value one double holds exactly is the pair with <code class="inlineEq">lo = 0</code>; that is all
+<code>FromDouble(1.5)</code> does.</li><li><strong>Touching:</strong> <code>lo</code> continues exactly where <code>hi</code> ends, giving 106 contiguous bits, the "31 digits" from the
+title. The smallest example is <code class="inlineEq">1 + 2<sup>-53</sup></code>, which becomes the pair <code class="inlineEq">(1, 2<sup>-53</sup>)</code>.</li><li><strong>Gapped:</strong> This is the interesting case, where <code>lo</code> starts further down, and every bit position in between is a zero. This feels like a special case, a "double-double denormal", but it is not. The pair from our example happens to have a gap of 2 (<a href="#code-10" title="Go to code listing 10: B's binary digits split between the two halves of the pair. A owns all the integer bits, so the fraction of the exact sum is B itself.">Code listing 10</a>).</li><li><strong>Overlapping never exists.</strong> If the windows overlapped, <code>hi</code> would no longer be the value rounded to
+a double and the same number could be written as many different pairs. That is what the
+invariant forbids, and you cannot even build it: <code>FromTwoDoubles(1.0, 0.75)</code> renormalizes on entry
+and returns <code>(1.75, 0)</code>.</li></ul><p>The example's gap of 2 can be seen if we write the digits out in binary.
+<code>A</code> owns all the integer bits, so the fractional bits of the exact sum are exactly <code>B</code>'s own digits,
+and the pair splits that digit stream in two. <code>sum</code>'s 53-bit window (which started way up at <code class="inlineEq">2<sup>36</sup></code>)
+runs out 16 places after the binary point, and <code>error</code> carries the rest:</p><div class="highlighter-rouge" id="code-10"><div class="code-header"><span>Code listing 10: B's binary digits split between the two halves of the pair. A owns all the integer bits, so the fraction of the exact sum is B itself.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+</pre></td><td class="rouge-code"><pre>B     = .1000111001000000001011011000...
+sum   = .1000111001000000                 window ends at 2^-16
+error =                  001011011000...  first set bit at 2^-19
+                         ^^
+                         the gap: two zero bits stored by neither half</pre></td></tr></tbody></table></code></div></div><p>And in our case, <code>error</code>'s share of the stream happens to begin with two zeros, and that is all a gap is.
+Those zeros are real digits of the value, but a float never spends storage on leading zeros.
+Instead, its exponent simply points lower, the way <code class="inlineEq">0.001011</code> and <code class="inlineEq">1.011 â 2<sup>-3</sup></code> are the same number.</p><p>The gapped shape has one catch, though.
+The gap itself costs nothing and loses nothing; the pair holds exactly two "islands" of bits.
+Suppose this absurd case: <code class="inlineEq">10<sup>300</sup> + 10<sup>-300</sup></code> is a perfectly legal pair with 1,940 zero bits between its islands, carried in 16 bytes.
+However, evaluate <code class="inlineEq">(10<sup>300</sup> + 10<sup>-300</sup>) + 1</code> and the exact answer would need a third island in the middle, so the smallest one is dropped and the answer is simply <code class="inlineEq">10<sup>300</sup> + 1</code>.</p><p>"But surely <code class="inlineEq">10<sup>300</sup></code> written in binary does not have loads of trailing zerosâ½"
+Right, it does not. Writing it exactly needs about 700 significant bits.
+But the <code>1e300</code> in the pair is not that number, it is the nearest <em>double</em>, which stores a 53-bit significand times a power of two, with every position below those 53 bits implicitly zero.</p><p>Double-double promises ~106 significant bits <em>at the leading edge of the value</em>.
+A wide-gapped pair can exceed that promise but only temporarily, as any arithmetic operation can snap it back.
+Printing runs into the same limit from the other side, which is why the type also carries a <code>ToStringExact</code>.</p><h2 id="What-it-actually-costs">What it actually costs<a aria-label="Link to this section" class="heading-anchor" href="#What-it-actually-costs">#</a></h2><p>Chained single-operation latency, i9-13900K, .NET 10, BenchmarkDotNet:</p><table class="center"><thead><tr><th>Operation</th><th class="right"><code>double</code></th><th class="right"><code>DoubleDouble</code></th><th class="right">ratio</th></tr></thead><tbody><tr><td>add</td><td class="right">0.325 ns</td><td class="right">4.07 ns</td><td class="right">12.5x</td></tr><tr><td>multiply</td><td class="right">0.64 ns</td><td class="right">3.08 ns</td><td class="right">4.8x</td></tr><tr><td>square</td><td class="right">0.64 ns</td><td class="right">2.83 ns</td><td class="right">4.4x</td></tr><tr><td>multiply + add</td><td class="right">1.17 ns</td><td class="right">7.08 ns</td><td class="right">6.0x</td></tr><tr><td>divide</td><td class="right">2.20 ns</td><td class="right">24.09 ns</td><td class="right">10.9x</td></tr></tbody></table><p>Addition is the expensive one (12.5x) and multiplication the cheap one (4.8x), the exact opposite of every other numeric type. The FMA does the whole exact product in one instruction, while the exact sum needs two <code>twoSum</code>s and two renormalizations.
+And division, which has no error-free transformation at all, costs what long division costs.</p><h3 id="Against-a-real-arbitrary-precision-library">Against a real arbitrary-precision library<a aria-label="Link to this section" class="heading-anchor" href="#Against-a-real-arbitrary-precision-library">#</a></h3><p>The comparison that matters is against MPFR, made in a real kernel rather than a loop that repeats one operation.</p><p>The kernel is the whole definition of the Mandelbrot set, which is a small thing to write down.
+Take a point <code class="inlineEq">c</code> in the complex plane, start at <code class="inlineEq">z<sub>0</sub> = 0</code>, and iterate:</p><div class="equation" id="equation-4"><span class="eqId">(4)</span><code class="mainEq" title="z_n+1 = z_n^2 + c">z<sub>n+1</sub> = z<sub>n</sub><sup>2</sup> + c</code></div><p>If the orbit stays bounded forever, <code class="inlineEq">c</code> belongs to the set and the pixel is black.
+If it escapes, and it provably has once <code class="inlineEq">|z| &gt; 2</code>, the iteration count on the way out is the color.
+Every kernel number below is the cost of running those seven real operations, once per iteration, in one type or another.
+Operands change every time, the escape test is included, and one frame is roughly 390 million iterations with every core busy.
+MPFR goes through hand-written P/Invoke with no wrapper class in the way, at 106 bits, which is double-double's significand exactly.</p><table class="center"><thead><tr><th>Kernel</th><th class="right">iterations/second</th><th class="right">vs <code>double</code></th><th class="right">vs <code>DoubleDouble</code></th></tr></thead><tbody><tr><td><code>double</code></td><td class="right">8,700 M</td><td class="right">1x</td></tr><tr><td><code>DoubleDouble</code></td><td class="right">1,000 M</td><td class="right">~9x</td><td class="right">1x</td></tr><tr><td>MPFR @106, in place</td><td class="right">108 M</td><td class="right">~81x</td><td class="right"><strong>~9x</strong></td></tr><tr><td>MPFR @106, fresh result per operation</td><td class="right">26 M</td><td class="right">~330x</td><td class="right"><strong>~38x</strong></td></tr><tr><td>MPFR @212, in place</td><td class="right">57 M</td><td class="right">~150x</td><td class="right">~17x</td></tr><tr><td>MPFR @212, fresh result per operation</td><td class="right">22 M</td><td class="right">~400x</td><td class="right">~45x</td></tr></tbody></table><p>The two MPFR styles run the identical seven operations. The only difference is where results go: into destinations allocated once and reused, the way you would write it in C, or into a fresh value per operation, the way many wrappers present it.</p><p>A double-double costs roughly 9x a double, MPFR at the same 31 digits costs roughly 9x a double-double again, and those two steps multiply into the ~81x.
+There is no reason the option in the middle should land in the geometric middle of the gap it fills, but this one does.
+Take the API at face value and let it allocate, and your perf penalty shoots up to ~38x instead.</p><p>Read those as "about nine" and "about forty" rather than to the digit.<sup class="footnote-ref" id="fnref-3"><a href="#fn-3">[3]</a></sup></p><blockquote class="prompt-note"><p>Per-operation timings and whole-kernel throughput disagree, as they should. A loop repeating one operation on fixed operands is the friendliest case there is, not the one you ship.
+It is not a threading artifact either, running the same frame on one thread and on all of them speeds both types up by about the same factor.</p></blockquote><h3 id="The-allocation-is-avoidable-and-that-is-the-catch">The allocation is avoidable, and that is the catch<a aria-label="Link to this section" class="heading-anchor" href="#The-allocation-is-avoidable-and-that-is-the-catch">#</a></h3><p>The 38x row is avoidable, but the discipline is manual and permanent: keep destinations alive across iterations, never write <code>a * b + c</code> as an expression because each operation would allocate a new value.
+People do exactly that, and it works. It is also most of what you were hoping a number type would spare you.</p><p>Double-double has no such style to get wrong.
+A value is two doubles in a <code>readonly struct</code>, so <code>zRe * zIm * 2.0 + cIm</code> allocates nothing, and no later edit can regress it.</p><h3 id="What-a-fixed-width-value-type-buys">What a fixed-width value type buys<a aria-label="Link to this section" class="heading-anchor" href="#What-a-fixed-width-value-type-buys">#</a></h3><p>The 9x is this kernel's number, not a constant. It comes from seven arithmetic operations per iteration on
+operands that are already in registers. Shift the mix toward division, where double-double is at its weakest,
+or toward memory, where neither type is doing the work, and it moves. What does not move is where the
+difference comes from:</p><ol><li><strong>There is no call.</strong> A double-double add or multiply is 7 to 20 instructions the JIT inlines into your loop (a divide is about eighty, and still inlined); an MPFR operation is an opaque function call (in .NET across the P/Invoke boundary, about 1.6 ns before any arithmetic starts).</li><li><strong>No loops, no branches.</strong> A fixed instruction sequence the CPU pipelines, against a data-dependent walk over limbs, then a normalize, then a round.</li><li><strong>It rides the FPU.</strong> Native <code>double</code> adds and multiplies, retired one per cycle with several in flight, against integer paths plus software rounding.</li><li><strong>Precision is decided at compile time.</strong> No precision field, no rounding policy, none of the bookkeeping a library spends much of its time on.</li><li><strong>It can vectorize.</strong> Nothing branches, so a structure-of-arrays rewrite over <code>Vector256&lt;double&gt;</code> does four values at a time and the same arithmetic ports to a GPU. That is a rewrite, not something the JIT will do to the type above, but arbitrary precision has no such rewrite available at all.</li></ol><p>You get 2x the precision for about 9x the cost.
+The trick even composes: three doubles make a triple-double (~159 bits), four a quad-double (~212 bits).
+But each extra term adds the same 53 bits while renormalization keeps getting more expensive, so somewhere around the third or fourth double a real library becomes the cheaper way to get digits.</p><h3 id="Against-the-compiler-s-128-bit-float">Against the compiler's 128-bit float<a aria-label="Link to this section" class="heading-anchor" href="#Against-the-compiler-s-128-bit-float">#</a></h3><p>If you write C or C++ on GCC or Clang, the quadruple precision from the naming note is built in, spelled <code>__float128</code>. Declare it and every operator works, 113 significand bits, no library, no license.
+If it were fast, this article would be a lot shorter.</p><p>The catch is that no x86 or mainstream ARM processor implements binary128 in hardware, so the compiler lowers every operation into a call to a software routine (<code>__addtf3</code> and friends).
+That gives up 3 of the 5 advantages above: it is a call, the arithmetic leaves the FPU, and nothing vectorizes.
+Measured with the same chained loops and the same kernel, this time in C<sup class="footnote-ref" id="fnref-4"><a href="#fn-4">[4]</a></sup>:</p><table class="center"><thead><tr><th>Kernel (C, one core)</th><th class="right">iterations/second</th><th class="right">vs <code>double</code></th><th class="right">vs <code>DoubleDouble</code></th></tr></thead><tbody><tr><td><code>double</code></td><td class="right">531 M</td><td class="right">1x</td></tr><tr><td><code>long double</code> (x87)</td><td class="right">441 M</td><td class="right">1.2x</td></tr><tr><td><code>DoubleDouble</code></td><td class="right">76 M</td><td class="right">~7x</td><td class="right">1x</td></tr><tr><td><code>__float128</code></td><td class="right">12.4 M</td><td class="right">~43x</td><td class="right"><strong>~6x</strong></td></tr></tbody></table><p>Per isolated operation it is 2x to 4x behind double-double, with one exception: division, double-double's weakest operation and soft-float's least bad one, goes to <code>__float128</code> by 1.6x.
+The <code>long double</code> row shows what hardware support is worth: nearly a double's speed, but only 64 significand bits, widening a double rather than doubling it.</p><p>The 6x perf price does buy you some things: 7 more bits, far more exponent range, correct rounding, and properly working infinities/NaNs.
+And where binary128 is in hardware, IBM's POWER9 and later, <code>__float128</code> is the right answer.
+On x86 the trade goes the other way, and in .NET the question never arises, as there is unfortunately no 128-bit float to reach for (yet?).</p><h2 id="Showcase-a-Mandelbrot-zoom-that-double-cannot-reach">Showcase: a Mandelbrot zoom that double cannot reach<a aria-label="Link to this section" class="heading-anchor" href="#Showcase-a-Mandelbrot-zoom-that-double-cannot-reach">#</a></h2><p>Back to the zoom that started this. Here is what the renderer is asked to draw:</p><div class="highlighter-rouge" id="code-11"><div class="code-header"><span>Code listing 11: A deep-zoom center in the seahorse valley, and a view width that is past double's floor.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+</pre></td><td class="rouge-code"><pre><span class="k">private</span> <span class="k">const</span> <span class="k">string</span> CENTER_RE = "-0.74364389112485980556186";
+<span class="k">private</span> <span class="k">const</span> <span class="k">string</span> CENTER_IM = "0.13182591316154390843318";
+
+<span class="k">private</span> <span class="k">const</span> <span class="k">double</span> MARQUEE_WIDTH = 7.746e-15;
+<span class="k">private</span> <span class="k">const</span> <span class="k">double</span> ESCAPE_SQUARED = 65536.0 * 65536.0;</pre></td></tr></tbody></table></code></div></div><p>The kernel is deliberately the same code once per type: same operations, same order, same values,
+with each type using the cheapest spelling of each operation it has.
+All of them are in <a href="#Appendix-B-the-benchmarked-kernels" title="Jump to section">section Appendix B: the benchmarked kernels</a>, side by side; here is the double-double one:</p><div class="highlighter-rouge" id="code-12"><div class="code-header"><span>Code listing 12: The double-double inner loop. Note the escape test: it decides a branch, so a double's accuracy is plenty for it.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+</pre></td><td class="rouge-code"><pre>DoubleDouble zRe = DoubleDouble.Zero;
+DoubleDouble zIm = DoubleDouble.Zero;
+<span class="k">for</span> (; n &lt; maxIterations; n++) {
+	DoubleDouble zReSquared = zRe.Square();
+	DoubleDouble zImSquared = zIm.Square();
+	magnitudeSquared = zReSquared.Hi + zImSquared.Hi;
+	<span class="k">if</span> (magnitudeSquared &gt; ESCAPE_SQUARED) {
+		<span class="k">break</span>;
+	}
+	zIm = zRe * zIm * 2.0 + cIm;
+	zRe = zReSquared - zImSquared + cRe;
+}</pre></td></tr></tbody></table></code></div></div><div class="figure img-gallery" id="figure-4"><a class="img-link" data-size="500x500" href="/blog/double-double-arithmetic/img/zoom-1e-03.6097f977.png" title="A view 1e-3 across. At this depth both types render the same image."></a><span class="fig-caption">Figure 4: A view 1e-3 across. At this depth both types render the same image.</span></div><div class="figure" id="figure-5"><ul class="img-gallery img-gallery-fill"><li><figure style="max-width:420px"><a class="img-link" data-size="500x500" href="/blog/double-double-arithmetic/img/zoom-7.7e-15-double.1e55e24d.png" title="double"></a><figcaption>double</figcaption></figure></li><li><figure style="max-width:420px"><a class="img-link" data-size="500x500" href="/blog/double-double-arithmetic/img/zoom-7.7e-15-dd.4c0b74d0.png" title="double-double"></a><figcaption>double-double</figcaption></figure></li></ul><span class="fig-caption">Figure 5: The 7.7e-15 view. The double render quantizes into blocks; the double-double render is unaffected.</span></div><p>The pixelated areas in the double render are not a bug.
+Each one is a group of neighboring pixels whose coordinates rounded to exactly the same double, iterated to exactly the same result (color).
+The pixel step here is about 1.5e-17, a seventh of the gap between neighboring doubles, so the blocks are about seven pixels wide, and every further zoom step widens them until the whole frame is a single one.
+With double-double the blocks are gone, and the detail holds down to a view width of about 1e-28.</p><p>Keep going, though, and the same thing happens to it, as <a href="#figure-6" title="Go to figure 6: A nearby center at 4.9e-31 across, sixteen orders of magnitude deeper. Now it is the double-double precision that has run out. The reference on the right is the same view computed by perturbation, which is what is really there.">Figure 6</a> shows.</p><div class="figure" id="figure-6"><ul class="img-gallery img-gallery-fill"><li><figure style="max-width:420px"><a class="img-link" data-size="500x500" href="/blog/double-double-arithmetic/img/zoom-4.9e-31-dd.04088f72.png" title="double-double"></a><figcaption>double-double</figcaption></figure></li><li><figure style="max-width:420px"><a class="img-link" data-size="500x500" href="/blog/double-double-arithmetic/img/zoom-4.9e-31-perturbation.a27c34bf.png" title="perturbation, for reference"></a><figcaption>perturbation, for reference</figcaption></figure></li></ul><span class="fig-caption">Figure 6: A nearby center at 4.9e-31 across, sixteen orders of magnitude deeper. Now it is the double-double precision that has run out. The reference on the right is the same view computed by perturbation, which is what is really there.</span></div><h2 id="Having-31-digits-is-not-the-same-as-using-31-digits">Having 31 digits is not the same as using 31 digits<a aria-label="Link to this section" class="heading-anchor" href="#Having-31-digits-is-not-the-same-as-using-31-digits">#</a></h2><p>Everything so far measures one thing: how finely you can represent a point.
+How much precision the computation then needs is a different question, and the Julia set makes the gap between them very clear.</p><p>A Julia set uses <a href="#equation-4" title="Go to equation 4">Equation 4</a> again, but with the two roles swapped: <code class="inlineEq">c</code> is one constant for the whole image, and the pixel coordinate is the starting <code class="inlineEq">z<sub>0</sub></code> instead of zero.
+Same arithmetic, same cost per iteration, and it falls apart at a zoom the Mandelbrot renderer would not notice.</p><p>I ran into this while browsing Julia sets in my own renderer.
+I often found that the most interesting structure is in the center of the image (the origin), so that's where I zoomed in.
+The glitches arrived so early that I first thought I had a bug in my code.
+However, switching the kernel to double-double eliminated them completely,
+so the bug was not in the code, and I went looking for what had run out.</p><div class="figure" id="figure-7"><ul class="img-gallery img-gallery-fill"><li><figure style="max-width:420px"><a class="img-link" data-size="960x960" href="/blog/double-double-arithmetic/img/julia-double.6cf001fb.png" title="double"></a><figcaption>double</figcaption></figure></li><li><figure style="max-width:420px"><a class="img-link" data-size="960x960" href="/blog/double-double-arithmetic/img/julia-dd.858bc67c.png" title="double-double"></a><figcaption>double-double</figcaption></figure></li></ul><span class="fig-caption">Figure 7: One Julia view just about 3e-7 across. The Mandelbrot at the top of this article is more than seven orders of magnitude deeper and comes out clean.</span></div><p>The coordinate is not what ran out.
+The center is 9.7e-8 from the origin, and doubles are dense down there, with consecutive ones just 1.3e-23 apart.</p><p>The precision runs out in the first line of the loop, in the addition rather than the squaring.
+Squaring makes the pixel's coordinate smaller, which costs nothing; a double keeps all its digits no matter how small the number gets.
+The damage is the very next step, where that tiny result is added to <code class="inlineEq">c</code>, a number around 0.75.
+Write one iteration out and you can count what survives:</p><div class="highlighter-rouge" id="code-13"><div class="code-header"><span>Code listing 13: One pixel's first iteration, 1.2e-8 from the origin, and its neighbor one pixel step away. Both squares land on the same double once c is added.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+</pre></td><td class="rouge-code"><pre>z_0       = 0.000000012           the pixel
+z_0^2     = 0.000000000000000144  exact, to a double's full 16 digits
+c         = 0.75
+
+c + z_0^2 = 0.750000000000000144  what the sum should be
+c + z_0^2 = 0.750000000000000111  the nearest double, 23% short
+                             ^^^
+
+next pixel over, 3.1e-10 away:
+
+z_0       = 0.0000000123125       a different coordinate
+z_0^2     = 0.000000000000000152  and a different square
+c + z_0^2 = 0.750000000000000111  onto the very same double</pre></td></tr></tbody></table></code></div></div><p>Near 0.75 the doubles are 1.1e-16 apart, and this pixel is worth 1.44e-16, so the sum can record it only as one whole step, storing the pixel's contribution 23% short.
+The neighbor's square is 5% larger again and still rounds to that same single step, which is why the two lines end identically.
+Two pixels that started 3.1e-10 apart are indistinguishable before the second iteration begins.
+Closer to the origin there is nothing left to lose at all. A pixel 5e-9 out has <code class="inlineEq">z<sub>0</sub><sup>2</sup> = 2.5 â 10<sup>-17</sup></code>, under half of that step, so <code>c + z_0^2</code> returns <code>0.75</code> exactly and the pixel contributes nothing at all.
+You can see that neighborhood in <a href="#figure-7" title="Go to figure 7: One Julia view just about 3e-7 across. The Mandelbrot at the top of this article is more than seven orders of magnitude deeper and comes out clean.">Figure 7</a>, in the bottom right of the first picture, where every pixel falls to the same <code class="inlineEq">z<sub>1</sub> = c</code>. The double-double beside it draws a spiral there.</p><p>Neighboring pixels are now separated by the size of a rounding error rather than the size of a coordinate, and a chaotic map spends the rest of the run amplifying both.
+Across a row of the double render, 99% of the pixels come out with the wrong escape count.</p><p>That is also why the damage looks nothing like the earlier figures.
+There the input grid was quantized, so it failed as a lattice aligned to the pixel axes; here the grid is fine and the noise is inside the dynamics, so the image tears along the set's own structure instead.</p><p>The square sets the rate.
+Zooming <em>toward the origin</em>, the pixel's signal in <code class="inlineEq">z<sub>1</sub></code> shrinks as <code class="inlineEq">|z<sub>0</sub>|<sup>2</sup></code> while the view width only shrinks as <code class="inlineEq">|z<sub>0</sub>|</code>, so the usable zoom is the square root of what the same type manages on a Mandelbrot, half the digits.
+Move the same view away from the origin and the penalty vanishes completely, matching the Mandelbrot depth for depth, which shows that this is a fact about small values of <code class="inlineEq">z<sub>0</sub></code> rather than about Julia sets.</p><h2 id="Where-the-double-double-trick-stops-working">Where the double-double trick stops working<a aria-label="Link to this section" class="heading-anchor" href="#Where-the-double-double-trick-stops-working">#</a></h2><p>These are double-double's edges:</p><ul><li><strong>Range is unchanged, and the usable range is smaller.</strong> Overflow is still at 1e308, but full precision only
+lasts down to about 2e-292. Below that the low component goes subnormal, the exact product stops being exact,
+and the pair degrades toward a plain double.</li><li><strong>Infinities do not survive.</strong> The error terms compute <code>inf - inf</code>, so the first overflow or division by
+zero hands back NaN where a double would hand back an infinity. The Mandelbrot kernel above is safe only
+because its bailout fires long before anything can grow that large.</li><li><strong>NaN sorts instead of poisoning.</strong> Comparison is lexicographic on the two halves, so a NaN sorts below
+every real value rather than making every comparison false the way a double's does, and <code>Equals</code> and
+<code>CompareTo</code> disagree about whether two NaNs are the same. Given the bullet above, that NaN is reachable.</li><li><strong>Not correctly rounded.</strong> The guarantees are relative-error bounds (about <code class="inlineEq">2<sup>-104</sup></code> for the product), not "the
+nearest representable 106-bit value". Good enough for everything in the target band, but do not claim more.</li><li><strong>The compiler must not "help".</strong> Every error-free transformation depends on the operations happening
+exactly as written, at exactly double precision. C and C++ with <code>-ffast-math</code> will reassociate
+<code>sum - a</code> away, and FMA contraction, which is on by default in GCC and Clang without any fast-math
+flag, rewrites Dekker's splitting steps into something that is no longer a split. .NET is a comfortable
+place to write this: there is no fast-math switch, RyuJIT does not reassociate floating-point expressions,
+and it never contracts a multiply and an add into an FMA on its own.</li><li><strong>Non-associativity is worse than a double's</strong>, so tests have to compare against an exact oracle rather
+than against remembered literals.</li><li><strong>~31 digits is the ceiling.</strong> If the requirement is "arbitrary" or "whatever the input needs", this is
+the wrong tool. In my own fractal renderer double-double is
+one tier of three, and it hands off at 1e-28.</li></ul><h2 id="What-31-digits-buys-in-real-life-units">What 31 digits buys, in real-life units<a aria-label="Link to this section" class="heading-anchor" href="#What-31-digits-buys-in-real-life-units">#</a></h2><p>Double-double renders at zooms in the range of <code class="inlineEq">10<sup>29</sup></code>.
+These numbers are quite hard to get a feel for, so here are some fun facts.</p><p>Put the whole Mandelbrot set on your phone screen, about 7 cm wide, some 1200 pixels across.
+Now pinch to zoom and keep going until neighboring pixels start landing on the same coordinate, the way they do in <a href="#figure-5" title="Go to figure 5: The 7.7e-15 view. The double render quantizes into blocks; the double-double render is unaffected.">Figure 5</a>.
+Then ask how big the whole set has grown by the time that happens.</p><p>Say every pinch doubles the zoom and takes one second.
+In <code>double</code> precision you are done in <strong>44 seconds</strong>, with the screen down to 1.3e-13 of a unit.
+The entire set drawn at that scale would be <strong>1,200,000,000 km</strong> across, 8x the distance from the Earth to the Sun, reaching from here to past Jupiter.</p><p>In <code>DoubleDouble</code> you keep pinching for another <strong>53 seconds</strong>, down to 1.5e-29 across.
+The original set is now <strong>12 observable universes, side by side</strong>!</p><p>And it goes far, far deeper still.
+<a href="#figure-8" title="Go to figure 8: A view 2.5e-398 across, 1,322 doublings below the whole set, computed by perturbation.
+Placing its center takes about 400 decimal digits. A double has 15 and a double-double has 31.">Figure 8</a> shows the same pinching kept up for <strong>22 minutes</strong>, to a view 2.5e-398 across, which needs the center represented to 400+ decimal digits.
+No fixed-width type reaches that, and no amount of gluing doubles together ever will.
+That one takes perturbation: one reference orbit at full precision, and a per-pixel delta at lower precision (down there, the delta is around 1e-401, far below the smallest number even a double can represent).</p><div class="figure img-gallery" id="figure-8"><a class="img-link" data-size="1920x1440" href="/blog/double-double-arithmetic/img/zoom-2.5e-398-perturbation.40e309ac.png" title="A view 2.5e-398 across, 1,322 doublings below the whole set, computed by perturbation.
+Placing its center takes about 400 decimal digits. A double has 15 and a double-double has 31."></a><span class="fig-caption">Figure 8: A view 2.5e-398 across, 1,322 doublings below the whole set, computed by perturbation.<sup class="footnote-ref" id="fnref-5"><a href="#fn-5">[5]</a></sup>
+Placing its center takes about 400 decimal digits.<sup class="footnote-ref" id="fnref-6"><a href="#fn-6">[6]</a></sup> A double has 15 and a double-double has 31.</span></div><h2 id="Takeaway">Takeaway<a aria-label="Link to this section" class="heading-anchor" href="#Takeaway">#</a></h2><p>I sat down to write a short note about gluing two doubles together, and it kept growing.
+Partly because I decided to measure MPFR instead of guessing at it, and partly because the fractals I was using as a demo kept showing me things I had not planned to write about.</p><p>Three things are worth taking away even if you skipped everything above.</p><p><strong>The performance gap is split almost exactly in half.</strong> A double-double costs about 9x a double, and an arbitrary-precision float (MPFR here) at the same 31 digits costs about 9x a double-double again.
+That second 9x is why I wrote the type at all.
+It kept my own explorer interactive at these depths and made high-resolution renders practical (until I implemented perturbation-based algorithms).</p><p><strong>You cannot hold it wrong.</strong> It is two doubles in a <code>readonly struct</code>: nothing to preallocate for better performance, no native binary or P/Invoke, no precision field to keep making decisions about.
+It inlines, and it vectorizes if you want it to.</p><p><strong>Having 31 digits is not the same as using 31 digits.</strong> The type decides how many digits you start with. Your operations and numbers decide how many useful digits are still left at the end.
+In the Julia section a single addition costs the same 14 digits either way: a double goes in with just under 16 and comes out with 2, a double-double goes in with just under 32 and comes out with 18.
+A wider type hands you more digits to start with. It does nothing about how fast you lose them.</p><p>The decision rule I ended up with:</p><ul><li>Need up to ~31 digits, in a hot loop, and want it fast without maintaining allocation discipline by hand? Double-double: two hundred lines of arithmetic and no dependencies.</li><li>Need arbitrary or input-dependent precision, or simply more than ~31 digits? Use a real library, and budget for roughly 80x a plain double at those same 31 digits, rising as you ask for more, and 300x or worse if you let the API allocate a result per operation.</li><li>Need range rather than precision? Different trick entirely. I have a type for that one too, and it may get its own article.</li></ul><p>And one note on the motivating example: for deep Mandelbrot zooms, brute-force precision is not the state of the art.
+Perturbation goes where no fixed-width type can, and I have implemented that too, but it deserves an article of its own.
+The fractal was the motivation here, not the point. The gap between doubles and arbitrary-precision libraries shows up in far more places than fractal renderers.</p><h2 id="Further-reading">Further reading<a aria-label="Link to this section" class="heading-anchor" href="#Further-reading">#</a></h2><ul><li>T. J. Dekker, <a class="external" href="https://eudml.org/doc/132105" target="_blank">"A Floating-Point Technique for Extending the Available Precision"</a>, Numerische Mathematik, 1971.
+The original paper: the splitting trick, and the fast two-sum this article calls <code>quickTwoSum</code>.</li><li>D. E. Knuth, <em>The Art of Computer Programming</em>, vol. 2: Seminumerical Algorithms, section 4.2.2.
+The six-operation <code>twoSum</code> and the proof that it is exact.</li><li>Y. Hida, X. S. Li and D. H. Bailey, <a class="external" href="https://www.davidhbailey.com/dhbpapers/arith15.pdf" target="_blank">"Algorithms for Quad-Double Precision Floating Point Arithmetic"</a>, 2001.
+The QD library paper - the reference double-double and quad-double implementation.</li><li>M. Joldes, J.-M. Muller and V. Popescu, <a class="external" href="https://inria.hal.science/hal-01351529" target="_blank">"Tight and Rigorous Error Bounds for Basic Building Blocks of Double-Word Arithmetic"</a>, ACM TOMS, 2017.
+The modern error analysis: tight, proven bounds for the addition, multiplication and division used here.</li><li>J. R. Shewchuk, <a class="external" href="https://people.eecs.berkeley.edu/~jrs/papers/robustr.pdf" target="_blank">"Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates"</a>, 1997.
+Where the technique goes next: expansions of <em>n</em> doubles whose precision adapts to the input.</li></ul><section class="footnotes"><h2 class="footnotes-title">Footnotes</h2><ol class="footnotes-list"><li class="footnote-def" id="fn-1"><p>The naming gets even muddier with C's <code>long double</code>, whose meaning depends on the platform and the compiler. On IBM POWER it is actually double-double, exactly this technique (GCC calls it <code>__ibm128</code>, and reserves <code>__float128</code> for the IEEE type). On x86 it is yet another type: GCC and Clang give you the 80-bit x87 extended format with a 64-bit significand, while MSVC makes it just another name for <code>double</code>. <a aria-label="Back to the text" class="footnote-back" href="#fnref-1" title="Back to the text">â©</a></p></li><li class="footnote-def" id="fn-2"><p>Printed values are rounded for readability. <code>B</code> is really the double <em>nearest</em> 0.555666777888, which drags a tail of extra digits from the decimal-to-binary conversion into <code>B</code>, <code>bLost</code>, <code>error</code> and the final sum, and the algorithm carries that tail exactly like the digits shown. <a aria-label="Back to the text" class="footnote-back" href="#fnref-2" title="Back to the text">â©</a></p></li><li class="footnote-def" id="fn-3"><p>Medians of three runs on an idle machine; the spread between runs is a few percent either way. The iteration counts, on the other hand, are identical across every run and every type. <a aria-label="Back to the text" class="footnote-back" href="#fnref-3" title="Back to the text">â©</a></p></li><li class="footnote-def" id="fn-4"><p>gcc 14.2, <code>-O2</code>, FMA contraction off, one P-core of the same i9-13900K; double-double is a line-for-line C port of Appendix A, and reproduces the .NET per-operation numbers within a few percent. Single-threaded, so compare the ratios, not the rows, with the all-core table earlier. <a aria-label="Back to the text" class="footnote-back" href="#fnref-4" title="Back to the text">â©</a></p></li><li class="footnote-def" id="fn-5"><p>Nobody had ever looked at this spot before, and without the coordinate written down nobody could find it again, including me. It is kind of like searching for one particular grain of sand in the entire observable universe. Even if you managed to find the right planet, the search would still be hopeless. And like space, the set is mostly empty, with everything worth looking at on the boundary. <a aria-label="Back to the text" class="footnote-back" href="#fnref-5" title="Back to the text">â©</a></p></li><li class="footnote-def" id="fn-6"><p>Written down here so it is not lost, 406 digits each. Real part: <code>-1.2546501186909057505269466250921981644070768100251708177516070303734046805262190991942188750230768678605788326475221138767425434553956510745751843244663895032007841539877137705604003669583875944006181706618704710525415050302476211752688927355924699367031357139525690997877831869648195623522823691538908055742989329820011761064778120010166893341652782500699958380682058425509820660627053365326418384253599781</code>. Imaginary part: <code>0.3819035642800001819461581237720802452234485990147800334446378567314132368999769468860848762828896508632064176850184911749715609976648123007802564910929725517436736759042462717235720004499322510654559848620036722449528324306932522044048459018966997955517496317108858725278768456014781914592217389991723653848006887239802789886568674879888329442270299742538205772252794459812326617996073246041743419429748869</code>. The viewport is 1.906e-398 high, on a 4:3 frame. <a aria-label="Back to the text" class="footnote-back" href="#fnref-6" title="Back to the text">â©</a></p></li></ol></section><h2 id="Appendix-A-the-whole-type">Appendix A: the whole type<a aria-label="Link to this section" class="heading-anchor" href="#Appendix-A-the-whole-type">#</a></h2><p>Everything discussed above, in two files.
+First the arithmetic half, depending on nothing but <code>System</code> - this is the part to copy when you only need the math:</p><div class="highlighter-rouge" id="code-14"><div class="code-header"><span>Code listing 14: DoubleDouble.cs, complete.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+</pre></td><td class="rouge-code"><pre><span class="cm">// Double-double arithmetic in ~200 lines. This file depends on nothing but System, on</span>
+<span class="cm">// purpose: it is meant to be readable top to bottom and droppable into any project.</span>
+<span class="cm">// Printing and parsing need a big-integer detour, so they live in DoubleDoubleFormat.cs.</span>
+<span class="k">namespace</span> DoubleDoubleSample;
+
+<span class="cd">/// &lt;summary&gt;</span>
+<span class="cd">/// A value stored as the unevaluated sum of two doubles: ~106 significand bits</span>
+<span class="cd">/// (~31 decimal digits) at a few times the cost of a double, with no heap allocation.</span>
+<span class="cd">///</span>
+<span class="cd">/// Invariant: Hi == RoundToNearest(Hi + Lo), i.e. |Lo| is at most half an ulp of Hi.</span>
+<span class="cd">/// Every factory and operation below maintains it, and comparisons rely on it.</span>
+<span class="cd">///</span>
+<span class="cd">/// Built on the Dekker/Knuth error-free transformations at the bottom of this file;</span>
+<span class="cd">/// products use the hardware fused multiply-add. The exponent range is a plain double's</span>
+<span class="cd">/// (this buys precision, not range), and non-finite values are not special-cased: the</span>
+<span class="cd">/// first operation on an infinity yields NaN (the error terms compute inf - inf), so</span>
+<span class="cd">/// test for escape before a value can blow up.</span>
+<span class="cd">///</span>
+<span class="cd">/// By Marek Fiser, from marekfiser.com/blog/double-double-arithmetic/ (CC BY 4.0).</span>
+<span class="cd">/// &lt;/summary&gt;</span>
+<span class="k">public</span> <span class="k">readonly</span> <span class="k">partial</span> <span class="k">struct</span> DoubleDouble : <span class="nc">IEquatable</span>&lt;DoubleDouble&gt;, <span class="nc">IComparable</span>&lt;DoubleDouble&gt; {
+
+	<span class="k">private</span> <span class="k">readonly</span> <span class="k">double</span> m_hi;
+	<span class="k">private</span> <span class="k">readonly</span> <span class="k">double</span> m_lo;
+
+	<span class="cd">/// &lt;summary&gt;The leading component; equals the value rounded to nearest double.&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">double</span> Hi =&gt; m_hi;
+
+	<span class="cd">/// &lt;summary&gt;The trailing component (the rounding error of &lt;see cref="Hi"/&gt;).&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">double</span> Lo =&gt; m_lo;
+
+	<span class="cd">/// &lt;summary&gt;True when the value is exactly zero.&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">bool</span> IsZero =&gt; m_hi == 0.0;
+
+	<span class="cd">/// &lt;summary&gt;-1, 0 or +1 (0 also for NaN).&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">int</span> Sign =&gt; m_hi &gt; 0.0 ? 1 : m_hi &lt; 0.0 ? -1 : 0;
+
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble Zero { <span class="k">get</span>; } = <span class="k">new</span> DoubleDouble(0.0, 0.0);
+
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble One { <span class="k">get</span>; } = <span class="k">new</span> DoubleDouble(1.0, 0.0);
+
+
+	<span class="k">private</span> DoubleDouble(<span class="k">double</span> hi, <span class="k">double</span> lo) {
+		m_hi = hi;
+		m_lo = lo;
+	}
+
+
+	<span class="cd">/// &lt;summary&gt;Creates the exact value of a double; the trailing component is zero.&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble FromDouble(<span class="k">double</span> value) {
+		<span class="k">return</span> <span class="k">new</span> DoubleDouble(value, 0.0);
+	}
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// Creates the exact sum &lt;paramref name="hi"/&gt; + &lt;paramref name="lo"/&gt; of two arbitrary</span>
+	<span class="cd">/// doubles, renormalizing so the invariant holds.</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble FromTwoDoubles(<span class="k">double</span> hi, <span class="k">double</span> lo) {
+		(<span class="k">double</span> sum, <span class="k">double</span> error) = twoSum(hi, lo);
+		<span class="k">return</span> <span class="k">new</span> DoubleDouble(sum, error);
+	}
+
+	<span class="cd">/// &lt;summary&gt;Adds two values. Relative error stays below 3 * 2^-106 for all inputs.&lt;/summary&gt;</span>
+	<span class="k">public</span> DoubleDouble Add(DoubleDouble right) {
+		<span class="cm">// Add the two components pairwise, then fold the errors back in twice: the first</span>
+		<span class="cm">// fold can itself round, which is what the second quickTwoSum cleans up.</span>
+		(<span class="k">double</span> sum, <span class="k">double</span> error) = twoSum(m_hi, right.m_hi);
+		(<span class="k">double</span> lowSum, <span class="k">double</span> lowError) = twoSum(m_lo, right.m_lo);
+		error += lowSum;
+		(sum, error) = quickTwoSum(sum, error);
+		error += lowError;
+		(sum, error) = quickTwoSum(sum, error);
+		<span class="k">return</span> <span class="k">new</span> DoubleDouble(sum, error);
+	}
+
+	<span class="cd">/// &lt;summary&gt;Subtracts &lt;paramref name="right"/&gt; from this value.&lt;/summary&gt;</span>
+	<span class="k">public</span> DoubleDouble Subtract(DoubleDouble right) {
+		<span class="k">return</span> Add(right.Negate());
+	}
+
+	<span class="cd">/// &lt;summary&gt;Multiplies two values.&lt;/summary&gt;</span>
+	<span class="k">public</span> DoubleDouble Multiply(DoubleDouble right) {
+		<span class="cm">// hi*hi exactly, then the three cross terms - each already below the error term's</span>
+		<span class="cm">// magnitude, so ordinary double addition is accurate enough for them.</span>
+		(<span class="k">double</span> product, <span class="k">double</span> error) = twoProduct(m_hi, right.m_hi);
+		error += m_hi * right.m_lo + m_lo * right.m_hi + m_lo * right.m_lo;
+		(product, error) = quickTwoSum(product, error);
+		<span class="k">return</span> <span class="k">new</span> DoubleDouble(product, error);
+	}
+
+	<span class="cd">/// &lt;summary&gt;Multiplies by a plain double - two cross terms fewer than the full product.&lt;/summary&gt;</span>
+	<span class="k">public</span> DoubleDouble Multiply(<span class="k">double</span> right) {
+		(<span class="k">double</span> product, <span class="k">double</span> error) = twoProduct(m_hi, right);
+		error += m_lo * right;
+		(product, error) = quickTwoSum(product, error);
+		<span class="k">return</span> <span class="k">new</span> DoubleDouble(product, error);
+	}
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// Divides this value by &lt;paramref name="right"/&gt;. There is no error-free</span>
+	<span class="cd">/// transformation for division, so this is long division: take a double-precision digit</span>
+	<span class="cd">/// of the quotient, subtract its contribution exactly, repeat.</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">public</span> DoubleDouble Divide(DoubleDouble right) {
+		<span class="k">double</span> quotient1 = m_hi / right.m_hi;
+		DoubleDouble remainder = Subtract(right.Multiply(quotient1));
+		<span class="k">double</span> quotient2 = remainder.m_hi / right.m_hi;
+		remainder = remainder.Subtract(right.Multiply(quotient2));
+		<span class="k">double</span> quotient3 = remainder.m_hi / right.m_hi;
+
+		(<span class="k">double</span> sum, <span class="k">double</span> error) = quickTwoSum(quotient1, quotient2);
+		<span class="k">return</span> <span class="k">new</span> DoubleDouble(sum, error).Add(FromDouble(quotient3));
+	}
+
+	<span class="cd">/// &lt;summary&gt;Returns this value squared (cheaper than the general product).&lt;/summary&gt;</span>
+	<span class="k">public</span> DoubleDouble Square() {
+		(<span class="k">double</span> product, <span class="k">double</span> error) = twoProduct(m_hi, m_hi);
+		error += 2.0 * m_hi * m_lo + m_lo * m_lo;
+		(product, error) = quickTwoSum(product, error);
+		<span class="k">return</span> <span class="k">new</span> DoubleDouble(product, error);
+	}
+
+	<span class="cd">/// &lt;summary&gt;Returns the negated value (exact - negation never rounds).&lt;/summary&gt;</span>
+	<span class="k">public</span> DoubleDouble Negate() {
+		<span class="k">return</span> <span class="k">new</span> DoubleDouble(-m_hi, -m_lo);
+	}
+
+	<span class="cd">/// &lt;summary&gt;Returns the absolute value.&lt;/summary&gt;</span>
+	<span class="k">public</span> DoubleDouble Abs() {
+		<span class="k">return</span> Sign &lt; 0 ? Negate() : <span class="k">this</span>;
+	}
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// The square root, by one Newton refinement of the double root: faithful to about an</span>
+	<span class="cd">/// ulp of the double-double, not correctly rounded. Zero stays zero; negative and NaN</span>
+	<span class="cd">/// inputs resolve through the double root, so non-finite values propagate as everywhere</span>
+	<span class="cd">/// else in this arithmetic.</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">public</span> DoubleDouble Sqrt() {
+		<span class="k">if</span> (!(m_hi &gt; 0.0)) {           <span class="cm">// deliberately not "m_hi &lt;= 0.0": this form is also true for NaN</span>
+			<span class="k">return</span> FromDouble(<span class="nc">Math</span>.Sqrt(m_hi));
+		}
+		<span class="k">double</span> approx = <span class="nc">Math</span>.Sqrt(m_hi);
+		DoubleDouble residual = Subtract(FromDouble(approx).Square());
+		<span class="k">double</span> correction = residual.m_hi / (approx + approx);
+		(<span class="k">double</span> hi, <span class="k">double</span> lo) = quickTwoSum(approx, correction);
+		<span class="k">return</span> <span class="k">new</span> DoubleDouble(hi, lo);
+	}
+
+	<span class="cd">/// &lt;summary&gt;Rounds to the nearest double.&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">double</span> ToDouble() {
+		<span class="k">return</span> m_hi + m_lo;
+	}
+
+	<span class="cd">/// &lt;summary&gt;Compares values; thanks to the normalization invariant this is simply</span>
+	<span class="cd">/// lexicographic on (Hi, Lo).&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">int</span> CompareTo(DoubleDouble other) {
+		<span class="k">int</span> hiComparison = m_hi.CompareTo(other.m_hi);
+		<span class="k">return</span> hiComparison != 0 ? hiComparison : m_lo.CompareTo(other.m_lo);
+	}
+
+	<span class="k">public</span> <span class="k">bool</span> Equals(DoubleDouble other) {
+		<span class="k">return</span> m_hi == other.m_hi &amp;&amp; m_lo == other.m_lo;
+	}
+
+	<span class="k">public</span> <span class="k">override</span> <span class="k">bool</span> Equals(object? obj) {
+		<span class="k">return</span> obj <span class="k">is</span> DoubleDouble other &amp;&amp; Equals(other);
+	}
+
+	<span class="k">public</span> <span class="k">override</span> <span class="k">int</span> GetHashCode() {
+		<span class="k">return</span> HashCode.Combine(m_hi, m_lo);
+	}
+
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble <span class="k">operator</span> +(DoubleDouble left, DoubleDouble right) =&gt; left.Add(right);
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble <span class="k">operator</span> -(DoubleDouble left, DoubleDouble right) =&gt; left.Subtract(right);
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble <span class="k">operator</span> *(DoubleDouble left, DoubleDouble right) =&gt; left.Multiply(right);
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble <span class="k">operator</span> *(DoubleDouble left, <span class="k">double</span> right) =&gt; left.Multiply(right);
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble <span class="k">operator</span> /(DoubleDouble left, DoubleDouble right) =&gt; left.Divide(right);
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble <span class="k">operator</span> -(DoubleDouble value) =&gt; value.Negate();
+
+	<span class="k">public</span> <span class="k">static</span> <span class="k">bool</span> <span class="k">operator</span> ==(DoubleDouble left, DoubleDouble right) =&gt; left.Equals(right);
+	<span class="k">public</span> <span class="k">static</span> <span class="k">bool</span> <span class="k">operator</span> !=(DoubleDouble left, DoubleDouble right) =&gt; !left.Equals(right);
+	<span class="k">public</span> <span class="k">static</span> <span class="k">bool</span> <span class="k">operator</span> &lt;(DoubleDouble left, DoubleDouble right) =&gt; left.CompareTo(right) &lt; 0;
+	<span class="k">public</span> <span class="k">static</span> <span class="k">bool</span> <span class="k">operator</span> &gt;(DoubleDouble left, DoubleDouble right) =&gt; left.CompareTo(right) &gt; 0;
+	<span class="k">public</span> <span class="k">static</span> <span class="k">bool</span> <span class="k">operator</span> &lt;=(DoubleDouble left, DoubleDouble right) =&gt; left.CompareTo(right) &lt;= 0;
+	<span class="k">public</span> <span class="k">static</span> <span class="k">bool</span> <span class="k">operator</span> &gt;=(DoubleDouble left, DoubleDouble right) =&gt; left.CompareTo(right) &gt;= 0;
+
+	<span class="cd">/// &lt;summary&gt;Widening a double is exact, so it may happen implicitly.&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">static</span> <span class="k">implicit</span> <span class="k">operator</span> DoubleDouble(<span class="k">double</span> value) =&gt; FromDouble(value);
+
+	<span class="cd">/// &lt;summary&gt;Narrowing back to a double loses half the digits, so it must be asked for.&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">static</span> <span class="k">explicit</span> <span class="k">operator</span> <span class="k">double</span>(DoubleDouble value) =&gt; value.ToDouble();
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// Knuth's two-sum: sum + error == a + b &lt;em&gt;exactly&lt;/em&gt;, for any two doubles. The</span>
+	<span class="cd">/// rounding error of a floating-point addition is itself a representable double, and</span>
+	<span class="cd">/// these six operations recover it. Branch-free; the intermediates may round, but the</span>
+	<span class="cd">/// steps are arranged so that whatever one loses another accounts for.</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> (<span class="k">double</span> Sum, <span class="k">double</span> Error) twoSum(<span class="k">double</span> a, <span class="k">double</span> b) {
+		<span class="k">double</span> sum = a + b;
+		<span class="k">double</span> bKept = sum - a;        <span class="cm">// the part of b that made it into the sum</span>
+		<span class="k">double</span> aKept = sum - bKept;    <span class="cm">// and the part of a</span>
+		<span class="k">double</span> aLost = a - aKept;
+		<span class="k">double</span> bLost = b - bKept;
+		<span class="k">return</span> (sum, aLost + bLost);
+	}
+
+	<span class="cd">/// &lt;summary&gt;Dekker's fast two-sum: the same guarantee in three operations, but only</span>
+	<span class="cd">/// valid when |a| &gt;= |b| (or a == 0). Used where the caller knows the order.&lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> (<span class="k">double</span> Sum, <span class="k">double</span> Error) quickTwoSum(<span class="k">double</span> a, <span class="k">double</span> b) {
+		<span class="k">double</span> sum = a + b;
+		<span class="k">double</span> bKept = sum - a;
+		<span class="k">return</span> (sum, b - bKept);       <span class="cm">// a kept everything, so only b's loss is left</span>
+	}
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// Exact product: product + error == a * b exactly. The full product needs 106 bits;</span>
+	<span class="cd">/// the fused multiply-add computes a*b - product with a single rounding, which is</span>
+	<span class="cd">/// precisely the missing low half. This is what makes modern double-double</span>
+	<span class="cd">/// multiplication cheap (Dekker's original splitting trick needed 17 operations</span>
+	<span class="cd">/// instead of 2).</span>
+	<span class="cd">///</span>
+	<span class="cd">/// &lt;para&gt;Practically every mainstream CPU of the last decade has an FMA instruction;</span>
+	<span class="cd">/// on one that does not, Math.FusedMultiplyAdd computes the same answer in software,</span>
+	<span class="cd">/// so the type stays correct and merely stops being cheap.&lt;/para&gt;</span>
+	<span class="cd">///</span>
+	<span class="cd">/// &lt;para&gt;The error is representable only while the product itself stays normal. Below</span>
+	<span class="cd">/// about 2e-292 the exact tail no longer fits a double and this stops being exact.&lt;/para&gt;</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> (<span class="k">double</span> Product, <span class="k">double</span> Error) twoProduct(<span class="k">double</span> a, <span class="k">double</span> b) {
+		<span class="k">double</span> product = a * b;
+		<span class="k">double</span> error = <span class="nc">Math</span>.FusedMultiplyAdd(a, b, -product);
+		<span class="k">return</span> (product, error);
+	}
+}</pre></td></tr></tbody></table></code></div></div><p>And the human half: exact printing and parsing, which cannot stay inside doubles and takes the <code>BigInteger</code> detour:</p><div class="highlighter-rouge" id="code-15"><div class="code-header"><span>Code listing 15: DoubleDoubleFormat.cs, complete.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256
+257
+258
+259
+260
+261
+262
+263
+264
+265
+266
+267
+268
+269
+270
+271
+272
+273
+274
+</pre></td><td class="rouge-code"><pre><span class="cm">// The half of DoubleDouble that has to leave the world of doubles. Arithmetic never needs</span>
+<span class="cm">// this: only humans do. Printing 31 correct decimal digits means computing them exactly,</span>
+<span class="cm">// which is a job for BigInteger (in the BCL, so still zero NuGet dependencies).</span>
+<span class="k">using</span> System.Globalization;
+<span class="k">using</span> System.Numerics;
+<span class="k">using</span> System.Text;
+
+<span class="k">namespace</span> DoubleDoubleSample;
+
+<span class="k">public</span> <span class="k">readonly</span> <span class="k">partial</span> <span class="k">struct</span> DoubleDouble {
+
+	<span class="cd">/// &lt;summary&gt;Significant digits &lt;see cref="ToString()"/&gt; prints: enough to round-trip any</span>
+	<span class="cd">/// value whose two components are contiguous (see &lt;see cref="Parse"/&gt;).&lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">const</span> <span class="k">int</span> DEFAULT_DIGITS = 36;
+
+
+	<span class="cd">/// &lt;summary&gt;Formats with &lt;see cref="DEFAULT_DIGITS"/&gt; significant digits.&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">override</span> <span class="k">string</span> ToString() {
+		<span class="k">return</span> ToString(DEFAULT_DIGITS);
+	}
+
+	<span class="cd">/// &lt;summary&gt;Formats with the given number of significant decimal digits, correctly rounded.&lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">string</span> ToString(<span class="k">int</span> significantDigits) {
+		<span class="k">if</span> (significantDigits &lt; 1) {
+			<span class="k">throw</span> <span class="k">new</span> ArgumentOutOfRangeException(<span class="k">nameof</span>(significantDigits));
+		}
+
+		<span class="k">if</span> (!double.IsFinite(m_hi)) {
+			<span class="k">return</span> m_hi.ToString(CultureInfo.InvariantCulture);
+		}
+
+		(BigInteger numerator, BigInteger denominator) = toRational(<span class="k">this</span>);
+		<span class="k">return</span> formatRational(numerator, denominator, significantDigits);
+	}
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// Formats the exact value. A double-double is a sum of two binary fractions, so it</span>
+	<span class="cd">/// always has a finite decimal expansion - just a long one (hundreds of digits when the</span>
+	<span class="cd">/// components are far apart).</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">string</span> ToStringExact() {
+		<span class="k">if</span> (!double.IsFinite(m_hi)) {
+			<span class="k">return</span> m_hi.ToString(CultureInfo.InvariantCulture);
+		}
+
+		(BigInteger numerator, BigInteger denominator) = toRational(<span class="k">this</span>);
+		<span class="k">if</span> (numerator.IsZero) {
+			<span class="k">return</span> "0";
+		}
+
+		<span class="cm">// denominator is a power of two, so multiplying by the matching power of five turns</span>
+		<span class="cm">// it into a power of ten and the digits fall out directly.</span>
+		<span class="k">int</span> twos = (<span class="k">int</span>)(denominator.GetBitLength() - 1);
+		BigInteger scaled = BigInteger.Abs(numerator) * BigInteger.Pow(5, twos);
+		<span class="k">string</span> digits = scaled.ToString(CultureInfo.InvariantCulture).PadLeft(twos + 1, '0');
+		<span class="k">string</span> sign = numerator.Sign &lt; 0 ? "-" : "";
+		<span class="k">if</span> (twos == 0) {
+			<span class="k">return</span> sign + digits;
+		}
+
+		<span class="k">string</span> result = sign + digits[..^twos] + "." + digits[^twos..];
+		<span class="k">return</span> result.TrimEnd('0').TrimEnd('.');
+	}
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// Parses a decimal string to the nearest double-double (the value is built exactly as a</span>
+	<span class="cd">/// rational, then rounded once into each component). Round-trips with</span>
+	<span class="cd">/// &lt;see cref="ToString()"/&gt; for every value whose components are &lt;em&gt;contiguous&lt;/em&gt; -</span>
+	<span class="cd">/// a hand-built pair such as (1.0, 1e-300) carries more information than 36 digits can.</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">public</span> <span class="k">static</span> DoubleDouble Parse(<span class="k">string</span> text) {
+		(BigInteger numerator, BigInteger denominator) = parseRational(text);
+		<span class="k">double</span> hi = toNearestDouble(numerator, denominator);
+		<span class="k">if</span> (!double.IsFinite(hi)) {
+			<span class="k">return</span> FromDouble(hi);
+		}
+
+		<span class="cm">// Subtract the leading component exactly, and round what is left into the trailing one.</span>
+		(BigInteger hiNumerator, BigInteger hiDenominator) = toRational(FromDouble(hi));
+		BigInteger restNumerator = numerator * hiDenominator - hiNumerator * denominator;
+		BigInteger restDenominator = denominator * hiDenominator;
+		<span class="k">double</span> lo = toNearestDouble(restNumerator, restDenominator);
+		<span class="k">return</span> FromTwoDoubles(hi, lo);
+	}
+
+	<span class="cd">/// &lt;summary&gt;The exact value of a double-double as a rational (the denominator is a power of two).&lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> (BigInteger Numerator, BigInteger Denominator) toRational(DoubleDouble value) {
+		(BigInteger hiNumerator, BigInteger hiDenominator) = toRational(value.m_hi);
+		(BigInteger loNumerator, BigInteger loDenominator) = toRational(value.m_lo);
+		<span class="k">return</span> (hiNumerator * loDenominator + loNumerator * hiDenominator, hiDenominator * loDenominator);
+	}
+
+	<span class="cd">/// &lt;summary&gt;The exact value of a finite double as a rational, straight from its bits.&lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> (BigInteger Numerator, BigInteger Denominator) toRational(<span class="k">double</span> value) {
+		<span class="k">long</span> bits = BitConverter.DoubleToInt64Bits(value);
+		<span class="k">int</span> exponent = (<span class="k">int</span>)((bits &gt;&gt; 52) &amp; 0x7FF);
+		<span class="k">long</span> mantissa = bits &amp; 0xF_FFFF_FFFF_FFFFL;
+		<span class="k">if</span> (exponent == 0) {
+			exponent = -1074;  <span class="cm">// subnormal: no implicit leading bit</span>
+		} <span class="k">else</span> {
+			mantissa |= 1L &lt;&lt; 52;
+			exponent -= 1075;
+		}
+
+		BigInteger numerator = bits &lt; 0 ? -mantissa : mantissa;
+		<span class="k">return</span> exponent &gt;= 0
+			? (numerator &lt;&lt; exponent, BigInteger.One)
+			: (numerator, BigInteger.One &lt;&lt; -exponent);
+	}
+
+	<span class="cd">/// &lt;summary&gt;Rounds an exact rational to the nearest double, ties to even.&lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> <span class="k">double</span> toNearestDouble(BigInteger numerator, BigInteger denominator) {
+		<span class="k">if</span> (numerator.IsZero) {
+			<span class="k">return</span> 0.0;
+		}
+
+		<span class="k">int</span> sign = numerator.Sign;
+		numerator = BigInteger.Abs(numerator);
+
+		<span class="cm">// Scale so the quotient lands in [2^52, 2^54): one integer division then gives every</span>
+		<span class="cm">// bit of the significand plus the remainder needed to decide the rounding.</span>
+		<span class="k">long</span> exponent = numerator.GetBitLength() - denominator.GetBitLength() - 53;
+		<span class="k">if</span> (exponent &gt; 0) {
+			denominator &lt;&lt;= (<span class="k">int</span>)exponent;
+		} <span class="k">else</span> {
+			numerator &lt;&lt;= (<span class="k">int</span>)-exponent;
+		}
+
+		BigInteger quotient = BigInteger.DivRem(numerator, denominator, <span class="k">out</span> BigInteger remainder);
+		<span class="k">if</span> (quotient.GetBitLength() &gt; 53) {
+			<span class="cm">// One bit too many: give it back to the exponent, folding the dropped bit into</span>
+			<span class="cm">// the remainder so the rounding decision below stays exact.</span>
+			<span class="k">if</span> (!quotient.IsEven) {
+				remainder += denominator;
+			}
+			quotient &gt;&gt;= 1;
+			denominator &lt;&lt;= 1;
+			exponent++;
+		}
+
+		<span class="k">int</span> comparison = (remainder &lt;&lt; 1).CompareTo(denominator);
+		<span class="k">if</span> (comparison &gt; 0 || (comparison == 0 &amp;&amp; !quotient.IsEven)) {
+			quotient++;
+			<span class="k">if</span> (quotient.GetBitLength() &gt; 53) {
+				quotient &gt;&gt;= 1;
+				exponent++;
+			}
+		}
+
+		<span class="k">return</span> sign * <span class="nc">Math</span>.ScaleB((<span class="k">double</span>)quotient, (<span class="k">int</span>)exponent);
+	}
+
+	<span class="cd">/// &lt;summary&gt;Turns "-1.25e-7" and friends into an exact rational.&lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> (BigInteger Numerator, BigInteger Denominator) parseRational(<span class="k">string</span> text) {
+		text = text.Trim();
+		<span class="k">if</span> (text.Length == 0) {
+			<span class="k">throw</span> <span class="k">new</span> FormatException("Empty input.");
+		}
+
+		<span class="k">int</span> index = 0;
+		<span class="k">bool</span> negative = text[index] == '-';
+		<span class="k">if</span> (negative || text[index] == '+') {
+			index++;
+		}
+
+		BigInteger mantissa = BigInteger.Zero;
+		<span class="k">int</span> fractionDigits = 0;
+		<span class="k">bool</span> seenDot = <span class="k">false</span>;
+		<span class="k">bool</span> seenDigit = <span class="k">false</span>;
+
+		<span class="k">for</span> (; index &lt; text.Length; index++) {
+			<span class="k">char</span> c = text[index];
+			<span class="k">if</span> (c == '.') {
+				<span class="k">if</span> (seenDot) {
+					<span class="k">throw</span> <span class="k">new</span> FormatException($"Two <span class="k">decimal</span> points <span class="k">in</span> '{text}'.");
+				}
+				seenDot = <span class="k">true</span>;
+			} <span class="k">else</span> <span class="k">if</span> (c <span class="k">is</span> &gt;= '0' <span class="k">and</span> &lt;= '9') {
+				mantissa = mantissa * 10 + (c - '0');
+				seenDigit = <span class="k">true</span>;
+				<span class="k">if</span> (seenDot) {
+					fractionDigits++;
+				}
+			} <span class="k">else</span> <span class="k">if</span> (c <span class="k">is</span> 'e' <span class="k">or</span> 'E') {
+				<span class="k">break</span>;
+			} <span class="k">else</span> {
+				<span class="k">throw</span> <span class="k">new</span> FormatException($"Unexpected character '{c}' <span class="k">in</span> '{text}'.");
+			}
+		}
+
+		<span class="k">if</span> (!seenDigit) {
+			<span class="k">throw</span> <span class="k">new</span> FormatException($"No digits <span class="k">in</span> '{text}'.");
+		}
+
+		<span class="k">int</span> exponent = -fractionDigits;
+		<span class="k">if</span> (index &lt; text.Length) {
+			exponent += <span class="k">int</span>.Parse(text[(index + 1)..], CultureInfo.InvariantCulture);
+		}
+
+		<span class="k">if</span> (negative) {
+			mantissa = -mantissa;
+		}
+
+		<span class="k">return</span> exponent &gt;= 0
+			? (mantissa * BigInteger.Pow(10, exponent), BigInteger.One)
+			: (mantissa, BigInteger.Pow(10, -exponent));
+	}
+
+	<span class="cd">/// &lt;summary&gt;Rounds an exact rational to N significant digits and lays them out.&lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> <span class="k">string</span> formatRational(BigInteger numerator, BigInteger denominator, <span class="k">int</span> digits) {
+		<span class="k">if</span> (numerator.IsZero) {
+			<span class="k">return</span> "0";
+		}
+
+		<span class="k">bool</span> negative = numerator.Sign &lt; 0;
+		numerator = BigInteger.Abs(numerator);
+
+		<span class="cm">// Decimal exponent of the leading digit, from the bit lengths (log10(2) ~ 0.30103),</span>
+		<span class="cm">// then corrected by the one-step loop below when the estimate is off by one.</span>
+		<span class="k">int</span> exponent10 = (<span class="k">int</span>)Math.Floor((numerator.GetBitLength() - denominator.GetBitLength()) * 0.30103);
+		<span class="k">string</span> text;
+
+		<span class="k">while</span> (<span class="k">true</span>) {
+			<span class="k">int</span> scale = digits - 1 - exponent10;
+			BigInteger scaledNumerator = numerator;
+			BigInteger scaledDenominator = denominator;
+			<span class="k">if</span> (scale &gt;= 0) {
+				scaledNumerator *= BigInteger.Pow(10, scale);
+			} <span class="k">else</span> {
+				scaledDenominator *= BigInteger.Pow(10, -scale);
+			}
+			BigInteger rounded = roundToNearest(scaledNumerator, scaledDenominator);
+			text = rounded.ToString(CultureInfo.InvariantCulture);
+			<span class="k">if</span> (text.Length == digits) {
+				<span class="k">break</span>;
+			}
+			<span class="cm">// Off by one either way (estimate too low, or rounding carried into a new digit).</span>
+			exponent10 += text.Length - digits;
+		}
+
+		text = text.TrimEnd('0');
+		<span class="k">if</span> (text.Length == 0) {
+			text = "0";
+		}
+
+		StringBuilder result = <span class="k">new</span>(negative ? "-" : "");
+		<span class="k">if</span> (exponent10 &gt;= -5 &amp;&amp; exponent10 &lt; digits) {
+			<span class="cm">// Positional, the range where it stays readable.</span>
+			<span class="k">if</span> (exponent10 &gt;= 0) {
+				text = text.PadRight(exponent10 + 1, '0');
+				result.Append(text[..(exponent10 + 1)]);
+				<span class="k">if</span> (text.Length &gt; exponent10 + 1) {
+					result.Append('.').Append(text[(exponent10 + 1)..]);
+				}
+			} <span class="k">else</span> {
+				result.Append("0.").Append('0', -exponent10 - 1).Append(text);
+			}
+		} <span class="k">else</span> {
+			result.Append(text[0]);
+			<span class="k">if</span> (text.Length &gt; 1) {
+				result.Append('.').Append(text[1..]);
+			}
+			result.Append('e').Append(exponent10.ToString(CultureInfo.InvariantCulture));
+		}
+		
+		<span class="k">return</span> result.ToString();
+	}
+
+	<span class="cd">/// &lt;summary&gt;Integer nearest to numerator/denominator, ties away from zero (both positive).&lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> BigInteger roundToNearest(BigInteger numerator, BigInteger denominator) {
+		BigInteger quotient = BigInteger.DivRem(numerator, denominator, <span class="k">out</span> BigInteger remainder);
+		<span class="k">return</span> (remainder &lt;&lt; 1) &gt;= denominator ? quotient + 1 : quotient;
+	}
+}</pre></td></tr></tbody></table></code></div></div><h2 id="Appendix-B-the-benchmarked-kernels">Appendix B: the benchmarked kernels<a aria-label="Link to this section" class="heading-anchor" href="#Appendix-B-the-benchmarked-kernels">#</a></h2><p>The numbers in <a href="#What-it-actually-costs" title="Jump to section">section What it actually costs</a> come from these, so here they are in full rather than as a claim.
+The pixel loop and the threading are the same for all three and are left out; what follows is the arithmetic, plus the per-worker scratch the MPFR kernel needs and the other two do not.</p><p>Read them against each other.</p><div class="highlighter-rouge" id="code-16"><div class="code-header"><span>Code listing 16: Kernels.cs, complete: one kernel, three ways.</span><button aria-label="copy" data-title-succeed="Copied!"></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+</pre></td><td class="rouge-code"><pre><span class="k">namespace</span> DoubleDoubleSample.Mandelbrot;
+
+<span class="cd">/// &lt;summary&gt;</span>
+<span class="cd">/// One escape-time kernel, three ways, plus the scratch the MPFR one needs. Everything else -</span>
+<span class="cd">/// parsing the center, dividing up rows, timing - is in MandelbrotRenderer.cs, so the three can be</span>
+<span class="cd">/// read against each other here without the driver in the way.</span>
+<span class="cd">///</span>
+<span class="cd">/// &lt;para&gt;All three run the same seven operations per iteration: two squares, one multiply, a</span>
+<span class="cd">/// doubling, two adds and a subtract. The first two differ only in the declared type of the</span>
+<span class="cd">/// coordinates, which is the point of the exercise. The third is the same arithmetic again as calls</span>
+<span class="cd">/// into a library, and it is the shape of that third one, rather than the arithmetic in it, that</span>
+<span class="cd">/// costs the order of magnitude.&lt;/para&gt;</span>
+<span class="cd">///</span>
+<span class="cd">/// &lt;para&gt;Each does its escape test in whatever way is cheapest for the type it is written in. The</span>
+<span class="cd">/// test's precision does not matter: past |z| &gt; 2 the orbit diverges, and by the time it crosses a</span>
+<span class="cd">/// bailout of 65536 it is squaring itself each iteration, so the last bits could only move the</span>
+<span class="cd">/// escape by an iteration - measurably, they do not move it at all, and both MPFR variants below</span>
+<span class="cd">/// count the same iterations to the digit as the double-double one. For double-double the test is</span>
+<span class="cd">/// two field reads. For MPFR it is a native compare against a preallocated constant, because</span>
+<span class="cd">/// getting a double out of an MPFR value costs a call, and that call would be per iteration.&lt;/para&gt;</span>
+<span class="cd">///</span>
+<span class="cd">/// &lt;para&gt;A fourth variant, which allocates a fresh MPFR value per operation the way a normal</span>
+<span class="cd">/// wrapper does, lives beside the driver in MandelbrotRenderer.cs. It is these same calls with the</span>
+<span class="cd">/// lifetime bookkeeping spelled out, and it is four times slower for it.&lt;/para&gt;</span>
+<span class="cd">/// &lt;/summary&gt;</span>
+<span class="k">public</span> <span class="k">static</span> <span class="k">unsafe</span> <span class="k">partial</span> <span class="k">class</span> MandelbrotRenderer {
+
+	<span class="cd">/// &lt;summary&gt;Bailout radius squared. Generous, so the smooth-iteration formula is accurate.&lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">const</span> <span class="k">double</span> ESCAPE_SQUARED = 65536.0 * 65536.0;
+
+
+	<span class="cd">/// &lt;summary&gt;Plain double, for reference and for the pictures that fall apart.&lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> <span class="k">double</span> iterateDouble(
+		<span class="k">double</span> cRe,
+		<span class="k">double</span> cIm,
+		<span class="k">int</span> maxIterations,
+		<span class="k">out</span> <span class="k">int</span> iterations
+	) {
+		<span class="k">double</span> zRe = 0.0;
+		<span class="k">double</span> zIm = 0.0;
+		<span class="k">double</span> magnitudeSquared = 0.0;
+		<span class="k">int</span> n = 0;
+		<span class="k">for</span> (; n &lt; maxIterations; n++) {
+			<span class="k">double</span> zReSquared = zRe * zRe;
+			<span class="k">double</span> zImSquared = zIm * zIm;
+			magnitudeSquared = zReSquared + zImSquared;
+			<span class="k">if</span> (magnitudeSquared &gt; ESCAPE_SQUARED) {
+				<span class="k">break</span>;
+			}
+			zIm = 2.0 * zRe * zIm + cIm;
+			zRe = zReSquared - zImSquared + cRe;
+		}
+		iterations = n;
+		<span class="k">return</span> magnitudeSquared;
+	}
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// The same source, with &lt;c&gt;DoubleDouble&lt;/c&gt; substituted for &lt;c&gt;double&lt;/c&gt;. That is the whole</span>
+	<span class="cd">/// diff: operators, no allocation, no scratch, nothing to release. The escape test reads the</span>
+	<span class="cd">/// leading halves directly, which costs nothing at all.</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> <span class="k">double</span> iterateDoubleDouble(
+			DoubleDouble cRe,
+			DoubleDouble cIm,
+			<span class="k">int</span> maxIterations,
+			<span class="k">out</span> <span class="k">int</span> iterations
+	) {
+		DoubleDouble zRe = DoubleDouble.Zero;
+		DoubleDouble zIm = DoubleDouble.Zero;
+		<span class="k">double</span> magnitudeSquared = 0.0;
+		<span class="k">int</span> n = 0;
+		<span class="k">for</span> (; n &lt; maxIterations; n++) {
+			DoubleDouble zReSquared = zRe.Square();
+			DoubleDouble zImSquared = zIm.Square();
+			magnitudeSquared = zReSquared.Hi + zImSquared.Hi;
+			<span class="k">if</span> (magnitudeSquared &gt; ESCAPE_SQUARED) {
+				<span class="k">break</span>;
+			}
+			zIm = zRe * zIm * 2.0 + cIm;
+			zRe = zReSquared - zImSquared + cRe;
+		}
+		iterations = n;
+		<span class="k">return</span> magnitudeSquared;
+	}
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// MPFR with destinations allocated once and written in place, which is how you would write this</span>
+	<span class="cd">/// in C and is MPFR at its best. Nothing here reaches the heap: at these precisions MPFR takes</span>
+	<span class="cd">/// its scratch space off the stack.</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">static</span> <span class="k">double</span> iterateInPlace(
+		MpfrScratch s, 
+		<span class="k">int</span> maxIterations, 
+		<span class="k">out</span> <span class="k">int</span> iterations
+	) {
+		MpfrNative.SetDouble(s.ZRe, 0.0);
+		MpfrNative.SetDouble(s.ZIm, 0.0);
+		<span class="k">int</span> n = 0;
+		<span class="k">for</span> (; n &lt; maxIterations; n++) {
+			MpfrNative.mpfr_sqr(s.ZReSquared, s.ZRe, MpfrNative.ROUND_NEAREST);
+			MpfrNative.mpfr_sqr(s.ZImSquared, s.ZIm, MpfrNative.ROUND_NEAREST);
+			MpfrNative.mpfr_add(s.Temp, s.ZReSquared, s.ZImSquared, MpfrNative.ROUND_NEAREST);
+			<span class="k">if</span> (MpfrNative.mpfr_cmp(s.Temp, s.Escape) &gt; 0) {
+				<span class="k">break</span>;
+			}
+			MpfrNative.mpfr_mul(s.Temp, s.ZRe, s.ZIm, MpfrNative.ROUND_NEAREST);
+			MpfrNative.mpfr_add(s.Temp, s.Temp, s.Temp, MpfrNative.ROUND_NEAREST);   <span class="cm">// exact doubling</span>
+			MpfrNative.mpfr_add(s.ZIm, s.Temp, s.CIm, MpfrNative.ROUND_NEAREST);
+			MpfrNative.mpfr_sub(s.Temp, s.ZReSquared, s.ZImSquared, MpfrNative.ROUND_NEAREST);
+			MpfrNative.mpfr_add(s.ZRe, s.Temp, s.CRe, MpfrNative.ROUND_NEAREST);
+		}
+		iterations = n;
+		<span class="cm">// Converted once per pixel rather than once per iteration, and only the escape path uses it:</span>
+		<span class="cm">// a pixel that ran out of iterations is colored by its count alone. Temp still holds the</span>
+		<span class="cm">// magnitude there, because the loop broke before reaching the line that reuses it.</span>
+		<span class="k">return</span> MpfrNative.GetDouble(s.Temp);
+	}
+
+	<span class="cd">/// &lt;summary&gt;</span>
+	<span class="cd">/// Per-worker MPFR values. MPFR values cannot be shared across threads for writing, so</span>
+	<span class="cd">/// &lt;c&gt;Parallel.For&lt;/c&gt;'s localInit hands each worker its own set and localFinally releases them.</span>
+	<span class="cd">/// &lt;/summary&gt;</span>
+	<span class="k">private</span> <span class="k">sealed</span> <span class="k">class</span> MpfrScratch : IDisposable {
+
+		<span class="k">public</span> <span class="k">readonly</span> <span class="k">void</span>* CRe;
+		<span class="k">public</span> <span class="k">readonly</span> <span class="k">void</span>* CIm;
+		<span class="k">public</span> <span class="k">readonly</span> <span class="k">void</span>* ZRe;
+		<span class="k">public</span> <span class="k">readonly</span> <span class="k">void</span>* ZIm;
+		<span class="k">public</span> <span class="k">readonly</span> <span class="k">void</span>* ZReSquared;
+		<span class="k">public</span> <span class="k">readonly</span> <span class="k">void</span>* ZImSquared;
+		<span class="k">public</span> <span class="k">readonly</span> <span class="k">void</span>* Temp;
+		<span class="k">public</span> <span class="k">readonly</span> <span class="k">void</span>* Temp2;
+
+		<span class="cd">/// &lt;summary&gt;The bailout radius as an MPFR value, so the escape test never has to convert.&lt;/summary&gt;</span>
+		<span class="k">public</span> <span class="k">readonly</span> <span class="k">void</span>* Escape;
+
+		<span class="k">public</span> <span class="k">long</span> Iterations;
+
+		<span class="k">public</span> MpfrScratch(<span class="k">int</span> precision) {
+			CRe = MpfrNative.Allocate(precision);
+			CIm = MpfrNative.Allocate(precision);
+			ZRe = MpfrNative.Allocate(precision);
+			ZIm = MpfrNative.Allocate(precision);
+			ZReSquared = MpfrNative.Allocate(precision);
+			ZImSquared = MpfrNative.Allocate(precision);
+			Temp = MpfrNative.Allocate(precision);
+			Temp2 = MpfrNative.Allocate(precision);
+			Escape = MpfrNative.Allocate(precision);
+			MpfrNative.SetDouble(Escape, ESCAPE_SQUARED);
+		}
+
+		<span class="cd">/// &lt;summary&gt;Every value is live here: both kernels restore that before returning.&lt;/summary&gt;</span>
+		<span class="k">public</span> <span class="k">void</span> Dispose() {
+			MpfrNative.Free(CRe);
+			MpfrNative.Free(CIm);
+			MpfrNative.Free(ZRe);
+			MpfrNative.Free(ZIm);
+			MpfrNative.Free(ZReSquared);
+			MpfrNative.Free(ZImSquared);
+			MpfrNative.Free(Temp);
+			MpfrNative.Free(Temp2);
+			MpfrNative.Free(Escape);
+		}
+	}
+}</pre></td></tr></tbody></table></code></div></div><p>The escape test of the double-double kernel does differ slightly, but it's just a small optimization resulting in no precision loss.
+The orbit past <code class="inlineEq">|z| &gt; 2</code> is diverging exponentially, so the low part of double-double has no real effect on the number of iterations.</p><p>The fourth kernel, the MPFR one with a fresh value per operation, is very similar to the third,
+but with each operation producing a new value.
+That's the 38x row.</p></div><div class="post-tail-wrapper text-muted"><div class="post-meta mt-3"><a href="/categories/blog/">blog</a></div><div class="post-tags mt-3"><a class="post-tag" href="/tags/Csharp/">C#</a><a class="post-tag" href="/tags/Performance/">Performance</a><a class="post-tag" href="/tags/Fractals/">Fractals</a></div><div class="post-tail-bottom d-flex justify-content-between align-items-center mt-2 pb-2"><div class="license-wrapper">This post is licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank">CC BY 4.0</a> by the author.</div><div class="share-wrapper d-flex align-items-center"><span class="share-label text-muted">Share</span><span class="share-icons"><a aria-label="Bluesky" data-tip="Bluesky" href="https://bsky.app/intent/compose?text=Double-double%3A%2031%20digits%20of%20precision%20without%20leaving%20the%20FPU%20-%20Marek%27s%20blog%0Ahttps%3A%2F%2Fmarekfiser.com%2Fblog%2Fdouble-double-arithmetic" rel="noopener" target="_blank"></a><a aria-label="Twitter" data-tip="Twitter" href="https://twitter.com/intent/tweet?text=Double-double%3A%2031%20digits%20of%20precision%20without%20leaving%20the%20FPU%20-%20Marek%27s%20blog&amp;url=https%3A%2F%2Fmarekfiser.com%2Fblog%2Fdouble-double-arithmetic" rel="noopener" target="_blank"></a><a aria-label="Facebook" data-tip="Facebook" href="https://www.facebook.com/sharer/sharer.php?title=Double-double%3A%2031%20digits%20of%20precision%20without%20leaving%20the%20FPU%20-%20Marek%27s%20blog&amp;u=https%3A%2F%2Fmarekfiser.com%2Fblog%2Fdouble-double-arithmetic" rel="noopener" target="_blank"></a><a aria-label="Telegram" data-tip="Telegram" href="https://t.me/share/url?url=URL&amp;text=Double-double%3A%2031%20digits%20of%20precision%20without%20leaving%20the%20FPU%20-%20Marek%27s%20blog%0Ahttps%3A%2F%2Fmarekfiser.com%2Fblog%2Fdouble-double-arithmetic" rel="noopener" target="_blank"></a></span></div></div></div></article>
