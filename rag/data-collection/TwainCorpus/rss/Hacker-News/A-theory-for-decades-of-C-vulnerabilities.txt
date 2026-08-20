@@ -1,0 +1,1307 @@
+Appendix II: A Theory of Semantic Invariants - From C Vulnerabilities to Memory-Safe Language Design
+
+The missing concept
+
+The central argument of this book can be expressed in a single idea:
+
+A semantic invariant is a property that must remain true about a value, object, or relationship throughout the execution of a program if the program is to continue operating on the intended data and memory.
+
+C is full of such invariants.
+
+A variable called `length` may be intended to represent the number of bytes available in a buffer. A variable called `count` may represent the number of elements in an array. A pointer may be intended to identify the beginning of an allocated object. An offset may be intended to remain within that object. A pointer may be assumed to remain valid until a particular operation has completed. Two pointers may be assumed to refer to distinct regions of memory.
+
+None of these assumptions is merely a comment about the program. They are semantic facts on which the correctness of subsequent operations depends.
+
+The difficulty is that standard C generally does not make these relationships part of the types of the values that carry them.
+
+C can tell us that a value has type `size_t`. It cannot, in the ordinary type system, tell us whether that value represents a number of bytes, a number of elements, an allocation size, a buffer capacity, an offset, or the length of an input.
+
+C can tell us that a value has type `char *`. It cannot generally tell us the extent of the object accessible through that pointer, who owns the object, how long it remains alive, or whether a particular number of bytes may safely be accessed beginning at that address.
+
+The result is not simply that C contains "unsafe operations." The deeper problem is that the semantic relationships required to make those operations safe are frequently maintained as informal obligations in the programmer's reasoning rather than as invariants enforced by the language.
+
+This provides a common theoretical explanation for a remarkably broad family of security vulnerabilities.
+
+Integer overflow, buffer overflow, out-of-bounds access, use-after-free, and double free are not the same bug. They occur at different points in a program and involve different immediate mechanisms. But they can often be understood as different failure manifestations of broken semantic invariants.
+
+The vulnerability is the point at which the program's representation of reality ceases to correspond to reality.
+
+1. What is a semantic invariant?
+
+An invariant is a proposition that is expected to remain true throughout some region of program execution.
+
+Consider:
+
+size_t count;
+size_t size;
+char *p;
+
+The C type system tells us very little about the relationships between these values.
+
+But the programmer may be relying on a much richer set of propositions:
+
+count represents the number of elements requested
+
+size represents the number of bytes required for count elements
+
+p points to storage of at least size bytes
+
+an access at p + offset remains within that storage
+
+length does not exceed the remaining extent
+
+p remains valid until the access has completed
+
+These are semantic invariants.
+
+They are not necessarily visible in the declarations.
+
+The program may nevertheless depend upon every one of them.
+
+This distinction is fundamental.
+
+A type says what a value is permitted to be according to the language. A semantic invariant says what that value means in the particular program and what relationships must remain true for subsequent operations to be valid.
+
+For example:
+
+size_t length;
+
+does not mean:
+
+length is a valid length for the buffer p
+
+It means only that `length` has the C type `size_t`.
+
+The stronger proposition is something like:
+
+0 <= length <= extent(p)
+
+where `extent(p)` represents the amount of memory that may validly be accessed beginning at `p`.
+
+That proposition is what makes:
+
+memcpy(p, source, length);
+
+safe.
+
+C does not generally carry the proposition `length <= extent(p)` along with the values `length` and `p`.
+
+The programmer must establish it.
+
+2. The semantic chain
+
+Many memory vulnerabilities can be understood as a chain of dependent propositions.
+
+A simplified example is:
+
+size = count * element_size;
+p = malloc(size);
+q = p + offset;
+memcpy(q, source, length);
+
+At first sight, this is simply a sequence of ordinary C operations.
+
+Semantically, however, it represents a chain:
+
+count
+  |
+  v
+required size
+  |
+  v
+allocated extent
+  |
+  v
+object identity
+  |
+  v
+offset
+  |
+  v
+remaining extent
+  |
+  v
+copy length
+  |
+  v
+valid memory access
+
+Each relationship represents an invariant.
+
+For example:
+
+size = count * element_size
+
+depends upon the invariant that `count` really represents the intended number of elements and that the multiplication produces the intended size without overflow.
+
+Then:
+
+p = malloc(size)
+
+depends upon the invariant that the allocated size corresponds to the logical object the programmer intends to construct.
+
+Then:
+
+q = p + offset
+
+depends upon `offset` being an appropriate position within that object.
+
+Finally:
+
+memcpy(q, source, length)
+
+depends upon `length` not exceeding the remaining extent of the destination and upon the source and destination satisfying the requirements of the operation.
+
+A failure near the beginning of the chain may not become visible until much later.
+
+This is why a vulnerability can appear to be located at the `memcpy`, while the actual semantic failure occurred much earlier.
+
+3. Integer overflow: the first failure of meaning
+
+Integer overflow is often described as an arithmetic problem.
+
+In security-critical C code, it is more useful to see it as a failure of semantic meaning.
+
+Suppose:
+
+size_t size = count * element_size;
+
+The programmer intends:
+
+size = the number of bytes required to store count elements
+
+If the calculation does not represent that mathematical quantity, then the variable `size` no longer means what the programmer believes it means.
+
+The semantic invariant has failed:
+
+intended size = represented size
+
+The vulnerability may not yet be a memory violation.
+
+The program may still execute normally.
+
+The failure appears later:
+
+p = malloc(size);
+
+Now the allocation is smaller than intended.
+
+The program has crossed a semantic boundary:
+
+mathematical quantity
+        |
+        v
+represented integer
+        |
+        v
+allocation size
+
+The first incorrect value can therefore create a later memory-safety violation.
+
+CVE-2019-19590 in radare2 is a useful example. The vulnerability involved an integer overflow in the calculation of a token allocation size, followed by a use-after-free involving the token buffer. The integer error therefore did not remain an isolated arithmetic defect. It propagated into the memory model of the program.
+
+CVE-2022-37454 provides another example. The vulnerability in the Keccak XKCP SHA-3 implementation involved an integer overflow that resulted in a buffer overflow.
+
+The CVE categories are different because they describe different observable failures. Semantically, however, they can form a single chain:
+
+attacker-controlled quantity
+        |
+        v
+integer calculation
+        |
+        v
+intended allocation size
+        |
+        v
+incorrect represented size
+        |
+        v
+incorrect memory relationship
+        |
+        v
+memory corruption
+
+The integer overflow is one manifestation of a broken invariant. The eventual memory corruption is another.
+
+4. Buffer overflow: the extent invariant has failed
+
+Once an incorrect size reaches an allocation, the next invariant is spatial:
+
+The memory region being accessed must be at least as large as the operation assumes it is.
+
+Suppose the programmer believes:
+
+p -> 100 bytes
+
+but an earlier calculation actually caused:
+
+p -> 60 bytes
+
+The pointer itself may be perfectly valid.
+
+The allocation may have succeeded.
+
+The program may have passed every local test up to this point.
+
+The failure occurs when the program subsequently assumes the wrong extent.
+
+For example:
+
+memcpy(p, source, 100);
+
+The semantic claim is:
+
+extent(p) >= 100
+
+But reality is:
+
+extent(p) = 60
+
+The copy is therefore not simply "a bad call to memcpy."
+
+It is the point at which a previously broken extent invariant becomes an observable memory violation.
+
+Heartbleed, CVE-2014-0160, is one of the most famous examples. The vulnerability involved a buffer over-read in OpenSSL's TLS and DTLS heartbeat handling. The attacker could cause the program to read beyond the logical bounds of the supplied heartbeat data and obtain information from process memory.
+
+The essential semantic failure was not that the machine could not read memory.
+
+The problem was that the program's description of the amount of memory belonging to the logical message did not match the amount of memory that was actually read.
+
+The machine was doing what the generated instructions told it to do.
+
+The problem was that the program's semantic model of the buffer was wrong.
+
+5. Out-of-bounds access: the spatial invariant has failed in another way
+
+Buffer overflow and out-of-bounds access are closely related, but the semantic perspective helps distinguish them.
+
+An out-of-bounds access is fundamentally a failure of the invariant:
+
+The address being accessed must lie within the permitted extent of the intended object.
+
+Consider:
+
+int array[10];
+
+array[index] = value;
+
+The programmer's intended invariant is:
+
+0 <= index < 10
+
+The C type of `index` does not express that fact.
+
+It is merely an integer.
+
+Nor does the type of `array` automatically turn `index` into a value whose range is statically constrained to the array's extent.
+
+The operation is therefore safe only if the programmer or some earlier operation establishes the invariant.
+
+CVE-2015-7547, for example, involved stack-based buffer overflows in glibc's resolver code when processing specially crafted DNS responses.
+
+The important semantic question is:
+
+Why did the program's assumptions about the size of attacker-controlled DNS data cease to correspond to the actual destination buffer?
+
+The attacker wins when an external value causes an internal invariant about the extent of an object to become false.
+
+6. Wrong location is as important as wrong amount
+
+The semantic-invariant model also explains something that is easy to overlook if memory safety is described only in terms of bounds.
+
+A program can access:
+
+the correct amount of memory
+
+at:
+
+the wrong location
+
+This is a failure of object identity rather than merely extent.
+
+A pointer is not semantically valid simply because its numerical representation happens to designate an address that can be accessed.
+
+The program also needs the invariant:
+
+This pointer identifies the object that the program believes it identifies.
+
+This is one reason C's pointer semantics are considerably more subtle than the simplistic statement that "a pointer is just an address."
+
+The C abstract machine has rules concerning objects, pointer values, object lifetime, and pointer arithmetic. Questions of pointer provenance have also been an ongoing subject of discussion within the C standardization community precisely because numerical address equality does not capture all of the semantic information associated with a pointer.
+
+From the perspective of this book, the important observation is simple:
+
+address
+  !=
+object identity
+
+The program must preserve both.
+
+A pointer may have a plausible address while the semantic relationship between that pointer and the intended object has already been broken.
+
+7. Use-after-free: the temporal invariant has failed
+
+Spatial invariants answer:
+
+Where may I access?
+
+Lifetime invariants answer:
+
+When may I access it?
+
+Consider:
+
+p = malloc(...);
+
+/* use p */
+
+free(p);
+
+/* use p again */
+
+The pointer value may still be held by the program after the object has been released.
+
+The crucial invariant is:
+
+if p is dereferenced,
+the object identified by p must still be alive
+
+After `free(p)`, that invariant no longer holds.
+
+This produces a temporal memory-safety failure:
+
+correct object
+      |
+      v
+object lifetime ends
+      |
+      v
+pointer remains available
+      |
+      v
+pointer is used
+      |
+      v
+use-after-free
+
+CVE-2026-3805, for example, records a use-after-free in curl's SMB connection reuse code, where a data pointer could refer to memory that had already been freed.
+
+The vulnerability is not fundamentally about the numerical value of the pointer.
+
+The pointer can contain the same bits before and after the `free`.
+
+What has changed is the semantic world to which those bits refer.
+
+Before:
+
+p -> live object
+
+After:
+
+p -> object whose lifetime has ended
+
+The bits may look unchanged.
+
+The invariant is not.
+
+That is precisely why lifetime is a semantic property rather than merely a representation property.
+
+8. Double free: ownership has failed
+
+A double free reveals a related but distinct invariant.
+
+Consider:
+
+free(p);
+free(p);
+
+The problem is not simply that the second call uses an invalid pointer.
+
+The deeper failure is that the program has lost track of authority over the lifetime of the allocation.
+
+A useful semantic invariant is:
+
+An allocation may be released exactly once by the entity responsible for ending its lifetime.
+
+C does not generally encode ownership in the type of `p`.
+
+The declaration:
+
+int *p;
+
+does not distinguish:
+
+owning pointer
+
+from:
+
+borrowed pointer
+
+or:
+
+shared alias
+
+or:
+
+pointer whose ownership has already been transferred
+
+Consequently, ownership is maintained through programming conventions.
+
+CVE-2006-2026 in libtiff is an early example of a double-free vulnerability that could result in denial of service and potentially arbitrary code execution.
+
+CVE-2025-5914 in libarchive provides a more recent example in which an integer-overflow condition could ultimately lead to a double-free condition and memory corruption.
+
+This is particularly revealing.
+
+An integer failure can eventually become an ownership and lifetime failure:
+
+integer invariant
+       |
+       v
+memory-state invariant
+       |
+       v
+ownership/lifetime invariant
+       |
+       v
+double free
+
+Again, the CVE taxonomy identifies multiple weaknesses.
+
+The semantic-invariant model sees a causal chain.
+
+9. One vulnerability can cross several semantic boundaries
+
+This may be the most important observation when looking at real CVEs.
+
+CVE classifications tend to divide vulnerabilities into categories such as:
+
+CWE-190  Integer Overflow or Wraparound
+CWE-122  Heap-based Buffer Overflow
+CWE-787  Out-of-bounds Write
+CWE-416  Use After Free
+CWE-415  Double Free
+
+These classifications are useful because they identify the immediate failure mode.
+
+But they can conceal the relationship between them.
+
+CVE-2026-21486 is an unusually clear example. The vulnerability is associated with integer overflow, heap buffer overflow, use-after-free, and out-of-bounds write in the same code path.
+
+That is precisely what the semantic-invariant model predicts.
+
+The categories need not be independent.
+
+A single corrupted assumption can propagate:
+
+wrong integer
+     |
+     v
+wrong allocation
+     |
+     v
+wrong extent
+     |
+     v
+invalid pointer or range
+     |
+     v
+memory corruption
+     |
+     v
+lifetime corruption
+     |
+     v
+use-after-free
+
+The vulnerability database records the observable manifestations.
+
+The program's semantics reveal the chain connecting them.
+
+10. The same pattern appears in large C systems
+
+This is not an isolated property of small C programs.
+
+The same structure appears in some of the most important software written in C.
+
+OpenSSL contains cryptographic protocols and extensive binary parsing.
+
+glibc contains memory-management, string, networking, and resolver code.
+
+curl parses network protocols and maintains long-lived connection state.
+
+libarchive processes attacker-controlled archive formats.
+
+The Linux kernel contains enormous quantities of C code operating on memory, hardware, packets, filesystem structures, and kernel objects.
+
+These systems are particularly exposed to semantic-invariant failures because they repeatedly perform the same transformation:
+
+untrusted external information
+        |
+        v
+integer / length / offset
+        |
+        v
+pointer or allocation
+        |
+        v
+memory operation
+
+The external value begins as data.
+
+The program turns it into a claim about memory.
+
+The security problem arises when the program fails to preserve the truth of that claim.
+
+11. CVEs therefore expose a recurring semantic pattern
+
+The following mapping is useful:
+
+CVE manifestation
+        |
+        v
+Immediate failure
+        |
+        v
+Broken semantic invariant
+
+Integer overflow:
+
+arithmetic result does not represent intended quantity
+        |
+        v
+meaning invariant
+
+Undersized allocation:
+
+allocated extent does not match logical object
+        |
+        v
+representation and extent invariant
+
+Buffer overflow:
+
+operation exceeds allocated region
+        |
+        v
+spatial extent invariant
+
+Out-of-bounds read or write:
+
+access lies outside permitted object range
+        |
+        v
+object and range invariant
+
+Use-after-free:
+
+access occurs after object lifetime ended
+        |
+        v
+temporal lifetime invariant
+
+Double free:
+
+lifetime is ended more than once
+        |
+        v
+ownership and lifetime invariant
+
+Stale pointer:
+
+pointer no longer identifies intended live object
+        |
+        v
+identity and lifetime invariant
+
+Invalid aliasing:
+
+references violate assumptions about permitted access
+        |
+        v
+aliasing invariant
+
+These are not interchangeable.
+
+They should not be collapsed into one undifferentiated category.
+
+But they can be understood as different ways in which the relationship between program representation and program meaning breaks down.
+
+12. Why C is particularly exposed
+
+The problem is not that C has no type system.
+
+Nor is it that C has no memory model.
+
+The problem is that C's ordinary types are not sufficiently expressive to represent the full set of semantic relationships required by memory-safe programming.
+
+Consider:
+
+char *p;
+size_t length;
+
+The programmer may intend:
+
+p identifies the beginning of a live buffer
+length is the number of bytes currently valid
+length does not exceed the buffer's extent
+p remains valid for the duration of the operation
+the caller retains the appropriate ownership
+
+The C declarations express almost none of those relationships.
+
+They express only:
+
+p is a pointer to char
+length is a size_t
+
+Everything else is convention.
+
+This is the crucial gap.
+
+13. The programmer becomes the carrier of the invariant
+
+In a memory-safe language, the compiler may be able to represent and enforce some of these relationships.
+
+In C, the programmer frequently has to carry them mentally.
+
+Consider:
+
+void process(char *buffer, size_t length);
+
+The caller and callee may both understand a contract such as:
+
+buffer points to at least length bytes
+buffer remains valid for the duration of process
+the region may be modified
+the caller retains ownership
+
+But none of those properties is apparent from:
+
+char *
+size_t
+
+The semantic contract exists.
+
+It simply exists outside the type system.
+
+This is why C programming can be understood as a continual exercise in maintaining informal proofs.
+
+The programmer establishes an invariant in one part of the program and relies upon it somewhere else.
+
+The compiler does not necessarily know that the invariant exists.
+
+When the invariant fails, the failure may be separated from its cause by hundreds of lines of code, several function calls, or an entirely different subsystem.
+
+14. The security consequence: invariants can be broken silently
+
+This is particularly dangerous in security-sensitive software because an attacker can often control the values that participate in the invariant.
+
+For example:
+
+network packet
+      |
+      v
+attacker-controlled length
+      |
+      v
+integer conversion
+      |
+      v
+allocation
+      |
+      v
+pointer arithmetic
+      |
+      v
+copy
+
+Every step can appear locally reasonable.
+
+The attacker does not need to make the program execute an obviously forbidden operation.
+
+They need only cause a value to make a previously assumed invariant false.
+
+This is a profound difference.
+
+The attack is often not:
+
+Make the program do something it was never designed to do.
+
+It is:
+
+Make the program believe that something false is true, and then let it perform an operation that is perfectly legitimate under that false assumption.
+
+That is why these vulnerabilities are so persistent.
+
+15. Why testing cannot solve the fundamental problem
+
+If the problem were simply that certain inputs cause an invalid memory access, exhaustive testing might theoretically solve it.
+
+But the semantic-invariant problem is larger.
+
+Suppose a program contains:
+
+size = count * element_size;
+
+Testing may demonstrate that the operation works for:
+
+count = 10
+count = 100
+count = 1000
+
+It does not establish the invariant:
+
+size always represents the mathematically required number of bytes
+
+Likewise, testing:
+
+memcpy(p, source, length);
+
+with valid lengths does not prove:
+
+length <= extent(p)
+
+for all possible inputs and execution paths.
+
+Testing exercises examples.
+
+Semantic invariants describe relationships that must hold for every execution satisfying the program's contract.
+
+This is one reason static enforcement is so attractive.
+
+The objective is not merely to test whether an invalid state occurs.
+
+It is to make the invalid state difficult or impossible to represent.
+
+16. The modern response: move the invariant into the language
+
+This is the fundamental direction taken by modern memory-safe language design.
+
+Instead of:
+
+pointer + separate length + programmer convention
+
+a language can provide an abstraction that means:
+
+reference to a valid region of known extent
+
+Instead of:
+
+raw pointer + ownership convention
+
+it can distinguish:
+
+owned value
+borrowed reference
+shared reference
+exclusive mutable reference
+
+Instead of:
+
+integer that happens to represent an element count
+
+it can provide stronger abstractions that distinguish units and ranges.
+
+Instead of requiring the programmer to remember:
+
+this reference must not outlive that object
+
+the language can encode lifetime relationships and have the compiler verify them.
+
+The important shift is therefore:
+
+C:
+
+programmer establishes invariant
+        |
+        v
+programmer preserves invariant
+        |
+        v
+programmer proves invariant
+
+versus:
+
+memory-safe language:
+
+language represents invariant
+        |
+        v
+compiler preserves invariant
+        |
+        v
+compiler rejects violations
+
+No language can encode every semantic property of an arbitrary program.
+
+But moving important classes of invariants into the language dramatically reduces the space in which these vulnerabilities can occur.
+
+17. Why this matters for C specifically
+
+This argument should not be interpreted as claiming that every security vulnerability in a C program is a memory-safety vulnerability.
+
+C programs can contain:
+
+authentication errors
+cryptographic mistakes
+protocol-design errors
+access-control failures
+logic errors
+race conditions
+denial-of-service conditions
+information leaks unrelated to memory corruption
+
+Nor does every C memory vulnerability arise from exactly the same broken invariant.
+
+The claim is more precise:
+
+A very large and security-critical family of C vulnerabilities arises because C allows important semantic invariants concerning memory, extent, object identity, lifetime, ownership, and arithmetic relationships to remain implicit and dynamically unenforced.
+
+This is why memory safety has become such a significant security concern.
+
+The CISA Cybersecurity Advisory Committee has explicitly discussed memory-safety problems in terms of spatial and temporal categories and has argued that adopting memory-safe technologies can reduce the pool of vulnerabilities available for exploitation.
+
+The distinction between spatial and temporal memory safety maps naturally onto the invariant model:
+
+Spatial:
+    Where may this access occur?
+    How much memory may it access?
+
+Temporal:
+    When may this access occur?
+    Does the object still exist?
+
+Ownership and aliasing add further dimensions to the same underlying problem.
+
+18. The CVE record as the visible tip of an invariant failure
+
+A CVE describes a vulnerability as it becomes observable from a security perspective.
+
+It might say:
+
+heap-based buffer overflow
+
+or:
+
+use-after-free
+
+or:
+
+integer overflow
+
+or:
+
+double free
+
+These are useful descriptions of what went wrong.
+
+But for understanding why C produces so many such vulnerabilities, we need to ask another question:
+
+What semantic relationship did the program assume, and where did that relationship cease to be true?
+
+For example:
+
+# Heartbleed
+
+The observable failure:
+
+buffer over-read
+
+The deeper question:
+
+Why was the amount of memory read allowed to exceed
+the amount actually belonging to the logical heartbeat?
+
+CVE-2014-0160 records that buffer over-read.
+
+# glibc resolver vulnerability
+
+The observable failure:
+
+stack buffer overflow
+
+The deeper question:
+
+Why did the program's assumptions about the size of
+attacker-controlled DNS data cease to correspond to
+the actual destination buffer?
+
+CVE-2015-7547 records the resulting buffer overflows.
+
+# radare2
+
+The observable failures:
+
+integer overflow
+use-after-free
+
+The deeper question:
+
+Why was an arithmetic result allowed to become the
+basis for a memory relationship without preserving
+the intended size invariant?
+
+CVE-2019-19590 provides a concrete instance of that chain.
+
+# libarchive
+
+The observable failure:
+
+integer overflow
+        |
+        v
+double free
+        |
+        v
+memory corruption
+
+The deeper question:
+
+How did a corrupted numerical invariant propagate
+into an invalid lifetime or ownership decision?
+
+CVE-2025-5914 demonstrates such a progression.
+
+# iccDEV
+
+The observable failures span several categories:
+
+integer overflow
+heap buffer overflow
+out-of-bounds write
+use-after-free
+
+CVE-2026-21486 is especially useful because the vulnerability record captures several stages of the same failure.
+
+These examples demonstrate why the invariant perspective is valuable.
+
+The CVE classifications are different.
+
+The underlying semantic story can nevertheless be continuous.
+
+19. A useful way to think about C security vulnerabilities
+
+The following model is perhaps the most concise representation of the argument:
+
+             SEMANTIC INVARIANT
+                     |
+                     |
+          +----------+----------+
+          |          |          |
+       Meaning     Space      Time
+          |          |          |
+          |          |          |
+      integer      extent /    lifetime /
+      quantity     location    ownership
+          |          |          |
+          v          v          v
+     overflow    overflow    use-after-free
+                  / OOB       / double free
+          |          |          |
+          +----------+----------+
+                     |
+                     v
+              memory corruption
+                     |
+          +----------+----------+
+          |          |          |
+          v          v          v
+       disclosure  execution   denial
+
+The vulnerabilities are not all the same.
+
+They are failure manifestations occurring when different semantic invariants are violated.
+
+20. The significance of "wrong memory"
+
+"Wrong memory" does not necessarily mean:
+
+The programmer typed the wrong pointer.
+
+It can mean:
+
+the wrong amount of memory
+the wrong location
+the wrong object
+the wrong lifetime
+the wrong ownership
+the wrong interpretation of a number
+
+And these can arise from a chain of individually ordinary operations.
+
+The ultimate failure occurs when:
+
+The program's semantic description of memory diverges from the actual memory state of the machine.
+
+That divergence is the common feature.
+
+An integer may no longer represent the intended quantity.
+
+A pointer may no longer identify the intended object.
+
+A length may no longer describe the accessible extent.
+
+An object may no longer be alive.
+
+An owner may no longer have authority over an allocation.
+
+Once the semantic invariant is broken, a later operation can turn that invisible discrepancy into a security vulnerability.
+
+21. The deeper criticism of C
+
+The criticism, then, should not be:
+
+C is poorly typed.
+
+That is too crude.
+
+Nor should it be:
+
+C has pointers.
+
+Pointers are not intrinsically a defect.
+
+Nor:
+
+C permits manual memory management.
+
+Manual memory management is sometimes necessary for systems programming.
+
+The deeper criticism is:
+
+C makes the programmer responsible for maintaining semantic relationships that the language's ordinary type and memory abstractions do not adequately represent.
+
+That is a more precise statement.
+
+C's `int *` is not merely a pointer.
+
+In a real program it may implicitly mean:
+
+a pointer
+to an object
+of a particular logical kind
+within a particular allocation
+at a particular offset
+with a particular remaining extent
+during a particular lifetime
+under a particular ownership regime
+and subject to particular aliasing assumptions
+
+But its type is still:
+
+int *
+
+The missing information has not disappeared.
+
+It has moved into:
+
+programmer knowledge
+naming conventions
+documentation
+comments
+API contracts
+assertions
+code review
+testing
+static-analysis annotations
+defensive programming
+
+And ultimately, the programmer must ensure that these facts remain true.
+
+22. The security significance of implicit invariants
+
+This is where an engineering inconvenience becomes a security problem.
+
+If an invariant is explicit and mechanically enforced, an attacker generally cannot violate it merely by supplying an unusual value.
+
+If an invariant is implicit and maintained by programmer reasoning, an attacker may be able to search for an input that causes the reasoning to become false.
+
+That produces a characteristic attack pattern:
+
+attacker input
+      |
+      v
+unexpected value
+      |
+      v
+implicit assumption
+      |
+      v
+invariant becomes false
+      |
+      v
+ordinary C operation
+      |
+      v
+invalid memory operation
+      |
+      v
+security consequence
+
+The attacker does not necessarily need control over the final memory operation.
+
+They need control over the premise under which that operation is considered safe.
+
+This is why integer values, lengths, offsets, and allocation sizes are so important in C security.
+
+They are often the bridge between attacker-controlled data and memory semantics.
+
+23. From vulnerability categories to invariant categories
+
+One possible way of reorganizing our understanding of C vulnerabilities is to stop treating the CWE categories as the deepest level of explanation.
+
+Instead, consider the following hierarchy.
+
+# Level 1: Semantic invariant
+
+What must remain true?
+
+length <= extent
+offset within object
+object is alive
+allocation has one owner
+count * element_size is representable
+
+# Level 2: Invariant failure
+
+What ceased to be true?
+
+length > extent
+offset outside object
+object lifetime ended
+two paths release same object
+calculated size wrapped
+
+# Level 3: Vulnerability manifestation
+
+What does the program do as a result?
+
+buffer overflow
+out-of-bounds access
+use-after-free
+double free
+integer overflow
+
+# Level 4: Security consequence
+
+What can an attacker obtain?
+
+crash
+information disclosure
+memory corruption
+control-flow corruption
+privilege escalation
+arbitrary code execution
+denial of service
+
+This gives us a causal model:
+
+semantic assumption
+       |
+       v
+broken invariant
+       |
+       v
+C-level failure
+       |
+       v
+memory corruption
+       |
+       v
+security consequence
+
+The CVE usually names Level 3.
+
+The real engineering problem often begins at Level 1.
+
+24. The ultimate lesson
+
+The history of C's security problems can therefore be understood as the history of semantic information that programmers were required to carry manually.
+
+The machine knows addresses.
+
+C gives programmers those addresses.
+
+But safe programming requires knowing considerably more than an address.
+
+It requires knowing:
+
+what object is here
+how large it is
+where its boundaries are
+how the pointer was derived
+whether the object is still alive
+who owns it
+who else can access it
+what the integer used as a length actually means
+whether the arithmetic producing that length was valid
+
+When these facts remain implicit, they become opportunities for divergence between what the program believes and what the machine actually contains.
+
+That divergence is the fertile ground in which memory-safety vulnerabilities grow.
+
+The individual CVEs are the visible manifestations.
+
+The semantic invariant is the underlying concept.
+
+25. A final formulation
+
+The central proposition of this book can therefore be stated more formally:
+
+A memory-safety vulnerability occurs when a program performs an operation under a semantic invariant that is false, or when a semantic invariant required for the validity of an operation has been lost between the point at which it was established and the point at which it is relied upon.
+
+Under this formulation:
+
+**Integer overflow** is a failure to preserve the invariant that a numerical value represents the intended mathematical quantity.
+
+**Buffer overflow** is a failure to preserve the invariant that the accessible extent of an object is at least as large as the operation assumes.
+
+**Out-of-bounds access** is a failure to preserve the invariant that an address lies within the permitted range of the intended object.
+
+**Use-after-free** is a failure to preserve the invariant that the object identified by a pointer remains alive when the pointer is dereferenced.
+
+**Double free** is a failure to preserve the invariant governing the unique lifetime and ownership of an allocation.
+
+These are different vulnerabilities.
+
+But they share a common structure:
+
+                 SEMANTIC INVARIANT
+                        |
+                        v
+                programmer assumption
+                        |
+                        v
+                invariant is violated
+                        |
+                        v
+             program continues executing
+                        |
+                        v
+             invalid memory operation
+                        |
+                        v
+             security vulnerability
+
+The most important property of the C language in this respect is therefore not simply that it permits pointers, arithmetic, manual allocation, or direct memory manipulation.
+
+It is that the language frequently permits these operations without carrying forward enough semantic information to establish that the relationships on which their safety depends are still true.
+
+That is why the same basic pattern can produce such apparently different CVEs.
+
+The integer overflow is not the buffer overflow.
+
+The buffer overflow is not the use-after-free.
+
+The use-after-free is not the double free.
+
+But all can be understood as points at which the program's semantic model of memory has diverged from the memory that actually exists.
+
+And that is perhaps the most fundamental security lesson to draw from decades of C vulnerabilities:
+
+Memory corruption begins not when the wrong byte is written, but when the program first loses the invariant that tells it which bytes are right.
+
+← Previous
+ 
+Appendix III→

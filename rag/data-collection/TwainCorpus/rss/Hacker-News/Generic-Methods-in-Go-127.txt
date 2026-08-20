@@ -1,0 +1,186 @@
+August 20, 2026
+When 
+Go 1.18 introduced Generics
+ in 2022, it brought generic type parameters to functions and structs, but left out methods. With the release of Go 1.27, this long-standing limitation has been removed. Methods can now define their own type parameters without adding them to the receiving struct.
+Why this change was introduced
+If you want to create a graph node that holds a generic value, you might implement it like this:
+type
+ 
+Node
+[
+T
+ 
+any
+]
+ 
+struct
+ 
+{
+
+value
+ 
+T
+
+}
+
+Imagine adding a method 
+Map
+ that transforms a node of type 
+T
+ into a node of another type 
+U
+. Prior to Go 1.27, you were forced to add 
+U
+ directly to the 
+Node
+ struct itself:
+type
+ 
+Node
+[
+T
+ 
+any
+,
+ 
+U
+ 
+any
+]
+ 
+struct
+ 
+{
+
+value
+ 
+T
+
+}
+
+func
+ 
+(
+n
+ 
+*
+Node
+[
+T
+,
+ 
+U
+])
+ 
+Map
+()
+ 
+Node
+[
+T
+,
+ 
+U
+]
+ 
+{
+
+// ...
+
+}
+
+Adding 
+U
+ to the struct itself is bad design because 
+U
+ is a type parameter specific to 
+Map
+. Even though other methods wouldn’t use 
+U
+, they still had to keep it in their receiver declarations.
+The only workaround was to implement 
+Map
+ as a package-level 
+function
+ instead of a method, since functions could define their own type parameters. But methods couldn’t, leading to awkward and non-idiomatic code API designs.
+Starting in Go 1.27, 
+U
+ can be defined exclusively on the 
+Map
+ method:
+func
+ 
+(
+n
+ 
+*
+Node
+[
+T
+])
+ 
+Map
+[
+U
+ 
+any
+]()
+ 
+Node
+[
+U
+]
+ 
+{
+
+// ...
+
+}
+
+Why did it take so long?
+The answer lies in 
+how generics are implemented
+ in Go. The compiler handles generics primarily using 
+monomorphization
+, meaning it will create a copy of generic structs or functions for every specific type they’re used with. Because at some point, the abstract concept of generics needs to be translated to straight-forward machine code.
+However, Go’s interface system works at 
+runtime
+. The specific type of a value passed into an interface parameter is resolved while the program runs. This dynamic dispatch clashes with generics being resolved at compile time. Consider what would happen if we wanted to declare our 
+Map
+ method in an interface:
+type
+ 
+Mapper
+ 
+interface
+ 
+{
+
+Map
+[
+T
+ 
+any
+,
+ 
+U
+ 
+any
+](
+element
+ 
+T
+)
+ 
+U
+
+}
+
+To make this work, the runtime would either need a Just-In-Time compiler to generate machine code for specific types on the fly, or it would need to create said copies for every possible type upfront, resulting in a massively bloated binary.
+Ultimately, the Go team decided to separate generic methods from interfaces. Go 1.27 allows generic methods on concrete types, but 
+not
+ on interfaces. This distinction is why the above example won’t compile and why the discussions around it took a while.
+Further Reading
+Go 1.27 Release Notes (go.dev)
+Proposal: Generic Methods for Go (GitHub)
+The Performance of Generics in Go (dominik.info)
