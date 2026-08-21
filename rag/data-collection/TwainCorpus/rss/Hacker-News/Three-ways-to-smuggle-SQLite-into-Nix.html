@@ -1,0 +1,333 @@
+<article class="column">
+
+<div class="post-body prose"><p>The core of <a href="/2026/08/09/nixpkgs-multiverse-every-version-that-ever-existed">nixpkgs-multiverse</a>, when you strip away the Nix API and the CLI, is an index. It is a map from <code class="language-plaintext highlighter-rouge">(attribute, version)</code> to the revision that shipped it as a JSON file.<sup class="sn-ref">1</sup><span class="sidenote"><span class="sn-num">1</span><span class="sn-p">There are actually a few other files that drive other features such as the statistics or <a href="/2026/08/14/nixpkgs-multiverse-fast-mode">“fast mode”</a>, but they are all JSON as well. </span></span></p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span><span class="nb">ls</span> <span class="nt">-lh</span> index/
+<span class="go">-rw-r--r--. 1 fmzakari fmzakari 7.5M Aug 19 13:57 history.json
+-rw-r--r--. 1 fmzakari fmzakari 5.3M Aug 19 13:57 versions.json
+</span></code></pre></div></div>
+<p>As of <a href="https://github.com/fzakaria/nixpkgs-multiverse/commit/9cc02098e177f784f822c57973ebfc3c02c21bed">9cc0209</a>, <code class="language-plaintext highlighter-rouge">versions.json</code> is 5.3 MiB and <code class="language-plaintext highlighter-rouge">history.json</code> is 7.5MiB covering 305,492 package versions across 31,904 packages and 1,534 revisions.</p>
+<p>The Nix API loads the JSON files lazily and are all read via <code class="language-plaintext highlighter-rouge">builtins.fromJSON</code>:</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="nv">index</span> <span class="o">=</span> <span class="kr">builtins</span><span class="o">.</span><span class="nv">fromJSON</span> <span class="p">(</span><span class="kr">builtins</span><span class="o">.</span><span class="nv">readFile</span> <span class="sx">./index/versions.json</span><span class="p">);</span>
+</code></pre></div></div>
+<p>I would like to enrich the data with even more information however it comes at a cost: mo’data, mo’problems.</p>
+<p>The goal of the project is to minimize the number of Nixpkgs that are downloaded. If we merely swap fetching huge Nixpkgs for huge JSON, it’s not a clear win.</p>
+<p>For now we have to be judicious about what we store in the JSON files and think of clever encoding schemes to make the data small and compact.</p>
+<p>If we were not constrained to the Nix <code class="language-plaintext highlighter-rouge">builtins</code>, we would leverage established technologies to efficiently encode our dataset that allow multiple query access patterns: databases!</p>
+<p>Let’s say we were not restricted to JSON, do we have any other options?</p>
+<h2 id="one-lookup-costs-the-whole-file"><a aria-label="Permalink to this section" class="hanchor" href="#one-lookup-costs-the-whole-file">§</a>One lookup costs the whole file</h2>
+<p>Why are large JSON files so problematic? <code class="language-plaintext highlighter-rouge">builtins.fromJSON</code> is <em>eager</em>. There is no lazy JSON in Nix, no streaming parse (i.e. “just give me this one key”). The moment you touch the result you have parsed all 5.3 MB and materialised all 305,492 values on the Nix heap.</p>
+<p>In the case of the multiverse, asking for one package costs the same as what asking for all of them.</p>
+<blockquote class="alert alert-note">
+<p><strong>Note</strong>
+The lookup itself is not the problem. Nix attribute sets are a sorted array,
+so access is a binary search, not a scan.
+The cost is entirely in the JSON parse and in allocating the values and downloading a large file.</p>
+</blockquote>
+<p>If we want to do alternate questions over the index, we have to make sure we keep the answers efficiently stored to better match
+the access pattern.</p>
+<p>What we want is obvious. We want a way to efficiently encode the data and a declarative way to define queries: we want SQLite!<sup class="sn-ref">2</sup><span class="sidenote"><span class="sn-num">2</span><span class="sn-p"><a href="https://github.com/fzakaria/nixpkgs-multiverse">nixpkgs-multiverse</a> already exports a SQLite database as a package to help others explore this data. </span></span></p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>sqlite3 index.db <span class="s2">"SELECT version, rev FROM versions WHERE attr='hello'"</span>
+<span class="go">2.10|728
+</span><span class="c">...
+</span><span class="go">0.01s, 4 MB
+</span></code></pre></div></div>
+<p>Nix <em>by default</em> cannot do this. Unfortunately there is no <code class="language-plaintext highlighter-rouge">builtins.sqlite</code>, although I think there should be…</p>
+<p>Turns out though there are knobs we can touch or sources we can patch to get what we want anyways, albeit each one has a caveat. 😈</p>
+<h2 id="one-builtinsexec"><a aria-label="Permalink to this section" class="hanchor" href="#one-builtinsexec">§</a>One: <code class="language-plaintext highlighter-rouge">builtins.exec</code></h2>
+<p>I was surprised I did not know about this <code class="language-plaintext highlighter-rouge">builtin</code>, and it has been around since <a href="https://github.com/NixOS/nix/issues/1300">release 1.11.9</a> in April 2017. It is the ultimate escape hatch for a variety of use-cases when you simply can’t get them done with what’s available.</p>
+<p><code class="language-plaintext highlighter-rouge">builtins.exec</code> takes a list of strings, runs the program, and <strong>parses its stdout as a Nix expression</strong>.</p>
+<p>It is gated behind a setting that makes it clear it’s unsafe.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--option</span> allow-unsafe-native-code-during-evaluation <span class="nb">true</span> <span class="se">\</span>
+<span class="go">    --expr 'builtins.exec [ "/bin/sh" "-c" "echo 42" ]'
+42
+</span></code></pre></div></div>
+<p>For integration, SQLite is perfectly capable of printing the Nix syntax. We never need a serialisation format in between as we make SQLite emit the attrset directly:</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="kd">let</span>
+  <span class="nv">versionsOf</span> <span class="o">=</span> <span class="nv">attr</span><span class="p">:</span> <span class="kr">builtins</span><span class="o">.</span><span class="nv">exec</span> <span class="p">[</span>
+    <span class="s2">"</span><span class="si">${</span><span class="nv">sqlite</span><span class="si">}</span><span class="s2">/bin/sqlite3"</span> <span class="s2">"-noheader"</span> <span class="s2">"-separator"</span> <span class="s2">""</span> <span class="s2">"./index.db"</span>
+    <span class="s2">''</span><span class="s2">      SELECT '{' || group_concat(</span><span class="s2">               '"' || version || '" = ' ||</span><span class="s2">               COALESCE(CAST(rev AS TEXT), 'null') || ';', ' ')</span><span class="s2">           || '}'</span><span class="s2">      FROM versions WHERE attr = '</span><span class="si">${</span><span class="nv">attr</span><span class="si">}</span><span class="s2">';</span><span class="s2">    ''</span>
+  <span class="p">];</span>
+<span class="kn">in</span>
+  <span class="nv">versionsOf</span> <span class="s2">"hello"</span>
+</code></pre></div></div>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--impure</span> <span class="nt">-f</span> query.nix <span class="se">\</span>
+<span class="go">           --option allow-unsafe-native-code-during-evaluation true
+{
+</span><span class="gp">  "2.10" = 728;</span><span class="s2">"2.12"</span> <span class="o">=</span> 822<span class="p">;</span> <span class="s2">"2.12.1"</span> <span class="o">=</span> 1369<span class="p">;</span>
+<span class="gp">  "2.12.2" = 1486;</span><span class="s2">"2.12.3"</span> <span class="o">=</span> null<span class="p">;</span> <span class="s2">"2.7"</span> <span class="o">=</span> 0<span class="p">;</span> <span class="s2">"2.8"</span> <span class="o">=</span> 13<span class="p">;</span>
+<span class="go">}
+</span></code></pre></div></div>
+<p>The caveat is that every query is now a <code class="language-plaintext highlighter-rouge">fork</code>, an <code class="language-plaintext highlighter-rouge">exec</code>, a process image of SQLite, and a re-parse of the output through the Nix parser.
+If you do not plan to execute many queries that overhead is likely acceptable given the simplicity of the integration.</p>
+<h2 id="two-builtinsimportnative"><a aria-label="Permalink to this section" class="hanchor" href="#two-builtinsimportnative">§</a>Two: <code class="language-plaintext highlighter-rouge">builtins.importNative</code></h2>
+<p>From researching <code class="language-plaintext highlighter-rouge">builtins.exec</code>, I stumbled upon <code class="language-plaintext highlighter-rouge">builtins.importNative</code>. It takes a path to a shared object and a symbol name, <code class="language-plaintext highlighter-rouge">dlopen</code>s it, and calls that symbol. It landed in <strong>1.8</strong>, December 2014.<sup class="sn-ref">3</sup><span class="sidenote"><span class="sn-num">3</span><span class="sn-p">The C++ field was originally called <code class="language-plaintext highlighter-rouge">enableImportNative</code> and was renamed to <code class="language-plaintext highlighter-rouge">enableNativeCode</code> for <code class="language-plaintext highlighter-rouge">exec</code>. </span></span></p>
+<p>The shared object must implement the following signature:</p>
+<div class="language-cpp highlighter-rouge" data-lang="cpp"><div class="highlight"><pre class="highlight"><code><span class="k">extern</span> <span class="s">"C"</span> <span class="k">typedef</span> <span class="nf">void</span> <span class="p">(</span><span class="o">*</span><span class="n">ValueInitializer</span><span class="p">)(</span><span class="n">EvalState</span> <span class="o">&amp;</span> <span class="n">state</span><span class="p">,</span> <span class="n">Value</span> <span class="o">&amp;</span> <span class="n">v</span><span class="p">);</span>
+</code></pre></div></div>
+<p>We can define a new <em>native</em> function that returns the versions for our input:</p>
+<div class="language-cpp highlighter-rouge" data-lang="cpp"><div class="highlight"><pre class="highlight"><code><span class="k">extern</span> <span class="s">"C"</span> <span class="kt">void</span> <span class="nf">nix_sqlite_versions</span><span class="p">(</span><span class="n">EvalState</span> <span class="o">&amp;</span> <span class="n">state</span><span class="p">,</span> <span class="n">Value</span> <span class="o">&amp;</span> <span class="n">v</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">v</span><span class="p">.</span><span class="n">mkPrimOp</span><span class="p">(</span><span class="k">new</span> <span class="n">PrimOp</span><span class="p">{</span>
+        <span class="p">.</span><span class="n">name</span> <span class="o">=</span> <span class="s">"nix_sqlite_versions"</span><span class="p">,</span>
+        <span class="p">.</span><span class="n">args</span> <span class="o">=</span> <span class="p">{</span><span class="s">"dbPath"</span><span class="p">,</span> <span class="s">"attr"</span><span class="p">},</span>
+        <span class="p">.</span><span class="n">arity</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="p">.</span><span class="n">impl</span> <span class="o">=</span> <span class="n">versions</span><span class="p">,</span>
+    <span class="p">});</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>The implementation is ordinary C++ using the Nix API. Below is a snippet
+of the implementation, making sure to cache our <code class="language-plaintext highlighter-rouge">sqlite3</code> handles to avoid
+the same startup penalty as <code class="language-plaintext highlighter-rouge">builtins.exec</code>:</p>
+<div class="language-cpp highlighter-rouge" data-lang="cpp"><div class="highlight"><pre class="highlight"><code><span class="cm">/* The whole point: the database handle outlives a single query, so the
+   b-tree pages we touch stay warm for the rest of the evaluation. */</span>
+<span class="n">std</span><span class="o">::</span><span class="n">map</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="p">,</span> <span class="n">sqlite3</span> <span class="o">*&gt;</span> <span class="n">handles</span><span class="p">;</span>
+
+<span class="kt">void</span> <span class="nf">versions</span><span class="p">(</span><span class="n">EvalState</span> <span class="o">&amp;</span> <span class="n">state</span><span class="p">,</span> <span class="k">const</span> <span class="n">PosIdx</span> <span class="n">pos</span><span class="p">,</span>
+              <span class="n">Value</span> <span class="o">**</span> <span class="n">args</span><span class="p">,</span> <span class="n">Value</span> <span class="o">&amp;</span> <span class="n">v</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="n">path</span><span class="p">(</span><span class="n">state</span><span class="p">.</span><span class="n">forceStringNoCtx</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">pos</span><span class="p">,</span> <span class="s">"..."</span><span class="p">));</span>
+    <span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="n">attr</span><span class="p">(</span><span class="n">state</span><span class="p">.</span><span class="n">forceStringNoCtx</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">pos</span><span class="p">,</span> <span class="s">"..."</span><span class="p">));</span>
+
+    <span class="c1">// cached across calls</span>
+    <span class="k">auto</span> <span class="o">*</span> <span class="n">db</span> <span class="o">=</span> <span class="n">openOnce</span><span class="p">(</span><span class="n">state</span><span class="p">,</span> <span class="n">pos</span><span class="p">,</span> <span class="n">path</span><span class="p">);</span>
+
+    <span class="n">sqlite3_stmt</span> <span class="o">*</span> <span class="n">stmt</span> <span class="o">=</span> <span class="nb">nullptr</span><span class="p">;</span>
+    <span class="n">sqlite3_prepare_v2</span><span class="p">(</span><span class="n">db</span><span class="p">,</span>
+                       <span class="s">"SELECT version, rev "</span>
+                       <span class="s">"FROM versions "</span>
+                       <span class="s">"WHERE attr = ?1"</span><span class="p">,</span>
+                       <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">stmt</span><span class="p">,</span> <span class="nb">nullptr</span><span class="p">);</span>
+    <span class="n">sqlite3_bind_text</span><span class="p">(</span><span class="n">stmt</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">attr</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span>
+                      <span class="n">attr</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span> <span class="n">SQLITE_TRANSIENT</span><span class="p">);</span>
+
+    <span class="cm">/* ... collect rows ... */</span>
+
+    <span class="cm">/* Build the attrset directly. No text ever exists. */</span>
+    <span class="k">auto</span> <span class="n">bindings</span> <span class="o">=</span> <span class="n">state</span><span class="p">.</span><span class="n">buildBindings</span><span class="p">(</span><span class="n">rows</span><span class="p">.</span><span class="n">size</span><span class="p">());</span>
+    <span class="k">for</span> <span class="p">(</span><span class="k">auto</span> <span class="o">&amp;</span> <span class="p">[</span><span class="n">version</span><span class="p">,</span> <span class="n">rev</span><span class="p">]</span> <span class="o">:</span> <span class="n">rows</span><span class="p">)</span> <span class="p">{</span>
+        <span class="k">auto</span> <span class="o">&amp;</span> <span class="n">slot</span> <span class="o">=</span> <span class="n">bindings</span><span class="p">.</span><span class="n">alloc</span><span class="p">(</span><span class="n">state</span><span class="p">.</span><span class="n">symbols</span><span class="p">.</span><span class="n">create</span><span class="p">(</span><span class="n">version</span><span class="p">));</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">rev</span><span class="p">)</span> <span class="n">slot</span><span class="p">.</span><span class="n">mkInt</span><span class="p">(</span><span class="o">*</span><span class="n">rev</span><span class="p">);</span> <span class="k">else</span> <span class="n">slot</span><span class="p">.</span><span class="n">mkNull</span><span class="p">();</span>
+    <span class="p">}</span>
+    <span class="n">v</span><span class="p">.</span><span class="n">mkAttrs</span><span class="p">(</span><span class="n">bindings</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>Using it looks like this:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--impure</span> <span class="se">\</span>
+<span class="go">    --option allow-unsafe-native-code-during-evaluation true \
+    --expr '(builtins.importNative
+                  ./libnixsqlite.so "nix_sqlite_versions"
+            ) "./index.db" "hello"'
+{
+</span><span class="gp">  "2.10" = 728;</span><span class="s2">"2.12"</span> <span class="o">=</span> 822<span class="p">;</span> <span class="s2">"2.12.1"</span> <span class="o">=</span> 1369<span class="p">;</span>
+<span class="gp">  "2.12.2" = 1486;</span><span class="s2">"2.12.3"</span> <span class="o">=</span> null<span class="p">;</span> <span class="s2">"2.7"</span> <span class="o">=</span> 0<span class="p">;</span> <span class="s2">"2.8"</span> <span class="o">=</span> 13<span class="p">;</span>
+<span class="go">}
+</span></code></pre></div></div>
+<h2 id="three-a-giant-nix-file"><a aria-label="Permalink to this section" class="hanchor" href="#three-a-giant-nix-file">§</a>Three: a giant Nix file</h2>
+<p><em>This section was added after publishing based on an idea from <a href="https://github.com/rickynils">rickynils</a>.</em></p>
+<p>Nix is often described as resembling JSON and there is a very easy translation from JSON to Nix.
+What if instead of reading JSON we read the same contents but as a <code class="language-plaintext highlighter-rouge">.nix</code> file?</p>
+<p>Theoretically it should have no parser boundary, no <code class="language-plaintext highlighter-rouge">fromJSON</code>, and no serialisation format at all.
+The index becomes an expression the evaluator already knows how to read.</p>
+<p>The idea would be to leverage Nix’s laziness. Nix attribute set values are thunks, so in principle you should be able
+to <code class="language-plaintext highlighter-rouge">import</code> a very large expression, touch one attribute, and never pay for instantiating the rest.</p>
+<p>Transforming the index is a dozen lines of Python, and produces something very similar to the JSON:</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="p">{</span>
+  <span class="nv">revisionCount</span> <span class="o">=</span> <span class="mi">1534</span><span class="p">;</span>
+  <span class="nv">attrs</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">"2048-in-terminal"</span> <span class="o">=</span> <span class="p">{</span> <span class="s2">"2015-01-15"</span> <span class="o">=</span> <span class="mi">157</span><span class="p">;</span> <span class="s2">"2017-11-29"</span> <span class="o">=</span> <span class="mi">166</span><span class="p">;</span> <span class="p">};</span>
+    <span class="s2">"2bwm"</span> <span class="o">=</span> <span class="p">{</span> <span class="s2">"0.2"</span> <span class="o">=</span> <span class="mi">166</span><span class="p">;</span> <span class="p">};</span>
+    <span class="s2">"389-ds-base"</span> <span class="o">=</span> <span class="p">{</span> <span class="s2">"1.3.3.9"</span> <span class="o">=</span> <span class="mi">14</span><span class="p">;</span> <span class="s2">"1.3.5.15"</span> <span class="o">=</span> <span class="mi">100</span><span class="p">;</span> <span class="s2">"1.3.5.19"</span> <span class="o">=</span> <span class="mi">166</span><span class="p">;</span> <span class="p">};</span>
+    <span class="c"># ... 31,901 more</span>
+  <span class="p">};</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>6.0 MiB of Nix, against 5.3 MiB of JSON, holding identical data.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--impure</span> <span class="nt">--expr</span> <span class="s1">'(import ./index.nix).attrs.hello'</span>
+<span class="go">{
+</span><span class="gp">  "2.10" = 728;</span><span class="s2">"2.12"</span> <span class="o">=</span> 822<span class="p">;</span> <span class="s2">"2.12.1"</span> <span class="o">=</span> 1369<span class="p">;</span>
+<span class="gp">  "2.12.2" = 1486;</span><span class="s2">"2.12.3"</span> <span class="o">=</span> null<span class="p">;</span> <span class="s2">"2.7"</span> <span class="o">=</span> 0<span class="p">;</span> <span class="s2">"2.8"</span> <span class="o">=</span> 13<span class="p">;</span>
+<span class="go">}
+</span></code></pre></div></div>
+<h2 id="four-builtinswasm"><a aria-label="Permalink to this section" class="hanchor" href="#four-builtinswasm">§</a>Four: <code class="language-plaintext highlighter-rouge">builtins.wasm</code></h2>
+<p>Determinate Systems <a href="https://determinate.systems/blog/builtins-wasm/">shipped another option</a> in March of 2026: <code class="language-plaintext highlighter-rouge">builtins.wasm</code>, which calls a function inside a WebAssembly module.<sup class="sn-ref">4</sup><span class="sidenote"><span class="sn-num">4</span><span class="sn-p">Eelco gave a talk about this at <a href="https://www.socallinuxexpo.org/scale/23x/presentations/builtinswasm-nix-meets-webassembly">SCALE 23x</a>. </span></span> The motivation was similar to wanting to extend Nix surface area but avoid expanding <code class="language-plaintext highlighter-rouge">builtins</code>. Wasm is sandboxed and deterministic, so unlike the two builtins above, the goal is to provide a <em>safe escape-hatch</em>.</p>
+<p>WebAssembly is a binary instruction format for a stack-based virtual machine. The claim is that it is well suited for Nix because it has <em>deterministic execution</em>, which is a lot more restrained than a backdoor <code class="language-plaintext highlighter-rouge">builtins.exec</code>.</p>
+<h3 id="writing-a-module"><a aria-label="Permalink to this section" class="hanchor" href="#writing-a-module">§</a>Writing a module</h3>
+<p>A module needs to export <code class="language-plaintext highlighter-rouge">memory</code>, an initialiser called <code class="language-plaintext highlighter-rouge">nix_wasm_init_v1</code>, and the entry point.</p>
+<div class="language-rust highlighter-rouge" data-lang="rust"><div class="highlight"><pre class="highlight"><code><span class="nd">#![no_std]</span>
+<span class="nd">#![no_main]</span>
+<span class="k">type</span> <span class="n">ValueId</span> <span class="o">=</span> <span class="nb">u32</span><span class="p">;</span>
+
+<span class="nd">#[panic_handler]</span>
+<span class="k">fn</span> <span class="nf">panic</span><span class="p">(</span><span class="n">_</span><span class="p">:</span> <span class="o">&amp;</span><span class="nn">core</span><span class="p">::</span><span class="nn">panic</span><span class="p">::</span><span class="n">PanicInfo</span><span class="p">)</span> <span class="k">-&gt;</span> <span class="o">!</span> <span class="p">{</span>
+    <span class="nn">core</span><span class="p">::</span><span class="nn">arch</span><span class="p">::</span><span class="nn">wasm32</span><span class="p">::</span><span class="nf">unreachable</span><span class="p">()</span>
+<span class="p">}</span>
+
+<span class="c1">// Host functions supplied by the Nix evaluator.</span>
+<span class="nd">#[link(wasm_import_module</span> <span class="nd">=</span> <span class="s">"env"</span><span class="nd">)]</span>
+<span class="k">unsafe</span> <span class="k">extern</span> <span class="s">"C"</span> <span class="p">{</span>
+    <span class="k">fn</span> <span class="nf">get_int</span><span class="p">(</span><span class="n">v</span><span class="p">:</span> <span class="n">ValueId</span><span class="p">)</span> <span class="k">-&gt;</span> <span class="nb">i64</span><span class="p">;</span>
+    <span class="k">fn</span> <span class="nf">make_int</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">i64</span><span class="p">)</span> <span class="k">-&gt;</span> <span class="n">ValueId</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="nd">#[unsafe(no_mangle)]</span>
+<span class="k">pub</span> <span class="k">extern</span> <span class="s">"C"</span> <span class="k">fn</span> <span class="nf">nix_wasm_init_v1</span><span class="p">()</span> <span class="p">{}</span>
+
+<span class="k">fn</span> <span class="nf">fib</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">i64</span><span class="p">)</span> <span class="k">-&gt;</span> <span class="nb">i64</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;=</span> <span class="mi">1</span> <span class="p">{</span> <span class="mi">1</span> <span class="p">}</span> <span class="k">else</span> <span class="p">{</span> <span class="nf">fib</span><span class="p">(</span><span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">+</span> <span class="nf">fib</span><span class="p">(</span><span class="n">n</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)</span> <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="nd">#[unsafe(no_mangle)]</span>
+<span class="k">pub</span> <span class="k">extern</span> <span class="s">"C"</span> <span class="k">fn</span> <span class="nf">fib_entry</span><span class="p">(</span><span class="n">arg</span><span class="p">:</span> <span class="n">ValueId</span><span class="p">)</span> <span class="k">-&gt;</span> <span class="n">ValueId</span> <span class="p">{</span>
+    <span class="k">unsafe</span> <span class="p">{</span> <span class="nf">make_int</span><span class="p">(</span><span class="nf">fib</span><span class="p">(</span><span class="nf">get_int</span><span class="p">(</span><span class="n">arg</span><span class="p">)))</span> <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>Nixpkgs already includes the target for cross-compilation, so making one is pretty
+straightforward:</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="nv">pkgs</span><span class="o">.</span><span class="nv">runCommand</span> <span class="s2">"nix-wasm-rust-fib"</span>
+<span class="p">{</span>
+  <span class="nv">nativeBuildInputs</span> <span class="o">=</span> <span class="p">[</span> <span class="nv">pkgs</span><span class="o">.</span><span class="nv">rustc</span> <span class="nv">pkgs</span><span class="o">.</span><span class="nv">lld</span> <span class="p">];</span>
+  <span class="nv">src</span> <span class="o">=</span> <span class="sx">./modules.rs</span><span class="p">;</span>
+<span class="p">}</span> <span class="s2">''</span><span class="s2">  mkdir -p $out</span><span class="s2">  rustc --target wasm32-unknown-unknown --crate-type cdylib -O \</span><span class="s2">    -o $out/modules.wasm $src</span><span class="s2">''</span>
+</code></pre></div></div>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--extra-experimental-features</span> wasm-builtin <span class="se">\</span>
+<span class="gp">      --expr 'builtins.wasm { path = ./modules.wasm;</span><span class="gp">                              function = "fib_entry";</span><span class="o">}</span> 30<span class="s1">'
+</span><span class="go">1346269
+
+</span></code></pre></div></div>
+<p>You call back into the evaluator through the Nix API functions, so a wasm module builds real Nix values, similar to <code class="language-plaintext highlighter-rouge">builtins.importNative</code> minus the footgun.</p>
+<h2 id="can-i-haz-sqlite"><a aria-label="Permalink to this section" class="hanchor" href="#can-i-haz-sqlite">§</a>Can I haz SQLite?</h2>
+<p><a href="https://sqlite.org/wasm/doc/trunk/index.md">SQLite ships an official wasm build</a>, so the pieces seem to be sitting right there and the gears
+in my mind began to turn.</p>
+<p><picture></picture></p>
+<p>Initial attempts to try and load a SQLite database with the traditional Nix <code class="language-plaintext highlighter-rouge">builtins</code> were a bit of a failure as Nix strings cannot contain NULL bytes.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--impure</span> <span class="nt">--expr</span> <span class="s1">'builtins.stringLength (builtins.readFile ./index.db)'</span>
+<span class="go">error: the contents of the file '/tmp/mvsql/index.db' cannot be represented as a Nix string
+</span></code></pre></div></div>
+<p>Thankfully, with the help of some additional due-diligence by LLMs, we discovered
+that one of the Nix API functions is not in the blog post:</p>
+<div class="language-cpp highlighter-rouge" data-lang="cpp"><div class="highlight"><pre class="highlight"><code><span class="cm">/**
+ * Read the contents of a file into Wasm memory. This is like calling
+ * `builtins.readFile`, except that it can handle binary files that
+ * cannot be represented as Nix strings.
+ */</span>
+<span class="kt">uint32_t</span> <span class="n">read_file</span><span class="p">(</span><span class="n">ValueId</span> <span class="n">pathId</span><span class="p">,</span> <span class="kt">uint32_t</span> <span class="n">ptr</span><span class="p">,</span> <span class="kt">uint32_t</span> <span class="n">len</span><span class="p">)</span>
+</code></pre></div></div>
+<p><code class="language-plaintext highlighter-rouge">read_file</code> is <em>specifically</em> designed for this problem. This function allows a WASM module to pull arbitrary raw-bytes off disk into its memory.</p>
+<p>Unfortunately, it’s a little <em>too broad</em> in that it reads <strong>the complete file</strong> which is kind of overkill and what we are trying to avoid from our
+initial JSON solution.</p>
+<p>In the pursuit of exploration, let’s <em>patch</em> the implementation and augment the API to allow random access and partial read of a file.
+Turns out the patch to add is relatively small and straightforward.</p>
+<div class="language-cpp highlighter-rouge" data-lang="cpp"><div class="highlight"><pre class="highlight"><code><span class="cm">/**
+ * Read a range of a file into Wasm memory, starting at `offset`
+ * and copying at most `len` bytes.
+ * Returns the number of bytes actually copied.
+ */</span>
+<span class="kt">uint32_t</span> <span class="nf">read_file_range</span><span class="p">(</span><span class="n">ValueId</span> <span class="n">pathId</span><span class="p">,</span> <span class="kt">uint64_t</span> <span class="n">offset</span><span class="p">,</span>
+                         <span class="kt">uint32_t</span> <span class="n">ptr</span><span class="p">,</span> <span class="kt">uint32_t</span> <span class="n">len</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="k">auto</span> <span class="o">&amp;</span> <span class="n">pathValue</span> <span class="o">=</span> <span class="n">getValue</span><span class="p">(</span><span class="n">pathId</span><span class="p">);</span>
+    <span class="k">auto</span> <span class="n">path</span> <span class="o">=</span> <span class="n">state</span><span class="p">.</span><span class="n">realisePath</span><span class="p">(</span><span class="n">noPos</span><span class="p">,</span> <span class="n">pathValue</span><span class="p">);</span>
+
+    <span class="k">auto</span> <span class="n">buf</span> <span class="o">=</span> <span class="n">memory</span><span class="p">().</span><span class="n">subspan</span><span class="p">(</span><span class="n">ptr</span><span class="p">,</span> <span class="n">len</span><span class="p">);</span>
+
+    <span class="cm">/* If this is a real file on disk, do a positional read*/</span>
+    <span class="k">if</span> <span class="p">(</span><span class="k">auto</span> <span class="n">physical</span> <span class="o">=</span> <span class="n">path</span><span class="p">.</span><span class="n">getPhysicalPath</span><span class="p">())</span> <span class="p">{</span>
+        <span class="n">AutoCloseFD</span> <span class="n">fd</span><span class="p">{</span><span class="n">open</span><span class="p">(</span><span class="n">physical</span><span class="o">-&gt;</span><span class="n">string</span><span class="p">().</span><span class="n">c_str</span><span class="p">(),</span>
+                            <span class="n">O_RDONLY</span> <span class="o">|</span> <span class="n">O_CLOEXEC</span><span class="p">)};</span>
+        <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">fd</span><span class="p">)</span>
+            <span class="k">throw</span> <span class="nf">SysError</span><span class="p">(</span><span class="s">"opening file '%s'"</span><span class="p">,</span> <span class="n">physical</span><span class="o">-&gt;</span><span class="n">string</span><span class="p">());</span>
+        <span class="k">auto</span> <span class="n">n</span> <span class="o">=</span> <span class="n">pread</span><span class="p">(</span><span class="n">fd</span><span class="p">.</span><span class="n">get</span><span class="p">(),</span> <span class="n">buf</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">len</span><span class="p">,</span> <span class="n">offset</span><span class="p">);</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">n</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="k">throw</span> <span class="nf">SysError</span><span class="p">(</span><span class="s">"reading file '%s'"</span><span class="p">,</span> <span class="n">physical</span><span class="o">-&gt;</span><span class="n">string</span><span class="p">());</span>
+        <span class="k">return</span> <span class="n">n</span><span class="p">;</span>
+    <span class="p">}</span>
+
+    <span class="cm">/* Otherwise fall back to materialising the whole file. */</span>
+    <span class="k">auto</span> <span class="n">contents</span> <span class="o">=</span> <span class="n">path</span><span class="p">.</span><span class="n">readFile</span><span class="p">();</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">offset</span> <span class="o">&gt;=</span> <span class="n">contents</span><span class="p">.</span><span class="n">size</span><span class="p">())</span>
+        <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+    <span class="k">auto</span> <span class="n">n</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">min</span><span class="o">&lt;</span><span class="kt">size_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">len</span><span class="p">,</span> <span class="n">contents</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">-</span> <span class="n">offset</span><span class="p">);</span>
+    <span class="n">memcpy</span><span class="p">(</span><span class="n">buf</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span> <span class="n">contents</span><span class="p">.</span><span class="n">data</span><span class="p">()</span> <span class="o">+</span> <span class="n">offset</span><span class="p">,</span> <span class="n">n</span><span class="p">);</span>
+    <span class="k">return</span> <span class="n">n</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>Now we have everything we need to hook up SQLite and a custom virtual filesystem (VFS) layer to read from the provided <code class="language-plaintext highlighter-rouge">/nix/store</code> path entry.</p>
+<p>We build a WASM target of SQLite and we set <code class="language-plaintext highlighter-rouge">SQLITE_OS_OTHER=1</code>. That flag removes SQLite’s entire VFS layer and requires us to supply one.</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="nv">pkgs</span><span class="o">.</span><span class="nv">pkgsCross</span><span class="o">.</span><span class="nv">wasi32</span><span class="o">.</span><span class="nv">stdenv</span><span class="o">.</span><span class="nv">mkDerivation</span> <span class="p">{</span>
+  <span class="nv">pname</span> <span class="o">=</span> <span class="s2">"sqlite-nix-wasm"</span><span class="p">;</span>
+  <span class="nv">buildPhase</span> <span class="o">=</span> <span class="s2">''</span><span class="s2">    $CC -O2 -o sqlite_nix.wasm \</span><span class="s2">      -I</span><span class="si">${</span><span class="nv">amalgamation</span><span class="si">}</span><span class="si">${</span><span class="nv">amalgamation</span><span class="si">}</span><span class="s2">/sqlite3.c sqlite_nix.c \</span><span class="s2">      -DSQLITE_OS_OTHER=1 \</span><span class="s2">      -DSQLITE_THREADSAFE=0 \</span><span class="s2">      -DSQLITE_OMIT_LOAD_EXTENSION \</span><span class="s2">      -DSQLITE_OMIT_WAL \</span><span class="s2">      -Wl,--export-memory</span><span class="s2">  ''</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>We provide the build a simple implementation of the <code class="language-plaintext highlighter-rouge">xRead</code> API which is a call-back into the Nix evaluator via
+that newly exposed <code class="language-plaintext highlighter-rouge">nix_read_file_range</code> function. Everything else is stubs.</p>
+<div class="language-c highlighter-rouge" data-lang="c"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="k">const</span> <span class="n">sqlite3_io_methods</span> <span class="n">nixIoMethods</span> <span class="o">=</span> <span class="p">{</span>
+  <span class="p">.</span><span class="n">iVersion</span>               <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+  <span class="p">.</span><span class="n">xClose</span>                 <span class="o">=</span> <span class="n">nixClose</span><span class="p">,</span>
+  <span class="p">.</span><span class="n">xRead</span>                  <span class="o">=</span> <span class="n">nixRead</span><span class="p">,</span>
+  <span class="p">.</span><span class="n">xFileSize</span>              <span class="o">=</span> <span class="n">nixFileSize</span><span class="p">,</span>
+  <span class="p">.</span><span class="n">xDeviceCharacteristics</span> <span class="o">=</span> <span class="n">nixDeviceCharacteristics</span><span class="p">,</span>
+  <span class="cm">/* ... the rest are stubs ... */</span>
+<span class="p">};</span>
+
+<span class="k">static</span> <span class="kt">int</span> <span class="nf">nixRead</span><span class="p">(</span><span class="n">sqlite3_file</span> <span class="o">*</span><span class="n">f</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">buf</span><span class="p">,</span>
+                   <span class="kt">int</span> <span class="n">amt</span><span class="p">,</span> <span class="n">sqlite3_int64</span> <span class="n">off</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="n">NixFile</span> <span class="o">*</span><span class="n">p</span> <span class="o">=</span> <span class="p">(</span><span class="n">NixFile</span> <span class="o">*</span><span class="p">)</span> <span class="n">f</span><span class="p">;</span>
+  <span class="cm">/* The one line that matters: SQLite's pager asks
+     for a page, and we ask the Nix evaluator for
+     exactly those bytes. */</span>
+  <span class="kt">unsigned</span> <span class="n">got</span> <span class="o">=</span> <span class="n">nix_read_file_range</span><span class="p">(</span><span class="n">p</span><span class="o">-&gt;</span><span class="n">pathId</span><span class="p">,</span> <span class="p">(</span><span class="kt">unsigned</span> <span class="kt">long</span> <span class="kt">long</span><span class="p">)</span> <span class="n">off</span><span class="p">,</span>
+                                     <span class="n">buf</span><span class="p">,</span> <span class="p">(</span><span class="kt">unsigned</span><span class="p">)</span> <span class="n">amt</span><span class="p">);</span>
+
+  <span class="k">if</span> <span class="p">(</span><span class="n">got</span> <span class="o">&lt;</span> <span class="p">(</span><span class="kt">unsigned</span><span class="p">)</span> <span class="n">amt</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">memset</span><span class="p">((</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span> <span class="n">buf</span> <span class="o">+</span> <span class="n">got</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="kt">unsigned</span><span class="p">)</span> <span class="n">amt</span> <span class="o">-</span> <span class="n">got</span><span class="p">);</span>
+    <span class="k">return</span> <span class="n">SQLITE_IOERR_SHORT_READ</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="n">SQLITE_OK</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<blockquote class="alert alert-note">
+<p><strong>Note</strong>
+Unfortunately <code class="language-plaintext highlighter-rouge">builtins.wasm</code> gives every call a <strong>fresh instance</strong>. This is deliberate from the implementation, meaning we pay some startup code each time although not quite as drastic as a <code class="language-plaintext highlighter-rouge">fork</code> &amp; <code class="language-plaintext highlighter-rouge">exec</code></p>
+</blockquote>
+<p>The <code class="language-plaintext highlighter-rouge">sqlite_nix</code> WASM module takes an attrset of <code class="language-plaintext highlighter-rouge">{ db, sql }</code> and returns one attrset per row.<sup class="sn-ref">5</sup><span class="sidenote"><span class="sn-num">5</span><span class="sn-p">The full <code class="language-plaintext highlighter-rouge">sqlite_nix.c</code>, the VFS, the build derivation and the Nix patch are all <a href="https://gist.github.com/fzakaria/8fe754ee7db752a24cb9c55b38492844">in this gist</a>. </span></span></p>
+<p>We can provide it any arbitrary SQL and now query our dataset!</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="c"># query.nix</span>
+<span class="kr">builtins</span><span class="o">.</span><span class="nv">wasm</span> <span class="p">{</span> <span class="nv">path</span> <span class="o">=</span> <span class="sx">./sqlite_nix.wasm</span><span class="p">;</span> <span class="p">}</span> <span class="p">{</span>
+  <span class="nv">db</span>  <span class="o">=</span> <span class="sx">./index.db</span><span class="p">;</span>
+  <span class="nv">sql</span> <span class="o">=</span> <span class="s2">"SELECT version, rev FROM versions</span><span class="s2">         WHERE attr = 'hello' ORDER BY version"</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> <span class="nt">--extra-experimental-features</span> wasm-builtin <span class="nt">-f</span> query.nix
+<span class="gp">[ { rev = 728;</span>version <span class="o">=</span> <span class="s2">"2.10"</span><span class="p">;</span> <span class="o">}</span> <span class="o">{</span> rev <span class="o">=</span> 822<span class="p">;</span> version <span class="o">=</span> <span class="s2">"2.12"</span><span class="p">;</span> <span class="o">}</span>
+<span class="gp">  { rev = 1369;</span>version <span class="o">=</span> <span class="s2">"2.12.1"</span><span class="p">;</span> <span class="o">}</span> <span class="o">{</span> rev <span class="o">=</span> 1486<span class="p">;</span> version <span class="o">=</span> <span class="s2">"2.12.2"</span><span class="p">;</span> <span class="o">}</span>
+<span class="gp">  { rev = null;</span>version <span class="o">=</span> <span class="s2">"2.12.3"</span><span class="p">;</span> <span class="o">}</span> <span class="o">{</span> rev <span class="o">=</span> 0<span class="p">;</span> version <span class="o">=</span> <span class="s2">"2.7"</span><span class="p">;</span> <span class="o">}</span>
+<span class="gp">  { rev = 13;</span>version <span class="o">=</span> <span class="s2">"2.8"</span><span class="p">;</span> <span class="o">}</span> <span class="o">]</span>
+</code></pre></div></div>
+<p>The benefit of SQL is that now we are not limited to the shape of the data in JSON.</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="c"># which packages have shipped the most versions?</span>
+<span class="nv">sql</span> <span class="o">=</span> <span class="s2">"SELECT attr, COUNT(*) AS versions FROM versions</span><span class="s2">       GROUP BY attr ORDER BY versions DESC LIMIT 3"</span><span class="p">;</span>
+<span class="c"># =&gt; [ { attr = "linux"; versions = 548; }</span>
+<span class="c">#      { attr = "linux_latest"; versions = 540; }</span>
+<span class="c">#      { attr = "freefall"; versions = 534; } ]</span>
+</code></pre></div></div>
+<p><strong>That is a real full SQLite</strong> with all the bells and whistles: query planner, aggregates and subqueries, b-tree descent through an index, executing inside the Nix evaluator.
+All through WebAssembly. 🤯</p>
+<p>Every one of those answers is byte-identical to what the <code class="language-plaintext highlighter-rouge">sqlite3</code> CLI gives for the same query.</p>
+<h2 id="benchmark"><a aria-label="Permalink to this section" class="hanchor" href="#benchmark">§</a>Benchmark</h2>
+<p>How do these compare? Here is every approach answering the same question: “which revisions shipped this package?” either against the same 22 MB SQLite build of the index or the
+whole-file JSON/Nix equivalent.</p>
+<figure class="plotnine"></figure>
+<p>As we initially complained, <strong><code class="language-plaintext highlighter-rouge">fromJSON</code> is a flat line in the wrong place.</strong> It is 0.29s whether you ask one question or two hundred, because the 5.3 MB parse happens once and dominates everything after it.</p>
+<p><strong>The giant <code class="language-plaintext highlighter-rouge">.nix</code> file is the same flat line, drawn higher.</strong> It is roughly twice the time and 1.7× the memory of the JSON it replaced. Surprisngly, laziness never gets a chance to help: importing the file and touching <em>nothing at all</em> already costs 0.53s. The baseline cost is the parse, and the parse is eager as we well. Turns out parsing Nix expressions is even more expensive than JSON. Nix has run the file through its Bison grammar, build an AST for all 305,492 entries, and add every attribute name into the symbol table. <code class="language-plaintext highlighter-rouge">fromJSON</code> skips the AST entirely and goes straight from bytes to values, which is why the format with a “serialisation boundary” beats the one without.</p>
+<p><strong><code class="language-plaintext highlighter-rouge">builtins.exec</code> starts the cheapest and climbs</strong>, roughly 3.8 ms per query of <code class="language-plaintext highlighter-rouge">fork</code> + <code class="language-plaintext highlighter-rouge">exec</code> + Nix-parsing the output. It crosses <code class="language-plaintext highlighter-rouge">fromJSON</code> somewhere around eighty queries.</p>
+<p><strong><code class="language-plaintext highlighter-rouge">builtins.importNative</code> is flat and nearly free</strong>, 0.05s across the whole range since we <em>reuse SQLite instantiations</em> across multiple invocations. The database is opened once for the entire evaluation and the pages stay warm.</p>
+<p>Unfortunately, <strong>SQLite in wasm is dominated by a fixed cost</strong>, roughly <strong>2.5 s</strong> before the first query, then about <strong>7 ms</strong> each query thereafter.
+That 2.5 s is Cranelift compiling 1.1 MB of SQLite. Right now that is a limitation of the WASM implementation however Eelco has mentioned that the generated code could be cached on disk in the future across invocations.</p>
+<p>For a lock file pinning thirty packages, <code class="language-plaintext highlighter-rouge">fromJSON</code> still wins outright at the current index size.</p>
+<h2 id="what-i-actually-want"><a aria-label="Permalink to this section" class="hanchor" href="#what-i-actually-want">§</a>What I actually want</h2>
+<p>None of these is right for shipping the multiverse index, and I am not going to make <code class="language-plaintext highlighter-rouge">nixpkgs-multiverse</code> depend on <code class="language-plaintext highlighter-rouge">allow-unsafe-native-code-during-evaluation</code>. Asking people to run their evaluator with native code loading enabled so my flake can be faster is not a worthwhile request <em>at the moment</em>.</p>
+<p>For now, the index stays JSON and I’m holding back on some of the more loftier ideas I have that require <em>a lot more data</em>.</p>
+<p>Although philosophically I only use <a href="https://github.com/nixos/nix">CppNix</a>, I was a little intrigued and impressed with what the ecosystem could unlock with WASM. There are definitely some warts however such as waiting for it to JIT and the developer-experience of maybe having checked-in compiled blobs but there is definitely potential to unlock a variety of problems.</p>
+</div>
+</article>
