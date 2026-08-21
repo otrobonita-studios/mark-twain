@@ -1,0 +1,881 @@
+← All articles
+We rebuilt the Linux microVM stack on Apple Silicon
+What it takes to boot the same microVMs on Apple's hypervisor, and the one capability Apple will not let you have.
+Aug 18, 2026
+15
+ Min Read
+Ivan Cernja
+← All articles
+Aug 18, 2026
+We rebuilt the Linux microVM stack on Apple Silicon
+What it takes to boot the same microVMs on Apple's hypervisor, and the one capability Apple will not let you have.
+Ivan Cernja
+15
+ Min Read
+Encore
+ builds and deploys backend applications, and since mid-2022 every one of those builds has run inside a 
+Firecracker
+ microVM. Firecracker strips the emulated hardware down to what a Linux kernel needs, giving each build the isolation of a virtual machine with startup close to the cost of a container.
+
+Firecracker drives 
+KVM
+, so it needs a Linux host with 
+/dev/kvm
+, which no Mac has, and most engineers at Encore develop on a Mac. The maintainers have no plans to close that, given they turned down a working proof of concept built on Apple's Virtualization.framework and said they 
+do not plan to support macOS any time soon
+.
+
+So for four years, working on the build system meant working on it somewhere else. We wanted to run the same build system on our laptops while keeping Firecracker in production, so we built 
+crackling
+, a single microVM API that drives Firecracker on Linux and Apple's hypervisor on macOS; booting the same images on both required rebuilding much of the Linux image toolchain to run on macOS.
+
+Four years of developing on a shared remote machine
+
+We onboarded each engineer with a script you ran once. It SSHed into the shared build machine as root, pulled your public key from 
+https://github.com/<you>.keys
+ and created you a user, then added you to the 
+kvm
+ and 
+docker
+ groups so you could reach the hypervisor and run containers. It copied the VM images into your 
+~/images
+ and hard-linked the 
+firecracker
+ binary into your 
+~/binaries
+, since every user needed it under their own tree on the one box. You ended up with a personal environment in a datacentre, reachable over Tailscale, sitting next to everybody else's.
+
+Getting a change onto that environment took a second script, which read your username and your port out of the CUE config, from a gitignored per-engineer file, because we all shared that host and had to agree not to collide. Binaries were the easy half: we cross-compiled with 
+GOOS=linux GOARCH=amd64
+, rsynced the results across, and counted the transferred files to work out whether anything needed restarting.
+
+Images were the hard half, because Firecracker boots a block device and Docker produces layers. We could not find an existing tool that converted Docker layers into a block device Firecracker could boot, so we built the conversion ourselves, half on your laptop and half over SSH:
+
+# tools/dev-builder/deploy-dev-builder.sh
+
+docker save -o 
+"
+$imagesdir
+/
+$name
+.tar"
+ 
+"
+$docker_image
+"
+
+tar -C 
+"
+$layersdir
+"
+ -xf 
+"
+$imagesdir
+/
+$name
+.tar"
+          
+# explode the layers
+
+tar -C 
+"
+$dst
+/"
+ -xf 
+"
+$imagesdir
+/
+$name
+.tar"
+ manifest.json
+
+rsync -azP 
+$layersdir
+  
+${username}
+@builder:~/images/
+rsync -azP 
+"
+$dst
+"
+      
+${username}
+@builder:~/images/
+
+ssh 
+${username}
+@builder -- \
+    
+"bash -l -s squash_layers \"images/
+${outputdir}
+\" \"images/
+${name}
+\""
+ < 
+$scriptpath
+
+That last line pipes a shell function into a login shell on the far end and runs it there. The bash was later rewritten in Go, but the pipeline and the host did not change. We had 
+squash_layers
+ re-extract every layer in manifest order, delete the 
+.wh..wh..opq
+ whiteout markers with 
+find
+ because 
+tar
+ will not apply them for us, write a hardcoded 
+/etc/resolv.conf
+ since the VM had no DNS otherwise, pull the image's environment variables out of the Docker config with 
+jq
+, and finally call 
+mksquashfs
+ to produce something Firecracker could boot. We keyed a cache on the Docker image id so the whole path could be skipped when it matched. It ran whenever you had changed anything in the image, which was most of the time if you were working on the guest side.
+
+Restarting took a third SSH, to kill your container and start its replacement:
+
+docker run --privileged \
+    -v ~/socks:/var/lib/buildsvc/socks:rw   -v ~/logs:/tmp/encore-builds:rw \
+    -v ~/.keys:/.keys:ro                    -v ~/binaries:/usr/local/bin:ro \
+    -v ~/images:/usr/lib/buildsvc/images:ro \
+    --env-file service-envs \
+    --device /dev/kvm --device /dev/net/tun \
+    -p 
+$port
+:9060 --name 
+"
+${username}
+-builder"
+ -d -t buildsvc-tester
+
+Firecracker is running inside a Docker container there, so we had to pass 
+--privileged
+, 
+/dev/kvm
+ and 
+/dev/net/tun
+ through, because the process inside that container was going to create tap devices and boot virtual machines of its own.
+
+Firecracker expects those tap devices to attach to a host bridge, and inside a Docker container there is no host bridge. So we built one, in a shell script that ran before 
+buildsvc
+, the build service itself, came up:
+
+# tools/dev-builder/container/start.sh
+
+ip 
+link
+ add docker0 
+type
+ bridge
+ip 
+link
+ 
+set
+ eth0 master docker0
+addr=$(ip address show eth0 | grep inet | xargs | 
+cut
+ -d 
+" "
+ -f2)
+ip address del 
+$addr
+ dev eth0
+ip address add 
+$addr
+ dev docker0 broadcast 172.17.255.255
+ip 
+link
+ 
+set
+ docker0 up
+ip r add default via 172.17.0.1 dev docker0
+
+The script builds a bridge named 
+docker0
+ inside the container, enslaves the container's own 
+eth0
+ to it, then moves the IP address off 
+eth0
+ and onto the bridge. The tap devices then had something to attach to that looked enough like a real Docker host.
+
+The build system ran everywhere except our laptops
+
+The setup worked, which is why it lasted from 2022 until we finally replaced it. What it cost was harder to justify at a company whose whole pitch is that backend development should be smooth: that you should be able to write your application, run it locally, and have the infrastructure follow from the code rather than from a pile of YAML you maintain by hand. Meanwhile the part of our product that turns a git push into a running application was the one thing we could not run on the machines we write software on.
+
+Because the build system was remote, a local breakpoint would never fire and reading logs meant tailing a file over SSH. Attaching a profiler first required copying it onto the box. Every guest-side change also went through 
+docker save
+ and an 
+rsync
+ of the exploded image, followed by extraction and 
+mksquashfs
+ on the shared host while other engineers ran their own builds there.
+
+The loop was long enough that you thought twice before trying something speculative, and what we wanted was to run the build system on a Mac, natively, booting the same images, on the machine we were already sitting in front of.
+
+One API over two hypervisors with little in common
+
+We looked at what already existed first, and running Linux in a VM on macOS has several working implementations: Apple's own 
+container
+ reached 1.0 this June, 
+Lima
+ and 
+Tart
+ have been doing it for years, and podman can too, through 
+libkrun
+. You can even get 
+/dev/kvm
+ inside a Linux VM on an M3 or later running macOS 15, which runs Firecracker unmodified.
+
+None of them spans both hosts, though, and the nested route still leaves you inside a Linux VM on the subset of laptops that support it. Adopting any of them would have left us with a second, differently-behaved way of running builds that only exists on laptops.
+
+Crackling is a daemon and CLI that boot OCI images as lightweight Linux VMs on both platforms, with one agent inside the guest and one protocol driving it either way. Firecracker remains the backend on Linux, and on macOS it is Apple's 
+Virtualization.framework
+, or VZ, which is the prefix on every type it exports.
+
+We kept the core crate independent of either hypervisor. It describes a machine through 
+MachineSpec
+, which carries 
+vcpus
+, 
+mem
+, 
+kernel
+, 
+rootfs
+, 
+extra_disks
+, 
+nics
+, 
+vsock
+, and per-backend extras, while 
+MachineState
+ tracks it at runtime.
+
+Both backends implement 
+MachineBackend
+: 
+start
+, 
+shutdown
+, 
+pause
+, 
+resume
+, 
+snapshot
+, 
+wait
+, 
+dispose
+, and, where available, 
+connect_vsock
+. Backend dispatch is static because only one can exist for a given target, while the trait gives both implementations a shared contract and lets tests substitute an in-memory backend.
+
+Their capabilities still differ: Firecracker has host tap devices and its MMDS metadata service, while Apple's framework has a built-in NAT device, 
+virtiofs
+ directory sharing, and 
+Rosetta
+ translation for running x86 binaries in an arm64 guest. Each backend returns an error naming any requested feature it cannot implement:
+
+// crates/crackling-core/src/backend.rs
+
+pub
+ 
+enum
+ 
+Feature
+ {
+    Snapshot,
+    
+/// Creating a machine from a previously captured snapshot.
+
+/// Distinct from `Snapshot`: VZ can capture (entitlement permitting)
+
+/// but crackling never restores there, while Firecracker does both.
+
+    SnapshotRestore,
+    Mmds, VirtioFs, Rosetta,   
+// Firecracker / VZ / VZ
+
+/// Host tap network device (Firecracker).
+
+    TapNetwork,
+    
+/// Built-in NAT network device (VZ).
+
+    NatNetwork,
+    MemoryBalloon, Entropy, Vsock,
+    
+/// Machines outlive the controlling process and can be re-attached
+
+/// (Firecracker). VZ machines live in-process and can never be adopted.
+
+    Adoption,
+}
+
+Each backend reports what it supports on the current host before any machine exists, allowing the daemon to adjust a spec before 
+create
+. Requests for unavailable networking modes, adoption, or snapshot restore fail at the API boundary with the unsupported feature named.
+
+On Linux, each VM is a separate 
+firecracker
+ child process, driven over its REST API on a Unix socket by a small HTTP/1.1 client written for that limited API surface. Those processes can outlive the daemon. A transient 
+systemd scope
+ keeps the service manager from reaping them, and we persist both the PID and its start time so PID reuse cannot make an old record point at an unrelated process. On restart, the daemon opens a 
+pidfd
+ and checks the instance id over the API socket. Anything it cannot identify is left running. VZ machines live inside our process and end with it, so on macOS 
+Adoption
+ returns an error.
+
+Both backends are built and tested on every pull request, on an x86_64 Ubuntu runner for Firecracker and an arm64 macOS runner for VZ. The daemon's backend-agnostic logic runs against the mock backend on each runner, and the VZ tests require no hypervisor, code-signing, or guest image.
+
+The crackling CLI drives a daemon over gRPC; the daemon boots machines through a facade that selects one of two hypervisor backends at compile time, and both talk to the same in-guest agent over vsock.
+crackling CLI
+grpc
+cracklingd
+compile-time backend
+linux
+Firecracker
+macos
+Virtualization.framework
+vsock
+Guest agent
+The backend is chosen at compile time; the guest agent is the same binary on both.
+
+The one thread Apple's framework insists on
+
+Implementing the VZ backend came with a strict threading constraint: 
+VZVirtualMachine
+, 
+VZVirtualMachineConfiguration
+, and the framework's device objects are 
+!Send + !Sync
+, while every VM call and completion handler must run on the serial dispatch queue that created the VM. The rest of the daemon is 
+tokio
+, which moves futures between worker threads whenever it likes, so no arrangement can hold a VM object across an await point and satisfy both constraints.
+
+We create and access every VM on one process-global serial 
+DispatchQueue
+, with the VM registry available only to closures dispatched onto that queue so access stays serialized and the objects never reach tokio's threads. The async half is an ordinary 
+Send + Sync + Clone
+ handle that dispatches a closure carrying nothing but 
+Send
+ data, then awaits the reply:
+
+// crates/crackling-vz/src/reactor.rs
+
+reactor
+().queue.
+exec_async
+(
+move
+ || {
+    
+match
+ 
+build_configuration
+(&cfg) {
+        
+Ok
+(vm_cfg) => {
+            
+// SAFETY: we pass the reactor's own serial queue; the VM is
+
+// stored and only ever used from this queue henceforth.
+
+let
+ 
+vm
+ = 
+unsafe
+ {
+                VZVirtualMachine::
+initWithConfiguration_queue
+(
+                    VZVirtualMachine::
+alloc
+(), &vm_cfg, &
+reactor
+().queue)
+            };
+            
+let
+ 
+id
+ = shared.id;
+            
+if
+ 
+let
+ 
+Ok
+(
+mut
+ g) = 
+reactor
+().state.vms.
+lock
+() {
+                g.
+insert
+(id, ReactorVm { vm, shared });
+            }
+            
+let
+ 
+_
+ = reply.
+send
+(
+Ok
+(()));
+        }
+        
+Err
+(e) => { 
+/* mark Failed, then: */
+ 
+let
+ 
+_
+ = reply.
+send
+(
+Err
+(e)); }
+    }
+});
+
+The dispatch API requires 
+Send + 'static
+ closures, so the compiler prevents a 
+!Send
+ VM object from being captured. The registry and the reactor that holds it still need hand-written 
+Send
+ and 
+Sync
+ impls; the queue invariant depends on those two implementations.
+
+VZVirtualMachineConfiguration
+ is 
+!Send
+ too, so we split lowering into two phases: a 
+MachineSpec
+ becomes a structure containing only 
+Send
+ data on tokio, then that structure becomes a 
+VZVirtualMachineConfiguration
+ on the queue. A completion handler receives a raw 
+NSError
+ pointer that is valid only for the duration of the block, so we convert it into an owned error on the queue before replying. Dropping the last handle to a machine dispatches a dispose, because the framework requires that release on its own queue too.
+
+Building a bootable Linux image without Linux
+
+The VZ backend could now create and control a VM, but booting one still required replacing the Linux-only image pipeline. Turning an OCI image into a bootable root filesystem normally requires root and a loop mount, neither of which exists on macOS, while building an initramfs usually calls the 
+cpio
+ binary. The kernel tree's own 
+extract-vmlinux
+ is written for x86 bzImage and cannot unpack an arm64 kernel.
+
+Neither hypervisor boots anything until it has an uncompressed kernel image, and the 
+vmlinuz
+ an arm64 distribution ships is usually an 
+EFI zboot
+ file, which is a small EFI executable wrapping a compressed payload that the firmware would normally decompress at boot. There is no firmware here, so we unwrap it ourselves. The 
+MZ
+ and 
+zimg
+ signatures identify the format, and the header gives us the payload's offset, size, and compression:
+
+// crates/crackling-image/src/kernel.rs
+
+// EFI zboot: "MZ" at offset 0 and the "zimg" signature at offset 4.
+
+if
+ bytes.
+len
+() > 
+64
+ && &bytes[
+0
+..
+2
+] == 
+b"MZ"
+ && &bytes[
+4
+..
+8
+] == 
+b"zimg"
+ {
+    
+let
+ 
+payload_offset
+ = 
+u32
+::
+from_le_bytes
+(bytes[
+8
+..
+12
+].
+try_into
+().
+unwrap
+()) 
+as
+ 
+usize
+;
+    
+let
+ 
+payload_size
+ = 
+u32
+::
+from_le_bytes
+(bytes[
+12
+..
+16
+].
+try_into
+().
+unwrap
+()) 
+as
+ 
+usize
+;
+    
+let
+ 
+comp_end
+ = bytes[
+24
+..
+32
+].
+iter
+().
+position
+(|&b| b == 
+0
+).
+unwrap_or
+(
+8
+);
+    
+let
+ 
+compression
+ = std::
+str
+::
+from_utf8
+(&bytes[
+24
+..
+24
+ + comp_end]).
+unwrap_or
+(
+""
+);
+    
+let
+ 
+end
+ = payload_offset
+        .
+checked_add
+(payload_size)
+        .
+filter
+(|&e| e <= bytes.
+len
+())
+        .
+ok_or_else
+(|| ImageError::
+Kernel
+(
+"zboot payload out of range"
+.
+into
+()))?;
+    
+let
+ 
+raw
+ = 
+match
+ compression {
+        
+"gzip"
+ => 
+gunzip
+(&bytes[payload_offset..end])?,
+        other => 
+return
+ 
+Err
+(ImageError::
+Kernel
+(
+            
+format!
+(
+"unsupported zboot compression: {other:?}"
+))),
+    };
+}
+
+Hand Virtualization.framework a compressed kernel and it fails at start with a generic internal error and no detail attached. The virtualization entitlement was our first suspect, and we lost an afternoon re-signing binaries before looking at the kernel. We now check for 
+the 
+ARMd
+ signature at offset 0x38
+, which identifies a raw arm64 
+Image
+, and report a compressed kernel before trying to boot it.
+
+The kernel needs a root filesystem to boot into, so we apply OCI layers entirely in userspace and honor 
+.wh.
+ whiteout entries
+ as 
+squash_layers
+ did with 
+find
+, but in-process and without a cleanup pass afterwards. Pulling the image also required a custom platform resolver because the default keys off the host OS and never matches a linux/arm64 image for a request from a Mac.
+
+Booting the rootfs from RAM requires an initramfs: a newc-format cpio archive inside a gzip stream. We generate both layers in pure Rust, and by default the rootfs remains in memory until the VM stops.
+
+We unpack and normalize an image once, write a 
+.built
+ sentinel, and publish the completed output by atomic rename so a crash leaves the existing cache untouched. Each VM clones the cached rootfs using 
+clonefile
+ on APFS, a per-file 
+FICLONE
+ reflink on Linux filesystems that support it, or a plain copy elsewhere, and the RAM path repacks that clone into the VM's own initramfs.
+
+Getting a shell inside the VM
+
+Once the kernel and rootfs booted, crackling needed a way to run commands and move data inside the guest. Both platforms provide vsock, and Alpine's 
+virt
+ kernel ships AF_VSOCK as loadable modules, so the guest 
+/init
+ loads 
+vsock
+, 
+vmw_vsock_virtio_transport_common
+ and 
+vmw_vsock_virtio_transport
+, among others, before anything can listen. Those modules carry a vermagic string that must match the running kernel exactly, and a mismatch fails at load with nothing useful downstream: the VM boots, the agent never comes up, and the host waits for a connection that never arrives. We fetch the kernel and its modules from one 
+linux-virt
+ package so they stay in step. Mounting ext4 pulls in a crc32c hash even with checksums disabled, so 
+crc32c_generic
+ and 
+libcrc32c
+ have to be loaded, and an interactive shell needs 
+/dev/pts
+ mounted before 
+openpty
+ will work.
+
+Every VM runs the same agent, a static 
+musl
+ binary built for 
+aarch64-unknown-linux-musl
+ on the Mac and 
+x86_64-unknown-linux-musl
+ for amd64 hosts. It listens on 
+AF_VSOCK
+ and uses a small framed protocol: an 8-byte header followed by either an encoded control frame or raw bytes for bulk data, with one connection per operation. The protocol supports 
+exec
+ with streamed stdout and stderr, an interactive 
+shell
+ on a PTY, 
+cp
+ in both directions, and 
+forward
+, which turns a connection into a tunnel to a port inside the guest.
+
+The agent uses vsock for control, leaving the guest without manual network configuration or an SSH daemon installed by crackling. Outbound networking is a separate opt-in, while inbound access is available only through a control-plane forward authenticated with a per-VM token generated at boot.
+
+On macOS the host end of that transport is a 
+VZVirtioSocketDevice
+ connection whose file descriptor has to be 
+dup(2)
+ed immediately, because the framework closes the original when its Objective-C object deallocates. On Linux it is a Unix socket with a text handshake, and the reply has to be read one byte at a time:
+
+// crates/crackling-firecracker/src/machine.rs
+
+// Read the reply one byte at a time so we never swallow payload
+
+// bytes past the newline (a real hazard with buffered reads).
+
+stream.
+write_all
+(
+format!
+(
+"CONNECT {port}\n"
+).
+as_bytes
+()).
+await
+?;
+
+let
+ 
+mut 
+line
+ = 
+Vec
+::
+with_capacity
+(
+16
+);
+
+loop
+ {
+    
+let
+ 
+b
+ = stream.
+read_u8
+().
+await
+.
+map_err
+(Error::Io)?;
+    
+if
+ b == 
+b'
+\n
+'
+ { 
+break
+; }
+    line.
+push
+(b);
+}
+
+The macOS and Linux implementations differ, but both return a byte stream connected to the agent for 
+crackling shell
+, 
+exec
+ and 
+cp
+.
+
+Apple does not let third parties snapshot a VM
+
+Firecracker captures memory and device state natively through 
+PUT /snapshot/create
+, and a spec carrying 
+restore_from
+ spawns a fresh VMM, checks the snapshot's host fingerprint, loads the snapshot paused and resumes it without booting. Upstream only restores onto a matching architecture and Firecracker version, so the fingerprint check protects the operation when we suspend an idle sandbox and resume it on another host.
+
+Apple's framework appears to offer the same thing, since 
+VZVirtualMachine
+ exposes 
+saveMachineStateToURL
+, and 
+validateSaveRestoreSupport
+ on the configuration asks whether it is eligible. We wrote the implementation and the validator returned successfully, but the save failed with 
+VZErrorInternal
+. It fails even on a minimal VM carrying little more than a vsock device, which makes an unserializable device an unlikely explanation.
+
+Running a VM needs 
+com.apple.security.virtualization
+, which any developer can sign for, while saving one additionally needs 
+com.apple.private.virtualization
+, which Apple does not grant to third-party applications. Since the validator does not check for the second one, the framework reports the operation as supported, fails when you call it, and returns the same generic internal error that a bad kernel produces.
+
+What runs on a Mac now
+
+An engineer clones the build system, runs it on their laptop, and boots the OCI images used for 
+Encore's builds and deploys
+ through the same agent and vsock path. The shared host is gone, along with the 
+docker save
+ piped through 
+rsync
+ and the hand-built bridge inside a privileged container, and you can put a breakpoint in the build system and hit it.
+
+The local workflow looks like this:
+
+$ 
+crackling run --image alpine:3.20
+
+0c1f8f3c-7b21-4a5e-9a10-2b4c6d8e0f11   running   alpine:3.20
+
+$ 
+crackling 
+exec
+ 0c1f8f3c-7b21-4a5e-9a10-2b4c6d8e0f11 
+uname
+ -a
+
+Linux (none) 6.6.142-0-virt ... aarch64 Linux
+
+$ 
+crackling shell 0c1f8f3c-7b21-4a5e-9a10-2b4c6d8e0f11
+
+~ # cat /etc/alpine-release
+3.20.10
+
+Related Articles
+Development
+07/28/26
+ /
+ 
+5
+ Min Read
+Development
+07/28/26
+ /
+ 
+5
+ Min Read
+Your SQS consumer can hang forever by default
+The AWS Rust SDK ships no request timeout by default, so one SQS receive on a dead connection can hang a whole consumer with nothing in the logs.
+Ivan Cernja
+Development
+07/21/26
+ /
+ 
+8
+ Min Read
+Development
+07/21/26
+ /
+ 
+8
+ Min Read
+Sandboxing an agent's code isn't the same as trusting it
+A sandbox keeps an agent's code contained. It can't tell you the code is correct, which for backend code is the harder problem.
+Ivan Cernja
+Development
+07/15/26
+ /
+ 
+7
+ Min Read
+Development
+07/15/26
+ /
+ 
+7
+ Min Read
+We compiled our TypeScript parser to WASM
+How we compiled the Rust parser that reads infrastructure out of Encore code so it runs in the browser, and how we use it to reproduce the parser errors people report.
+Ivan Cernja
