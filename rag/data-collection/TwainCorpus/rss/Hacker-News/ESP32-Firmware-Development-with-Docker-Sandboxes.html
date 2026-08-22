@@ -1,0 +1,366 @@
+<article>
+<div class="wp-block-ponyo-layout-sidebar-right">
+<div class="container">
+<div class="wp-block-ponyo-column">
+<div class="column-container">
+<div class="wp-block-ponyo-blog-header">
+<div class="wp-block-ponyo-eyebrow">
+<div class="text">
+            Docker Captain
+        </div>
+</div>
+<h1 class="wp-block-ponyo-heading text-3xl">
+        Reproducible ESP32 Firmware Development with Docker and Docker Sandboxes
+    </h1>
+<div class="wp-block-ponyo-text">
+        Posted Aug 14, 2026
+    </div>
+</div>
+<div class="wp-block-ponyo-blog-author wp-block-ponyo-blog-contributor display__short">
+<div class="contributor-headshots">
+<div class="headshot">
+ </div>
+</div>
+<div class="contributor-names">
+<a class="contributor" href="https://www.docker.com/contributors/marco-franzon/">Marco Franzon</a>
+</div>
+</div>
+<div class="entry-content is-style-prose wp-block-post-content has-global-padding is-layout-constrained wp-block-post-content-is-layout-constrained">
+<p class="wp-block-paragraph">Firmware development has always been challenging: mismatched toolchains, “it works on my machine” builds, and the tension between maintaining legacy products and shipping new features. In this article we explore how you can use Docker and Docker sandboxes to ease firmware development, especially for ESP32 projects. Nowadays, teams end up supporting multiple hardware revisions, several ESP-IDF releases, and long-term customer deployments, all while iterating on new capabilities like Wi-Fi 6, Matter, or power optimizations.</p>
+<p class="wp-block-paragraph">The official <code>espressif/idf</code> Docker image solves the reproducibility problem. Docker Sandboxes (the <code>sbx</code> CLI) solve a newer one: letting AI coding agents work on your firmware at full speed without giving them the keys to your laptop. This article walks through a practical workflow that combines both: clean builds, parallel environments for new and legacy firmware, and safe unsupervised AI sessions.</p>
+<h2 class="wp-block-heading">Part 1: The Baseline – Building with the Official Image</h2>
+<p class="wp-block-paragraph">The <code>espressif/idf</code> image ships a complete, pinned ESP-IDF installation: the framework itself, the Xtensa/RISC-V toolchains, Python environment, CMake, ninja, everything. A build needs one command:</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+docker run --rm -v $PWD:/project -w /project \
+  -u $UID -e HOME=/tmp \
+  espressif/idf:release-v5.4 idf.py build
+</pre></div>
+<p class="wp-block-paragraph">A few details worth understanding rather than cargo-culting:</p>
+<ul class="wp-block-list">
+<li><code>-u $UID -e HOME=/tmp</code> makes the container run as your user, so build artifacts in <code>build/</code> aren’t owned by root. <code>HOME=/tmp</code> gives the IDF tools a writable home for their caches.</li>
+<li><strong>Pin your tag.</strong> <code>latest</code> tracks the master branch and will break you eventually. <code>vX.Y</code> tags are fixed releases; <code>release-vX.Y</code> tags track the release branch and receive bugfixes. For products in maintenance, exact <code>vX.Y.Z</code> tags are the safest; for active development, <code>release-vX.Y</code> is a good balance.</li>
+<li>If your mounted project is owned by a different user than the one in the container, Git will complain about “dubious ownership”. The image supports <code>-e IDF_GIT_SAFE_DIR='/project'</code> to whitelist the path (use : to separate multiple paths).</li>
+<li>Enable the compiler cache with <code>-e IDF_CCACHE_ENABLE=1</code> and persist it across runs by mounting a volume for it. Full rebuilds of a mid-size project drop from minutes to seconds.</li>
+</ul>
+<h3 class="wp-block-heading">Flashing and monitoring</h3>
+<p class="wp-block-paragraph">On <strong>Linux</strong>, pass the serial device through:</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+docker run --rm -it \
+  --device=/dev/ttyUSB0 \
+  --group-add $(getent group dialout | cut -d: -f3) \
+  -v $PWD:/project -w /project \
+  -u $UID -e HOME=/tmp \
+  espressif/idf:release-v5.4 idf.py flash monitor
+
+</pre></div>
+<p class="wp-block-paragraph">The <code>--group-add</code> is needed because you’re running as <code>$UID</code>, not root, and the device node belongs to <code>dialout</code>.</p>
+<p class="wp-block-paragraph">On <strong>macOS and Windows</strong>, Docker Desktop cannot pass USB devices into containers. The clean workaround is a network serial bridge using RFC2217, which esptool supports natively. On the host:</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+pip install esptool
+esp_rfc2217_server -p 4000 /dev/cu.usbserial-1420
+</pre></div>
+<p class="wp-block-paragraph">Inside the container, point idf.py at the network port:</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+idf.py --port 'rfc2217://host.docker.internal:4000?ign_set_control' flash monitor
+
+</pre></div>
+<p class="wp-block-paragraph">This looks like a hack but it’s actually a feature: once the serial port is a network endpoint, <em>anything</em> can reach it. Containers, CI runners, and (as we’ll see) sandboxed AI agents. Keep this trick in mind; it’s the linchpin of Part 3.</p>
+<h3 class="wp-block-heading">Hide it behind a Makefile</h3>
+<p class="wp-block-paragraph">Nobody should type these commands twice. A small Makefile keeps the interface stable even if the plumbing changes:</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+IDF_IMAGE ?= espressif/idf:release-v5.4
+PORT      ?= /dev/ttyUSB0
+
+DOCKER_RUN = docker run --rm -it \
+  --device=$(PORT) \
+  --group-add $(shell getent group dialout | cut -d: -f3) \
+  -v $(PWD):/project -w /project \
+  -v idf-ccache:/ccache -e CCACHE_DIR=/ccache -e IDF_CCACHE_ENABLE=1 \
+  -u $(shell id -u) -e HOME=/tmp -e IDF_GIT_SAFE_DIR=/project \
+  $(IDF_IMAGE)
+
+build:
+    $(DOCKER_RUN) idf.py build
+
+flash:
+    $(DOCKER_RUN) idf.py flash
+
+monitor:
+    $(DOCKER_RUN) idf.py monitor
+
+menuconfig:
+    $(DOCKER_RUN) idf.py menuconfig
+
+shell:
+    $(DOCKER_RUN) bash
+
+</pre></div>
+<p class="wp-block-paragraph">Now <code>make build</code> works identically for every developer and in CI, and switching IDF versions is <code>make build IDF_IMAGE=espressif/idf:release-v5.3</code>.</p>
+<h2 class="wp-block-heading">Part 2: Parallel Environments – New Features and Legacy, Side by Side</h2>
+<p class="wp-block-paragraph">This is where the container approach stops being merely convenient and starts changing how you work. Because each container is fully isolated, you can run two <em>different IDF versions</em> against two <em>different boards</em> at the same time, on the same machine.</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+# Terminal 1 - new feature branch, IDF 5.4, experimental board
+docker run --rm -it --device=/dev/esp32-experimental \
+  -v $PWD/new-feature:/project -w /project \
+  -u $UID -e HOME=/tmp \
+  espressif/idf:release-v5.4
+
+# Terminal 2 - legacy firmware, IDF 5.3, production board
+docker run --rm -it --device=/dev/esp32-production \
+  -v $PWD/legacy:/project -w /project \
+  -u $UID -e HOME=/tmp \
+  espressif/idf:release-v5.3
+
+</pre></div>
+<p class="wp-block-paragraph">Typical uses: flashing experimental code on one board while a long-running soak test or customer demo stays untouched on the other; A/B-comparing power consumption between firmware versions; reproducing a field bug on the exact legacy toolchain while the fix is developed on the current one.</p>
+<h3 class="wp-block-heading">Stable device names with udev</h3>
+<p class="wp-block-paragraph"><code>/dev/ttyUSB0</code> and <code>/dev/ttyUSB1</code> swap depending on plug order, which will eventually make you flash the wrong board. On Linux, pin them with udev rules keyed on the adapter’s serial number:</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+# find the serial numbers
+udevadm info -a /dev/ttyUSB0 | grep '{serial}'
+# /etc/udev/rules.d/99-esp32.rules
+SUBSYSTEM=="tty", ATTRS{serial}=="A50285BI", SYMLINK+="esp32-experimental"
+SUBSYSTEM=="tty", ATTRS{serial}=="B7743NM0", SYMLINK+="esp32-production"
+
+</pre></div>
+<p class="wp-block-paragraph">After <code>udevadm control --reload</code>, the symlinks survive reboots and re-plugs, and your Makefile targets can reference boards by role instead of by enumeration accident.</p>
+<h3 class="wp-block-heading">Or codify it with Compose</h3>
+<p class="wp-block-paragraph">If the two-environment setup is permanent, a <code>compose.yaml</code> documents it better than shell history:</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+services:
+  new-feature:
+    image: espressif/idf:release-v5.4
+    volumes: ["./new-feature:/project"]
+    working_dir: /project
+    devices: ["/dev/esp32-experimental:/dev/ttyUSB0"]
+    stdin_open: true
+    tty: true
+
+  legacy:
+    image: espressif/idf:release-v5.3
+    volumes: ["./legacy:/project"]
+    working_dir: /project
+    devices: ["/dev/esp32-production:/dev/ttyUSB0"]
+    stdin_open: true
+    tty: true
+
+</pre></div>
+<p class="wp-block-paragraph"><code>docker compose run new-feature idf.py flash monitor</code> and the mapping from role to physical board is version-controlled.</p>
+<h2 class="wp-block-heading">Part 3: Docker Sandboxes – Letting AI Agents Work Unsupervised</h2>
+<p class="wp-block-paragraph">Coding agents like Claude Code are genuinely useful for firmware work: porting components between IDF versions, writing unit tests, chasing config drift in <code>sdkconfig</code>. But to be useful they need to <em>run things</em>: builds, flashes, <code>pip install</code>, sometimes Docker itself. Giving an agent that freedom directly on your host, in bypass-permissions mode, is uncomfortable for good reasons.</p>
+<p class="wp-block-paragraph">Docker Sandboxes solve this with a stronger primitive than a container: each sandbox is a <strong>microVM with its own kernel, filesystem, network stack, and its own private Docker daemon</strong>. The agent can install packages, modify system config, build and run containers, and none of it touches your host. Your workspace directory syncs into the sandbox at the same path, so file paths in error messages match between the two worlds.</p>
+<p class="wp-block-paragraph">The CLI is small and clear:</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+# start Claude Code in a sandbox for the current project
+sbx run claude
+
+# work on a specific directory
+sbx run claude ~/firmware/new-feature
+
+# see what's running, resource usage, network requests
+sbx
+
+# list and clean up
+sbx ls
+sbx rm new-feature
+
+</pre></div>
+<p class="wp-block-paragraph">Three properties matter for firmware work in particular:</p>
+<ol class="wp-block-list">
+<li><strong>Disposability.</strong> The agent can trash its environment experimenting with esptool versions, partition tables, or custom toolchains. <code>sbx rm</code> and it never happened. Your host IDF setup, if you even have one, is untouched.</li>
+<li><strong>Network policy.</strong> Sandboxes route traffic through a host-side proxy with three modes: <em>open</em>, <em>balanced</em> (default-deny with pre-approved developer and package-manager domains), and <em>locked down</em>. An agent that decides to <code>curl</code> your firmware to somewhere unexpected simply can’t.</li>
+<li><strong>Credential isolation.</strong> API keys and tokens are injected by the host-side proxy into outgoing requests; the sandbox itself never sees them. A prompt-injected agent can’t exfiltrate what it doesn’t have.</li>
+</ol>
+<h3 class="wp-block-heading">But how does the agent flash a board?</h3>
+<p class="wp-block-paragraph">Here’s where the RFC2217 trick from Part 1 pays off. The sandbox is a VM; there is no USB passthrough. But there <em>is</em> a network path to the host. So expose the serial port as a network service on the host:</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+esp_rfc2217_server -p 4000 /dev/esp32-experimental
+
+</pre></div>
+<p class="wp-block-paragraph">and tell the agent (in your project’s CLAUDE.md or equivalent) to flash with:</p>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+idf.py --port 'rfc2217://host.docker.internal:4000?ign_set_control' flash monitor
+
+</pre></div>
+<p class="wp-block-paragraph">Now the agent’s whole loop runs end-to-end inside the sandbox: edit, build in a container it spawned itself, flash real hardware, read the monitor output, fix the bug. The only thing it can reach on your machine is one serial port you explicitly published. That’s a remarkably good trade: full hardware-in-the-loop autonomy, minimal blast radius.</p>
+<p class="wp-block-paragraph">Run one sandbox per board and you get the parallel-environment pattern from Part 2, agent edition: an agent iterating on the experimental board via port 4000 while you, or a second locked-down agent, watch the production board via port 4001.</p>
+<h3 class="wp-block-heading">Honest caveats</h3>
+<p class="wp-block-paragraph">Sandboxes are newer technology than containers, and it shows in places. MicroVM isolation is available on macOS (Apple Silicon), Windows 11, and Linux with KVM. Build performance inside the microVM is noticeably slower than native containers: fine for agent sessions, annoying for your own tight inner loop. And the agent runs in bypass-permissions mode by design; the isolation <em>is</em> the permission system, so review the diff before merging, same as you would for any contributor.</p>
+<h2 class="wp-block-heading">Part 4: Putting It Together – A Daily Workflow</h2>
+<ul class="wp-block-list">
+<li><strong>Regular development:</strong> VS Code Dev Containers with the <code>espressif/idf</code> image (plus the Espressif IDF extension inside the container). Same image as CI, full IntelliSense, native-container speed.</li>
+<li><strong>AI-assisted experimentation:</strong> <code>sbx run claude --branch &lt;feature&gt;</code>. The branch flag keeps the agent’s commits on a worktree, so your checkout stays clean; review and merge when it’s done.</li>
+<li><strong>Multi-board testing:</strong> parallel containers (you) or parallel sandboxes (agents), one per device, with udev-stable names and one <code>esp_rfc2217_server</code> per board.</li>
+<li><strong>CI:</strong> GitHub Actions with the official <code>espressif/esp-idf-ci-action</code>, pinned to the same IDF version as your dev image. If a build passes locally, it passes in CI. It’s the same bits.</li>
+</ul>
+<div class="wp-block-syntaxhighlighter-code"><pre class="brush: bash; gutter: false; title: ; notranslate" title="">
+# .github/workflows/build.yml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4
+          target: esp32s3
+
+</pre></div>
+<h2 class="wp-block-heading">Pro Tips</h2>
+<ul class="wp-block-list">
+<li>Pin exact image tags (<code>release-v5.4</code>, not <code>latest</code>), and record the tag in the repo (Makefile or compose file) so the toolchain version is part of the code review.</li>
+<li>One project folder per product line (<code>new-feature/</code>, <code>legacy/</code>) with its own pinned image. Never share a <code>build/</code> directory between IDF versions.</li>
+<li><code>IDF_GIT_SAFE_DIR=/project</code> kills the Git ownership warnings; <code>IDF_CCACHE_ENABLE=1</code> plus a ccache volume kills the rebuild times.</li>
+<li>Add <code>--group-add</code> for the dialout GID when combining <code>--device</code> with <code>-u $UID</code>.</li>
+<li>On macOS/Windows, and always with sandboxes, RFC2217 is your serial transport. One server per board, one port per server.</li>
+<li>Put the flash/monitor commands and port mapping in <code>CLAUDE.md</code> so agents discover the hardware setup without being told each session.</li>
+<li>If your team standardizes on extra tools (clang-tidy, cppcheck, a particular esptool), bake a thin custom image <code>FROM espressif/idf:release-v5.4</code> rather than installing them in every session.</li>
+</ul>
+<h2 class="wp-block-heading">Conclusion</h2>
+<p class="wp-block-paragraph">Docker turned ESP32 builds from a fragile, machine-specific ritual into something reproducible enough to trust. Parallel containers turn one desk into a small hardware lab, with legacy and next-gen firmware coexisting without friction. And Docker Sandboxes close the last gap: they make it reasonable, not reckless, to hand an AI agent a real board and let it work.</p>
+<p class="wp-block-paragraph">If you’re still installing ESP-IDF directly on your host machine in 2026, you’re working harder than necessary. Try the two-board setup this week: new firmware iterating on one device, stable firmware soaking on the other. Then hand one of them to an agent in a sandbox and see how far it gets.</p>
+<p class="wp-block-paragraph">Happy hacking!</p>
+<h3 class="wp-block-heading">Learn more</h3>
+<ul class="wp-block-list">
+<li><a href="https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/tools/idf-docker-image.html" id="dkr_esp-idf-docker-image-guide-92784" rel="nofollow noopener" target="_blank">ESP-IDF Docker image guide</a></li>
+<li>Review the <a href="https://docs.docker.com/ai/sandboxes/" id="dkr_docker-sandboxes-92784" rel="nofollow noopener" target="_blank">Docker Sandboxes</a> documentation</li>
+<li>Read the <a href="https://www.docker.com/blog/docker-sandboxes-run-claude-code-and-other-coding-agents-unsupervised-but-safely/" id="dkr_docker-blog-about-how-to-run-claude-code-and-other-coding-agents-safely-92784">Docker blog about how to  run Claude Code and other coding agents safely</a></li>
+<li>Review the GitHub action for building ESP-IDF projects: <a href="https://github.com/espressif/esp-idf-ci-action" id="dkr_esp-idf-ci-action-92784" rel="nofollow noopener" target="_blank">esp-idf-ci-action</a></li>
+</ul>
+
+</div>
+<div class="wp-block-ponyo-blog-author-about organism scheme__default">
+<div class="container">
+
+<div class="taxonomy">
+<span class="post-tag">
+<a href="https://www.docker.com/blog/tag/containers/" rel="tag">containers</a>
+</span>
+<span class="post-tag">
+<a href="https://www.docker.com/blog/tag/docker-sandboxes/" rel="tag">Docker Sandboxes</a>
+</span>
+<span class="post-category">
+<a href="https://www.docker.com/blog/category/community-content/" rel="category">Community</a>
+</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="wp-block-ponyo-column">
+<div class="column-container">
+<div class="wp-block-ponyo-blog-sidebar wp-block-ponyo-blog-sidebar-contributor">
+<div class="wp-block-ponyo-john hidden" data-john-selector=".entry-content h2">
+<div class="title">Table of contents</div>
+</div>
+<div class="wp-block-ponyo-cher">
+<div class="social-icons">
+
+
+
+</div>
+</div></div>
+</div>
+</div>
+</div>
+</div>
+<div class="organism text-align__center wp-block-ponyo-gabriel">
+<div class="container fade-in">
+<h2 class="wp-block-ponyo-heading text-3xl">
+        Related Posts
+    </h2>
+</div>
+</div>
+<div class="wp-block-ponyo-yolanda organism">
+<div class="container">
+<div class="wp-block-query is-layout-flow wp-block-query-is-layout-flow">
+<ul class="wp-block-post-template is-layout-flow wp-block-post-template-is-layout-flow"><li class="wp-block-post post-92915 post type-post status-publish format-standard has-post-thumbnail hentry category-community-content category-company category-engineering category-security category-solutions tag-ai-agent tag-artificial-intelligence-machine-learning tag-dhi tag-docker tag-docker-ai-governance tag-docker-hardened-images tag-sandboxes tag-security">
+<a class="wp-block-ponyo-carlos carlos-style__paddingless fade-in post-type__post" href="https://www.docker.com/blog/ai-agent-security-systems-problem/">
+<div class="eyebrow">
+
+<span class="eyebrow-right">Aug 18, 2026</span>
+</div>
+<div class="copy-container">
+<h4 class="wp-block-ponyo-heading text-md">
+        17,600 Actions: Agent Security Is a Systems Problem
+    </h4>
+<p class="body-copy">The OpenAI/Hugging Face incident exposed a new challenge for AI agent security. 17,600 attacker actions show why AI agent security can’t rely on human review. Explore the controls needed to constrain, observe, and govern agents at speed.</p>
+</div>
+
+<div class="contributors">
+<div class="wp-block-ponyo-blog-author wp-block-ponyo-blog-contributor display__short">
+<div class="contributor-headshots">
+<div class="headshot">
+ </div>
+</div>
+<div class="contributor-names">
+<div class="contributor">Mark Cavage</div>
+</div>
+</div>
+</div>
+<p class="link-copy">Read now </p>
+</a>
+</li><li class="wp-block-post post-92832 post type-post status-publish format-standard has-post-thumbnail hentry category-engineering tag-ai-agent tag-docker-sandboxes">
+<a class="wp-block-ponyo-carlos carlos-style__paddingless fade-in post-type__post" href="https://www.docker.com/blog/running-ai-agents-in-github-actions-with-docker-sandboxes/">
+<div class="eyebrow">
+
+<span class="eyebrow-right">Aug 21, 2026</span>
+</div>
+<div class="copy-container">
+<h4 class="wp-block-ponyo-heading text-md">
+        Running AI agents in GitHub Actions with Docker Sandboxes
+    </h4>
+<p class="body-copy">Run AI agents in GitHub Actions with Docker Sandboxes. See how isolated agents can run Testcontainers tests, fix code, and open draft pull requests.</p>
+</div>
+
+<div class="contributors">
+<div class="wp-block-ponyo-blog-author wp-block-ponyo-blog-contributor display__short">
+<div class="contributor-headshots">
+<div class="headshot">
+ </div>
+</div>
+<div class="contributor-names">
+<div class="contributor">Oleg Selajev</div>
+</div>
+</div>
+</div>
+<p class="link-copy">Read now </p>
+</a>
+</li><li class="wp-block-post post-92968 post type-post status-publish format-standard has-post-thumbnail hentry category-products tag-docker-hub tag-docker-verified-publisher tag-docker-verified-publisher-program">
+<a class="wp-block-ponyo-carlos carlos-style__paddingless fade-in post-type__post" href="https://www.docker.com/blog/docker-verified-publisher-applications-are-now-self-serve/">
+<div class="eyebrow">
+
+<span class="eyebrow-right">Aug 20, 2026</span>
+</div>
+<div class="copy-container">
+<h4 class="wp-block-ponyo-heading text-md">
+        Docker Verified Publisher Applications Are Now Self-Serve
+    </h4>
+<p class="body-copy">Apply to become a Docker Verified Publisher (DVP) now directly through Docker Hub. Get your verified content seen first by devs looking for trusted options. </p>
+</div>
+
+<div class="contributors">
+<div class="wp-block-ponyo-blog-author wp-block-ponyo-blog-contributor display__short">
+<div class="contributor-headshots">
+<div class="headshot">
+ </div>
+<div class="headshot">
+ </div>
+</div>
+<div class="contributor-names">
+<div class="contributor">Julia Wilson</div>
+                    
+                                                                         and
+                                                                                                                        
+                                            <div class="contributor">Dan Stelzer</div>
+</div>
+</div>
+</div>
+<p class="link-copy">Read now </p>
+</a>
+</li></ul>
+</div>
+</div>
+</div>
+</article>
