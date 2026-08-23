@@ -1,0 +1,533 @@
+This is pngine, a declarative format and runtime for WebGPU I've been working on for the past 2.5 years:
+
+(
+shader-module
+ :name
+ code
+ :code
+ "
+"
+"
+
+@vertex
+
+fn vertexMain(
+
+  @builtin(vertex_index) VertexIndex : u32
+
+) -> @builtin(position) vec4f {
+
+  var pos = array<vec2f, 3>(
+
+    vec2(0.0, 0.5),
+
+    vec2(-0.5, -0.5),
+
+    vec2(0.5, -0.5)
+
+  );
+
+  return vec4f(pos[VertexIndex], 0.0, 1.0);
+
+}
+
+@fragment
+
+fn fragMain() -> @location(0) vec4f {
+
+  return vec4(1.0, 0.0, 0.0, 1.0);
+
+}
+
+"
+"
+"
+)
+
+(
+render-pipeline
+ :name
+ pipeline
+
+  :layout
+ auto
+
+  (
+vertex
+ :module
+ code
+ :entry
+ vertexMain
+)
+
+  (
+fragment
+ :module
+ code
+ :entry
+ fragMain
+
+    (
+target
+ :format
+ preferred-canvas-format
+)
+)
+
+)
+
+(
+render-pass
+ :name
+ trianglePass
+
+  (
+color-attachment
+ :view
+ context-current-texture
+
+    :clear-value
+ [
+0
+ 0
+ 0
+ 0
+]
+ :load-op
+ clear
+ :store-op
+ store
+)
+
+  :pipeline
+ pipeline
+
+  (
+draw
+ :vertex-count
+ 3
+)
+)
+
+(
+frame
+ :name
+ main
+ :perform
+ [
+trianglePass
+]
+)
+
+The code above is a simple red triangle done in WebGPU using S-expressions for the plumbing that match 1:1 with the 
+WebGPU spec
+.
+
+1-2-3 pngine
+
+Pngine has three main capabilities:
+
+It allows you to declare and ship WebGPU plumbing (shaders and cpu/wasm init included), in a cross-platform way (not restricted to browsers, works with rust wgpu too, and players exist for android and ios).
+
+It validates the declared WebGPU configuration using WGSL reflection and spec checks, producing errors and warnings without requiring a live WebGPU context. It also has an LSP so it happens while you type.
+
+It can export everything to a single .html, or a .zip or a .png file, allowing you to hand someone a PNG that runs itself (the .png does not auto-execute, it just contains the bytecodes, you still need a tiny player to read it and play on your demand).
+
+The last part is the cool one, it's where the "png" in pngine comes from because the S-expressions are compiled to a binary representation which is then interpreted by a tiny runtime. That runtime and payload can be put in an extra PNG chunk, while the PNG itself remains the preview image for what you're shipping.
+
+Read more about all of this on its 
+dedicated page here
+.
+
+The code is CC0 and is available in 
+Github for issues and discussions
+ and the releases are cut from my self-hosted repo.
+
+But why?
+
+Shipping and sharing custom WebGPU wiring has been an open problem for me. I want a single file that describes all my WebGPU pipelines/buffers/passes/etc as well as the shader modules and WGSL code.
+
+You can do this currently with any general purpose language that supports WebGPU, but I want a higher abstraction with no distractions, something that can be used as a substrate for other tools and provide us with deeper insights (either by a human or a machine).
+
+SJON
+ gave me a way to build DSLs that can be automatically validated, and delivered in a consistent composable way through S-expressions. This is just for the WebGPU wiring and parts, not for the shader code, WGSL I see as a DSL of its own and is kept as is, pristine, not extended.
+
+This idea, where the program representation is itself readable data, is at the center of pngine, this property is very useful to me because when the program representation itself is ordinary structured data it automatically allows us to validate, replay, inspect, minify, serialize and machine-generate, all ahead of time and with each capability operating on the same representation.
+
+I won't go much further into this topic because I have written extensively about this in the 
+SJON post
+ and 
+page
+.
+
+Package your wires
+
+If I want to share a pipeline with you today, we first need to agree on a pile of conventions. What language is it in: TypeScript, JavaScript, Rust? How are handles represented and passed around? Is this pipeline part of a tiny animation, a game, or something else entirely? Those choices affect how the same WebGPU wiring gets packaged and shared.
+
+Pngine does not remove these, but tries very hard to reduce this surface, in a way that you can bundle multiple WebGPU wirings in the same way for very different purposes and targets.
+
+Most WebGPU plumbing is static
+
+The WebGPU spec is an amazing piece of consistency and elegance applied to the otherwise muddy and convoluted topic of what the graphics world has become. WebGPU puts a great deal of effort into taking implicit state away and moving things up into carefully designed API calls and config objects.
+
+I want to drive this point a bit, take a look at the equivalent JS code for the simple triangle that was laid out at the start:
+
+//
+ (shader-module :name code ...)
+
+const
+ code
+ =
+ device
+.
+createShaderModule
+(
+{
+
+  code
+:
+ `
+
+@vertex
+
+fn vertexMain(
+
+  @builtin(vertex_index) VertexIndex : u32
+
+) -> @builtin(position) vec4f {
+
+  var pos = array<vec2f, 3>(
+
+    vec2(0.0, 0.5),
+
+    vec2(-0.5, -0.5),
+
+    vec2(0.5, -0.5)
+
+  );
+
+  return vec4f(pos[VertexIndex], 0.0, 1.0);
+
+}
+
+@fragment
+
+fn fragMain() -> @location(0) vec4f {
+
+  return vec4(1.0, 0.0, 0.0, 1.0);
+
+}
+
+`
+,
+
+}
+)
+;
+
+//
+ (render-pipeline :name pipeline ...)
+
+const
+ pipeline
+ =
+ device
+.
+createRenderPipeline
+(
+{
+
+  layout
+:
+ "
+auto
+"
+,
+
+  vertex
+:
+   {
+ module
+:
+ code
+,
+ entryPoint
+:
+ "
+vertexMain
+"
+ }
+,
+
+  fragment
+:
+ {
+ module
+:
+ code
+,
+ entryPoint
+:
+ "
+fragMain
+"
+,
+ targets
+:
+ [
+{
+ format
+ }
+]
+ }
+,
+
+  primitive
+:
+ {
+ topology
+:
+ "
+triangle-list
+"
+ }
+,
+ //
+ default
+
+}
+)
+;
+
+//
+ (frame :name main :perform [trianglePass])
+
+const
+ encoder
+ =
+ device
+.
+createCommandEncoder
+(
+)
+;
+
+//
+ (render-pass :name trianglePass ...)
+
+const
+ pass
+ =
+ encoder
+.
+beginRenderPass
+(
+{
+
+  colorAttachments
+:
+ [
+{
+
+    view
+:
+ context
+.
+getCurrentTexture
+(
+)
+.
+createView
+(
+)
+,
+
+    clearValue
+:
+ [
+0
+,
+ 0
+,
+ 0
+,
+ 0
+]
+,
+
+    loadOp
+:
+ "
+clear
+"
+,
+
+    storeOp
+:
+ "
+store
+"
+,
+
+  }
+]
+,
+
+}
+)
+;
+
+pass
+.
+setPipeline
+(
+pipeline
+)
+;
+
+pass
+.
+draw
+(
+3
+)
+;
+          //
+ (draw :vertex-count 3)
+
+pass
+.
+end
+(
+)
+;
+
+device
+.
+queue
+.
+submit
+(
+[
+encoder
+.
+finish
+(
+)
+]
+)
+;
+
+This code creates things (createShaderModule, createRenderPipeline, createCommandEncoder) and then wires them up and then at the end sequences them in a pass.
+
+(btw the JavaScript code was generated with pngine, it is one possible output from the s-expressions)
+
+Creating, wiring and sequencing is the deal with WebGPU stuff, and it typically happens in a procedural environment where you can abstract away at your own taste.
+
+Bringing WebGPU wirings to a declarative space is easy, almost immediate, and it allows us to play with the concepts and blocks in a way that they can be described regardless of order, they exist as they are, declared, and can move around as we please.
+
+The WebGPU sequencing part isn't that hard either, we keep a description of what should happen in order, and execute it at the appropriate time.
+
+In pngine 
+frame
+ is one of the few places where order matters, and each name in 
+:perform
+ refers to a pass declared elsewhere in the file.
+
+(
+frame
+ :name
+ main
+ :perform
+ [
+
+  update-uniforms
+
+  update-textures
+
+  sdf-pass
+
+  post-processing
+
+]
+)
+In line with the pipeline
+
+Sharing shader code is neat, 
+shadertoy
+ is an amazing tool with an even better community, lots of examples and code to learn from, just impressive. Use it.
+
+If you want to go a bit deeper, there is 
+compute.toys
+, it allows you to have multiple compute shaders that feed each other into a final buffer that gets sent to the screen as pixels (ok, its a bit more than this, but just to exemplify). It extends WGSL with #macros that you can use to specify a few pipeline configurations and what not. Amazing tool, I have done a lot of my work in it, it is great if you want to learn WGSL and play around with some ideas.
+
+Nowadays there are tons of these tools, because "hey I can do a better version of this that can cater to my own shader proclivities" and thats really cool, shader tooling evolved by artists. But this is not pngine, sorry there is no playground (there is an LSP though), that is not the idea here.
+
+My idea is pngine is a substrate, a very versatile one, that does not limit you, but helps you (or your fav. machine if you want that) to build on top of it your crazy things that higher level abstractions don't give you so easily (scene graphs, material nodes, etc...).
+
+Triangles, and then...
+
+Triangles are all fun, but that simple example does not speak well of where pngine puts you. Want a particle system that never touches the CPU?
+
+Play
+
+Download the PNG
+
+2048 GPU particles with buffer pooling, shot up from a nozzle, pulled down by
+gravity, and then respawned with a fresh random velocity when their life runs out.
+
+In this example the attribute buffer is also the thing that the simulation writes.
+
+The full document is on the
+
+particle fountain sample page
+.
+Or take the PNG above: it is the program, poster and all.
+
+Particle fountain, and then...
+
+Play
+
+Download the PNG
+
+A single draw call gets you 400 low-poly trees swaying in the wind, depth tested against a sky.
+
+The tree itself is 12 vertices typed straight into the document as a
+
+(data ...)
+ form, a trunk quad and two foliage triangles. The 400 instance
+records that place, scale, rotate and tint them are filled once by a compute
+pass. Both are vertex buffers on the same pipeline, one stepping per vertex and
+the other per instance, so the whole forest is 
+(draw :vertex-count 12 :instance-count NUM_TREES)
+.
+
+Check out the full document on the
+
+instanced trees sample page
+.
+As before, the program, poster and all is the PNG too here.
+
+The bundler and the voyeur
+
+The images above are .png's, and they include an extra binary chunk that holds the actual webgpu player and its payload, making the real JS to load it very tiny. This is one option to export those pngine .sjon files, useful for quick small static things. It can also produce an .html file, a .zip bundle or the binary raw bytecode without any png.
+
+But yeah, the png in pngine is a homage to the initial kickstart idea I had of having the image be simultaneously a preview/poster and also container for the bytecode/runtime payload.
+
+Conclusion
+
+As a closing note/idea I want to grow the substrate term a bit.
+
+Soil and growing substrates serve three core functions: providing structural anchorages for roots, retaining water while allowing oxygen exchange, and storing or delivering nutrients.
+
+For me pngine is such a growing substrate for WebGPU and graphics, a place for low-level experimentation and exploration that is inherently constrained and focused on WebGPU alone, while providing for an easy way to hook generic interactions and cpu (wasm) code into buffers that can be used in shaders.
+
+All delivered in a package that can validate stuff and check for errors and flaws in the terminal or elsewhere (LSP, editor, as you type).
+
+It can be the place for much higher level experimentations to lay their roots on and grow. And share shaders with automatic .png previews that run themselves.
+
+Check out 
+pngine here
+, and/or 
+see the code here
+.
