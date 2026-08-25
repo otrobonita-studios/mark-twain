@@ -1,0 +1,845 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">LatticeDB</h1></div>
+<p dir="auto"><strong>Embedded property-graph database with native vector and full-text indexing.</strong></p>
+<p dir="auto">LatticeDB is a single-file local database for connected, semantic, and textual data. It lets you traverse relationships, run vector similarity search, and do BM25 full-text search over the same dataset in one engine and one query layer. It is designed for relationship-heavy workloads on a single machine, with zero-config operation and an embedded single-writer model.</p>
+<p dir="auto">LatticeDB is an embedded, single-file graph database that lets local applications query the same data by relationship, semantics, and text, then consume durable graph and application events from the same file. Workloads like Graph RAG, agent memory, and local knowledge tools are examples built on those primitives, not the definition of the engine.</p>
+<ul dir="auto">
+<li><strong>One file.</strong> Your entire database is a single portable file. No server, no configuration.</li>
+<li><strong>One query layer.</strong> Graph traversal, HNSW vector similarity, and BM25 full-text — in the same query language.</li>
+<li><strong>One event log.</strong> Durable named streams and a built-in graph changefeed share the same transaction/WAL path as graph writes.</li>
+<li><strong>Local-first.</strong> Designed for one owning process on one machine, with WAL-backed durability.</li>
+<li><strong>Fast.</strong> 0.13 μs node lookups. 0.83 ms vector search at 1M vectors with 100% recall.</li>
+</ul>
+<div class="highlight highlight-source-cypher notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='-- Find chunks similar to a query, traverse to their document, then to the author
+MATCH (chunk:Chunk)-[:PART_OF]-&gt;(doc:Document)-[:AUTHORED_BY]-&gt;(author:Person)
+WHERE chunk.embedding &lt;=&gt; $query_vector &lt; 0.3
+  AND doc.content @@ "neural networks"
+RETURN doc.title, chunk.text, author.name
+ORDER BY chunk.embedding &lt;=&gt; $query_vector
+LIMIT 10' dir="auto"><pre><span class="pl-c1">--</span> <span class="pl-smi">Find</span> <span class="pl-smi">chunks</span> <span class="pl-smi">similar</span> <span class="pl-smi">to</span> <span class="pl-smi">a</span> <span class="pl-smi">query</span>, <span class="pl-smi">traverse</span> <span class="pl-smi">to</span> <span class="pl-smi">their</span> <span class="pl-smi">document</span>, <span class="pl-smi">then</span> <span class="pl-smi">to</span> <span class="pl-smi">the</span> <span class="pl-smi">author</span>
+<span class="pl-k">MATCH</span> (<span class="pl-smi">chunk</span>:<span class="pl-smi">Chunk</span>)<span class="pl-c1">-</span><span class="pl-k">[</span><span class="pl-en"><span class="pl-k">:</span><span class="pl-en">PART_OF</span></span><span class="pl-k">]</span><span class="pl-c1">-&gt;</span>(<span class="pl-smi">doc</span>:<span class="pl-smi">Document</span>)<span class="pl-c1">-</span><span class="pl-k">[</span><span class="pl-en"><span class="pl-k">:</span><span class="pl-en">AUTHORED_BY</span></span><span class="pl-k">]</span><span class="pl-c1">-&gt;</span>(<span class="pl-smi">author</span>:<span class="pl-smi">Person</span>)
+<span class="pl-k">WHERE</span> <span class="pl-smi">chunk</span>.<span class="pl-smi">embedding</span> <span class="pl-k">&lt;=&gt;</span> $<span class="pl-smi">query_vector</span> <span class="pl-k">&lt;</span> <span class="pl-c1">0.3</span>
+  <span class="pl-k">AND</span> <span class="pl-smi">doc</span>.<span class="pl-smi">content</span> @@ <span class="pl-s">"neural networks"</span>
+<span class="pl-k">RETURN</span> <span class="pl-smi">doc</span>.<span class="pl-smi">title</span>, <span class="pl-smi">chunk</span>.<span class="pl-smi">text</span>, <span class="pl-smi">author</span>.<span class="pl-smi">name</span>
+<span class="pl-k">ORDER BY</span> <span class="pl-smi">chunk</span>.<span class="pl-smi">embedding</span> <span class="pl-k">&lt;=&gt;</span> $<span class="pl-smi">query_vector</span>
+<span class="pl-k">LIMIT</span> <span class="pl-c1">10</span></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Install</h2></div>
+<p dir="auto"><strong>CLI</strong></p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="curl -fsSL https://raw.githubusercontent.com/jeffhajewski/latticedb/main/dist/install.sh | bash" dir="auto"><pre>curl -fsSL https://raw.githubusercontent.com/jeffhajewski/latticedb/main/dist/install.sh <span class="pl-k">|</span> bash</pre></div>
+<p dir="auto"><strong>Python</strong></p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="pip install latticedb" dir="auto"><pre>pip install latticedb</pre></div>
+<p dir="auto">Published wheels are expected to bundle <code>liblattice</code> on supported platforms. Source installs can also bundle a staged native library during wheel builds with <code>LATTICE_BUNDLE_LIB_DIR=/path/to/lib</code>.</p>
+<p dir="auto"><strong>TypeScript / Node.js</strong></p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="npm install @hajewski/latticedb" dir="auto"><pre>npm install @hajewski/latticedb</pre></div>
+<p dir="auto">Published package tarballs are expected to bundle <code>liblattice</code> on supported platforms. Source checkouts can stage the native library into the package with <code>LATTICE_BUNDLE_LIB_DIR=/path/to/lib npm run bundle:native</code>.</p>
+<p dir="auto"><strong>Go</strong></p>
+<p dir="auto">See <a href="/jeffhajewski/latticedb/blob/main/bindings/go/README.md">bindings/go/README.md</a> for the current cgo workflow. The default consumer path uses installed <code>pkg-config</code> metadata; in-repo development can use <code>-tags repolocal</code> against <code>zig-out/lib</code>.
+There is also a runnable graph/vector/text retrieval example in <a href="/jeffhajewski/latticedb/blob/main/examples/go">examples/go</a>.</p>
+<p dir="auto">Recent binding-surface cleanups moved embedding helpers into dedicated modules and subpackages. See <a href="/jeffhajewski/latticedb/blob/main/docs/client_api_migration.md">docs/client_api_migration.md</a> for the preferred imports and current compatibility aliases.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Start Here</h2></div>
+<ul dir="auto">
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/getting_started.md">Getting Started</a> maps the shortest path for CLI, Python, TypeScript, and Go.</li>
+<li><a href="/jeffhajewski/latticedb/blob/main/examples/cli/README.md">CLI Quickstart</a> is the smallest copy-paste example in the repo.</li>
+<li><a href="/jeffhajewski/latticedb/blob/main/examples/README.md">Examples Overview</a> covers the larger graph/vector/text retrieval demos.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Example</h2></div>
+<p dir="auto">A complete example: create a small knowledge graph with documents and authors, store embeddings, index text, then query across all three search modes.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Python</h3></div>
+<div class="highlight highlight-source-python notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="from latticedb import Database
+from latticedb.embedding import hash_embed
+
+with Database(&quot;knowledge.db&quot;, create=True, enable_vectors=True, vector_dimensions=128) as db:
+
+    # --- Build the graph ---
+    with db.write() as txn:
+        # Create authors
+        alice = txn.create_node(labels=[&quot;Person&quot;], properties={&quot;name&quot;: &quot;Alice&quot;, &quot;field&quot;: &quot;ML&quot;})
+        bob = txn.create_node(labels=[&quot;Person&quot;], properties={&quot;name&quot;: &quot;Bob&quot;, &quot;field&quot;: &quot;Systems&quot;})
+        txn.create_edge(alice.id, bob.id, &quot;COLLABORATES_WITH&quot;)
+
+        # Create documents with chunks
+        for title, text, author in [
+            (&quot;Attention Is All You Need&quot;, &quot;The transformer architecture uses self-attention...&quot;, alice),
+            (&quot;Scaling Laws for LLMs&quot;, &quot;We find that model performance scales predictably...&quot;, alice),
+            (&quot;Log-Structured Merge Trees&quot;, &quot;LSM trees optimize write-heavy workloads...&quot;, bob),
+        ]:
+            doc = txn.create_node(labels=[&quot;Document&quot;], properties={&quot;title&quot;: title})
+            chunk = txn.create_node(labels=[&quot;Chunk&quot;], properties={&quot;text&quot;: text})
+
+            # Store embedding and index text
+            txn.set_vector(chunk.id, &quot;embedding&quot;, hash_embed(text, dimensions=128))
+            txn.fts_index(chunk.id, text)
+
+            txn.create_edge(chunk.id, doc.id, &quot;PART_OF&quot;)
+            txn.create_edge(doc.id, author.id, &quot;AUTHORED_BY&quot;)
+
+        txn.commit()
+
+    # --- Query: vector search + text match + graph traversal ---
+    results = db.query(&quot;&quot;&quot;
+        MATCH (chunk:Chunk)-[:PART_OF]-&gt;(doc:Document)-[:AUTHORED_BY]-&gt;(author:Person)
+        WHERE chunk.embedding &lt;=&gt; $query &lt; 0.5
+        RETURN doc.title, chunk.text, author.name
+        ORDER BY chunk.embedding &lt;=&gt; $query
+        LIMIT 5
+    &quot;&quot;&quot;, parameters={&quot;query&quot;: hash_embed(&quot;transformer attention mechanism&quot;, dimensions=128)})
+
+    for row in results:
+        print(f&quot;{row['doc.title']} by {row['author.name']}&quot;)
+
+    # --- Full-text search ---
+    for r in db.fts_search(&quot;self-attention transformer&quot;):
+        print(f&quot;Node {r.node_id}: score={r.score:.4f}&quot;)
+
+    # --- Aggregations ---
+    stats = db.query(&quot;&quot;&quot;
+        MATCH (doc:Document)-[:AUTHORED_BY]-&gt;(p:Person)
+        RETURN p.name, count(doc) AS papers
+        ORDER BY papers DESC
+    &quot;&quot;&quot;)
+    for row in stats:
+        print(f&quot;{row['p.name']}: {row['papers']} papers&quot;)" dir="auto"><pre><span class="pl-k">from</span> <span class="pl-s1">latticedb</span> <span class="pl-k">import</span> <span class="pl-v">Database</span>
+<span class="pl-k">from</span> <span class="pl-s1">latticedb</span>.<span class="pl-s1">embedding</span> <span class="pl-k">import</span> <span class="pl-s1">hash_embed</span>
+
+<span class="pl-k">with</span> <span class="pl-en">Database</span>(<span class="pl-s">"knowledge.db"</span>, <span class="pl-s1">create</span><span class="pl-c1">=</span><span class="pl-c1">True</span>, <span class="pl-s1">enable_vectors</span><span class="pl-c1">=</span><span class="pl-c1">True</span>, <span class="pl-s1">vector_dimensions</span><span class="pl-c1">=</span><span class="pl-c1">128</span>) <span class="pl-k">as</span> <span class="pl-s1">db</span>:
+
+    <span class="pl-c"># --- Build the graph ---</span>
+    <span class="pl-k">with</span> <span class="pl-s1">db</span>.<span class="pl-c1">write</span>() <span class="pl-k">as</span> <span class="pl-s1">txn</span>:
+        <span class="pl-c"># Create authors</span>
+        <span class="pl-s1">alice</span> <span class="pl-c1">=</span> <span class="pl-s1">txn</span>.<span class="pl-c1">create_node</span>(<span class="pl-s1">labels</span><span class="pl-c1">=</span>[<span class="pl-s">"Person"</span>], <span class="pl-s1">properties</span><span class="pl-c1">=</span>{<span class="pl-s">"name"</span>: <span class="pl-s">"Alice"</span>, <span class="pl-s">"field"</span>: <span class="pl-s">"ML"</span>})
+        <span class="pl-s1">bob</span> <span class="pl-c1">=</span> <span class="pl-s1">txn</span>.<span class="pl-c1">create_node</span>(<span class="pl-s1">labels</span><span class="pl-c1">=</span>[<span class="pl-s">"Person"</span>], <span class="pl-s1">properties</span><span class="pl-c1">=</span>{<span class="pl-s">"name"</span>: <span class="pl-s">"Bob"</span>, <span class="pl-s">"field"</span>: <span class="pl-s">"Systems"</span>})
+        <span class="pl-s1">txn</span>.<span class="pl-c1">create_edge</span>(<span class="pl-s1">alice</span>.<span class="pl-c1">id</span>, <span class="pl-s1">bob</span>.<span class="pl-c1">id</span>, <span class="pl-s">"COLLABORATES_WITH"</span>)
+
+        <span class="pl-c"># Create documents with chunks</span>
+        <span class="pl-k">for</span> <span class="pl-s1">title</span>, <span class="pl-s1">text</span>, <span class="pl-s1">author</span> <span class="pl-c1">in</span> [
+            (<span class="pl-s">"Attention Is All You Need"</span>, <span class="pl-s">"The transformer architecture uses self-attention..."</span>, <span class="pl-s1">alice</span>),
+            (<span class="pl-s">"Scaling Laws for LLMs"</span>, <span class="pl-s">"We find that model performance scales predictably..."</span>, <span class="pl-s1">alice</span>),
+            (<span class="pl-s">"Log-Structured Merge Trees"</span>, <span class="pl-s">"LSM trees optimize write-heavy workloads..."</span>, <span class="pl-s1">bob</span>),
+        ]:
+            <span class="pl-s1">doc</span> <span class="pl-c1">=</span> <span class="pl-s1">txn</span>.<span class="pl-c1">create_node</span>(<span class="pl-s1">labels</span><span class="pl-c1">=</span>[<span class="pl-s">"Document"</span>], <span class="pl-s1">properties</span><span class="pl-c1">=</span>{<span class="pl-s">"title"</span>: <span class="pl-s1">title</span>})
+            <span class="pl-s1">chunk</span> <span class="pl-c1">=</span> <span class="pl-s1">txn</span>.<span class="pl-c1">create_node</span>(<span class="pl-s1">labels</span><span class="pl-c1">=</span>[<span class="pl-s">"Chunk"</span>], <span class="pl-s1">properties</span><span class="pl-c1">=</span>{<span class="pl-s">"text"</span>: <span class="pl-s1">text</span>})
+
+            <span class="pl-c"># Store embedding and index text</span>
+            <span class="pl-s1">txn</span>.<span class="pl-c1">set_vector</span>(<span class="pl-s1">chunk</span>.<span class="pl-c1">id</span>, <span class="pl-s">"embedding"</span>, <span class="pl-en">hash_embed</span>(<span class="pl-s1">text</span>, <span class="pl-s1">dimensions</span><span class="pl-c1">=</span><span class="pl-c1">128</span>))
+            <span class="pl-s1">txn</span>.<span class="pl-c1">fts_index</span>(<span class="pl-s1">chunk</span>.<span class="pl-c1">id</span>, <span class="pl-s1">text</span>)
+
+            <span class="pl-s1">txn</span>.<span class="pl-c1">create_edge</span>(<span class="pl-s1">chunk</span>.<span class="pl-c1">id</span>, <span class="pl-s1">doc</span>.<span class="pl-c1">id</span>, <span class="pl-s">"PART_OF"</span>)
+            <span class="pl-s1">txn</span>.<span class="pl-c1">create_edge</span>(<span class="pl-s1">doc</span>.<span class="pl-c1">id</span>, <span class="pl-s1">author</span>.<span class="pl-c1">id</span>, <span class="pl-s">"AUTHORED_BY"</span>)
+
+        <span class="pl-s1">txn</span>.<span class="pl-c1">commit</span>()
+
+    <span class="pl-c"># --- Query: vector search + text match + graph traversal ---</span>
+    <span class="pl-s1">results</span> <span class="pl-c1">=</span> <span class="pl-s1">db</span>.<span class="pl-c1">query</span>(<span class="pl-s">"""</span>
+<span class="pl-s">        MATCH (chunk:Chunk)-[:PART_OF]-&gt;(doc:Document)-[:AUTHORED_BY]-&gt;(author:Person)</span>
+<span class="pl-s">        WHERE chunk.embedding &lt;=&gt; $query &lt; 0.5</span>
+<span class="pl-s">        RETURN doc.title, chunk.text, author.name</span>
+<span class="pl-s">        ORDER BY chunk.embedding &lt;=&gt; $query</span>
+<span class="pl-s">        LIMIT 5</span>
+<span class="pl-s">    """</span>, <span class="pl-s1">parameters</span><span class="pl-c1">=</span>{<span class="pl-s">"query"</span>: <span class="pl-en">hash_embed</span>(<span class="pl-s">"transformer attention mechanism"</span>, <span class="pl-s1">dimensions</span><span class="pl-c1">=</span><span class="pl-c1">128</span>)})
+
+    <span class="pl-k">for</span> <span class="pl-s1">row</span> <span class="pl-c1">in</span> <span class="pl-s1">results</span>:
+        <span class="pl-en">print</span>(<span class="pl-s">f"<span class="pl-s1"><span class="pl-kos">{</span><span class="pl-s1">row</span>[<span class="pl-s">'doc.title'</span>]<span class="pl-kos">}</span></span> by <span class="pl-s1"><span class="pl-kos">{</span><span class="pl-s1">row</span>[<span class="pl-s">'author.name'</span>]<span class="pl-kos">}</span></span>"</span>)
+
+    <span class="pl-c"># --- Full-text search ---</span>
+    <span class="pl-k">for</span> <span class="pl-s1">r</span> <span class="pl-c1">in</span> <span class="pl-s1">db</span>.<span class="pl-c1">fts_search</span>(<span class="pl-s">"self-attention transformer"</span>):
+        <span class="pl-en">print</span>(<span class="pl-s">f"Node <span class="pl-s1"><span class="pl-kos">{</span><span class="pl-s1">r</span>.<span class="pl-c1">node_id</span><span class="pl-kos">}</span></span>: score=<span class="pl-s1"><span class="pl-kos">{</span><span class="pl-s1">r</span>.<span class="pl-c1">score</span>:.4f<span class="pl-kos">}</span></span>"</span>)
+
+    <span class="pl-c"># --- Aggregations ---</span>
+    <span class="pl-s1">stats</span> <span class="pl-c1">=</span> <span class="pl-s1">db</span>.<span class="pl-c1">query</span>(<span class="pl-s">"""</span>
+<span class="pl-s">        MATCH (doc:Document)-[:AUTHORED_BY]-&gt;(p:Person)</span>
+<span class="pl-s">        RETURN p.name, count(doc) AS papers</span>
+<span class="pl-s">        ORDER BY papers DESC</span>
+<span class="pl-s">    """</span>)
+    <span class="pl-k">for</span> <span class="pl-s1">row</span> <span class="pl-c1">in</span> <span class="pl-s1">stats</span>:
+        <span class="pl-en">print</span>(<span class="pl-s">f"<span class="pl-s1"><span class="pl-kos">{</span><span class="pl-s1">row</span>[<span class="pl-s">'p.name'</span>]<span class="pl-kos">}</span></span>: <span class="pl-s1"><span class="pl-kos">{</span><span class="pl-s1">row</span>[<span class="pl-s">'papers'</span>]<span class="pl-kos">}</span></span> papers"</span>)</pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">TypeScript</h3></div>
+<div class="highlight highlight-source-ts notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='import { Database } from "@hajewski/latticedb";
+import { hashEmbed } from "@hajewski/latticedb/embedding";
+
+const db = new Database("knowledge.db", {
+  create: true,
+  enableVectors: true,
+  vectorDimensions: 128,
+});
+await db.open();
+
+// Build a graph
+await db.write(async (txn) =&gt; {
+  const alice = await txn.createNode({
+    labels: ["Person"],
+    properties: { name: "Alice", field: "ML" },
+  });
+  const doc = await txn.createNode({
+    labels: ["Document"],
+    properties: { title: "Attention Is All You Need" },
+  });
+  const chunk = await txn.createNode({
+    labels: ["Chunk"],
+    properties: { text: "The transformer architecture uses self-attention..." },
+  });
+
+  await txn.setVector(chunk.id, "embedding", hashEmbed("transformer self-attention", 128));
+  await txn.ftsIndex(chunk.id, "The transformer architecture uses self-attention...");
+
+  await txn.createEdge(chunk.id, doc.id, "PART_OF");
+  await txn.createEdge(doc.id, alice.id, "AUTHORED_BY");
+});
+
+// Query across vector search + graph traversal
+const results = await db.query(
+  `MATCH (chunk:Chunk)-[:PART_OF]-&gt;(doc:Document)-[:AUTHORED_BY]-&gt;(author:Person)
+   WHERE chunk.embedding &lt;=&gt; $query &lt; 0.5
+   RETURN doc.title, chunk.text, author.name
+   ORDER BY chunk.embedding &lt;=&gt; $query
+   LIMIT 5`,
+  { query: hashEmbed("attention mechanism", 128) }
+);
+
+for (const row of results.rows) {
+  console.log(`${row["doc.title"]} by ${row["author.name"]}`);
+}
+
+await db.close();' dir="auto"><pre><span class="pl-k">import</span> <span class="pl-kos">{</span> <span class="pl-v">Database</span> <span class="pl-kos">}</span> <span class="pl-k">from</span> <span class="pl-s">"@hajewski/latticedb"</span><span class="pl-kos">;</span>
+<span class="pl-k">import</span> <span class="pl-kos">{</span> <span class="pl-s1">hashEmbed</span> <span class="pl-kos">}</span> <span class="pl-k">from</span> <span class="pl-s">"@hajewski/latticedb/embedding"</span><span class="pl-kos">;</span>
+
+<span class="pl-k">const</span> <span class="pl-s1">db</span> <span class="pl-c1">=</span> <span class="pl-k">new</span> <span class="pl-v">Database</span><span class="pl-kos">(</span><span class="pl-s">"knowledge.db"</span><span class="pl-kos">,</span> <span class="pl-kos">{</span>
+  <span class="pl-c1">create</span>: <span class="pl-c1">true</span><span class="pl-kos">,</span>
+  <span class="pl-c1">enableVectors</span>: <span class="pl-c1">true</span><span class="pl-kos">,</span>
+  <span class="pl-c1">vectorDimensions</span>: <span class="pl-c1">128</span><span class="pl-kos">,</span>
+<span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+<span class="pl-k">await</span> <span class="pl-s1">db</span><span class="pl-kos">.</span><span class="pl-en">open</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+
+<span class="pl-c">// Build a graph</span>
+<span class="pl-k">await</span> <span class="pl-s1">db</span><span class="pl-kos">.</span><span class="pl-en">write</span><span class="pl-kos">(</span><span class="pl-k">async</span> <span class="pl-kos">(</span><span class="pl-s1">txn</span><span class="pl-kos">)</span> <span class="pl-c1">=&gt;</span> <span class="pl-kos">{</span>
+  <span class="pl-k">const</span> <span class="pl-s1">alice</span> <span class="pl-c1">=</span> <span class="pl-k">await</span> <span class="pl-s1">txn</span><span class="pl-kos">.</span><span class="pl-en">createNode</span><span class="pl-kos">(</span><span class="pl-kos">{</span>
+    <span class="pl-c1">labels</span>: <span class="pl-kos">[</span><span class="pl-s">"Person"</span><span class="pl-kos">]</span><span class="pl-kos">,</span>
+    <span class="pl-c1">properties</span>: <span class="pl-kos">{</span> <span class="pl-c1">name</span>: <span class="pl-s">"Alice"</span><span class="pl-kos">,</span> <span class="pl-c1">field</span>: <span class="pl-s">"ML"</span> <span class="pl-kos">}</span><span class="pl-kos">,</span>
+  <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+  <span class="pl-k">const</span> <span class="pl-s1">doc</span> <span class="pl-c1">=</span> <span class="pl-k">await</span> <span class="pl-s1">txn</span><span class="pl-kos">.</span><span class="pl-en">createNode</span><span class="pl-kos">(</span><span class="pl-kos">{</span>
+    <span class="pl-c1">labels</span>: <span class="pl-kos">[</span><span class="pl-s">"Document"</span><span class="pl-kos">]</span><span class="pl-kos">,</span>
+    <span class="pl-c1">properties</span>: <span class="pl-kos">{</span> <span class="pl-c1">title</span>: <span class="pl-s">"Attention Is All You Need"</span> <span class="pl-kos">}</span><span class="pl-kos">,</span>
+  <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+  <span class="pl-k">const</span> <span class="pl-s1">chunk</span> <span class="pl-c1">=</span> <span class="pl-k">await</span> <span class="pl-s1">txn</span><span class="pl-kos">.</span><span class="pl-en">createNode</span><span class="pl-kos">(</span><span class="pl-kos">{</span>
+    <span class="pl-c1">labels</span>: <span class="pl-kos">[</span><span class="pl-s">"Chunk"</span><span class="pl-kos">]</span><span class="pl-kos">,</span>
+    <span class="pl-c1">properties</span>: <span class="pl-kos">{</span> <span class="pl-c1">text</span>: <span class="pl-s">"The transformer architecture uses self-attention..."</span> <span class="pl-kos">}</span><span class="pl-kos">,</span>
+  <span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+
+  <span class="pl-k">await</span> <span class="pl-s1">txn</span><span class="pl-kos">.</span><span class="pl-en">setVector</span><span class="pl-kos">(</span><span class="pl-s1">chunk</span><span class="pl-kos">.</span><span class="pl-c1">id</span><span class="pl-kos">,</span> <span class="pl-s">"embedding"</span><span class="pl-kos">,</span> <span class="pl-en">hashEmbed</span><span class="pl-kos">(</span><span class="pl-s">"transformer self-attention"</span><span class="pl-kos">,</span> <span class="pl-c1">128</span><span class="pl-kos">)</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+  <span class="pl-k">await</span> <span class="pl-s1">txn</span><span class="pl-kos">.</span><span class="pl-en">ftsIndex</span><span class="pl-kos">(</span><span class="pl-s1">chunk</span><span class="pl-kos">.</span><span class="pl-c1">id</span><span class="pl-kos">,</span> <span class="pl-s">"The transformer architecture uses self-attention..."</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+
+  <span class="pl-k">await</span> <span class="pl-s1">txn</span><span class="pl-kos">.</span><span class="pl-en">createEdge</span><span class="pl-kos">(</span><span class="pl-s1">chunk</span><span class="pl-kos">.</span><span class="pl-c1">id</span><span class="pl-kos">,</span> <span class="pl-s1">doc</span><span class="pl-kos">.</span><span class="pl-c1">id</span><span class="pl-kos">,</span> <span class="pl-s">"PART_OF"</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+  <span class="pl-k">await</span> <span class="pl-s1">txn</span><span class="pl-kos">.</span><span class="pl-en">createEdge</span><span class="pl-kos">(</span><span class="pl-s1">doc</span><span class="pl-kos">.</span><span class="pl-c1">id</span><span class="pl-kos">,</span> <span class="pl-s1">alice</span><span class="pl-kos">.</span><span class="pl-c1">id</span><span class="pl-kos">,</span> <span class="pl-s">"AUTHORED_BY"</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+<span class="pl-kos">}</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+
+<span class="pl-c">// Query across vector search + graph traversal</span>
+<span class="pl-k">const</span> <span class="pl-s1">results</span> <span class="pl-c1">=</span> <span class="pl-k">await</span> <span class="pl-s1">db</span><span class="pl-kos">.</span><span class="pl-en">query</span><span class="pl-kos">(</span>
+  <span class="pl-s">`MATCH (chunk:Chunk)-[:PART_OF]-&gt;(doc:Document)-[:AUTHORED_BY]-&gt;(author:Person)</span>
+<span class="pl-s">   WHERE chunk.embedding &lt;=&gt; $query &lt; 0.5</span>
+<span class="pl-s">   RETURN doc.title, chunk.text, author.name</span>
+<span class="pl-s">   ORDER BY chunk.embedding &lt;=&gt; $query</span>
+<span class="pl-s">   LIMIT 5`</span><span class="pl-kos">,</span>
+  <span class="pl-kos">{</span> <span class="pl-c1">query</span>: <span class="pl-en">hashEmbed</span><span class="pl-kos">(</span><span class="pl-s">"attention mechanism"</span><span class="pl-kos">,</span> <span class="pl-c1">128</span><span class="pl-kos">)</span> <span class="pl-kos">}</span>
+<span class="pl-kos">)</span><span class="pl-kos">;</span>
+
+<span class="pl-k">for</span> <span class="pl-kos">(</span><span class="pl-k">const</span> <span class="pl-s1">row</span> <span class="pl-k">of</span> <span class="pl-s1">results</span><span class="pl-kos">.</span><span class="pl-c1">rows</span><span class="pl-kos">)</span> <span class="pl-kos">{</span>
+  <span class="pl-smi">console</span><span class="pl-kos">.</span><span class="pl-en">log</span><span class="pl-kos">(</span><span class="pl-s">`<span class="pl-s1"><span class="pl-kos">${</span><span class="pl-s1">row</span><span class="pl-kos">[</span><span class="pl-s">"doc.title"</span><span class="pl-kos">]</span><span class="pl-kos">}</span></span> by <span class="pl-s1"><span class="pl-kos">${</span><span class="pl-s1">row</span><span class="pl-kos">[</span><span class="pl-s">"author.name"</span><span class="pl-kos">]</span><span class="pl-kos">}</span></span>`</span><span class="pl-kos">)</span><span class="pl-kos">;</span>
+<span class="pl-kos">}</span>
+
+<span class="pl-k">await</span> <span class="pl-s1">db</span><span class="pl-kos">.</span><span class="pl-en">close</span><span class="pl-kos">(</span><span class="pl-kos">)</span><span class="pl-kos">;</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Go</h3></div>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='db, err := latticedb.Open("knowledge.db", latticedb.OpenOptions{
+    Create: true,
+    EnableVectors: true,
+    VectorDimensions: 128,
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+
+err = db.Update(func(tx *latticedb.Tx) error {
+    node, err := tx.CreateNode(latticedb.CreateNodeOptions{
+        Labels: []string{"Chunk"},
+        Properties: map[string]latticedb.Value{"text": "The transformer architecture uses self-attention..."},
+    })
+    if err != nil {
+        return err
+    }
+    if err := tx.SetVector(node.ID, "embedding", []float32{1, 0, 0, 0}); err != nil {
+        return err
+    }
+    return tx.FTSIndex(node.ID, "The transformer architecture uses self-attention...")
+})
+if err != nil {
+    log.Fatal(err)
+}' dir="auto"><pre><span class="pl-s1">db</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">latticedb</span>.<span class="pl-c1">Open</span>(<span class="pl-s">"knowledge.db"</span>, latticedb.<span class="pl-smi">OpenOptions</span>{
+    <span class="pl-s1">Create</span>: <span class="pl-c1">true</span>,
+    <span class="pl-s1">EnableVectors</span>: <span class="pl-c1">true</span>,
+    <span class="pl-s1">VectorDimensions</span>: <span class="pl-c1">128</span>,
+})
+<span class="pl-k">if</span> <span class="pl-s1">err</span> <span class="pl-c1">!=</span> <span class="pl-c1">nil</span> {
+    <span class="pl-s1">log</span>.<span class="pl-c1">Fatal</span>(<span class="pl-s1">err</span>)
+}
+<span class="pl-k">defer</span> <span class="pl-s1">db</span>.<span class="pl-c1">Close</span>()
+
+<span class="pl-s1">err</span> <span class="pl-c1">=</span> <span class="pl-s1">db</span>.<span class="pl-c1">Update</span>(<span class="pl-k">func</span>(<span class="pl-s1">tx</span> <span class="pl-c1">*</span>latticedb.<span class="pl-smi">Tx</span>) <span class="pl-smi">error</span> {
+    <span class="pl-s1">node</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">tx</span>.<span class="pl-c1">CreateNode</span>(latticedb.<span class="pl-smi">CreateNodeOptions</span>{
+        <span class="pl-s1">Labels</span>: []<span class="pl-smi">string</span>{<span class="pl-s">"Chunk"</span>},
+        <span class="pl-s1">Properties</span>: <span class="pl-k">map</span>[<span class="pl-smi">string</span>]latticedb.<span class="pl-smi">Value</span>{<span class="pl-s">"text"</span>: <span class="pl-s">"The transformer architecture uses self-attention..."</span>},
+    })
+    <span class="pl-k">if</span> <span class="pl-s1">err</span> <span class="pl-c1">!=</span> <span class="pl-c1">nil</span> {
+        <span class="pl-k">return</span> <span class="pl-s1">err</span>
+    }
+    <span class="pl-k">if</span> <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">tx</span>.<span class="pl-c1">SetVector</span>(<span class="pl-s1">node</span>.<span class="pl-c1">ID</span>, <span class="pl-s">"embedding"</span>, []<span class="pl-smi">float32</span>{<span class="pl-c1">1</span>, <span class="pl-c1">0</span>, <span class="pl-c1">0</span>, <span class="pl-c1">0</span>}); <span class="pl-s1">err</span> <span class="pl-c1">!=</span> <span class="pl-c1">nil</span> {
+        <span class="pl-k">return</span> <span class="pl-s1">err</span>
+    }
+    <span class="pl-k">return</span> <span class="pl-s1">tx</span>.<span class="pl-c1">FTSIndex</span>(<span class="pl-s1">node</span>.<span class="pl-c1">ID</span>, <span class="pl-s">"The transformer architecture uses self-attention..."</span>)
+})
+<span class="pl-k">if</span> <span class="pl-s1">err</span> <span class="pl-c1">!=</span> <span class="pl-c1">nil</span> {
+    <span class="pl-s1">log</span>.<span class="pl-c1">Fatal</span>(<span class="pl-s1">err</span>)
+}</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Performance</h2></div>
+<p dir="auto">Benchmarked on Apple M1, single-threaded, with auto-scaled buffer pool. Run <code>zig build benchmark</code> to reproduce.
+For the repeated-term FTS indexing workload that previously exposed quadratic append behavior, run <code>zig build fts-benchmark</code>.</p>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Core Operations</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Latency</th>
+<th>Throughput</th>
+<th>Target</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Node lookup</td>
+<td>0.13 μs</td>
+<td>7.9M ops/sec</td>
+<td>&lt; 1 μs</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>Node creation</td>
+<td>0.65 μs</td>
+<td>1.5M ops/sec</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Edge traversal</td>
+<td>9 μs</td>
+<td>111K ops/sec</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Full-text search (100 docs)</td>
+<td>19 μs</td>
+<td>53K ops/sec</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>10-NN vector search (1M vectors)</td>
+<td>0.83 ms</td>
+<td>1.2K ops/sec</td>
+<td>&lt; 10 ms @ 1M</td>
+<td>PASS</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Vector Search (HNSW) at Scale</h3></div>
+<p dir="auto">128-dimensional cosine vectors, M=16, ef_construction=200, ef_search=64, k=10. Run <code>zig build vector-benchmark</code> to reproduce.</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Scale</th>
+<th>Mean Latency</th>
+<th>P99 Latency</th>
+<th>Recall@10</th>
+<th>Memory</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1,000</td>
+<td>65 μs</td>
+<td>70 μs</td>
+<td>100%</td>
+<td>1 MB</td>
+</tr>
+<tr>
+<td>10,000</td>
+<td>174 μs</td>
+<td>695 μs</td>
+<td>99%</td>
+<td>10 MB</td>
+</tr>
+<tr>
+<td>100,000</td>
+<td>438 μs</td>
+<td>1.2 ms</td>
+<td>99%</td>
+<td>101 MB</td>
+</tr>
+<tr>
+<td>1,000,000</td>
+<td>832 μs</td>
+<td>1.8 ms</td>
+<td>100%</td>
+<td>1,040 MB</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Search latency scales sub-linearly (O(log N)) with 99–100% recall@10. Uses heuristic neighbor selection (HNSW paper Algorithm 4) for diverse graph connectivity, connection page packing for ~4.5x memory reduction, and pre-normalized dot product for fast cosine distance.</p>
+<p dir="auto"><strong>ef_search Sensitivity (1M vectors)</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>ef_search</th>
+<th>Mean Latency</th>
+<th>Recall@10</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>16</td>
+<td>506 μs</td>
+<td>57%</td>
+</tr>
+<tr>
+<td>32</td>
+<td>1.9 ms</td>
+<td>79%</td>
+</tr>
+<tr>
+<td>64</td>
+<td>990 μs</td>
+<td>100%</td>
+</tr>
+<tr>
+<td>128</td>
+<td>3.2 ms</td>
+<td>100%</td>
+</tr>
+<tr>
+<td>256</td>
+<td>11.6 ms</td>
+<td>100%</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Competitive Analysis</h3></div>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Point Lookups</h4></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>System</th>
+<th>Latency</th>
+<th>Type</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>LatticeDB</strong></td>
+<td><strong>0.13 μs</strong></td>
+<td>Embedded</td>
+<td><code>zig build benchmark</code></td>
+</tr>
+<tr>
+<td>RocksDB (in-memory)</td>
+<td>0.14 μs</td>
+<td>Embedded</td>
+<td><a href="https://github.com/facebook/rocksdb/wiki/RocksDB-In-Memory-Workload-Performance-Benchmarks">RocksDB wiki</a></td>
+</tr>
+<tr>
+<td>SQLite (in-memory)</td>
+<td>~0.2 μs</td>
+<td>Embedded</td>
+<td><a href="https://turso.tech/blog/microsecond-level-sql-query-latency-with-libsql-local-replicas-5e4ae19b628b" rel="nofollow">Turso blog</a></td>
+</tr>
+<tr>
+<td>SQLite (WAL, disk)</td>
+<td>3 μs (p90)</td>
+<td>Embedded</td>
+<td><a href="https://marending.dev/notes/sqlite-benchmarks/" rel="nofollow">marending.dev</a></td>
+</tr>
+<tr>
+<td>Neo4j</td>
+<td>28 ms (p99)</td>
+<td>Server</td>
+<td><a href="https://memgraph.com/blog/memgraph-vs-neo4j-performance-benchmark-comparison" rel="nofollow">Memgraph comparison</a></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">LatticeDB's B+Tree achieves sub-microsecond cached lookups, matching RocksDB in-memory and outperforming SQLite on disk by 23x.</p>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Vector Search</h4></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>System</th>
+<th>Latency (10-NN)</th>
+<th>Scale</th>
+<th>Type</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>LatticeDB</strong></td>
+<td><strong>0.83 ms mean, 100% recall</strong></td>
+<td>1M</td>
+<td>Embedded</td>
+<td><code>zig build vector-benchmark</code></td>
+</tr>
+<tr>
+<td>FAISS HNSW (single-thread)</td>
+<td>0.5–3 ms</td>
+<td>1M</td>
+<td>Library</td>
+<td><a href="https://github.com/facebookresearch/faiss/wiki/Indexing-1M-vectors">FAISS wiki</a></td>
+</tr>
+<tr>
+<td>Weaviate</td>
+<td>1.4 ms mean, 3.1 ms P99</td>
+<td>1M</td>
+<td>Server</td>
+<td><a href="https://docs.weaviate.io/weaviate/benchmarks/ann" rel="nofollow">Weaviate benchmarks</a></td>
+</tr>
+<tr>
+<td>Qdrant</td>
+<td>~1–2 ms</td>
+<td>1M</td>
+<td>Server</td>
+<td><a href="https://qdrant.tech/benchmarks/" rel="nofollow">Qdrant benchmarks</a></td>
+</tr>
+<tr>
+<td>Milvus + SQ8</td>
+<td>2.2 ms P99</td>
+<td>1M</td>
+<td>Server</td>
+<td><a href="https://zilliz.com/vdbbench-leaderboard" rel="nofollow">VectorDBBench</a></td>
+</tr>
+<tr>
+<td>pgvector HNSW</td>
+<td>~5 ms @ 99% recall</td>
+<td>1M</td>
+<td>Extension</td>
+<td><a href="https://jkatz05.com/post/postgres/pgvector-performance-150x-speedup/" rel="nofollow">Jonathan Katz</a></td>
+</tr>
+<tr>
+<td>LanceDB</td>
+<td>3–5 ms</td>
+<td>1M</td>
+<td>Embedded</td>
+<td><a href="https://medium.com/etoai/benchmarking-lancedb-92b01032874a" rel="nofollow">LanceDB blog</a></td>
+</tr>
+<tr>
+<td>Chroma</td>
+<td>4–5 ms mean</td>
+<td>1M</td>
+<td>Embedded</td>
+<td><a href="https://docs.trychroma.com/production/administration/performance" rel="nofollow">Chroma docs</a></td>
+</tr>
+<tr>
+<td>Pinecone P2</td>
+<td>~15 ms (incl. network)</td>
+<td>1M</td>
+<td>Cloud</td>
+<td><a href="https://www.pinecone.io/blog/dedicated-read-nodes/" rel="nofollow">Pinecone blog</a></td>
+</tr>
+<tr>
+<td>sqlite-vec (brute force)</td>
+<td>17 ms</td>
+<td>1M</td>
+<td>Extension</td>
+<td><a href="https://alexgarcia.xyz/blog/2024/sqlite-vec-stable-release/index.html" rel="nofollow">Alex Garcia</a></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">LatticeDB at 1M achieves 0.83 ms mean with 100% recall@10 — faster than FAISS single-threaded HNSW and competitive with Weaviate and Qdrant server-based systems (which add network overhead in practice).</p>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Graph Traversal</h4></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>System</th>
+<th>2-hop (100K nodes)</th>
+<th>Type</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>LatticeDB</strong></td>
+<td><strong>39 μs</strong></td>
+<td>Embedded</td>
+<td><code>zig build sqlite-benchmark</code></td>
+</tr>
+<tr>
+<td>SQLite (recursive CTE)</td>
+<td>548 μs</td>
+<td>Embedded</td>
+<td><code>zig build sqlite-benchmark</code></td>
+</tr>
+<tr>
+<td>Kuzu</td>
+<td>19 ms</td>
+<td>Embedded</td>
+<td><a href="https://thedataquarry.com/blog/embedded-db-2/" rel="nofollow">The Data Quarry</a></td>
+</tr>
+<tr>
+<td>Neo4j</td>
+<td>10 ms (1M nodes)</td>
+<td>Server</td>
+<td><a href="https://neo4j.com/news/how-much-faster-is-a-graph-database-really/" rel="nofollow">Neo4j blog</a></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto"><strong>LatticeDB vs SQLite</strong> — Social network graph with power-law degree distribution, adjacency cache pre-warmed:</p>
+<p dir="auto"><strong>Small Scale (10K nodes, 50K edges)</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Workload</th>
+<th>LatticeDB</th>
+<th>SQLite</th>
+<th align="right">Speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1-hop traversal</td>
+<td>560 ns</td>
+<td>13.0 μs</td>
+<td align="right"><strong>23x</strong></td>
+</tr>
+<tr>
+<td>2-hop traversal</td>
+<td>3.0 μs</td>
+<td>37.5 μs</td>
+<td align="right"><strong>13x</strong></td>
+</tr>
+<tr>
+<td>3-hop traversal</td>
+<td>19.1 μs</td>
+<td>178.5 μs</td>
+<td align="right"><strong>9x</strong></td>
+</tr>
+<tr>
+<td>Variable path (1..5)</td>
+<td>82.4 μs</td>
+<td>4.3 ms</td>
+<td align="right"><strong>52x</strong></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto"><strong>Medium Scale (100K nodes, 500K edges)</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Workload</th>
+<th>LatticeDB</th>
+<th>SQLite</th>
+<th align="right">Speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1-hop traversal</td>
+<td>8.0 μs</td>
+<td>290.0 μs</td>
+<td align="right"><strong>36x</strong></td>
+</tr>
+<tr>
+<td>2-hop traversal</td>
+<td>38.7 μs</td>
+<td>548.3 μs</td>
+<td align="right"><strong>14x</strong></td>
+</tr>
+<tr>
+<td>3-hop traversal</td>
+<td>197.3 μs</td>
+<td>1.2 ms</td>
+<td align="right"><strong>6x</strong></td>
+</tr>
+<tr>
+<td>Variable path (1..5)</td>
+<td>134.4 μs</td>
+<td>10.1 ms</td>
+<td align="right"><strong>75x</strong></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto"><strong>Depth-Limited Traversal (10K nodes, 50K edges)</strong></p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th align="right">Depth</th>
+<th align="right">LatticeDB</th>
+<th align="right">SQLite</th>
+<th align="right">Speedup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="right">10</td>
+<td align="right">311 μs</td>
+<td align="right">121 ms</td>
+<td align="right"><strong>390x</strong></td>
+</tr>
+<tr>
+<td align="right">15</td>
+<td align="right">380 μs</td>
+<td align="right">271 ms</td>
+<td align="right"><strong>713x</strong></td>
+</tr>
+<tr>
+<td align="right">25</td>
+<td align="right">318 μs</td>
+<td align="right">587 ms</td>
+<td align="right"><strong>1,848x</strong></td>
+</tr>
+<tr>
+<td align="right">50</td>
+<td align="right">500 μs</td>
+<td align="right">1.4 s</td>
+<td align="right"><strong>2,819x</strong></td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">LatticeDB uses BFS with adjacency cache and bitset visited tracking. SQLite uses a recursive CTE with <code>UNION</code> deduplication. Both compute identical reachable node sets (~8K nodes). The gap widens at deeper depths as SQLite's CTE overhead grows with each recursion level. Run <code>zig build graph-benchmark -- --quick</code> to reproduce.</p>
+<div class="markdown-heading" dir="auto"><h4 class="heading-element" dir="auto" tabindex="-1">Full-Text Search (BM25)</h4></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>System</th>
+<th>Search Latency</th>
+<th>Type</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>LatticeDB</strong></td>
+<td><strong>19 μs</strong></td>
+<td>Embedded</td>
+<td><code>zig build benchmark</code></td>
+</tr>
+<tr>
+<td>SQLite FTS5</td>
+<td>&lt; 6 ms</td>
+<td>Embedded</td>
+<td><a href="https://blog.sqlite.ai/real-time-full-text-site-search-with-sqlite-fts5-extension" rel="nofollow">SQLite Cloud</a></td>
+</tr>
+<tr>
+<td>Elasticsearch</td>
+<td>1–10 ms</td>
+<td>Server</td>
+<td>Various</td>
+</tr>
+<tr>
+<td>Tantivy</td>
+<td>10–100 μs</td>
+<td>Library</td>
+<td>Various</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">LatticeDB's inverted index with BM25 scoring is ~300x faster than SQLite FTS5 and competitive with Tantivy (a dedicated Rust search library).</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Features</h2></div>
+<p dir="auto"><strong>Graph</strong></p>
+<ul dir="auto">
+<li>Nodes and edges with labels and arbitrary properties</li>
+<li>Durable explicit equality indexes for scoped node and edge properties</li>
+<li>Multi-hop traversal, variable-length paths (<code>*1..3</code>)</li>
+<li>ACID transactions with commit/rollback and crash recovery</li>
+<li>MERGE, WITH, UNWIND, aggregations (<code>count</code>, <code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>collect</code>)</li>
+</ul>
+<p dir="auto"><strong>Vector Search</strong></p>
+<ul dir="auto">
+<li>HNSW approximate nearest neighbor with configurable M, ef</li>
+<li>Built-in hash embeddings or HTTP client for Ollama/OpenAI</li>
+<li>Bulk vector node insertion for fast ingestion</li>
+</ul>
+<p dir="auto"><strong>Full-Text Search</strong></p>
+<ul dir="auto">
+<li>BM25-ranked inverted index with tokenization and stemming</li>
+<li>Fuzzy search with configurable Levenshtein distance</li>
+</ul>
+<p dir="auto"><strong>Cypher Query Language</strong></p>
+<ul dir="auto">
+<li>MATCH, WHERE, RETURN, CREATE, DELETE, SET, REMOVE</li>
+<li>ORDER BY, LIMIT, SKIP, DETACH DELETE</li>
+<li>Vector distance operator: <code>&lt;=&gt;</code></li>
+<li>Full-text search operator: <code>@@</code></li>
+<li>Parameters: <code>$name</code></li>
+</ul>
+<p dir="auto"><strong>Operations</strong></p>
+<ul dir="auto">
+<li>Single-file storage with write-ahead log for crash recovery</li>
+<li>Durable named streams with explicit consumer offsets, manual trim, and graph changefeeds</li>
+<li>Online freelist reuse plus <code>lattice compact</code> for safe physical tail reclamation</li>
+<li>Zero configuration — open a file and start working</li>
+<li>Embedded single-writer model for local applications</li>
+<li>Clean C API; Python, TypeScript, and Go bindings wrap it</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Use Cases</h2></div>
+<ul dir="auto">
+<li><strong>Connected local data</strong> — Notes, documents, catalogs, citation graphs, and entity graphs</li>
+<li><strong>Graph plus retrieval</strong> — Relationship traversal, semantic search, and lexical search over the same dataset</li>
+<li><strong>Local knowledge tools</strong> — Embedded apps that need graph structure without running a separate server</li>
+<li><strong>Agent memory and RAG pipelines</strong> — One example class of workload built on the graph/vector/text substrate</li>
+<li><strong>Local development</strong> — Lightweight alternative to Neo4j or Weaviate for prototyping on one machine</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">When to Use Something Else</h2></div>
+<p dir="auto">LatticeDB is fast, but speed is not the only thing that matters. Here are cases where a different tool is the better choice.</p>
+<p dir="auto"><strong>You need multiple applications writing to the same database at the same time.</strong>
+LatticeDB is embedded with a single-writer model. One process opens the file and owns it. If you need many clients connecting over a network, use Neo4j, PostgreSQL, or another client-server database.</p>
+<p dir="auto"><strong>Your data is fundamentally tabular.</strong>
+If your data fits naturally into rows and columns — sales records, user accounts, time series — a relational database like SQLite or PostgreSQL will be simpler and just as fast. Graph databases shine when relationships between records are the point, not an afterthought.</p>
+<p dir="auto"><strong>You need to scale beyond a single machine.</strong>
+LatticeDB stores everything in one file on one machine. If you need sharding, replication, or distributed queries across billions of nodes, look at Neo4j cluster, Dgraph, or a managed service like Neptune.</p>
+<p dir="auto"><strong>You need the full Cypher language.</strong>
+LatticeDB supports most of Cypher but not all of it. Features like <code>OPTIONAL MATCH</code> and <code>CALL</code> procedures are not yet implemented. If your queries depend on these, Neo4j is the complete implementation.</p>
+<p dir="auto"><strong>You need mature tooling and ecosystem.</strong>
+Neo4j has visualization tools, admin dashboards, monitoring, drivers in every language, and years of community resources. PostgreSQL has decades of tooling. LatticeDB is new and lean — which is a strength for embedding, but a weakness if you need a rich operational ecosystem around your database.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Building from Source</h2></div>
+<p dir="auto">Written in Zig. No dependencies.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="git clone https://github.com/jeffhajewski/latticedb.git
+cd latticedb
+zig build                  # build everything
+zig build test             # run tests
+zig build -Doptimize=ReleaseFast   # optimized build" dir="auto"><pre>git clone https://github.com/jeffhajewski/latticedb.git
+<span class="pl-c1">cd</span> latticedb
+zig build                  <span class="pl-c"><span class="pl-c">#</span> build everything</span>
+zig build <span class="pl-c1">test</span>             <span class="pl-c"><span class="pl-c">#</span> run tests</span>
+zig build -Doptimize=ReleaseFast   <span class="pl-c"><span class="pl-c">#</span> optimized build</span></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Documentation</h2></div>
+<ul dir="auto">
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/getting_started.md">Getting Started</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/14_durable_streams.md">Durable Streams and Graph Changefeeds</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/property_index_design.md">Property Indexes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/examples/README.md">Examples Overview</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/examples/cli/README.md">CLI Quickstart</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/00_introduction.md">Architecture Overview</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/release_notes_0.10.0.md">0.10.0 Release Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/release_notes_0.9.6.md">0.9.6 Release Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/release_notes_0.9.5.md">0.9.5 Release Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/release_notes_0.9.0.md">0.9.0 Release Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/release_notes_0.8.7.md">0.8.7 Release Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/release_notes_0.8.6.md">0.8.6 Release Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/release_notes_0.8.5.md">0.8.5 Release Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/release_notes_0.8.4.md">0.8.4 Release Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/release_notes_0.8.2.md">0.8.2 Release Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/release_notes_0.8.0.md">0.8.0 Release Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/docs/client_api_migration.md">Client API Migration Notes</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/bindings/python/README.md">Python API Reference</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/bindings/typescript/README.md">TypeScript API Reference</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/bindings/go/README.md">Go API Reference</a></li>
+<li><a href="/jeffhajewski/latticedb/blob/main/include/lattice.h">C API Header</a></li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto"><a href="/jeffhajewski/latticedb/blob/main/LICENSE">MIT</a></p>
+</article>
