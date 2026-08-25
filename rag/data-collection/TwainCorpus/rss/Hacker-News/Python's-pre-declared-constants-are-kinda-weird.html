@@ -1,0 +1,104 @@
+<main>
+<div class="heading">
+<h1>python's pre-declared constants are kinda weird</h1>
+<time datetime="2026-08-01">2026-08-01</time>
+</div>
+<div class="content">
+<p>python has 6 pre-declared "constants": <code>True</code>, <code>False</code>, <code>None</code>, <code>__debug__</code>, <code>Ellipsis</code> (or equivalently <code>...</code>), and <code>NotImplemented</code>. but they all behave slightly differently, for some reason.
+
+        <h2><code>True</code>, <code>False</code>, and <code>None</code></h2>
+<p><code>True</code>, <code>False</code>, and <code>None</code> are keywords. they aren't identifiers, they're just straight up their own lexical tokens. which is really weird; nothing else is like this in python. usually stuff is resolved during regular name resolution, not in the lexer itself.
+
+        <p>an interesting side effect of this is that expressions like <code>x.True</code> raise a <code>SyntaxError</code>. i'm curious as to what the rationale was for this decision (if there was one).
+
+        <p>there's some more interesting stuff with these constants, but i'll get to it later, since it ties in with the other constants.
+
+        <h2><code>__debug__</code></h2>
+<p><code>__debug__</code> is a boolean constant: it's normally <code>True</code>, but when running with <kbd>-O</kbd>, it's <code>False</code>. the idea is similar to how <code>assert</code> is disabled in non-debug builds: you can wrap code in <code>if __debug__</code> if the check would be too expensive in an "optimized" build, or something.
+
+        <p><code>__debug__</code> is really interesting though, because although it's a normal identifier (unlike <code>True</code>, <code>False</code>, and <code>None</code>), it's the only identifier in the language which can't be assigned to:
+
+        <pre><samp>&gt;&gt;&gt; <kbd>__debug__ = 67</kbd>
+  File "<stdin>", line 1
+SyntaxError: cannot assign to __debug__</stdin></samp></pre>
+<p>you can't even assign to it as an attribute:
+
+        <pre><samp>&gt;&gt;&gt; <kbd>x.__debug__ = 67</kbd>
+  File "<stdin>", line 1
+SyntaxError: cannot assign to __debug__</stdin></samp></pre>
+<p>again, no other identifier behaves like this. this is a true special case.
+
+        <p>but because it's not a keyword, it behaves slightly differently to <code>True</code>, <code>False</code>, and <code>None</code>:
+<code>x.__debug__</code> raises <code>AttributeError</code> (rather than <code>SyntaxError</code>), since it's syntactically valid; it's just looking up an attribute which doesn't exist.
+
+        <p>interestingly, there's also a special error message for attempting to delete <code>__debug__</code> (despite the fact that this would raise a <code>NameError</code> anyway if not for the special case), but this <em>doesn't</em> apply for deleting an attribute named <code>__debug__</code>:
+
+        <pre><samp>&gt;&gt;&gt; <kbd>del __debug__</kbd>
+  File "<stdin>", line 1
+SyntaxError: cannot delete __debug__
+&gt;&gt;&gt; <kbd>del x.__debug__</kbd>
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+NameError: name 'x' is not defined</module></stdin></stdin></samp></pre>
+<p>if <code>x</code> were defined, an <code>AttributeError</code> would be raised instead. in either case, it's not a <code>SyntaxError</code> (unlike assignment), for some reason.
+
+        <h3>tangent: <code>SyntaxError</code> is a lie</h3>
+<p>speaking of errors: assigning to <code>__debug__</code> is one of only a few cases i'm aware of where a <code>SyntaxError</code> is raised despite something not actually being invalid syntax. here, you can confirm it yourself:
+
+        <pre><samp>&gt;&gt;&gt; <kbd>assert (__debug__ := 67)</kbd></samp></pre>
+<p>running that assert in a debug build raises a <code>SyntaxError</code>, but with <samp>-O</samp>, the assertion is never compiled, and so no exception is raised.
+
+        <p>two other instances of this are using <code>yield</code> or <code>await</code> outside of a function:
+
+        <pre><samp>&gt;&gt;&gt; <kbd>assert (yield)</kbd>
+&gt;&gt;&gt; <kbd>assert (await 67)</kbd></samp></pre>
+<h2><code>Ellipsis</code> and <code>NotImplemented</code></h2>
+<p><code>Ellipsis</code> and <code>NotImplemented</code> are documented in the "constants" section of the reference, but unlike the other 4 constants, they aren't "real" constants. they're just normal builtins, so they can be shadowed by globals:
+
+        <pre><samp>&gt;&gt;&gt; <kbd>NotImplemented = 67</kbd>
+&gt;&gt;&gt; <kbd>NotImplemented</kbd>
+67</samp></pre>
+<p>again, i'm curious about the rationale here. why is it that these aren't special, but the other constants are?
+
+        <h2>overwriting constants</h2>
+<p>here's something interesting: despite being lexical tokens, <code>True</code>, <code>False</code>, and <code>None</code> also exist as normal builtins:
+
+        <pre><samp>&gt;&gt;&gt; <kbd>import builtins</kbd>
+&gt;&gt;&gt; <kbd>getattr(builtins, 'True')</kbd>
+True
+&gt;&gt;&gt; <kbd>getattr(builtins, 'False')</kbd>
+False
+&gt;&gt;&gt; <kbd>getattr(builtins, 'None') is None</kbd>
+True</samp></pre>
+<p>there's no way to directly access these without using <code>getattr</code>.
+
+        <p>but here's where things get really interesting: <code>setattr</code> also works!
+
+        <pre><samp>&gt;&gt;&gt; <kbd>setattr(builtins, 'True', 67)</kbd>
+&gt;&gt;&gt; <kbd>getattr(builtins, 'True')</kbd>
+67</samp></pre>
+<p>however, this doesn't change the value when accessed with the lexical token:
+
+        <pre><samp>&gt;&gt;&gt; <kbd>True</kbd>
+True</samp></pre>
+<p>but <code>__debug__</code> has the same behavior!
+
+        <pre><samp>&gt;&gt;&gt; <kbd>setattr(builtins, '__debug__', 67)</kbd>
+&gt;&gt;&gt; <kbd>builtins.__debug__</kbd>
+67
+&gt;&gt;&gt; <kbd>__debug__</kbd>
+True</samp></pre>
+<p>so <code>__debug__</code> can <em>sorta</em> be assigned to, but despite not being a lexical token, it's special cased just like <code>True</code>, <code>False</code>, and <code>None</code>: its value is unaffected by changes to the builtins module. so it really is a constant!
+
+        <p><code>Ellipsis</code> and <code>NotImplemented</code> are, once again, not actually constants:
+
+        <pre><samp>&gt;&gt;&gt; <kbd>setattr(builtins, 'Ellipsis', 67)</kbd>
+&gt;&gt;&gt; <kbd>Ellipsis</kbd>
+67</samp></pre>
+<p>this doesn't change the value of <code>...</code> though:
+
+        <pre><samp>&gt;&gt;&gt; <kbd>...</kbd>
+Ellipsis</samp></pre>
+<p>so in some sense, <code>...</code> is a real constant, but <code>Ellipsis</code> isn't. weird, right?
+      </p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></p></div>
+</main>
