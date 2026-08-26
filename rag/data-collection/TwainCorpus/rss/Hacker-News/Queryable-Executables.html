@@ -1,0 +1,168 @@
+<article class="column">
+
+<div class="post-body prose"><p>I was pleasantly surprised and happy to see that my article ‘<a href="/2026/08/23/your-executable-is-a-sqlite-database">Your executable is a SQLite database</a>’ resonated with people. It is a format I have been thinking about for a while, and the idea seems to have
+struck a chord with others.</p>
+<p><picture></picture></p>
+<p>A quick recap: <strong>SELF</strong>, a format where the program is a SQLite database. We can use <a href="https://docs.kernel.org/admin-guide/binfmt-misc.html">binfmt_misc</a> to trigger a custom
+interpreter that maps the rows in the <code class="language-plaintext highlighter-rouge">segments</code> table and jumps to the entry point,
+and a whole class of binary tooling collapses into SQL.</p>
+<p>What keeps surprising me is how having the file format be a SQLite database keeps collapsing everything into SQL. One idea that was immediately evident to myself and others through comments: If the executable is a database, and a database is something you can write to, can the <em>running program</em> use it to also store its state? 🤔</p>
+<p>Yes! 🤯
+We can collapse not only a complete distribution but all the state for every application into a single file, alleviating the need for <code class="language-plaintext highlighter-rouge">/var/</code> or <code class="language-plaintext highlighter-rouge">/tmp/</code> or <code class="language-plaintext highlighter-rouge">/home/</code> or any other filesystem. The program can store its own state in the same file it is running from, and it can do so transactionally.</p>
+<p><strong><a href="https://github.com/fzakaria/selfdb/tree/main/examples/server">self-httpd</a></strong> is a proof-of-concept webserver that does exactly that. It is a single file program executed from a database. The file contains the program, the website, the routes and all the visitor logs. All state is updated <strong>in the same SQLite</strong> file as the program itself.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># Our server is a single file, and it is a SQLite database
+</span><span class="gp">$</span>file server
+<span class="go">server: SQLite 3.x database, application id 1397050438, ...
+
+</span><span class="gp">$</span>./server <span class="nt">--journal</span> wal 8080
+<span class="go">self-httpd: serving 3 routes out of /srv/self/server
+self-httpd: listening on http://0.0.0.0:8080 with 4 workers
+
+</span><span class="gp">$</span>curl <span class="nt">-s</span> localhost:8080 | <span class="nb">head</span> <span class="nt">-1</span>
+<span class="go">&lt;!doctype html&gt;
+
+</span><span class="c"># nobody has pressed the button on that page yet
+</span><span class="gp">$</span>sqlite3 server <span class="s1">'SELECT count(*) FROM presses'</span>
+<span class="go">0
+
+</span><span class="gp">$</span>curl <span class="nt">-s</span> <span class="nt">-X</span> POST <span class="nt">-d</span> press localhost:8080/api/press
+<span class="go">{"presses":1,"button":"press"}
+
+</span><span class="c"># the application data is inside the same database
+</span><span class="gp">$</span>sqlite3 server <span class="s1">'SELECT id, at, button FROM presses'</span>
+<span class="go">1|2026-08-25 03:11:28|press
+
+</span><span class="c"># so was the GET that fetched the page in the first place
+</span><span class="gp">$</span>sqlite3 server <span class="s1">'SELECT count(*) AS n, path
+</span><span class="go">                  FROM visits GROUP BY path'
+1|/
+1|/api/press
+</span></code></pre></div></div>
+<p>This web-server is live at <strong><a href="https://selfdb.exe.xyz">https://selfdb.exe.xyz</a></strong>.<sup class="sn-ref">1</sup><span class="sidenote"><span class="sn-num">1</span><span class="sn-p">If the site is not working for you, sorry. I deployed it on their smallest tier.
+    I included a screenshot of the site just in case for posterity! </span></span> It is one file, a SQLite database, and it is also the server. It is the website, it is the program, and it is the visitor log and state.</p>
+<p><picture></picture></p>
+<h1 id="everything-is-my-demon-muse"><a aria-label="Permalink to this section" class="hanchor" href="#everything-is-my-demon-muse">§</a>Everything is my demon muse</h1>
+<p>I have a lot of admiration for the work of <a href="https://justine.lol/">Justine Tunney</a>,
+whose prior art <a href="https://redbean.dev">redbean</a>: a webserver in a
+single file, built as an <a href="https://github.com/jart/cosmopolitan">Actually Portable Executable</a> with a self-extracting ZIP archive, inspired the idea.</p>
+<p>SELF is many ways is less brilliant. It relies on simpler tools to achieve something
+very similar but I’m amazed how much collapses into a single domain: SQL.</p>
+<p>Whereas, redbean needs to include an archive format (ZIP), the database
+itself is the container. Redbean provides Lua hooks to manipulate the responses,
+whereas the equivalent in SELF is a new row in a <code class="language-plaintext highlighter-rouge">handlers</code> table.</p>
+<div class="language-sql highlighter-rouge" data-lang="sql"><div class="highlight"><pre class="highlight"><code><span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">handlers</span> <span class="k">VALUES</span>
+  <span class="p">(</span><span class="s1">'/api/busiest'</span><span class="p">,</span> <span class="s1">'SELECT path, count(*)
+                    FROM visits GROUP BY path
+                    ORDER BY 2 DESC LIMIT 5'</span><span class="p">);</span>
+</code></pre></div></div>
+<p>If redbean is an <strong>Actually Portable Executable</strong>, this is an <strong>Actually Queryable Executable</strong>. One of them runs anywhere, the other one you can <code class="language-plaintext highlighter-rouge">SELECT</code> from.</p>
+<h1 id="all-you-need-is-argv0"><a aria-label="Permalink to this section" class="hanchor" href="#all-you-need-is-argv0">§</a>All you need is <code class="language-plaintext highlighter-rouge">argv[0]</code></h1>
+<p>How does the process get access to itself? 🤔</p>
+<p>For now, you cannot use <code class="language-plaintext highlighter-rouge">/proc/self/exe</code>.<sup class="sn-ref">2</sup><span class="sidenote"><span class="sn-num">2</span><span class="sn-p">Funny enough, the VFS Linux maintainer recently landed support for 
+            transparent <code class="language-plaintext highlighter-rouge">binfmt_misc</code> in the kernel, which would make <code class="language-plaintext highlighter-rouge">/proc/self/exe</code> point to the original file. I wrote <a href="/2026/07/20/linux-kernel-will-support-origin-sort-of">about it here</a>. </span></span> When <code class="language-plaintext highlighter-rouge">binfmt_misc</code> matches, the kernel does
+not <code class="language-plaintext highlighter-rouge">execve</code> your file at all , it execs the <em>interpreter</em>,  and hands it the
+path:</p>
+<p><code class="language-plaintext highlighter-rouge">self-exec</code> passes <code class="language-plaintext highlighter-rouge">argv + 1</code> through to the program, so the program’s
+<code class="language-plaintext highlighter-rouge">argv[0]</code> is the path to the executable itself. The interpreter also releases its SQLite connection before jumping to the entry point, so the program can open its own file and query it.</p>
+<div class="language-c highlighter-rouge" data-lang="c"><div class="highlight"><pre class="highlight"><code><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">sqlite3</span> <span class="o">*</span><span class="n">db</span><span class="p">;</span>
+	<span class="cm">/* the file the kernel just executed */</span>
+	<span class="n">sqlite3_open</span><span class="p">(</span><span class="n">argv</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="o">&amp;</span><span class="n">db</span><span class="p">);</span>
+	<span class="p">...</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>This is pretty unrestricted and <em>magical</em>. You can read your own segment table or a new table next to it. The writes persist across invocations. ✨</p>
+<h1 id="self-httpd"><a aria-label="Permalink to this section" class="hanchor" href="#self-httpd">§</a>self-httpd</h1>
+<p>The web-server for our example is three tables: <code class="language-plaintext highlighter-rouge">routes</code>, <code class="language-plaintext highlighter-rouge">visits</code> and <code class="language-plaintext highlighter-rouge">presses</code>.
+We will record every visitor and every button press.</p>
+<div class="language-sql highlighter-rouge" data-lang="sql"><div class="highlight"><pre class="highlight"><code><span class="c1">-- the content, added to the executable</span>
+<span class="c1">-- after it is compiled and linked</span>
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">routes</span>  <span class="p">(</span><span class="n">path</span> <span class="nb">TEXT</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">,</span>
+                      <span class="n">mime</span> <span class="nb">TEXT</span><span class="p">,</span> <span class="n">body</span> <span class="nb">BLOB</span><span class="p">);</span>
+<span class="c1">-- what the site collects, written back </span>
+<span class="c1">-- into the executable while it runs</span>
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">visits</span>  <span class="p">(</span><span class="n">id</span> <span class="nb">INTEGER</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">,</span> <span class="k">at</span> <span class="nb">TEXT</span><span class="p">,</span>
+                      <span class="n">ua</span> <span class="nb">TEXT</span><span class="p">,</span> <span class="n">path</span> <span class="nb">TEXT</span><span class="p">);</span>
+<span class="k">CREATE</span> <span class="k">TABLE</span> <span class="n">presses</span> <span class="p">(</span><span class="n">id</span> <span class="nb">INTEGER</span> <span class="k">PRIMARY</span> <span class="k">KEY</span><span class="p">,</span>
+                      <span class="k">at</span> <span class="nb">TEXT</span><span class="p">,</span> <span class="n">button</span> <span class="nb">TEXT</span><span class="p">);</span>
+</code></pre></div></div>
+<p>Building the application feels very unremarkable and familiar. We execute DDL to
+create the application schema and <code class="language-plaintext highlighter-rouge">INSERT</code> the website.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># an ordinary ELF for now
+</span><span class="gp">$</span>cc <span class="nt">-O2</span> server.c <span class="nt">-o</span> server.elf <span class="si">$(</span>pkg-config <span class="nt">--libs</span> sqlite3<span class="si">)</span>
+<span class="c"># the same program, as rows
+</span><span class="gp">$</span>elf2self server.elf server
+<span class="gp">$</span>sqlite3 server &lt; site/schema.sql
+<span class="gp">$</span>sqlite3 server <span class="s2">"INSERT INTO routes VALUES
+</span><span class="go">                    ('/index.html', 'text/html',
+                     readfile('site/index.html'))"
+</span></code></pre></div></div>
+<p>The asset pipeline looks like a “normal webserver” until you realize it’s querying itself
+with SQL for the content. Oh, and “itself” is a SQLite database.</p>
+<figure class="graphviz"></figure>
+<p>The page at <a href="https://selfdb.exe.xyz">https://selfdb.exe.xyz</a> shows a lot of fun additional information besides
+the visitor log and button presses. I included segments, symbols and relocations. Those are not baked in at built time, they are queried from itself while running.</p>
+<h1 id="editing-a-live-site-is-a-transaction"><a aria-label="Permalink to this section" class="hanchor" href="#editing-a-live-site-is-a-transaction">§</a>Editing a live site is a transaction</h1>
+<p>Once you have the capability to do ACID transactions, interesting things become possible.
+The webserver can edit its own content while it is running, and the edits are transactional. The <code class="language-plaintext highlighter-rouge">UPDATE</code> is committed to the same file as the program, and a <code class="language-plaintext highlighter-rouge">ROLLBACK</code> undoes it.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># change the running site. no restart, no reload, no deploy
+</span><span class="gp">$</span>sqlite3 server <span class="s2">"UPDATE routes SET body = readfile('new.html')
+</span><span class="go">                  WHERE path = '/index.html'"
+</span><span class="gp">$</span>curl <span class="nt">-s</span> localhost:8080
+<span class="go">&lt;!doctype html&gt;&lt;h1&gt;edited in place&lt;/h1&gt;
+</span></code></pre></div></div>
+<p>Since the file format is SQLite we can also take advantage of the cornicopea of tooling
+that exists. <code class="language-plaintext highlighter-rouge">sqldiff</code> will tell you exactly what a “deploy did”, this can let us audit and identify changes between two versions of the same program.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>sqldiff <span class="nt">--summary</span> yesterday.server server
+<span class="go">routes:      1 changes, 0 inserts, 0 deletes, 2 unchanged
+segments:    0 changes, 0 inserts, 0 deletes, 13 unchanged
+symbols:     0 changes, 0 inserts, 0 deletes, 174 unchanged
+relocations: 0 changes, 0 inserts, 0 deletes, 99 unchanged
+</span></code></pre></div></div>
+<p>What about full-text search? <a href="https://www.sqlite.org/fts5.html">FTS5</a> is a <code class="language-plaintext highlighter-rouge">CREATE VIRTUAL TABLE</code> away, so a webserver can index its own pages, inside itself, and still be a webserver afterwards:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>sqlite3 server <span class="s2">"CREATE VIRTUAL TABLE search USING fts5(path, body);
+</span><span class="go">                  INSERT INTO search SELECT path, body FROM routes
+                    WHERE mime LIKE 'text/%'"
+
+</span><span class="gp">$</span>sqlite3 server <span class="s2">"SELECT path, snippet(search, 1, '[', ']', '...', 6)
+</span><span class="go">                  FROM search WHERE search MATCH 'transaction'"
+/index.html|...Editing is a [transaction].&lt;/h2&gt;
+
+</span><span class="c"># still runs. it just knows about itself now
+</span><span class="gp">$</span>./server 8080
+</code></pre></div></div>
+<p>None of that is machinery I wrote. It is machinery SQLite already has, that a
+program inherits for free by being a database.</p>
+<p>All the rage <em>was</em> static site generators, but the future is an <strong>actually queryable executable</strong>.</p>
+<h1 id="deploying-is-scp-of-one-file"><a aria-label="Permalink to this section" class="hanchor" href="#deploying-is-scp-of-one-file">§</a>Deploying is <code class="language-plaintext highlighter-rouge">scp</code> of one file</h1>
+<p>I am really enjoying the simplicity that seems to be popular and heralded by
+products like <a href="https://exe.dev/">exe.dev</a>. People often yearn to go back to the
+“good old days” of <code class="language-plaintext highlighter-rouge">scp</code> and <code class="language-plaintext highlighter-rouge">ssh</code> to deploy a single file, and SELF is a format that makes that possible again, but better! Rather than just shipping an archive of PHP, we ship the whole system or application closure down to the <code class="language-plaintext highlighter-rouge">libc</code>.</p>
+<p>How would we make a deployment if the data and code is intertwined?</p>
+<p>We can think of a redeploy as a data migration, and the migration
+is two <code class="language-plaintext highlighter-rouge">INSERT ... SELECT</code>, because the program and its data are the same
+file!</p>
+<div class="language-sql highlighter-rouge" data-lang="sql"><div class="highlight"><pre class="highlight"><code><span class="c1">-- the running deployment</span>
+<span class="n">ATTACH</span> <span class="s1">'/srv/self/server'</span> <span class="k">AS</span> <span class="k">old</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">visits</span>  <span class="p">(</span><span class="k">at</span><span class="p">,</span> <span class="n">ua</span><span class="p">,</span> <span class="n">path</span><span class="p">)</span>
+  <span class="k">SELECT</span> <span class="k">at</span><span class="p">,</span> <span class="n">ua</span><span class="p">,</span> <span class="n">path</span> <span class="k">FROM</span> <span class="k">old</span><span class="p">.</span><span class="n">visits</span><span class="p">;</span>
+<span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">presses</span> <span class="p">(</span><span class="k">at</span><span class="p">,</span> <span class="n">button</span><span class="p">)</span>
+  <span class="k">SELECT</span> <span class="k">at</span><span class="p">,</span> <span class="n">button</span> <span class="k">FROM</span> <span class="k">old</span><span class="p">.</span><span class="n">presses</span><span class="p">;</span>
+</code></pre></div></div>
+<p>Swap the file, restart, and the visitor log survives the new build.
+You can even do this for the program itself in reverse. The <code class="language-plaintext highlighter-rouge">segments</code> table is just like any other table. 😈</p>
+<h1 id="go-press-the-button"><a aria-label="Permalink to this section" class="hanchor" href="#go-press-the-button">§</a>Go press the button</h1>
+<p><a href="https://selfdb.exe.xyz">https://selfdb.exe.xyz</a> has a button on it. Pressing it is an <code class="language-plaintext highlighter-rouge">INSERT</code> into
+the executable that served you the page</p>
+<p>The code is at <a href="https://github.com/fzakaria/selfdb">fzakaria/selfdb</a> if you
+are curious. It is probably a bit <em>half-baked</em>, and definitely AI assisted, but that’s OK with me. I wanted to explore this idea and see if it was feasible and what might be possible.</p>
+<p>I think I only scratched the surface of some of the fun possibilities. I am curious to see what others might do with it, and I would love to see a few more examples of “actually queryable executables” in the wild.<sup class="sn-ref">3</sup><span class="sidenote"><span class="sn-num">3</span><span class="sn-p">One idea a friend suggested was discovery over multicase DNS to spread
+     program updates via transactions. </span></span></p>
+<p>Turns out that when we re-envision what we considered to be simply a <em>byte layout</em>
+specification was actually better off being a <em>database</em>, a lot of machinery we have been using for decades simply stops being necessary. The program is the database, and the database is the program.</p>
+<blockquote>
+<p>“Never, ever underestimate the importance of having fun”</p>
+<p>– Randy Pausch</p>
+</blockquote>
+</div>
+</article>
