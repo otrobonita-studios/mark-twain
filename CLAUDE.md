@@ -14,21 +14,46 @@ neutral or corporate voice.
 
 
 ## Stack decisions
-- Next.js App Router. Serves pages statically via Firebase Hosting (the `/out` directory).
-- Dynamic API routes (`/api/...`) use Node.js server environments (e.g. Vercel or Firebase Cloud Functions/App Hosting).
-- Firestore via client SDK — all config through NEXT_PUBLIC_ env vars.
-- Firebase initializes only client-side with checks (guarded using page level `useEffect` and `isConfigured` checks).
-- Firestore Security Rules restrict `subscribers` collection: anonymous users can only `create` entries, they cannot `read`, `update`, or `delete` (defined in `firestore.rules`).
-- Dev Server habit: Always ensure the development server (`npm run dev` or equivalent) is running and active, especially after executing git pushes or builds.
+- Next.js App Router on **Vercel** (`mark.otrobonita.com`). Route handlers under
+  `src/app/api/**` run as Vercel functions, so this is not a static site.
+- **Retrieval:** Qdrant (`QDRANT_URL`, `QDRANT_API_KEY`, collection `twain_test`).
+  Embeddings via DeepInfra `BAAI/bge-m3`, falling back to Hugging Face.
+- **Generation:** DeepSeek (`DEEPSEEK_API_KEY`, a team Shared Environment Variable in Vercel).
+  Do not add Gemini or Google Generative AI — see `AGENTS.md`.
+- **Vision:** `completeVision` in `src/lib/llm-router.js` uses Anthropic, because DeepSeek V4 is
+  text-only and Blueprint Validator sends drawings through `/api/proxy`. This is the one
+  sanctioned exception; see Rule 6.6 in the engineering playbook's `CONSTITUTION.md`.
+- **Persistence:** Supabase. Do not add Firestore, Firebase Auth, or Firebase Storage.
+- Dev Server habit: Always ensure the development server (`npm run dev` or equivalent) is running
+  and active, especially after executing git pushes or builds.
+
+## Firebase is being torn down — do not build on it
+`src/lib/firebase.js`, `src/lib/firebase-server.js` and `firestore.rules` are still in the tree,
+and four call sites still import them (the diary pages, `/rebuild-process`, and the
+quote-collector route). **They are legacy and scheduled for deletion.** Treat them as read-only
+history, not as a pattern to follow or extend.
+
+Two things to know before touching them:
+
+1. The Firebase project they point at (`otrobonita-home-72da6`) no longer exists — the Firestore
+   API answers `CONSUMER_INVALID`. These paths already fail in production.
+2. They fail **silently**. Every call site gates on `isConfigured` and returns early, so the app
+   degrades to static content with nothing logged. That contradicts Rule 1.3 (no silent exception
+   swallowing) and is the reason the teardown replaces them rather than repairing them.
+
+`next.config.mjs` still carries a dead `BUILDING_FOR_FIREBASE` branch. The flag is never set.
 
 ## What requires .env.local to work
-Firebase will silently fall back to localStorage if env vars are missing.
-Always check isConfigured before assuming Firestore is live.
+Retrieval and generation. `src/app/api/chat/route.js` throws an explicit error when `QDRANT_URL`
+or `DEEPSEEK_API_KEY` is missing — that is the intended pattern for anything new. Never add a
+fallback that returns plausible-looking output when configuration is absent.
 
 ## Paths
 - `src/app/` — App Router pages and layouts
 - `src/components/` — shared UI components
-- `src/lib/firebase.js` — Firestore init (touch carefully)
+- `src/lib/llm-router.js` — shared LLM routing behind `/api/proxy` (DeepSeek; Anthropic for vision)
+- `src/lib/embeddings.js` — BAAI/bge-m3 embeddings
+- `src/lib/firebase.js` — legacy Firestore init, scheduled for deletion. Do not extend.
 - `src/data/` — static content (lyrics, entries)
 - `public/` — static assets, audio in sounds/music/
 
