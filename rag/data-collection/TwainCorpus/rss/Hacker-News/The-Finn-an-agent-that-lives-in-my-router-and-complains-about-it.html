@@ -1,0 +1,377 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">The Finn</h1></div>
+<p dir="auto">A small, grumpy agent that lives inside your router and only knows what the router can see.</p>
+<p dir="auto">Named after the character in William Gibson's Sprawl trilogy who ends up as a construct in
+an armoured box bolted into an alley, where people come to hear the oracle complain. This
+one runs on a GL.iNet GL-MT3000 on an office wall. It watches the hallway it is in, and
+occasionally has something to say about it.</p>
+<p dir="auto">It is deliberately not an assistant. No tools, no memory beyond a state file, no access to
+your mail or calendar or tickets, and nothing to be helpful with. It has a view of one
+hallway and an opinion about it.</p>
+<blockquote>
+<p dir="auto">Six failed SSH logins in the last minute, usually it's zero all night. Bloody hell, some
+tosser out there fancies his chances.</p>
+</blockquote>
+<blockquote>
+<p dir="auto">Твой десктоп качает на скорости 9.5 Мбит/с, обычно там крутится жалких 200 Кбит/с.
+В глотку будто ведро воды опрокинули, аж кадык свело.</p>
+</blockquote>
+<p dir="auto">Everything runs on the router itself. If the rest of your infrastructure is on fire, this
+still works, which was most of the point.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Quick start</h2></div>
+<p dir="auto">You need about ten minutes, a router you own, and a card on file with an LLM provider.</p>
+<p dir="auto"><strong>1. Check your router can host it.</strong> OpenWrt-based, with <code>lua</code>, <code>lua-cjson</code> and a <code>curl</code>
+built with TLS. On GL.iNet firmware all three are usually there already:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="ssh root@192.168.8.1 'lua -e &quot;require(\&quot;cjson\&quot;) print(\&quot;ok\&quot;)&quot;; curl --version | head -1'
+# missing anything?  opkg update &amp;&amp; opkg install lua lua-cjson curl" dir="auto"><pre>ssh root@192.168.8.1 <span class="pl-s"><span class="pl-pds">'</span>lua -e "require(\"cjson\") print(\"ok\")"; curl --version | head -1<span class="pl-pds">'</span></span>
+<span class="pl-c"><span class="pl-c">#</span> missing anything?  opkg update &amp;&amp; opkg install lua lua-cjson curl</span></pre></div>
+<p dir="auto">It needs a few megabytes of overlay and nothing else. Tested on a GL-MT3000, OpenWrt 21.02,
+512 MB RAM.</p>
+<p dir="auto"><strong>2. Make him a Telegram bot.</strong> In Telegram, open <a href="https://t.me/botfather" rel="nofollow">@BotFather</a>, send
+<code>/newbot</code>, give it a name and a username. He hands you a token like <code>123456789:AAF...</code>. That
+token is the bot; anyone holding it can post as him, so treat it as a password.</p>
+<p dir="auto"><strong>3. Find your own Telegram id.</strong> Message <a href="https://t.me/userinfobot" rel="nofollow">@userinfobot</a>; it replies
+with a number. He answers that id and no other, so nobody else can talk to your router.</p>
+<p dir="auto"><strong>4. Get an API key.</strong> <a href="https://console.anthropic.com" rel="nofollow">Anthropic</a> or
+<a href="https://platform.openai.com/api-keys" rel="nofollow">OpenAI</a>, both are wired up. <strong>Create a dedicated key
+with a low monthly limit.</strong> It will sit in plaintext on a device that shares a network with
+other people; a key that can only ever spend five dollars is a key you can shrug about.
+Expect single-digit dollars a month at the default settings.</p>
+<p dir="auto"><strong>5. Install.</strong></p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="git clone https://github.com/YuriKovalov22/the-finn &amp;&amp; cd the-finn
+cp env.example env &amp;&amp; $EDITOR env     # paste the token, your id, the key
+./install.sh root@192.168.8.1" dir="auto"><pre>git clone https://github.com/YuriKovalov22/the-finn <span class="pl-k">&amp;&amp;</span> <span class="pl-c1">cd</span> the-finn
+cp env.example env <span class="pl-k">&amp;&amp;</span> <span class="pl-smi">$EDITOR</span> env     <span class="pl-c"><span class="pl-c">#</span> paste the token, your id, the key</span>
+./install.sh root@192.168.8.1</pre></div>
+<p dir="auto">The installer checks the router, copies two files, writes <code>env</code> with mode 0600, installs the
+minute cron entry, enables cron, and prints what he can see right now.</p>
+<p dir="auto"><strong>6. Say hello first.</strong> Open your bot in Telegram and press Start. Telegram does not let a bot
+open a conversation, so that message is what tells him where to write. He picks it up on his
+next tick, within a minute. Send <code>/help</code> to see what he understands.</p>
+<p dir="auto">That is the whole setup. He will stay quiet for the first fifteen minutes while he learns what
+normal looks like, then speak when something is not.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How he decides to speak</h2></div>
+<p dir="auto">There is no list of interesting events, which is the part worth stealing. Every minute the box
+takes a wide reading of itself and the room, keeps a rolling history of every reading in RAM,
+and looks for anything that has fallen outside its own recent range. Whatever is unusual
+<em>today</em> is what he talks about, so he does not become the same five notifications forever.</p>
+<p dir="auto">Two kinds of oddity are detected generically:</p>
+<ul dir="auto">
+<li><strong>numeric</strong>, when a sensor leaves the band it has held for the last 45 minutes by more than
+a per-sensor floor that keeps ordinary wobble out;</li>
+<li><strong>membership</strong>, when anything appears in or disappears from a set: a device, a neighbour on
+the upstream network, an unusual destination port.</li>
+</ul>
+<p dir="auto">Variety is enforced along three axes, and the coarsest one matters most. <strong>Kind</strong> is what a
+remark is actually about: traffic, presence, neighbours, an intruder, his own body, the rhythm
+of the place. Connections, throughput and per-device flow churn are different sensors and
+different themes but the same observation to a reader, and traffic is by far the twitchiest
+thing on a network, so left to itself it wins nearly every round: five of six consecutive
+remarks here were some counter going up. Traffic is therefore rationed to one remark in six
+hours, and the kind that has waited longest is chosen first.</p>
+<p dir="auto">Which means the other kinds have to have something to say, so several observations exist that
+are not counters at all: a machine arriving or leaving and how long it was gone, someone at the
+desk at an hour the room is normally empty, an uptime milestone, a stretch of stillness, and
+hour-of-day profiles for the slow human sensors, because what is normal at nine on a Tuesday is
+not what is normal at nine on a Sunday and a 45 minute band cannot tell the difference.</p>
+<p dir="auto">Variety is enforced along two further axes, and the second one is easy to miss. <strong>Theme</strong> keeps him off
+one subject; <strong>shape</strong> keeps him off one sentence. Six remarks reading "X is N now, usually M"
+are varied by theme and identical to read, so each oddity also carries a shape (a level rising,
+something quieting, an arrival, a departure, a change of rhythm, a stretch of stillness) and the
+longest-waiting combination of the two wins. He is also shown his own last few remarks and told
+not to reuse their form.</p>
+<p dir="auto">The watchdog is worth calling out because it inverts the usual arrangement: a router is the one
+vantage point <em>outside</em> the blast radius of the server it depends on, so it is what still speaks
+when that server dies. <code>FINN_WATCH</code> maps names to hosts or URLs; a target has to miss several
+checks before he calls it down, and an outage is the single thing allowed past quiet hours and
+the daily budget, because being woken at 3am is the whole point of it.</p>
+<p dir="auto">Stillness is itself an observation: after some hours in which nothing has left its range, he is
+handed that fact rather than staying mute, because a resident would remark on a quiet evening.</p>
+<p dir="auto">Two rules stop him degenerating into a monitor for whichever sensor twitches most. Every
+oddity carries a <strong>theme</strong> (ports, the room, the wider network, people, his own body, the
+network, an intruder); a theme that has just been used goes quiet for ninety minutes, and
+among what is left the longest-waiting theme is the one he is handed. And churn is not news:
+a port or a neighbour that was here yesterday and came back does not count, only genuine
+novelty does.</p>
+<p dir="auto">Only then is a model asked, and it is asked as a resident rather than a monitoring system:
+react to this one thing, or reply <code>NOTHING</code> if it is bloodless bookkeeping. A subject he has
+raised is muted for six hours, and a failed API call is not treated as a decision to stay
+quiet.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">What he can feel</h2></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Sense</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>who is on your wifi, and how strong their signal is</td>
+<td><code>iwinfo assoclist</code></td>
+</tr>
+<tr>
+<td>who they are</td>
+<td><code>/tmp/dhcp.leases</code>, by hostname, so MAC rotation does not break it</td>
+</tr>
+<tr>
+<td>which of them are furniture rather than strangers</td>
+<td><code>FINN_KNOWN_HOSTS</code>, hostname to plain name</td>
+</tr>
+<tr>
+<td>which of them are people you know</td>
+<td><code>FINN_PEOPLE</code>, hostname to a person's name</td>
+</tr>
+<tr>
+<td>whether a machine is in use or asleep</td>
+<td>per-device flow churn in <code>/proc/net/nf_conntrack</code></td>
+</tr>
+<tr>
+<td>how much each device is pulling and sending</td>
+<td>conntrack byte counters, when they can be trusted (see below)</td>
+</tr>
+<tr>
+<td>how long each machine has been here, and since it last stirred</td>
+<td>tracked between ticks</td>
+</tr>
+<tr>
+<td>how many devices the upstream network has, and which are new</td>
+<td>neighbour table on that interface</td>
+</tr>
+<tr>
+<td>what the network talks to, and on what ports</td>
+<td>conntrack, common ports filtered out</td>
+</tr>
+<tr>
+<td>link health, latency and loss to the gateway</td>
+<td><code>dmesg</code>, <code>ping</code></td>
+</tr>
+<tr>
+<td>throughput both ways</td>
+<td><code>/proc/net/dev</code> deltas</td>
+</tr>
+<tr>
+<td>whether a tunnel is alive, and who is on his VPN</td>
+<td><code>wg show</code></td>
+</tr>
+<tr>
+<td>his own temperature, load, memory, disk, uptime</td>
+<td><code>/sys</code>, <code>/proc</code></td>
+</tr>
+<tr>
+<td>failed SSH logins and real kernel errors</td>
+<td><code>logread</code>, with the wifi driver's constant screaming filtered out</td>
+</tr>
+<tr>
+<td>whether you arrived earlier or later than usual</td>
+<td>rolling history of first phone appearance</td>
+</tr>
+<tr>
+<td>whether the servers your fleet depends on are still up</td>
+<td><code>FINN_WATCH</code>, ping or HTTP probe</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Per-device throughput deserves a warning. It is read from conntrack byte counters, and on any
+router with hardware NAT offload, which includes this one, established flows are handled in
+silicon and those counters stop growing. A busy video call shows up as a handful of packets.
+Left alone this produces devices that appear to be sending more than the entire uplink carried,
+and an agent will faithfully narrate the impossible number. Each tick therefore checks the parts
+against the whole and publishes nothing rather than something wrong.</p>
+<p dir="auto">Association is useless as presence, which is worth knowing before you build something like
+this: a sleeping Mac stays associated all night, and so does a printer. Flow churn is the
+honest signal. A sleeping machine opens no new connections; a machine someone is sitting at
+opens between three and fifty a minute.</p>
+<p dir="auto">Every sensor is also wired to a sensation. He is not handed "temperature 63, was 45", he is
+handed heat climbing inside his case; a device drawing closer is a tickle, a yanked cable is a
+slap, unfamiliar broadcasts from beyond the wall are ghosts he can hear and never see. He has
+an anatomy to complain about: the antennas are his ears, the ports his fingers and toes, the
+flash his gut.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Talking to him</h2></div>
+<p dir="auto">He answers anything you write, always, in any mode. He also takes commands, handled locally
+at no cost:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/status</code></td>
+<td>mode, what he has said today, model calls spent, which brain he is thinking with</td>
+</tr>
+<tr>
+<td><code>/off</code></td>
+<td>speaks only when spoken to</td>
+</tr>
+<tr>
+<td><code>/rare</code></td>
+<td>at most 2 unprompted a day, 3 hours apart</td>
+</tr>
+<tr>
+<td><code>/normal</code></td>
+<td>at most 5 a day, an hour apart</td>
+</tr>
+<tr>
+<td><code>/chatty</code></td>
+<td>at most 10 a day, 15 minutes apart</td>
+</tr>
+<tr>
+<td><code>/test</code></td>
+<td>no daily ceiling, one a minute, for two hours, then back to <code>/chatty</code> by itself</td>
+</tr>
+<tr>
+<td><code>/voice</code></td>
+<td><code>beep</code> plays a pip when he posts, <code>speak</code> reads the remark aloud, <code>off</code> keeps him to Telegram</td>
+</tr>
+<tr>
+<td><code>/machines</code></td>
+<td>lists the machines he can control and which are awake</td>
+</tr>
+<tr>
+<td><code>/wake &lt;name&gt;</code></td>
+<td>sends a WOL magic packet, waits, and tells you whether it actually came up</td>
+</tr>
+<tr>
+<td><code>/sleep &lt;name&gt;</code></td>
+<td>sleeps the machine over SSH</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Test mode spends its own budget. Otherwise an afternoon of watching him work leaves him mute
+for the rest of the day, which is exactly what happened here: two hours of testing burned 22
+remarks against a ceiling of 10, and he went silent the moment the test expired.</p>
+<p dir="auto">The daily allowance opens gradually rather than all at once. Mornings are the richest hours
+for oddities, so a flat cap gets spent before eleven and leaves nothing for whatever happens
+at five; instead it unlocks in proportion to how much of the speaking window has passed, with
+one message always available.</p>
+<p dir="auto">He calls you by whatever you put in <code>FINN_OWNER_NAME</code>, and he only ever talks to the one
+Telegram id you configured.</p>
+<p dir="auto">Unprompted remarks come out in Russian or English by coin toss. He answers you in whichever
+language you wrote in. To make him monolingual, edit <code>STYLE</code> and the language line near the
+bottom of <code>finn.lua</code>.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Running it</h2></div>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='/root/finn/tick.sh            # one tick, as cron runs it
+/root/finn/tick.sh facts      # what the box sees right now: sends nothing, records nothing
+/root/finn/tick.sh say "..."  # make him speak on a given occasion
+/root/finn/tick.sh status     # the same answer /status gives in the bot
+/root/finn/tick.sh kinds      # how each sensor is grouped, and when each group last spoke' dir="auto"><pre>/root/finn/tick.sh            <span class="pl-c"><span class="pl-c">#</span> one tick, as cron runs it</span>
+/root/finn/tick.sh facts      <span class="pl-c"><span class="pl-c">#</span> what the box sees right now: sends nothing, records nothing</span>
+/root/finn/tick.sh say <span class="pl-s"><span class="pl-pds">"</span>...<span class="pl-pds">"</span></span>  <span class="pl-c"><span class="pl-c">#</span> make him speak on a given occasion</span>
+/root/finn/tick.sh status     <span class="pl-c"><span class="pl-c">#</span> the same answer /status gives in the bot</span>
+/root/finn/tick.sh kinds      <span class="pl-c"><span class="pl-c">#</span> how each sensor is grouped, and when each group last spoke</span></pre></div>
+<p dir="auto"><code>facts</code> is strictly read-only, and that matters more than it looks: an inspection that saved
+what it saw would mark the oddity as already known, and the next real tick would have nothing
+left to say. Diagnostics must not eat the event they are diagnosing.</p>
+<p dir="auto">State lives in <code>/root/finn/state.json</code>, events in <code>/root/finn/finn.log</code>; a quiet tick writes
+nothing. The first run takes a baseline and stays silent, so a cold start does not report every
+device in the building as a new face.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">A speaker, if you want one</h2></div>
+<p dir="auto">Plug a class-compliant USB speaker into the router and he can be heard as well as read. Install
+<code>kmod-usb-audio</code> and <code>alsa-utils</code>, and set <code>FINN_VOICE</code>:</p>
+<ul dir="auto">
+<li><code>beep</code>, the default and the one worth having: a short two-tone pip when he posts, so you look
+at your phone. <code>sounds/finn-blip.wav</code> in this repo, copy it to <code>/root/bell/finn.wav</code>.</li>
+<li><code>speak</code>, which sends the remark to OpenAI speech synthesis and plays it through the speaker,
+in a gruff old-sailor voice. Requires <code>FINN_OPENAI_KEY</code> even when the words come from
+Anthropic. Delightful for about a day, then you will switch it to <code>beep</code>; ask me how I know.</li>
+<li><code>off</code>.</li>
+</ul>
+<p dir="auto">Either way it only makes noise between <code>FINN_VOICE_FROM</code> and <code>FINN_VOICE_TO</code>, 9 to 19 by
+default, and never when no sound card is present.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Cost and wear</h2></div>
+<p dir="auto">The minute tick is pure local work: no API call unless an anomaly was found, and a hard ceiling
+of 40 model calls a day including the ones that end in <code>NOTHING</code>.</p>
+<p dir="auto">The flash is treated as the scarce resource it is on these boxes. Sensor history lives in
+tmpfs, the persistent state file is a few hundred bytes and is only rewritten when its contents
+actually change, and the log is truncated at 256 KB. Total footprint on the overlay is well
+under a megabyte.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Tuning</h2></div>
+<p dir="auto">At the top of <code>finn.lua</code>:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HIST</code></td>
+<td>how many minutes of history count as "normal"</td>
+</tr>
+<tr>
+<td><code>WARMUP</code></td>
+<td>samples before a sensor may cry anomaly</td>
+</tr>
+<tr>
+<td><code>SUBJECT_MUTE</code></td>
+<td>how long a subject stays quiet after he raises it</td>
+</tr>
+<tr>
+<td><code>CALL_BUDGET</code></td>
+<td>hard ceiling on model calls per day</td>
+</tr>
+<tr>
+<td><code>QUIET_FROM</code> / <code>QUIET_TO</code></td>
+<td>hours in which he may speak unprompted</td>
+</tr>
+<tr>
+<td><code>FLOOR</code></td>
+<td>per-sensor noise floors: how big a change has to be to count</td>
+</tr>
+<tr>
+<td><code>MODES</code></td>
+<td>the talkativeness presets behind the bot commands</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">The character is one prompt near the middle of the file. Rewrite it and you have a different
+resident. Four rules in it were each learned by getting them wrong, and are worth keeping in
+any character you write:</p>
+<ol dir="auto">
+<li><strong>The plain fact first, then the image.</strong> A remark made only of metaphor and swearing reads
+well and communicates nothing: "двести семьдесят восемь глоток орут в брюхе" leaves the
+reader guessing what happened. Name the thing by its own name; the lock may follow as an
+image, but it may not stand in for "failed SSH logins".</li>
+<li><strong>Every image must mean something.</strong> Ask for a bodily reaction without demanding the
+comparison be checkable and you get filler shaped like style: "проснулся резче, чем спал"
+cannot be true or false.</li>
+<li><strong>Never let the character narrate its own plumbing.</strong> Unprompted, a model will happily say
+"I was not given that value", which is true of the prompt and fatal to a thing bolted to a
+wall. It notices or it does not.</li>
+<li><strong>Forbid the two lies a sensor agent tells naturally.</strong> A throughput reading is how much is
+moving, not how much could move, and a model will happily turn "2.5 Mbit/s flowing" into
+"the line is narrow as a needle's eye" while a gigabit sits idle. It will also invent
+outside knowledge it cannot have: mine announced that video calls "need at least 5 to 10
+Mbit/s each way", which is both wrong and unknowable from inside a router. Say plainly that
+it has never read a specification and that the only normal it owns is the one it measured
+in that room.</li>
+<li><strong>Write the style rule in the language it governs.</strong> An English instruction about writing
+numbers as digits sits unread at the bottom of a Russian answer. The same rule in Russian is
+obeyed at once.</li>
+</ol>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Privacy</h2></div>
+<p dir="auto"><code>FINN_PEOPLE</code> lets him greet people by name: "John's just joined the wifi, go and say hello."
+That is for a network you run and people who know it exists. The same trick pointed at a
+shared building network would work rather well, and that is the point at which this stops
+being a toy and becomes covert attendance tracking of strangers, so it is not built and I
+would not add it. Aggregate counts of the wider network are already there and carry nobody's
+name.</p>
+<p dir="auto">This watches a network, which means it watches the people on it. It is written for a router
+you own, in a room you occupy. Keep it that way. It reports on the owner's own named devices
+and on anonymous counts, it never inspects traffic contents (DNS query logging is deliberately
+not switched on), and it sends messages to exactly one Telegram id.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Notes for the road</h2></div>
+<ul dir="auto">
+<li><code>scp</code> does not work against dropbear, which has no <code>sftp-server</code>. Pipe through <code>ssh 'cat &gt; file'</code>.</li>
+<li>GL.iNet firmware runs a second <code>crond</code> off <code>/tmp/gl_crontabs</code> for its own jobs. Leave it alone;
+the installer uses the stock one at <code>/etc/crontabs/root</code>.</li>
+<li>A firmware upgrade wipes the overlay and takes <code>/root/finn</code> with it. Re-run <code>install.sh</code>.</li>
+<li>Lua 5.1 has no notion of a character, so every string cut is a byte cut. Slicing Cyrillic at a
+byte boundary produces invalid UTF-8 and the API rejects the whole request. There is a
+character-aware truncation helper in the file for this reason.</li>
+</ul>
+<p dir="auto">MIT licensed. It is a toy with a body; enjoy it.</p>
+</article>
