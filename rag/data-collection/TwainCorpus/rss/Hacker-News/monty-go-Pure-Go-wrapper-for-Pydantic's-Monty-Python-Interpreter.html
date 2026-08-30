@@ -1,0 +1,527 @@
+<article class="markdown-body entry-content container-lg" itemprop="text"><div class="markdown-heading" dir="auto"><h1 class="heading-element" dir="auto" tabindex="-1">monty-go</h1></div>
+<p dir="auto"><strong>Run LLM-generated Python safely from Go — no containers, no CGO, no subprocess.</strong></p>
+<p dir="auto">A pure-Go wrapper around <a href="https://github.com/pydantic/monty">Pydantic's Monty</a> Python interpreter, compiled to WebAssembly and loaded via <a href="https://wazero.io" rel="nofollow">wazero</a>. Your Go agent writes Python code, monty-go executes it in a sandboxed WASM instance with sub-millisecond startup, and pauses whenever the code calls an external function so your Go code can handle it.</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="go get github.com/fugue-labs/monty-go" dir="auto"><pre>go get github.com/fugue-labs/monty-go</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Why?</h2></div>
+<p dir="auto">LLMs work faster, cheaper, and more reliably when they write code instead of making sequential tool calls. Instead of:</p>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='Agent → tool_call("search", {query: "weather london"}) → result
+Agent → tool_call("search", {query: "weather tokyo"})  → result
+Agent → tool_call("compare", {a: result1, b: result2}) → result'><pre class="notranslate"><code>Agent → tool_call("search", {query: "weather london"}) → result
+Agent → tool_call("search", {query: "weather tokyo"})  → result
+Agent → tool_call("compare", {a: result1, b: result2}) → result
+</code></pre></div>
+<p dir="auto">The LLM writes:</p>
+<div class="highlight highlight-source-python notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='london = search(query="weather london")
+tokyo = search(query="weather tokyo")
+compare(a=london, b=tokyo)' dir="auto"><pre><span class="pl-s1">london</span> <span class="pl-c1">=</span> <span class="pl-en">search</span>(<span class="pl-s1">query</span><span class="pl-c1">=</span><span class="pl-s">"weather london"</span>)
+<span class="pl-s1">tokyo</span> <span class="pl-c1">=</span> <span class="pl-en">search</span>(<span class="pl-s1">query</span><span class="pl-c1">=</span><span class="pl-s">"weather tokyo"</span>)
+<span class="pl-en">compare</span>(<span class="pl-s1">a</span><span class="pl-c1">=</span><span class="pl-s1">london</span>, <span class="pl-s1">b</span><span class="pl-c1">=</span><span class="pl-s1">tokyo</span>)</pre></div>
+<p dir="auto">One model call instead of three. The Python code calls your Go functions, Monty pauses at each call, your Go code executes it, and Monty resumes. No containers. No sandbox services. No <code>exec()</code>. Just a 2.9MB WASM binary embedded in your Go binary.</p>
+<p dir="auto">For motivation, see:</p>
+<ul dir="auto">
+<li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/programmatic-tool-calling" rel="nofollow">Programmatic Tool Calling</a> from Anthropic</li>
+<li><a href="https://www.anthropic.com/engineering/code-execution-with-mcp" rel="nofollow">Code Execution with MCP</a> from Anthropic</li>
+<li><a href="https://blog.cloudflare.com/code-mode/" rel="nofollow">Code Mode</a> from Cloudflare</li>
+<li><a href="https://github.com/huggingface/smolagents">Smol Agents</a> from Hugging Face</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Quick Start</h2></div>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    montygo "github.com/fugue-labs/monty-go"
+)
+
+func main() {
+    runner, err := montygo.New()
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer runner.Close()
+
+    result, err := runner.Execute(context.Background(),
+        "x * 2 + y",
+        map[string]any{"x": 10, "y": 5},
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(result) // 25
+}' dir="auto"><pre><span class="pl-k">package</span> main
+
+<span class="pl-k">import</span> (
+    <span class="pl-s">"context"</span>
+    <span class="pl-s">"fmt"</span>
+    <span class="pl-s">"log"</span>
+
+    montygo <span class="pl-s">"github.com/fugue-labs/monty-go"</span>
+)
+
+<span class="pl-k">func</span> <span class="pl-s1">main</span>() {
+    <span class="pl-s1">runner</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">montygo</span>.<span class="pl-c1">New</span>()
+    <span class="pl-k">if</span> <span class="pl-s1">err</span> <span class="pl-c1">!=</span> <span class="pl-c1">nil</span> {
+        <span class="pl-s1">log</span>.<span class="pl-c1">Fatal</span>(<span class="pl-s1">err</span>)
+    }
+    <span class="pl-k">defer</span> <span class="pl-s1">runner</span>.<span class="pl-c1">Close</span>()
+
+    <span class="pl-s1">result</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">runner</span>.<span class="pl-c1">Execute</span>(<span class="pl-s1">context</span>.<span class="pl-c1">Background</span>(),
+        <span class="pl-s">"x * 2 + y"</span>,
+        <span class="pl-k">map</span>[<span class="pl-smi">string</span>]<span class="pl-smi">any</span>{<span class="pl-s">"x"</span>: <span class="pl-c1">10</span>, <span class="pl-s">"y"</span>: <span class="pl-c1">5</span>},
+    )
+    <span class="pl-k">if</span> <span class="pl-s1">err</span> <span class="pl-c1">!=</span> <span class="pl-c1">nil</span> {
+        <span class="pl-s1">log</span>.<span class="pl-c1">Fatal</span>(<span class="pl-s1">err</span>)
+    }
+    <span class="pl-s1">fmt</span>.<span class="pl-c1">Println</span>(<span class="pl-s1">result</span>) <span class="pl-c">// 25</span>
+}</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">External Functions (Pause/Resume)</h2></div>
+<p dir="auto">The real power is external function calls. Monty pauses execution whenever Python code calls a function you've declared, your Go callback handles it, and Monty resumes with the return value:</p>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="result, err := runner.Execute(ctx,
+    `
+london = get_weather(&quot;London&quot;)
+tokyo = get_weather(&quot;Tokyo&quot;)
+f&quot;{london['city']}: {london['temp']}°C, {tokyo['city']}: {tokyo['temp']}°C&quot;
+    `,
+    nil,
+    montygo.WithExternalFunc(func(ctx context.Context, call *montygo.FunctionCall) (any, error) {
+        city, _ := call.Args[&quot;city&quot;].(string)
+        // Your real implementation here — HTTP call, database query, anything.
+        return map[string]any{&quot;city&quot;: city, &quot;temp&quot;: 22}, nil
+    }, montygo.Func(&quot;get_weather&quot;, &quot;city&quot;)),
+)
+// result: &quot;London: 22°C, Tokyo: 22°C&quot;" dir="auto"><pre><span class="pl-s1">result</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">runner</span>.<span class="pl-c1">Execute</span>(<span class="pl-s1">ctx</span>,
+    <span class="pl-s">`</span>
+<span class="pl-s">london = get_weather("London")</span>
+<span class="pl-s">tokyo = get_weather("Tokyo")</span>
+<span class="pl-s">f"{london['city']}: {london['temp']}°C, {tokyo['city']}: {tokyo['temp']}°C"</span>
+<span class="pl-s">    `</span>,
+    <span class="pl-c1">nil</span>,
+    <span class="pl-s1">montygo</span>.<span class="pl-c1">WithExternalFunc</span>(<span class="pl-k">func</span>(<span class="pl-s1">ctx</span> context.<span class="pl-smi">Context</span>, <span class="pl-s1">call</span> <span class="pl-c1">*</span>montygo.<span class="pl-smi">FunctionCall</span>) (<span class="pl-smi">any</span>, <span class="pl-smi">error</span>) {
+        <span class="pl-s1">city</span>, <span class="pl-s1">_</span> <span class="pl-c1">:=</span> <span class="pl-s1">call</span>.<span class="pl-c1">Args</span>[<span class="pl-s">"city"</span>].(<span class="pl-smi">string</span>)
+        <span class="pl-c">// Your real implementation here — HTTP call, database query, anything.</span>
+        <span class="pl-k">return</span> <span class="pl-k">map</span>[<span class="pl-smi">string</span>]<span class="pl-smi">any</span>{<span class="pl-s">"city"</span>: <span class="pl-s1">city</span>, <span class="pl-s">"temp"</span>: <span class="pl-c1">22</span>}, <span class="pl-c1">nil</span>
+    }, <span class="pl-s1">montygo</span>.<span class="pl-c1">Func</span>(<span class="pl-s">"get_weather"</span>, <span class="pl-s">"city"</span>)),
+)
+<span class="pl-c">// result: "London: 22°C, Tokyo: 22°C"</span></pre></div>
+<p dir="auto">Multiple functions work the same way — register them all and dispatch by name:</p>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='result, err := runner.Execute(ctx, code, nil,
+    montygo.WithExternalFunc(func(ctx context.Context, call *montygo.FunctionCall) (any, error) {
+        switch call.Name {
+        case "search":
+            return doSearch(call.Args)
+        case "calculate":
+            return doCalculate(call.Args)
+        case "store":
+            return doStore(call.Args)
+        default:
+            return nil, fmt.Errorf("unknown function: %s", call.Name)
+        }
+    },
+        montygo.Func("search", "query"),
+        montygo.Func("calculate", "expression"),
+        montygo.Func("store", "key", "value"),
+    ),
+)' dir="auto"><pre><span class="pl-s1">result</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">runner</span>.<span class="pl-c1">Execute</span>(<span class="pl-s1">ctx</span>, <span class="pl-s1">code</span>, <span class="pl-c1">nil</span>,
+    <span class="pl-s1">montygo</span>.<span class="pl-c1">WithExternalFunc</span>(<span class="pl-k">func</span>(<span class="pl-s1">ctx</span> context.<span class="pl-smi">Context</span>, <span class="pl-s1">call</span> <span class="pl-c1">*</span>montygo.<span class="pl-smi">FunctionCall</span>) (<span class="pl-smi">any</span>, <span class="pl-smi">error</span>) {
+        <span class="pl-k">switch</span> <span class="pl-s1">call</span>.<span class="pl-c1">Name</span> {
+        <span class="pl-k">case</span> <span class="pl-s">"search"</span>:
+            <span class="pl-k">return</span> <span class="pl-s1">doSearch</span>(<span class="pl-s1">call</span>.<span class="pl-c1">Args</span>)
+        <span class="pl-k">case</span> <span class="pl-s">"calculate"</span>:
+            <span class="pl-k">return</span> <span class="pl-s1">doCalculate</span>(<span class="pl-s1">call</span>.<span class="pl-c1">Args</span>)
+        <span class="pl-k">case</span> <span class="pl-s">"store"</span>:
+            <span class="pl-k">return</span> <span class="pl-s1">doStore</span>(<span class="pl-s1">call</span>.<span class="pl-c1">Args</span>)
+        <span class="pl-k">default</span>:
+            <span class="pl-k">return</span> <span class="pl-c1">nil</span>, <span class="pl-s1">fmt</span>.<span class="pl-c1">Errorf</span>(<span class="pl-s">"unknown function: %s"</span>, <span class="pl-s1">call</span>.<span class="pl-c1">Name</span>)
+        }
+    },
+        <span class="pl-s1">montygo</span>.<span class="pl-c1">Func</span>(<span class="pl-s">"search"</span>, <span class="pl-s">"query"</span>),
+        <span class="pl-s1">montygo</span>.<span class="pl-c1">Func</span>(<span class="pl-s">"calculate"</span>, <span class="pl-s">"expression"</span>),
+        <span class="pl-s1">montygo</span>.<span class="pl-c1">Func</span>(<span class="pl-s">"store"</span>, <span class="pl-s">"key"</span>, <span class="pl-s">"value"</span>),
+    ),
+)</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Resource Limits</h2></div>
+<p dir="auto">Prevent runaway code with memory, time, allocation, and recursion limits:</p>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="result, err := runner.Execute(ctx, code, inputs,
+    montygo.WithLimits(montygo.Limits{
+        MaxDuration:       5 * time.Second,
+        MaxMemoryBytes:    10 * 1024 * 1024, // 10 MB
+        MaxAllocations:    100000,
+        MaxRecursionDepth: 100,
+    }),
+)" dir="auto"><pre><span class="pl-s1">result</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">runner</span>.<span class="pl-c1">Execute</span>(<span class="pl-s1">ctx</span>, <span class="pl-s1">code</span>, <span class="pl-s1">inputs</span>,
+    <span class="pl-s1">montygo</span>.<span class="pl-c1">WithLimits</span>(montygo.<span class="pl-smi">Limits</span>{
+        <span class="pl-s1">MaxDuration</span>:       <span class="pl-c1">5</span> <span class="pl-c1">*</span> <span class="pl-s1">time</span>.<span class="pl-c1">Second</span>,
+        <span class="pl-s1">MaxMemoryBytes</span>:    <span class="pl-c1">10</span> <span class="pl-c1">*</span> <span class="pl-c1">1024</span> <span class="pl-c1">*</span> <span class="pl-c1">1024</span>, <span class="pl-c">// 10 MB</span>
+        <span class="pl-s1">MaxAllocations</span>:    <span class="pl-c1">100000</span>,
+        <span class="pl-s1">MaxRecursionDepth</span>: <span class="pl-c1">100</span>,
+    }),
+)</pre></div>
+<p dir="auto">Infinite loops, memory bombs, and deep recursion all terminate cleanly with a <code>*MontyError</code>. Go's <code>context.Context</code> deadlines are also respected — cancel the context and the WASM instance stops.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Print Capture</h2></div>
+<p dir="auto">Capture Python <code>print()</code> output:</p>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='var output strings.Builder
+_, err := runner.Execute(ctx, `print("step 1 done")`, nil,
+    montygo.WithPrintFunc(func(s string) { output.WriteString(s) }),
+)
+fmt.Print(output.String()) // "step 1 done\n"' dir="auto"><pre><span class="pl-k">var</span> <span class="pl-s1">output</span> strings.<span class="pl-smi">Builder</span>
+<span class="pl-s1">_</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">runner</span>.<span class="pl-c1">Execute</span>(<span class="pl-s1">ctx</span>, <span class="pl-s">`print("step 1 done")`</span>, <span class="pl-c1">nil</span>,
+    <span class="pl-s1">montygo</span>.<span class="pl-c1">WithPrintFunc</span>(<span class="pl-k">func</span>(<span class="pl-s1">s</span> <span class="pl-smi">string</span>) { <span class="pl-s1">output</span>.<span class="pl-c1">WriteString</span>(<span class="pl-s1">s</span>) }),
+)
+<span class="pl-s1">fmt</span>.<span class="pl-c1">Print</span>(<span class="pl-s1">output</span>.<span class="pl-c1">String</span>()) <span class="pl-c">// "step 1 done\n"</span></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">OS Calls</h2></div>
+<p dir="auto">Python filesystem and environment access routes through your Go callback:</p>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='result, err := runner.Execute(ctx,
+    `
+from pathlib import Path
+data = Path("/config/settings.json").read_text()
+data
+    `,
+    nil,
+    montygo.WithOsCallFunc(func(ctx context.Context, call *montygo.OsCall) (any, error) {
+        switch call.Function {
+        case "Path.read_text":
+            path, _ := call.Args[0].(string)
+            return readFromYourStorage(path)
+        case "Path.exists":
+            path, _ := call.Args[0].(string)
+            return existsInYourStorage(path), nil
+        default:
+            return nil, fmt.Errorf("blocked: %s", call.Function)
+        }
+    }),
+)' dir="auto"><pre><span class="pl-s1">result</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">runner</span>.<span class="pl-c1">Execute</span>(<span class="pl-s1">ctx</span>,
+    <span class="pl-s">`</span>
+<span class="pl-s">from pathlib import Path</span>
+<span class="pl-s">data = Path("/config/settings.json").read_text()</span>
+<span class="pl-s">data</span>
+<span class="pl-s">    `</span>,
+    <span class="pl-c1">nil</span>,
+    <span class="pl-s1">montygo</span>.<span class="pl-c1">WithOsCallFunc</span>(<span class="pl-k">func</span>(<span class="pl-s1">ctx</span> context.<span class="pl-smi">Context</span>, <span class="pl-s1">call</span> <span class="pl-c1">*</span>montygo.<span class="pl-smi">OsCall</span>) (<span class="pl-smi">any</span>, <span class="pl-smi">error</span>) {
+        <span class="pl-k">switch</span> <span class="pl-s1">call</span>.<span class="pl-c1">Function</span> {
+        <span class="pl-k">case</span> <span class="pl-s">"Path.read_text"</span>:
+            <span class="pl-s1">path</span>, <span class="pl-s1">_</span> <span class="pl-c1">:=</span> <span class="pl-s1">call</span>.<span class="pl-c1">Args</span>[<span class="pl-c1">0</span>].(<span class="pl-smi">string</span>)
+            <span class="pl-k">return</span> <span class="pl-s1">readFromYourStorage</span>(<span class="pl-s1">path</span>)
+        <span class="pl-k">case</span> <span class="pl-s">"Path.exists"</span>:
+            <span class="pl-s1">path</span>, <span class="pl-s1">_</span> <span class="pl-c1">:=</span> <span class="pl-s1">call</span>.<span class="pl-c1">Args</span>[<span class="pl-c1">0</span>].(<span class="pl-smi">string</span>)
+            <span class="pl-k">return</span> <span class="pl-s1">existsInYourStorage</span>(<span class="pl-s1">path</span>), <span class="pl-c1">nil</span>
+        <span class="pl-k">default</span>:
+            <span class="pl-k">return</span> <span class="pl-c1">nil</span>, <span class="pl-s1">fmt</span>.<span class="pl-c1">Errorf</span>(<span class="pl-s">"blocked: %s"</span>, <span class="pl-s1">call</span>.<span class="pl-c1">Function</span>)
+        }
+    }),
+)</pre></div>
+<p dir="auto">No filesystem access happens unless your callback allows it.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Gollem Integration</h2></div>
+<p dir="auto">monty-go is designed to power <strong>code-mode</strong> in <a href="https://github.com/fugue-labs/gollem">Gollem</a>, the production agent framework for Go. Instead of sequential tool calls, the LLM writes Python that calls your tools as functions — Monty executes it safely, and Gollem orchestrates the whole thing.</p>
+<p dir="auto">Here's what this looks like with Gollem:</p>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='import (
+    "github.com/fugue-labs/gollem"
+    "github.com/fugue-labs/gollem/provider/anthropic"
+    montygo "github.com/fugue-labs/monty-go"
+)
+
+// Your existing Gollem tools — search, calculate, store, whatever.
+searchTool := gollem.FuncTool[SearchParams]("search", "Search the knowledge base", doSearch)
+calcTool := gollem.FuncTool[CalcParams]("calculate", "Run calculations", doCalc)
+
+// Create a code-mode tool that wraps your toolset with Monty.
+// The LLM writes Python code, Monty executes it, external function calls
+// route to your Go tools.
+codeMode := NewCodeModeTool(runner, searchTool, calcTool)
+
+agent := gollem.NewAgent[Analysis](anthropic.New(),
+    gollem.WithTools[Analysis](codeMode),
+    gollem.WithSystemPrompt[Analysis](`You have a code execution tool.
+Write Python code to call the available functions. Available functions:
+- search(query: str) -&gt; dict: Search the knowledge base
+- calculate(expression: str) -&gt; float: Evaluate math expressions
+Write code that calls these functions and returns the result.`),
+)
+
+result, _ := agent.Run(ctx, "Compare Q3 and Q4 revenue and calculate the growth rate")' dir="auto"><pre><span class="pl-k">import</span> (
+    <span class="pl-s">"github.com/fugue-labs/gollem"</span>
+    <span class="pl-s">"github.com/fugue-labs/gollem/provider/anthropic"</span>
+    montygo <span class="pl-s">"github.com/fugue-labs/monty-go"</span>
+)
+
+<span class="pl-c">// Your existing Gollem tools — search, calculate, store, whatever.</span>
+<span class="pl-s1">searchTool</span> <span class="pl-c1">:=</span> <span class="pl-s1">gollem</span>.<span class="pl-c1">FuncTool</span>[<span class="pl-smi">SearchParams</span>](<span class="pl-s">"search"</span>, <span class="pl-s">"Search the knowledge base"</span>, <span class="pl-s1">doSearch</span>)
+<span class="pl-s1">calcTool</span> <span class="pl-c1">:=</span> <span class="pl-s1">gollem</span>.<span class="pl-c1">FuncTool</span>[<span class="pl-smi">CalcParams</span>](<span class="pl-s">"calculate"</span>, <span class="pl-s">"Run calculations"</span>, <span class="pl-s1">doCalc</span>)
+
+<span class="pl-c">// Create a code-mode tool that wraps your toolset with Monty.</span>
+<span class="pl-c">// The LLM writes Python code, Monty executes it, external function calls</span>
+<span class="pl-c">// route to your Go tools.</span>
+<span class="pl-s1">codeMode</span> <span class="pl-c1">:=</span> <span class="pl-s1">NewCodeModeTool</span>(<span class="pl-s1">runner</span>, <span class="pl-s1">searchTool</span>, <span class="pl-s1">calcTool</span>)
+
+<span class="pl-s1">agent</span> <span class="pl-c1">:=</span> <span class="pl-s1">gollem</span>.<span class="pl-c1">NewAgent</span>[<span class="pl-smi">Analysis</span>](<span class="pl-s1">anthropic</span>.<span class="pl-c1">New</span>(),
+    gollem.<span class="pl-smi">WithTools</span>[<span class="pl-smi">Analysis</span>](<span class="pl-s1">codeMode</span>),
+    gollem.<span class="pl-smi">WithSystemPrompt</span>[<span class="pl-smi">Analysis</span>](<span class="pl-s">`You have a code execution tool.</span>
+<span class="pl-s">Write Python code to call the available functions. Available functions:</span>
+<span class="pl-s">- search(query: str) -&gt; dict: Search the knowledge base</span>
+<span class="pl-s">- calculate(expression: str) -&gt; float: Evaluate math expressions</span>
+<span class="pl-s">Write code that calls these functions and returns the result.`</span>),
+)
+
+<span class="pl-s1">result</span>, <span class="pl-s1">_</span> <span class="pl-c1">:=</span> <span class="pl-s1">agent</span>.<span class="pl-c1">Run</span>(<span class="pl-s1">ctx</span>, <span class="pl-s">"Compare Q3 and Q4 revenue and calculate the growth rate"</span>)</pre></div>
+<p dir="auto">With one model call, the LLM writes:</p>
+<div class="highlight highlight-source-python notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="q3 = search(query=&quot;Q3 revenue&quot;)
+q4 = search(query=&quot;Q4 revenue&quot;)
+growth = calculate(expression=f&quot;({q4['revenue']} - {q3['revenue']}) / {q3['revenue']} * 100&quot;)
+{&quot;q3&quot;: q3, &quot;q4&quot;: q4, &quot;growth_rate&quot;: growth}" dir="auto"><pre><span class="pl-s1">q3</span> <span class="pl-c1">=</span> <span class="pl-en">search</span>(<span class="pl-s1">query</span><span class="pl-c1">=</span><span class="pl-s">"Q3 revenue"</span>)
+<span class="pl-s1">q4</span> <span class="pl-c1">=</span> <span class="pl-en">search</span>(<span class="pl-s1">query</span><span class="pl-c1">=</span><span class="pl-s">"Q4 revenue"</span>)
+<span class="pl-s1">growth</span> <span class="pl-c1">=</span> <span class="pl-en">calculate</span>(<span class="pl-s1">expression</span><span class="pl-c1">=</span><span class="pl-s">f"(<span class="pl-s1"><span class="pl-kos">{</span><span class="pl-s1">q4</span>[<span class="pl-s">'revenue'</span>]<span class="pl-kos">}</span></span> - <span class="pl-s1"><span class="pl-kos">{</span><span class="pl-s1">q3</span>[<span class="pl-s">'revenue'</span>]<span class="pl-kos">}</span></span>) / <span class="pl-s1"><span class="pl-kos">{</span><span class="pl-s1">q3</span>[<span class="pl-s">'revenue'</span>]<span class="pl-kos">}</span></span> * 100"</span>)
+{<span class="pl-s">"q3"</span>: <span class="pl-s1">q3</span>, <span class="pl-s">"q4"</span>: <span class="pl-s1">q4</span>, <span class="pl-s">"growth_rate"</span>: <span class="pl-s1">growth</span>}</pre></div>
+<p dir="auto">Monty pauses three times (two searches, one calculation), your Go functions handle each one, and the final result flows back through Gollem's typed output pipeline. Three tool calls in one LLM round-trip.</p>
+<p dir="auto">Why Gollem + monty-go:</p>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+
+<th>Traditional tool calling</th>
+<th>Code-mode with monty-go</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>LLM calls</strong></td>
+<td>One per tool use</td>
+<td>One for all tools</td>
+</tr>
+<tr>
+<td><strong>Latency</strong></td>
+<td>N × model round-trip</td>
+<td>1 × model round-trip + μs execution</td>
+</tr>
+<tr>
+<td><strong>Cost</strong></td>
+<td>N × input/output tokens</td>
+<td>1 × input/output tokens</td>
+</tr>
+<tr>
+<td><strong>Logic</strong></td>
+<td>LLM reasons step by step</td>
+<td>LLM writes the logic once</td>
+</tr>
+<tr>
+<td><strong>Control flow</strong></td>
+<td>None (sequential only)</td>
+<td>Loops, conditionals, variables</td>
+</tr>
+<tr>
+<td><strong>Error handling</strong></td>
+<td>LLM must react to each failure</td>
+<td>try/except in Python</td>
+</tr>
+<tr>
+<td><strong>Security</strong></td>
+<td>✅ (tools are Go functions)</td>
+<td>✅ (WASM sandbox + your callbacks)</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<p dir="auto">Gollem gives you compile-time type safety, structured output, guardrails, cost tracking, middleware, and multi-provider support. monty-go gives you secure embedded Python execution. Together, your agents do more work per model call.</p>
+<p dir="auto"><strong><a href="https://github.com/fugue-labs/gollem">github.com/fugue-labs/gollem</a></strong> — The production agent framework for Go.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">How It Works</h2></div>
+<div class="snippet-clipboard-content notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="┌─────────────────────────────────────────────────────────┐
+│  Your Go Application                                    │
+│                                                         │
+│  runner, _ := montygo.New()                             │
+│  result, _ := runner.Execute(ctx, code, inputs, opts)   │
+│       │                                                 │
+│       ▼                                                 │
+│  ┌──────────────────────────────────┐                   │
+│  │  wazero (pure Go WASM runtime)  │                    │
+│  │                                 │                    │
+│  │  ┌───────────────────────────┐  │                    │
+│  │  │  monty.wasm (2.9 MB)      │  │  ◄── go:embed      │
+│  │  │  Monty Python Interpreter │  │                    │
+│  │  │  compiled to wasm32-wasi  │  │                    │
+│  │  └──────────┬────────────────┘  │                    │
+│  │             │                   │                    │
+│  │     pause on external call      │                    │
+│  │             │                   │                    │
+│  └─────────────┼───────────────────┘                    │
+│                │                                        │
+│                ▼                                        │
+│  ExternalFunc callback ──► your Go code ──► resume      │
+│  OsCallFunc callback   ──► your Go code ──► resume      │
+│  PrintFunc callback    ──► your Go code                 │
+└─────────────────────────────────────────────────────────┘"><pre class="notranslate"><code>┌─────────────────────────────────────────────────────────┐
+│  Your Go Application                                    │
+│                                                         │
+│  runner, _ := montygo.New()                             │
+│  result, _ := runner.Execute(ctx, code, inputs, opts)   │
+│       │                                                 │
+│       ▼                                                 │
+│  ┌──────────────────────────────────┐                   │
+│  │  wazero (pure Go WASM runtime)  │                    │
+│  │                                 │                    │
+│  │  ┌───────────────────────────┐  │                    │
+│  │  │  monty.wasm (2.9 MB)      │  │  ◄── go:embed      │
+│  │  │  Monty Python Interpreter │  │                    │
+│  │  │  compiled to wasm32-wasi  │  │                    │
+│  │  └──────────┬────────────────┘  │                    │
+│  │             │                   │                    │
+│  │     pause on external call      │                    │
+│  │             │                   │                    │
+│  └─────────────┼───────────────────┘                    │
+│                │                                        │
+│                ▼                                        │
+│  ExternalFunc callback ──► your Go code ──► resume      │
+│  OsCallFunc callback   ──► your Go code ──► resume      │
+│  PrintFunc callback    ──► your Go code                 │
+└─────────────────────────────────────────────────────────┘
+</code></pre></div>
+<ul dir="auto">
+<li><strong>No CGO.</strong> wazero is a pure-Go WebAssembly runtime.</li>
+<li><strong>No subprocess.</strong> The WASM binary is embedded via <code>go:embed</code> and compiled once at startup.</li>
+<li><strong>Fresh instance per call.</strong> Each <code>Execute()</code> gets an isolated WASM instance. No state leaks between calls.</li>
+<li><strong>JSON at the boundary.</strong> All data crossing the Go↔WASM boundary is JSON. Go types map naturally: <code>int</code>→<code>float64</code>, <code>string</code>→<code>string</code>, <code>bool</code>→<code>bool</code>, <code>nil</code>→<code>None</code>, <code>[]any</code>→<code>list</code>, <code>map[string]any</code>→<code>dict</code>.</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">API</h2></div>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='// Create a reusable runner. Compiles the WASM module once.
+runner, err := montygo.New()
+defer runner.Close()
+
+// Execute Python code with inputs and options.
+result, err := runner.Execute(ctx, code, inputs, opts...)
+
+// Options:
+montygo.WithExternalFunc(fn,                     // register callable functions
+    montygo.Func("search", "query", "limit"),    // with named parameters
+    montygo.Func("calculate", "expression"),
+)
+montygo.WithOsCallFunc(fn)                       // handle filesystem/env access
+montygo.WithLimits(montygo.Limits{...})          // resource limits
+montygo.WithPrintFunc(fn)                        // capture print output
+
+// FunctionCall provides named args (positional mapped by param name):
+call.Args["query"].(string)    // access by parameter name
+call.ArgsJSON()                // pre-serialized JSON string' dir="auto"><pre><span class="pl-c">// Create a reusable runner. Compiles the WASM module once.</span>
+<span class="pl-s1">runner</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">montygo</span>.<span class="pl-c1">New</span>()
+<span class="pl-k">defer</span> <span class="pl-s1">runner</span>.<span class="pl-c1">Close</span>()
+
+<span class="pl-c">// Execute Python code with inputs and options.</span>
+<span class="pl-s1">result</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">runner</span>.<span class="pl-c1">Execute</span>(<span class="pl-s1">ctx</span>, <span class="pl-s1">code</span>, <span class="pl-s1">inputs</span>, <span class="pl-s1">opts</span><span class="pl-c1">...</span>)
+
+<span class="pl-c">// Options:</span>
+<span class="pl-s1">montygo</span>.<span class="pl-c1">WithExternalFunc</span>(<span class="pl-s1">fn</span>,                     <span class="pl-c">// register callable functions</span>
+    <span class="pl-s1">montygo</span>.<span class="pl-c1">Func</span>(<span class="pl-s">"search"</span>, <span class="pl-s">"query"</span>, <span class="pl-s">"limit"</span>),    <span class="pl-c">// with named parameters</span>
+    <span class="pl-s1">montygo</span>.<span class="pl-c1">Func</span>(<span class="pl-s">"calculate"</span>, <span class="pl-s">"expression"</span>),
+)
+<span class="pl-s1">montygo</span>.<span class="pl-c1">WithOsCallFunc</span>(<span class="pl-s1">fn</span>)                       <span class="pl-c">// handle filesystem/env access</span>
+<span class="pl-s1">montygo</span>.<span class="pl-c1">WithLimits</span>(montygo.<span class="pl-smi">Limits</span>{<span class="pl-c1">...</span>})          <span class="pl-c">// resource limits</span>
+<span class="pl-s1">montygo</span>.<span class="pl-c1">WithPrintFunc</span>(<span class="pl-s1">fn</span>)                        <span class="pl-c">// capture print output</span>
+
+<span class="pl-c">// FunctionCall provides named args (positional mapped by param name):</span>
+<span class="pl-s1">call</span>.<span class="pl-c1">Args</span>[<span class="pl-s">"query"</span>].(<span class="pl-smi">string</span>)    <span class="pl-c">// access by parameter name</span>
+<span class="pl-s1">call</span>.<span class="pl-c1">ArgsJSON</span>()                <span class="pl-c">// pre-serialized JSON string</span></pre></div>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Types</h3></div>
+<markdown-accessiblity-table><table>
+<thead>
+<tr>
+<th>Python</th>
+<th>Go (result)</th>
+<th>Go (input)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>int</code></td>
+<td><code>float64</code></td>
+<td><code>int</code>, <code>float64</code></td>
+</tr>
+<tr>
+<td><code>float</code></td>
+<td><code>float64</code></td>
+<td><code>float64</code></td>
+</tr>
+<tr>
+<td><code>str</code></td>
+<td><code>string</code></td>
+<td><code>string</code></td>
+</tr>
+<tr>
+<td><code>bool</code></td>
+<td><code>bool</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>None</code></td>
+<td><code>nil</code></td>
+<td><code>nil</code></td>
+</tr>
+<tr>
+<td><code>list</code>, <code>tuple</code></td>
+<td><code>[]any</code></td>
+<td><code>[]any</code></td>
+</tr>
+<tr>
+<td><code>dict</code></td>
+<td><code>map[string]any</code></td>
+<td><code>map[string]any</code></td>
+</tr>
+<tr>
+<td><code>set</code></td>
+<td><code>[]any</code></td>
+<td>—</td>
+</tr>
+</tbody>
+</table></markdown-accessiblity-table>
+<div class="markdown-heading" dir="auto"><h3 class="heading-element" dir="auto" tabindex="-1">Errors</h3></div>
+<p dir="auto">Python exceptions become <code>*montygo.MontyError</code>:</p>
+<div class="highlight highlight-source-go notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content='result, err := runner.Execute(ctx, "1 / 0", nil)
+var me *montygo.MontyError
+if errors.As(err, &amp;me) {
+    fmt.Println(me.Message) // "Traceback... ZeroDivisionError: division by zero"
+}' dir="auto"><pre><span class="pl-s1">result</span>, <span class="pl-s1">err</span> <span class="pl-c1">:=</span> <span class="pl-s1">runner</span>.<span class="pl-c1">Execute</span>(<span class="pl-s1">ctx</span>, <span class="pl-s">"1 / 0"</span>, <span class="pl-c1">nil</span>)
+<span class="pl-k">var</span> <span class="pl-s1">me</span> <span class="pl-c1">*</span>montygo.<span class="pl-smi">MontyError</span>
+<span class="pl-k">if</span> <span class="pl-s1">errors</span>.<span class="pl-c1">As</span>(<span class="pl-s1">err</span>, <span class="pl-c1">&amp;</span><span class="pl-s1">me</span>) {
+    <span class="pl-s1">fmt</span>.<span class="pl-c1">Println</span>(<span class="pl-s1">me</span>.<span class="pl-c1">Message</span>) <span class="pl-c">// "Traceback... ZeroDivisionError: division by zero"</span>
+}</pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">What Monty Can Do</h2></div>
+<p dir="auto">Tracks upstream <a href="https://github.com/pydantic/monty/releases/tag/v0.0.11">Monty v0.0.11</a>.</p>
+<ul dir="auto">
+<li>Arithmetic, string operations, f-strings, slicing</li>
+<li>Functions, lambdas, closures, generators</li>
+<li><code>for</code>/<code>while</code> loops, <code>if</code>/<code>elif</code>/<code>else</code>, <code>break</code>/<code>continue</code></li>
+<li><code>try</code>/<code>except</code>/<code>finally</code>/<code>else</code>, <code>raise</code>, exception hierarchy</li>
+<li>List/dict/set comprehensions, dict/set view operators</li>
+<li><code>range</code>, <code>len</code>, <code>sum</code>, <code>min</code>, <code>max</code>, <code>sorted</code>, <code>reversed</code>, <code>enumerate</code>, <code>zip</code>, <code>map</code>, <code>filter</code>, <code>all</code>, <code>any</code>, <code>getattr</code></li>
+<li><code>isinstance</code>, <code>type</code>, <code>int()</code>, <code>float()</code>, <code>str()</code>, <code>bool()</code>, <code>abs()</code></li>
+<li><code>print()</code> with <code>sep</code> and <code>end</code> kwargs</li>
+<li>PEP 448 generalized unpacking (<code>*args</code>, <code>**kwargs</code> in calls, literals, etc.)</li>
+<li>Nested and augmented subscript assignment (<code>a[i][j] = v</code>, <code>a[i] += 1</code>)</li>
+<li>Tuple comparison (<code>&lt;</code>, <code>&gt;</code>, <code>&lt;=</code>, <code>&gt;=</code>)</li>
+<li>Multi-module imports (<code>import a, b, c</code>)</li>
+<li>Stdlib modules: <code>math</code> (all functions), <code>re</code>, <code>datetime</code>, <code>json</code>, and <code>sys</code>/<code>typing</code>/<code>asyncio</code> subsets</li>
+<li><code>import os</code>, <code>from pathlib import Path</code> (routed through OsCallFunc)</li>
+<li>Dataclass <em>instances</em> flow through external function calls (args, returns, and method calls surface with <code>method_call=true</code>)</li>
+<li>Resource limits: time, memory, allocations, recursion depth</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">What Monty Cannot Do</h2></div>
+<ul dir="auto">
+<li>Class definitions (only dataclass instances via external I/O; upstream Monty flags class <code>def</code> as "coming soon")</li>
+<li><code>match</code> statements (coming soon upstream)</li>
+<li>Context managers (<code>with ...</code>)</li>
+<li>Rest of stdlib and all third-party libraries</li>
+<li><code>float('inf')</code> / <code>float('nan')</code> (JSON serialization limitation in this bridge)</li>
+</ul>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Tests</h2></div>
+<p dir="auto">97 end-to-end tests covering every testable scenario from Monty's core test suite:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="make test" dir="auto"><pre>make <span class="pl-c1">test</span></pre></div>
+<p dir="auto">Covers: basic expressions, print variants, all exception types, data type round-tripping, external functions (args, kwargs, mixed, complex types, chaining, loops), input handling and scoping, resource limits (timeout, recursion, memory, allocations), OS calls, builtins, control flow, lambdas/closures, and execution isolation.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Building from Source</h2></div>
+<p dir="auto">Requires Rust with <code>wasm32-wasip1</code> target and Go 1.23+:</p>
+<div class="highlight highlight-source-shell notranslate position-relative overflow-auto" data-snippet-clipboard-copy-content="rustup target add wasm32-wasip1
+make build  # compiles Rust → WASM, copies to monty.wasm
+make test   # builds and runs Go tests" dir="auto"><pre>rustup target add wasm32-wasip1
+make build  <span class="pl-c"><span class="pl-c">#</span> compiles Rust → WASM, copies to monty.wasm</span>
+make <span class="pl-c1">test</span>   <span class="pl-c"><span class="pl-c">#</span> builds and runs Go tests</span></pre></div>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">Acknowledgments</h2></div>
+<p dir="auto">monty-go exists because of <a href="https://github.com/pydantic/monty">Monty</a>, created by <a href="https://github.com/samuelcolvin">Samuel Colvin</a> and the <a href="https://github.com/pydantic">Pydantic</a> team. Monty is a genuinely novel piece of engineering — a minimal, secure Python interpreter written from scratch in Rust, purpose-built for AI agents. The insight that LLMs should write code instead of making sequential tool calls, and that you need a safe interpreter (not a container) to execute it, is what makes code-mode possible.</p>
+<p dir="auto">Samuel and the Pydantic team have a track record of building foundational tools that the whole ecosystem builds on — <a href="https://github.com/pydantic/pydantic">Pydantic</a>, <a href="https://github.com/pydantic/pydantic-ai">Pydantic AI</a>, <a href="https://github.com/pydantic/logfire">Logfire</a>, and now Monty. This project is a Go bridge to their work, and we're grateful they built it.</p>
+<div class="markdown-heading" dir="auto"><h2 class="heading-element" dir="auto" tabindex="-1">License</h2></div>
+<p dir="auto">MIT</p>
+</article>

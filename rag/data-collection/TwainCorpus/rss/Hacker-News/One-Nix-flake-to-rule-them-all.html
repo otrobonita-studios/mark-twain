@@ -1,0 +1,165 @@
+<article class="column">
+
+<div class="post-body prose"><p>Flakes are undoubtedly here to stay, and I’ve made <a href="/2026/07/18/how-to-piss-off-your-nix-friends#flakes-are-meh">my opinion</a> on them well-known:
+they are “meh”.</p>
+<p>Despite their ever-presence, adding a flake input continues to be 
+a small annoyance that never goes away. It’s touted as a positive feature that flakes are
+federated but the reality is that I want the simplicity of a centralized flake. That was the beauty <em>and power</em> of <a href="https://github.com/NixOS/nixpkgs/">nixpkgs</a>.</p>
+<p><picture></picture></p>
+<p>The process is: you want <a href="https://github.com/nix-community/disko">disko</a>, so you add a <code class="language-plaintext highlighter-rouge">url</code>, then a <code class="language-plaintext highlighter-rouge">follows</code> so it stops dragging in its own nixpkgs, and then you do it again for
+the next one. This has become a meme in the Nix community about how every flake drags in its own <a href="https://nixcademy.com/posts/1000-instances-of-flake-utils/">flake-utils</a>.</p>
+<p>I refuse to accept this user experience.</p>
+<p>So I wondered: could <strong>one</strong> flake carry every other flake, and you just reach in
+for whatever you need?  🤯</p>
+<h2 id="omniflake"><a aria-label="Permalink to this section" class="hanchor" href="#omniflake">§</a>Omniflake</h2>
+<p><a href="https://github.com/fzakaria/omniflake">omniflake</a> is <strong>thousands of Nix flakes</strong> behind one flake input.</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="nv">inputs</span><span class="o">.</span><span class="nv">omniflake</span><span class="o">.</span><span class="nv">url</span> <span class="o">=</span> <span class="s2">"github:fzakaria/omniflake"</span><span class="p">;</span>
+<span class="nv">inputs</span><span class="o">.</span><span class="nv">omniflake</span><span class="o">.</span><span class="nv">inputs</span><span class="o">.</span><span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">follows</span> <span class="o">=</span> <span class="s2">"nixpkgs"</span><span class="p">;</span>
+</code></pre></div></div>
+<p>Once you have omniflake, you can use it like any other input.</p>
+<p>A package, in a shell or on a system:</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="nv">environment</span><span class="o">.</span><span class="nv">systemPackages</span> <span class="o">=</span> <span class="p">[</span>
+  <span class="nv">omniflake</span><span class="o">.</span><span class="nv">flakes</span><span class="o">.</span><span class="nv">nh</span><span class="o">.</span><span class="nv">packages</span><span class="o">.</span><span class="p">${</span><span class="nv">system</span><span class="p">}</span><span class="o">.</span><span class="nv">default</span>
+<span class="p">];</span>
+</code></pre></div></div>
+<p>An overlay:</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">overlays</span> <span class="o">=</span> <span class="p">[</span> <span class="nv">omniflake</span><span class="o">.</span><span class="nv">flakes</span><span class="o">.</span><span class="nv">rust-overlay</span><span class="o">.</span><span class="nv">overlays</span><span class="o">.</span><span class="nv">default</span> <span class="p">];</span>
+</code></pre></div></div>
+<p>A NixOS module:</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="nv">imports</span> <span class="o">=</span> <span class="p">[</span> <span class="nv">omniflake</span><span class="o">.</span><span class="nv">flakes</span><span class="o">.</span><span class="nv">disko</span><span class="o">.</span><span class="nv">nixosModules</span><span class="o">.</span><span class="nv">disko</span> <span class="p">];</span>
+</code></pre></div></div>
+<p>Or nothing in a flake at all, straight from the command line:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix run <span class="s1">'github:fzakaria/omniflake#flakes.nh.packages.x86_64-linux.default'</span> <span class="nt">--</span> <span class="nt">--version</span>
+</code></pre></div></div>
+<p>It has an accessible website that you can visit <a href="https://omniflake.com/">https://omniflake.com/</a> to see the list of flakes it carries, and some helpful documentation.</p>
+<p>Once added, you have access to nearly <strong>twelve thousand flakes</strong>, as of this writing, that you can access as needed lazily. You only pay for what you use.</p>
+<p>This sounds absurd but it works. A flake with thousands of inputs should be unusable
+but thanks to the laziness of the Nix language and the flake lock mechanism it works
+perfectly.</p>
+<p>How is it possible to contain nearly every flake within this one?</p>
+<h2 id="a-very-short-primer-on-flakes"><a aria-label="Permalink to this section" class="hanchor" href="#a-very-short-primer-on-flakes">§</a>A very short primer on flakes</h2>
+<p>A flake is a directory with a <code class="language-plaintext highlighter-rouge">flake.nix</code> that declares two things: <code class="language-plaintext highlighter-rouge">inputs</code>
+(other flakes it depends on) and <code class="language-plaintext highlighter-rouge">outputs</code> (a function of those inputs).</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="p">{</span>
+  <span class="nv">inputs</span><span class="o">.</span><span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">url</span> <span class="o">=</span> <span class="s2">"github:NixOS/nixpkgs/nixos-unstable"</span><span class="p">;</span>
+  <span class="nv">outputs</span> <span class="o">=</span> <span class="p">{</span> <span class="nv">self</span><span class="p">,</span> <span class="nv">nixpkgs</span> <span class="p">}:</span> <span class="p">{</span>
+    <span class="nv">packages</span><span class="o">.</span><span class="nv">x86_64-linux</span><span class="o">.</span><span class="nv">hello</span> <span class="o">=</span> <span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">legacyPackages</span><span class="o">.</span><span class="nv">x86_64-linux</span><span class="o">.</span><span class="nv">hello</span><span class="p">;</span>
+  <span class="p">};</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p><code class="language-plaintext highlighter-rouge">inputs</code> says <em>what</em> you depend on, loosely: “nixos-unstable” is a moving
+branch. The <code class="language-plaintext highlighter-rouge">flake.lock</code> next to it says <em>exactly</em> which commit that resolved to,
+so the build is reproducible. It is npm’s <code class="language-plaintext highlighter-rouge">package-lock.json</code>, or <code class="language-plaintext highlighter-rouge">Cargo.lock</code>.</p>
+<p>A lock file does not just pin your own inputs. It pins the whole transitive graph
+for every flake. That means if two child flakes both depend on <code class="language-plaintext highlighter-rouge">nixpkgs</code>, they will each have their own copy of <code class="language-plaintext highlighter-rouge">nixpkgs</code> in the lock file, and they may be different commits.</p>
+<div class="language-json highlighter-rouge" data-lang="json"><div class="highlight"><pre class="highlight"><code><span class="p">{</span><span class="nl">"nodes"</span><span class="p">:</span><span class="p">{</span><span class="nl">"root"</span><span class="p">:</span><span class="p">{</span><span class="nl">"inputs"</span><span class="p">:</span><span class="p">{</span><span class="nl">"agenix"</span><span class="p">:</span><span class="s2">"agenix"</span><span class="p">,</span><span class="nl">"nixpkgs"</span><span class="p">:</span><span class="s2">"nixpkgs"</span><span class="p">}</span><span class="p">},</span><span class="nl">"agenix"</span><span class="p">:</span><span class="p">{</span><span class="nl">"inputs"</span><span class="p">:</span><span class="p">{</span><span class="nl">"home-manager"</span><span class="p">:</span><span class="s2">"home-manager"</span><span class="p">},</span><span class="nl">"locked"</span><span class="p">:</span><span class="p">{</span><span class="nl">"rev"</span><span class="p">:</span><span class="s2">"5182..."</span><span class="p">,</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"github"</span><span class="p">}</span><span class="p">},</span><span class="nl">"home-manager"</span><span class="p">:</span><span class="p">{</span><span class="nl">"inputs"</span><span class="p">:</span><span class="p">{</span><span class="nl">"nixpkgs"</span><span class="p">:</span><span class="s2">"nixpkgs_2"</span><span class="p">},</span><span class="err">...</span><span class="p">},</span><span class="nl">"nixpkgs"</span><span class="p">:</span><span class="p">{</span><span class="nl">"locked"</span><span class="p">:</span><span class="p">{</span><span class="nl">"rev"</span><span class="p">:</span><span class="s2">"9fbb..."</span><span class="p">,</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"github"</span><span class="p">}</span><span class="p">},</span><span class="nl">"nixpkgs_2"</span><span class="p">:</span><span class="p">{</span><span class="nl">"locked"</span><span class="p">:</span><span class="p">{</span><span class="nl">"rev"</span><span class="p">:</span><span class="s2">"50ab..."</span><span class="p">,</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"github"</span><span class="p">}</span><span class="p">}</span><span class="p">}</span><span class="p">}</span></code></pre></div></div>
+<p>In this example <strong>there are two nixpkgs</strong>: <code class="language-plaintext highlighter-rouge">nixpkgs</code> and <code class="language-plaintext highlighter-rouge">nixpkgs_2</code>. This is the duplication everyone complains about, and it is why <code class="language-plaintext highlighter-rouge">follows</code> exists: <code class="language-plaintext highlighter-rouge">follows</code> rewrites a dependency to point at a node you already have, instead of fetching another copy. Doing this reduces the graph size <em>but</em> it is no longer building against the exact nixpkgs the author tested against.</p>
+<p>Here is a simple flake that uses <code class="language-plaintext highlighter-rouge">follows</code> to unify nixpkgs:</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="p">{</span>
+  <span class="nv">inputs</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">url</span> <span class="o">=</span> <span class="s2">"github:NixOS/nixpkgs/nixos-unstable"</span><span class="p">;</span>
+
+    <span class="nv">disko</span><span class="o">.</span><span class="nv">url</span> <span class="o">=</span> <span class="s2">"github:nix-community/disko"</span><span class="p">;</span>
+    <span class="nv">disko</span><span class="o">.</span><span class="nv">inputs</span><span class="o">.</span><span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">follows</span> <span class="o">=</span> <span class="s2">"nixpkgs"</span><span class="p">;</span>
+
+    <span class="nv">agenix</span><span class="o">.</span><span class="nv">url</span> <span class="o">=</span> <span class="s2">"github:ryantm/agenix"</span><span class="p">;</span>
+    <span class="nv">agenix</span><span class="o">.</span><span class="nv">inputs</span><span class="o">.</span><span class="nv">home-manager</span><span class="o">.</span><span class="nv">inputs</span><span class="o">.</span><span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">follows</span> <span class="o">=</span> <span class="s2">"nixpkgs"</span><span class="p">;</span>
+  <span class="p">};</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<figure class="graphviz"></figure>
+<p>Solid arrows are inputs; dashed are <code class="language-plaintext highlighter-rouge">follows</code> edges collapsing onto one shared
+nixpkgs.</p>
+<h2 id="inputs-are-lazy"><a aria-label="Permalink to this section" class="hanchor" href="#inputs-are-lazy">§</a>Inputs are lazy</h2>
+<p>The beauty of much of the craziness in Nix is that it is a lazy language. An input no output touches is never fetched.</p>
+<p>You can prove this destructively: lock a flake with two inputs, then corrupt one entry in
+<code class="language-plaintext highlighter-rouge">flake.lock</code> so it cannot possibly resolve.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span><span class="nb">sed</span> <span class="nt">-i</span> <span class="s1">'s/2810303efc.../0000000000000000000000000000000000000000/'</span> flake.lock
+<span class="gp">$</span>nix <span class="nb">eval</span> .#justB
+<span class="go">[ "aarch64-darwin" "aarch64-linux" "x86_64-darwin" "x86_64-linux" ]
+</span></code></pre></div></div>
+<p>That evaluated fine against a lock containing a revision that does not exist.
+Only forcing the poisoned input complains:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span>nix <span class="nb">eval</span> .#useA
+<span class="go">error: unable to download '.../0000000000000000000000000000000000000000.tar.gz': HTTP error 404
+</span></code></pre></div></div>
+<p>When you add a flake as an input, its entire transitive graph is
+copied into your lock as <em>metadata</em>, nothing is fetched and nothing is evaluated.</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span><span class="nb">time </span>nix flake lock
+<span class="go">• Added input 'mega'
+• Added input 'mega/a'          &lt;- the poisoned one
+• Added input 'mega/a/nixpkgs'
+real    0m0.084s
+</span></code></pre></div></div>
+<h2 id="false-start"><a aria-label="Permalink to this section" class="hanchor" href="#false-start">§</a>False start</h2>
+<p>My first attempt at creating a <em>massive single flake</em> was to add every flake as an input directly into <code class="language-plaintext highlighter-rouge">flake.nix</code> and lock it.</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="p">{</span>
+  <span class="nv">inputs</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">url</span> <span class="o">=</span> <span class="s2">"github:NixOS/nixpkgs/nixos-unstable"</span><span class="p">;</span>
+
+    <span class="nv">agenix</span><span class="o">.</span><span class="nv">url</span> <span class="o">=</span> <span class="s2">"github:ryantm/agenix"</span><span class="p">;</span>
+    <span class="nv">agenix</span><span class="o">.</span><span class="nv">inputs</span><span class="o">.</span><span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">follows</span> <span class="o">=</span> <span class="s2">"nixpkgs"</span><span class="p">;</span>
+
+    <span class="nv">disko</span><span class="o">.</span><span class="nv">url</span> <span class="o">=</span> <span class="s2">"github:nix-community/disko"</span><span class="p">;</span>
+    <span class="nv">disko</span><span class="o">.</span><span class="nv">inputs</span><span class="o">.</span><span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">follows</span> <span class="o">=</span> <span class="s2">"nixpkgs"</span><span class="p">;</span>
+
+    <span class="nv">home-manager</span><span class="o">.</span><span class="nv">url</span> <span class="o">=</span> <span class="s2">"github:nix-community/home-manager"</span><span class="p">;</span>
+    <span class="nv">home-manager</span><span class="o">.</span><span class="nv">inputs</span><span class="o">.</span><span class="nv">nixpkgs</span><span class="o">.</span><span class="nv">follows</span> <span class="o">=</span> <span class="s2">"nixpkgs"</span><span class="p">;</span>
+
+    <span class="c"># … 11,000 more …</span>
+  <span class="p">};</span>
+<span class="p">}</span>
+</code></pre></div></div>
+<p>Surprisingly despite the laziness of Nix, evaluating an output that touches
+nothing got <strong>very slow</strong> as inputs grew. The cost was not in evaluation. In order to create the lock file though the first time, Nix had to evaluate every input.</p>
+<p>When Nix creates the lock file, every node needs a unique name, and a name collision is
+resolved by appending <code class="language-plaintext highlighter-rouge">_2</code>, <code class="language-plaintext highlighter-rouge">_3</code> and so forth. The code would start the search at <code class="language-plaintext highlighter-rouge">_2</code> each time, and if there were 1,000 collisions, it would try <code class="language-plaintext highlighter-rouge">_2</code>, <code class="language-plaintext highlighter-rouge">_3</code>, … <code class="language-plaintext highlighter-rouge">_1000</code></p>
+<p>A megaflake guarantees collisions: every flake brings its own <code class="language-plaintext highlighter-rouge">systems</code> input, so 4,000 inputs produced 3,999 nodes named <code class="language-plaintext highlighter-rouge">systems_2</code> through <code class="language-plaintext highlighter-rouge">systems_4000</code>, about 8 million string
+formats per evaluation. This turned out to be quadratic time complexity in the number of inputs, and it was the reason for the slowdown.</p>
+<p>The fix was relatively simple: remember the highest suffix used per name and resume from
+there. I submitted <a href="https://github.com/NixOS/nix/pull/16387">NixOS/nix#16387</a>, and
+the lock files it writes are byte-identical to before.</p>
+<figure class="plotnine"></figure>
+<p>No one had been writing absurdly large flakes, so this quadratic cost was invisible.
+The fix was relatively simple and the speedup is dramatic: ~21x faster for 4,000 inputs.</p>
+<p>Despite this fix, this turned out to be a false start. In order to finish creating the <code class="language-plaintext highlighter-rouge">flake.lock</code> file, Nix has to evaluate every input. Nix locks one input at a time, fetching each tree
+to read its <code class="language-plaintext highlighter-rouge">flake.nix</code>, and one input that cannot be locked aborts the run.<sup class="sn-ref">1</sup><span class="sidenote"><span class="sn-num">1</span><span class="sn-p">I tried assembling the lock file outside Nix from the <code class="language-plaintext highlighter-rouge">flake.lock</code> files directly for 
+     each input but it kept disagreeing with <code class="language-plaintext highlighter-rouge">nix flake lock</code> and would cause Nix to redo the entire lock. </span></span></p>
+<p>So I went to the source to find out what a consumer does with an inherited
+lock. The answer is less than I assumed. When you add a flake as an input, Nix
+checks that flake’s <em>direct</em> inputs against its <code class="language-plaintext highlighter-rouge">flake.nix</code>, and copies
+everything deeper into your lock unread. And when it evaluates, the code that
+turns a lock into a flake does one thing per node: fetch the pinned tree,
+import its <code class="language-plaintext highlighter-rouge">flake.nix</code>, call <code class="language-plaintext highlighter-rouge">outputs</code> with the inputs the lock names.</p>
+<p>That is a table lookup and a fetch. Nothing about it needs the flakes to be
+<em>inputs</em>.</p>
+<h2 id="the-flakes-are-not-inputs"><a aria-label="Permalink to this section" class="hanchor" href="#the-flakes-are-not-inputs">§</a>The flakes are not inputs</h2>
+<p>Turns out we can avoid <code class="language-plaintext highlighter-rouge">inputs</code> altogether. omniflake’s <code class="language-plaintext highlighter-rouge">flake.nix</code> declares only five inputs, nixpkgs and four small other libraries.</p>
+<p>It does include a table of pins (JSONL) for all the flakes. Each line of <code class="language-plaintext highlighter-rouge">index.json</code> is the same <code class="language-plaintext highlighter-rouge">locked</code> object a <code class="language-plaintext highlighter-rouge">flake.lock</code> entry holds, which is exactly what <code class="language-plaintext highlighter-rouge">builtins.fetchTree</code> needs to fetch a tree in pure evaluation mode:</p>
+<div class="language-json highlighter-rouge" data-lang="json"><div class="highlight"><pre class="highlight"><code><span class="p">{</span><span class="nl">"disko"</span><span class="p">:</span><span class="p">{</span><span class="nl">"locked"</span><span class="p">:</span><span class="p">{</span><span class="nl">"narHash"</span><span class="p">:</span><span class="s2">"sha256-RxWs…"</span><span class="p">,</span><span class="nl">"owner"</span><span class="p">:</span><span class="s2">"nix-community"</span><span class="p">,</span><span class="nl">"repo"</span><span class="p">:</span><span class="s2">"disko"</span><span class="p">,</span><span class="nl">"rev"</span><span class="p">:</span><span class="s2">"ff8702b4…"</span><span class="p">,</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"github"</span><span class="p">}</span><span class="p">}</span><span class="p">}</span></code></pre></div></div>
+<p>Twelve thousand lines each representing a distinct flake, and reading them costs nothing until you ask for one specifically.</p>
+<p>When a flake is requested, <code class="language-plaintext highlighter-rouge">omniflake.flakes.disko</code>, the library runs a small loader that replicates what Nix itself does with a lock file.</p>
+<p>The library fetches the pin, reads disko’s own <code class="language-plaintext highlighter-rouge">flake.lock</code>, fetches and imports each input it names, and calls <code class="language-plaintext highlighter-rouge">outputs</code>. It supports <code class="language-plaintext highlighter-rouge">follows</code> and any other feature of a flake, because it is just evaluating the flake as Nix would.<sup class="sn-ref">2</sup><span class="sidenote"><span class="sn-num">2</span><span class="sn-p">Some flakes do not have a <code class="language-plaintext highlighter-rouge">flake.lock</code> file. For those  flakes, we store a <code class="language-plaintext highlighter-rouge">flake.lock</code> in omniflake directly, so they can be evaluated as if they had one. This is a hack but it works. </span></span></p>
+<p>The desire to keep our graphs small and avoid duplication is satisfied with the <code class="language-plaintext highlighter-rouge">overrides</code> attribute, which allows you to replace any input with your own.</p>
+<p>omniflake offers a <code class="language-plaintext highlighter-rouge">flakes</code> attribute that is already heavily unified across many popular flakes, such as <code class="language-plaintext highlighter-rouge">nixpkgs</code> or a <code class="language-plaintext highlighter-rouge">pinned</code> attribute set that is every flake exactly as the author intended.</p>
+<div class="language-nix highlighter-rouge" data-lang="nix"><div class="highlight"><pre class="highlight"><code><span class="c"># nixpkgs and the four libraries are yours</span>
+<span class="nv">omniflake</span><span class="o">.</span><span class="nv">flakes</span><span class="o">.</span><span class="nv">disko</span>
+<span class="c"># everything exactly as disko's author locked it</span>
+<span class="nv">omniflake</span><span class="o">.</span><span class="nv">pinned</span><span class="o">.</span><span class="nv">disko</span>
+<span class="c"># your policy</span>
+<span class="nv">omniflake</span><span class="o">.</span><span class="nv">lib</span><span class="o">.</span><span class="nv">withOverrides</span> <span class="p">{</span> <span class="nv">nixpkgs</span> <span class="o">=</span> <span class="nv">nixpkgs-stable</span><span class="p">;</span> <span class="p">}</span>
+</code></pre></div></div>
+<p>The flakes included are scraped from GitHub and updated automatically. Each flake is also updated periodically.</p>
+<h2 id="is-this-cursed"><a aria-label="Permalink to this section" class="hanchor" href="#is-this-cursed">§</a>Is this cursed?</h2>
+<p>Probably. The mechanism works and the ergonomics are what I wanted. 
+I can avoid having to ever think about adding a single flake input again.</p>
+<p>The performance is surprisingly good, because we only pay for what we use. Adding omniflake makes <code class="language-plaintext highlighter-rouge">nix flake lock</code> take around 1.5 seconds, inherits only six nodes, and downloads none
+of the thousands of flakes behind them:</p>
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">$</span><span class="nb">time </span>nix flake lock
+<span class="go">real    0m1.5s
+</span><span class="gp">$</span>nix <span class="nb">eval </span>github:fzakaria/omniflake#lib.count
+<span class="go">11975
+</span></code></pre></div></div>
+<p>I love the idea of federation but I want the simplicity of centralization. As Nix users, I want my cake and I want to eat it too: omniflake is my cake.</p>
+</div>
+</article>
