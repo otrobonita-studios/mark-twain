@@ -103,7 +103,7 @@ def main() -> None:
         first = json.loads(f.readline())
         dim = len(first["vector"])
 
-    total_lines = sum(1 for _ in INPUT_JSONL.open(encoding="utf-8"))
+    total_lines = sum(1 for l in INPUT_JSONL.open(encoding="utf-8") if l.strip())
 
     ensure_collection(client, dim, fresh=fresh)
     print(f"\nUploading {total_lines} vectors from {INPUT_JSONL.name}…\n")
@@ -113,6 +113,8 @@ def main() -> None:
 
     with INPUT_JSONL.open(encoding="utf-8") as f:
         for idx, line in enumerate(f, 1):
+            if not line.strip():
+                continue   # skip blank lines (e.g. flush boundaries)
             data = json.loads(line)
             batch.append(PointStruct(
                 id=data["id"],
