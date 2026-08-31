@@ -1,0 +1,282 @@
+<article class="page container">
+
+<div class="prose reveal">
+
+<p>Picture an AI agent trying to book you a table on a restaurant’s website. Today, it works like a very patient, slightly confused intern. It loads the page, reads the raw HTML, tries to figure out which of the forty <code class="language-plaintext highlighter-rouge">&lt;div&gt;</code> elements is the date picker, guesses that the green button probably means “confirm,” clicks it, waits, and re-reads the whole screen to see if anything happened. Move that button next week and the agent breaks. Rename a CSS class and it breaks. Add a cookie banner on top and it clicks the wrong thing entirely.</p>
+<p>This is how almost all “agents using websites” works right now: screen-scraping and hoping. It’s the automation equivalent of operating a computer by describing screenshots over the phone.</p>
+<p><strong>WebMCP</strong> proposes something much saner. Instead of the agent guessing what your site can do by staring at it, your site <em>declares</em> what it can do, as a set of clean, structured tools the agent can call directly. “Here’s a <code class="language-plaintext highlighter-rouge">book_table</code> tool. It takes a date, a time, and a party size. Call it.” No pixel-reading. No guessing. And the best part: it already runs in Chrome behind a trial, and adding your first tool takes about ten minutes.</p>
+<p>Let me show you the whole thing.</p>
+<h2 id="the-core-shift-from-scraping-to-declaring">The core shift: from scraping to declaring</h2>
+<p>The entire idea fits in one comparison. Same task, two worlds.</p>
+<figure class="wm-fig">
+<div class="wm-vs">
+<div class="col old">
+<h4>Today: the agent scrapes</h4>
+<div class="step"><span class="m">1</span>Read the entire DOM</div>
+<div class="step"><span class="m">2</span>Guess which element is the date field</div>
+<div class="step"><span class="m">3</span>Simulate typing and clicking</div>
+<div class="step"><span class="m">4</span>Re-read the whole page to check</div>
+<div class="step"><span class="m">5</span>Break when the layout changes</div>
+</div>
+<div class="col new">
+<h4>WebMCP: the site declares</h4>
+<div class="step"><span class="m">1</span>Page registers a <b>book_table</b> tool</div>
+<div class="step"><span class="m">2</span>Agent reads the tool's schema</div>
+<div class="step"><span class="m">3</span>Agent calls it with structured args</div>
+<div class="step"><span class="m">4</span>Tool runs your real JS, returns a result</div>
+<div class="step"><span class="m">5</span>Survives redesigns: the tool is the contract</div>
+</div>
+</div>
+<figcaption>The left column is brittle because the agent is reverse-engineering your UI every time. The right column is stable because you gave it a real interface. The layout can change freely underneath a tool whose name and schema stay the same.</figcaption>
+</figure>
+<p>If you’ve read my earlier post on <a href="/blog/2026-06-30-mcp-the-port-that-let-ai-touch-the-world/">MCP, the port that let AI touch the world</a>, this will feel familiar, and it should. MCP gave AI a standard way to call tools on a server. WebMCP brings that same idea into the browser: the web <em>page itself</em> becomes a place that offers tools, running in the tab you already have open, with the session you’re already logged into.</p>
+<h2 id="what-it-actually-is">What it actually is</h2>
+<p>WebMCP is a proposed web standard, developed jointly by Google (Chrome) and Microsoft (Edge) in the W3C Web Machine Learning Community Group, that gives a web page a small JavaScript API to register tools that an AI agent can discover and call. Google describes it plainly in the Chrome docs: a way to “build and expose structured tools for AI agents,” where the site annotates its own features so agents “know exactly how to interact” with them. To be precise about maturity, it’s a Community Group <em>draft</em>, not a finished W3C standard and not yet on the standards track, which is exactly why now is the moment to learn it and shape it.</p>
+<p>Three things make it click into place:</p>
+<ul>
+<li><strong>Discovery.</strong> A standard way for a page to say “I offer these tools,” like <code class="language-plaintext highlighter-rouge">checkout</code> or <code class="language-plaintext highlighter-rouge">filter_results</code>, so an agent can list them.</li>
+<li><strong>Schemas.</strong> Each tool declares its inputs and outputs as JSON Schema, so the agent knows exactly what to pass and there’s far less room to hallucinate or misread.</li>
+<li><strong>State.</strong> A shared understanding of what’s on the page right now, so the agent knows what it can actually act on.</li>
+</ul>
+<figure class="wm-fig">
+<div class="wm-status">
+<div class="lb">Where it stands today</div>
+<p>WebMCP is real and runnable, but early. It's available as a <b>Chrome origin trial from Chrome 149</b>, and you can switch it on locally with the flag <code>chrome://flags/#enable-webmcp-testing</code>. The proposal lives at <code>github.com/webmachinelearning/webmcp</code>, Angular already has experimental support, and Chrome ships demo sites (a pizza maker, travel search, a restaurant booking). Google's own words: it's "under active discussion and subject to change." So this is a "try it and shape it" moment, not a "ship it to production" one, and that's exactly why it's worth learning now.</p>
+</div>
+</figure>
+<h2 id="how-a-call-actually-flows">How a call actually flows</h2>
+<p>Here’s the whole loop, page to agent and back. Nothing exotic happens: the page registers tools, the agent lists them, picks one, calls it with structured arguments, and your own JavaScript does the work in the page.</p>
+<figure class="wm-fig">
+<div class="wm-flow">
+<div class="wm-frow">
+<div class="wm-node"><span class="st">page</span><b>Register tools</b><span>Your JS declares book_table, search, etc.</span></div>
+<div class="wm-arr">→</div>
+<div class="wm-node"><span class="st">agent</span><b>Discover</b><span>Lists the page's tools and their schemas</span></div>
+<div class="wm-arr">→</div>
+<div class="wm-node acc"><span class="st">agent</span><b>Call with args</b><span>Structured JSON matching the schema</span></div>
+<div class="wm-arr">→</div>
+<div class="wm-node acc"><span class="st">page</span><b>execute() runs</b><span>Your real JS, in the logged-in page</span></div>
+<div class="wm-arr">→</div>
+<div class="wm-node"><span class="st">agent</span><b>Gets result</b><span>A structured answer, visibly, in the tab</span></div>
+</div>
+</div>
+<figcaption>The tool's execute function runs inside your actual page, using your existing JavaScript, state, and the user's own logged-in session. It happens visibly in the tab, not in some invisible headless browser, so the user can watch it and trust it.</figcaption>
+</figure>
+<p>That “runs in the page you’re already logged into” detail is a big deal. The agent isn’t a separate bot logging in with stolen credentials somewhere. It’s calling a function in <em>your</em> open, authenticated tab, using the session you already have. The site keeps control of what it exposes, and the user can see it happen.</p>
+<h2 id="watch-one-call-happen">Watch one call happen</h2>
+<p>Concretely, when you ask an in-browser agent to do something on a WebMCP-enabled site, it looks like this: your request, the agent picking the declared tool, the tool running, the result.</p>
+<figure class="wm-fig">
+<div class="wm-demo">
+<div class="bar"></div>
+<div class="body">
+<div class="wm-line"><span class="u">you ›</span> book a table for 4 tonight at 8</div>
+<div class="wm-line"><span class="a">agent ›</span> found tool <span class="t">book_table</span> on this page</div>
+<div class="wm-line"><span class="a">agent ›</span> calling <span class="t">book_table</span>({ date: "today", time: "20:00", party: 4 })</div>
+<div class="wm-line"><span class="r">page ›</span> Booked. Table for 4 at 8:00 PM, confirmation #A17.</div>
+</div>
+</div>
+<figcaption>No DOM guessing anywhere in that exchange. The agent called a named function with typed arguments, and the page did the rest with its own code. This is the difference between an agent operating your site and an agent operating a photograph of your site.</figcaption>
+</figure>
+<h2 id="the-code-is-genuinely-tiny">The code is genuinely tiny</h2>
+<p>This is the part that makes people want to try it. Registering a tool is one call. Using the current imperative API from the Chrome docs, a to-do site adding an “add item” tool looks essentially like this:</p>
+<figure class="wm-fig">
+<div class="wm-code">
+<div class="hd">register a WebMCP tool (imperative API)</div>
+<pre><span class="k">await</span> document.modelContext.<span class="f">registerTool</span>({
+  name: <span class="s">'add_todo'</span>,
+  description: <span class="s">'Add an item to the to-do list'</span>,
+  inputSchema: {
+    type: <span class="s">'object'</span>,
+    properties: { text: { type: <span class="s">'string'</span> } },
+    required: [<span class="s">'text'</span>]
+  },
+  execute: <span class="k">async</span> ({ text }) =&gt; {
+    addTodoToPage(text);        <span class="c">// your own existing function</span>
+    <span class="k">return</span> <span class="s">`Added to-do: ${text}`</span>;
+  }
+});</pre>
+</div>
+<figcaption>That's the whole thing. You give the tool a name, a description, an input schema, and an execute function that calls code you already wrote. The agent discovers it with getTools(), and you can pull a tool back with an AbortController if it stops being relevant. There's also a declarative flavor where you annotate an HTML form instead of writing JS.</figcaption>
+</figure>
+<p>Notice what <code class="language-plaintext highlighter-rouge">execute</code> does: it calls <code class="language-plaintext highlighter-rouge">addTodoToPage</code>, a function that already exists on your site. WebMCP isn’t asking you to rebuild anything. You’re wrapping the actions your site can already do in a thin, declared interface so an agent can reach them cleanly. That’s why the ten-minutes claim is real.</p>
+<p>One accuracy note, because the API is young and moving: the current entry point is <code class="language-plaintext highlighter-rouge">document.modelContext</code>, while earlier drafts used <code class="language-plaintext highlighter-rouge">navigator.modelContext</code>, the move makes sense because tools really belong to a document, not the whole browser. If you follow an older tutorial showing <code class="language-plaintext highlighter-rouge">navigator</code>, that’s why. A one-line shim (<code class="language-plaintext highlighter-rouge">const mc = document.modelContext || navigator.modelContext</code>) bridges both while the change rolls out. Expect a few more edges like this to shift; it’s a draft.</p>
+<h2 id="a-real-one-worked-all-the-way-through">A real one, worked all the way through</h2>
+<p>The official WebMCP demos are all “call one tool and you’re done”, order a pizza, book a table. Useful, but they undersell the idea, because the interesting part of WebMCP isn’t one tool call. It’s an agent <em>chaining</em> tools to do real work, with a human gate on the part that matters. So instead of a toy, I built and deployed a real one to go with this post, and this section is the honest walk-through of it, because it teaches the whole model better than any abstract example.</p>
+<p><strong>Career Copilot</strong> is an experimental agentic career portal. You give it a resume; it reads real job descriptions from live company boards, scores your true fit, tells you your skill gaps, and prepares a batch of applications you approve in one click. Nothing is faked: the jobs are real, the matching is computed from real job-description text, and it applies nothing without your explicit OK.</p>
+<figure class="wm-fig">
+<div class="wm-live">
+<div class="lh"><b>Career Copilot, a live WebMCP career portal</b></div>
+<div class="lb">
+<p>Open it, tap "See it work instantly", and watch an agent run a full job-search mission over live data: read a resume, pull real openings from GitLab, Stripe and Databricks, read each job description, score your fit, surface your skill gaps, and propose a batch of applications for you to approve. It registers <b>13 real WebMCP tools</b> on the page.</p>
+<a class="go" href="https://webmcp-career-copilot-production.up.railway.app/" rel="noopener" target="_blank">Open the live demo →</a>
+</div>
+</div>
+<figcaption>Deployed and validated. With <code>chrome://flags/#enable-webmcp-testing</code> on, the page reports "WebMCP live, 13 tools registered" and they show up in the DevTools WebMCP panel. No flag needed to try it: one button runs the whole mission anyway. It never really submits an application, it prepares them and stops for you.</figcaption>
+</figure>
+<p>And this isn’t a diagram of what <em>should</em> happen, here’s the actual browser proving it. Turn the flag on, open DevTools, and Chrome grows a <strong>WebMCP</strong> panel that lists every tool the page registered, each with the same name and description the agent sees. This is the whole pitch made visible: the website <em>declares</em> its tools, and the browser reads them straight off the page.</p>
+<figure class="wm-fig">
+<div class="wm-shots">
+<div class="wm-shot">
+
+<div class="cap"><b>The tools, straight from the page.</b> Chrome's DevTools → Application → WebMCP panel. Every tool the page registered is listed with its real name and description, <code>aggregate_openings</code>, <code>compare_jobs</code>, <code>draft_outreach</code>, <code>explain_match</code>, exactly what an agent would discover.</div>
+</div>
+<div class="wm-shot">
+
+<div class="cap"><b>Click one, see its contract.</b> Selecting <code>parse_resume</code> opens a Details pane: name, full description, the frame it lives in, and an Origin that points right back at <code>registerTools</code> in the page's own source. No scraping, no guessing, the tool <i>is</i> the interface.</div>
+</div>
+</div>
+<figcaption>Real screenshots from the deployed demo. The left of the panel is the tool list an agent sees; the right is one tool's full contract. This is what "the website talks to the agent" actually looks like in the browser today.</figcaption>
+</figure>
+<h3 id="the-workflow-what-the-agent-actually-does">The workflow: what the agent actually does</h3>
+<p>Here’s the real mission, step by step. Each row is a WebMCP tool the page exposes; the agent chains them. Notice the shape: a run phase, then a consequential act phase that stops for a human.</p>
+<figure class="wm-fig">
+<div class="cc-flow wm-anim">
+<div class="cc-step"><span class="cc-tool">parse_resume</span><span class="cc-what">Reads <b>any</b> resume into a real profile: skills, seniority, focus area</span><span class="cc-tag">read</span></div>
+<div class="cc-step"><span class="cc-tool">aggregate_openings</span><span class="cc-what">Pulls live roles from three real company job boards</span><span class="cc-tag">read</span></div>
+<div class="cc-step"><span class="cc-tool">match_profile</span><span class="cc-what">Fetches each real <b>job description</b> and scores your true fit + gaps</span><span class="cc-tag">read</span></div>
+<div class="cc-step"><span class="cc-tool">find_gaps</span><span class="cc-what">Aggregates the gaps into a learning signal: "learn X to unlock more roles"</span><span class="cc-tag">read</span></div>
+<div class="cc-step"><span class="cc-tool">shortlist</span><span class="cc-what">Adds the strongest fits to your pipeline. Reversible</span><span class="cc-tag">act</span></div>
+<div class="cc-step"><span class="cc-tool">prepare_applications</span><span class="cc-what">Tailors a summary per role, ready to review</span><span class="cc-tag">act</span></div>
+<div class="cc-step gate"><span class="cc-tool">submit_batch</span><span class="cc-what">Opens a <b>human approval</b> panel: review the set, uncheck any, then apply</span><span class="cc-tag">gate</span></div>
+</div>
+<figcaption>The real agent loop. The first four tools are read-only, the agent gathers and reasons freely. Then shortlist and prepare change reversible state. Only the last one, applying in your name, is consequential, and it cannot happen without you clicking approve. That split is the entire safety model of WebMCP, made concrete.</figcaption>
+</figure>
+<h3 id="the-tools-grouped-by-what-they-can-do">The tools, grouped by what they can do</h3>
+<p>This grouping is worth internalizing, because it’s how you should design any WebMCP surface: separate what merely <em>reads</em> from what <em>acts</em>, and put the human gate only where it’s truly needed.</p>
+<figure class="wm-fig">
+<div class="cc-tools wm-anim">
+<div class="cc-tgroup read">
+<div class="cc-gh">Read (safe, no gate)</div>
+<div class="cc-t"><b>parse_resume</b></div>
+<div class="cc-t"><b>aggregate_openings</b></div>
+<div class="cc-t"><b>match_profile</b></div>
+<div class="cc-t"><b>find_gaps</b></div>
+<div class="cc-t"><b>explain_match</b></div>
+<div class="cc-t"><b>compare_jobs</b></div>
+<div class="cc-t"><b>pipeline_status</b></div>
+</div>
+<div class="cc-tgroup act">
+<div class="cc-gh">Act (reversible)</div>
+<div class="cc-t"><b>set_preferences</b></div>
+<div class="cc-t"><b>refine_search</b></div>
+<div class="cc-t"><b>shortlist</b></div>
+<div class="cc-t"><b>prepare_applications</b></div>
+<div class="cc-t"><b>draft_outreach</b></div>
+</div>
+<div class="cc-tgroup cons">
+<div class="cc-gh">Consequential (human gate)</div>
+<div class="cc-t"><b>submit_batch</b></div>
+<div class="cc-t" style="color:var(--text-3);margin-top:.5rem;">Just one. This is the only tool that does something in your name, so it's the only one that stops for approval.</div>
+</div>
+</div>
+<figcaption>13 tools, three tiers. WebMCP lets a tool flag itself with hints like <code>readOnlyHint</code>, so the agent (and the browser) know which calls are safe to make freely and which need a human. Getting this taxonomy right is most of what makes an agentic surface trustworthy.</figcaption>
+</figure>
+<h3 id="a-real-run-not-a-mockup">A real run, not a mockup</h3>
+<p>Here’s the actual tool-activity log from a validated run with a frontend engineer’s resume. Watch it read real descriptions and score honestly, no fake 99%s:</p>
+<figure class="wm-fig">
+<div class="wm-term">
+<div class="bar"><span class="lbl">tool activity · real run</span></div>
+<div class="body">
+<div class="ln"><span class="w tool">→ tool</span><span class="m">parse_resume(…)</span></div>
+<div class="ln"><span class="w res">✓ result</span><span class="m">Sam Patel, Senior Frontend Engineer · 11 skills · frontend focus</span></div>
+<div class="ln"><span class="w tool">→ tool</span><span class="m">aggregate_openings()</span></div>
+<div class="ln"><span class="w res">✓ result</span><span class="m">75 live roles from GitLab, Stripe, Databricks</span></div>
+<div class="ln"><span class="w tool">→ tool</span><span class="m">match_profile()</span></div>
+<div class="ln"><span class="w res">✓ result</span><span class="m">reading 24 real job descriptions…</span></div>
+<div class="ln"><span class="w res">✓ result</span><span class="m"><b>Design Engineer, Presence @ GitLab: 80%</b>, no gaps</span></div>
+<div class="ln"><span class="w res">✓ result</span><span class="m">Senior Software Engineer, Fullstack @ Stripe: 57%, gaps: python</span></div>
+<div class="ln"><span class="w res">✓ result</span><span class="m">AI Engineer @ GitLab: 54%, gaps: python, llm</span></div>
+<div class="ln"><span class="w tool">→ tool</span><span class="m">find_gaps()</span></div>
+<div class="ln"><span class="w res">✓ result</span><span class="m">top gaps across matches: python, testing, api</span></div>
+<div class="ln"><span class="w tool">→ tool</span><span class="m">shortlist([4 roles])</span></div>
+<div class="ln"><span class="w tool">→ tool</span><span class="m">prepare_applications([4])</span></div>
+<div class="ln"><span class="w gate">⏸ gate</span><span class="m">awaiting your approval for 4 applications…</span></div>
+<div class="ln"><span class="w res">✓ result</span><span class="m">applied to 3 (you unchecked 1) ✓</span></div>
+<div class="ln"><span class="w sys">·</span><span class="m">Mission complete.</span></div>
+</div>
+</div>
+<figcaption>A genuine run. The frontend resume's true best fit, a Design Engineer role at 80%, came from reading the real job description, not the title (the title never says "React"). The scores are honest and capped, the gaps are real, and the human approved 3 of 4 in the batch. Swap in a backend or data resume and the whole thing re-ranks to that person's real best matches. That's what a scraper fundamentally cannot do.</figcaption>
+</figure>
+<h3 id="the-one-hard-thing-and-why-the-human-gate-is-the-right-answer">The one hard thing, and why the human gate is the right answer</h3>
+<p>Building this taught me the honest limit of “auto-apply”, and it’s worth stating plainly because it’s the real engineering lesson. Everything up to the apply button is easy to automate and genuinely useful: reading resumes, aggregating openings, matching, tailoring. The <em>last mile</em>, actually submitting into a company’s application system, is the hard part. Those systems (Workday, Greenhouse and friends) are deliberately not open APIs, they sit behind logins and bot-detection, and automating submission usually violates their terms.</p>
+<p>This is exactly the gap WebMCP is meant to close. If a careers site exposed a <code class="language-plaintext highlighter-rouge">submit_application</code> tool the way this demo does, an agent could apply cleanly, in your own authenticated session, with your approval. Until sites do that, the correct design isn’t to fake the last mile, it’s to <strong>automate everything up to it and keep a human on the submit.</strong> That’s not a compromise. An agent that silently applies to jobs in your name is a liability; one that does all the work and asks before it acts as you is a superpower. WebMCP’s consent model is what makes that line enforceable.</p>
+<p>The full source is a single self-contained HTML file, and I wrote up the deeper product thinking, the candidate and employer sides, the phased build, the honest limits, as a design note in the repo.</p>
+<h2 id="the-trust-model-because-this-is-the-scary-part">The trust model, because this is the scary part</h2>
+<p>The obvious worry: if a page can hand tools to an agent, can a malicious page trick the agent into doing something awful? The design takes this seriously, and it’s worth knowing the guards.</p>
+<ul>
+<li><strong>It runs visibly, in the tab.</strong> No headless, background execution. A browsing context has to be open, so actions happen where the user can see them.</li>
+<li><strong>Same-origin only.</strong> Tool registration is gated by a <code class="language-plaintext highlighter-rouge">tools</code> Permissions Policy that defaults to <code class="language-plaintext highlighter-rouge">self</code>, so a random cross-origin iframe can’t quietly register tools unless the top page explicitly allows it.</li>
+<li><strong>Sensitive actions can demand a human.</strong> For things like making a purchase, a tool can require an explicit user confirmation dialog before it proceeds. Human-in-the-loop is built into the pattern, not bolted on.</li>
+<li><strong>Untrusted content is flagged.</strong> Tools carry annotation hints like <code class="language-plaintext highlighter-rouge">readOnlyHint</code> and <code class="language-plaintext highlighter-rouge">untrustedContentHint</code>, so the agent can treat a tool that returns third-party content with appropriate suspicion, which matters given everything we know about <a href="/blog/2026-08-02-llm-security-prompt-injection-and-the-cost-of-defending/">prompt injection</a>.</li>
+</ul>
+<p>None of this makes it magically safe, the standard is young and the security model is still being worked out, but the shape is right: visible, same-origin, consent-gated, and honest about untrusted data.</p>
+<h2 id="honest-pros-and-cons">Honest pros and cons</h2>
+<figure class="wm-fig">
+<div class="wm-pc">
+<div class="side pro">
+<div class="hd">Why it's exciting</div>
+<div class="li">Structured tool calls instead of brittle DOM scraping</div>
+<div class="li">Runs in the user's real, logged-in session, no separate bot auth</div>
+<div class="li">The site stays in control of what it exposes</div>
+<div class="li">Survives redesigns: the tool contract outlives the layout</div>
+<div class="li">Reuses code you already have, tiny to adopt</div>
+<div class="li">A real standard direction, not one vendor's lock-in</div>
+</div>
+<div class="side con">
+<div class="hd">Why it's early</div>
+<div class="li">Experimental: origin trial only, subject to change</div>
+<div class="li">Chrome-first today; broad browser support isn't here yet</div>
+<div class="li">Needs site adoption to matter; agents can't call tools that don't exist</div>
+<div class="li">Discoverability gap: a client must visit a site to learn its tools</div>
+<div class="li">Security model still maturing (malicious tools, injection)</div>
+<div class="li">Complex sites may need real refactoring to expose clean tools</div>
+</div>
+</div>
+<figcaption>The cons are almost all "it's early," not "it's wrong." That's the profile of a promising standard in its incubation window: the idea is sound, the ecosystem hasn't caught up yet.</figcaption>
+</figure>
+<h2 id="where-it-fits-use-cases">Where it fits: use cases</h2>
+<p>The pattern shines anywhere an agent needs to <em>do</em> something on a site, not just read it.</p>
+<figure class="wm-fig">
+<div class="wm-uses">
+<div class="wm-use"><div class="t">E-commerce</div><div class="d">Expose search_products, add_to_cart, checkout. An agent shops your store through real tools, not by clicking around.</div></div>
+<div class="wm-use"><div class="t">Booking &amp; travel</div><div class="d">Multi-city, multi-passenger trips or restaurant tables, where the form is complex and scraping is painful.</div></div>
+<div class="wm-use"><div class="t">SaaS dashboards</div><div class="d">Let an agent run the actions your app already has: create a ticket, filter a report, update a record.</div></div>
+<div class="wm-use"><div class="t">Form filling</div><div class="d">Declare the form's fields and a submit tool; the agent maps data in cleanly instead of guessing inputs.</div></div>
+<div class="wm-use"><div class="t">Accessibility</div><div class="d">A declared, semantic tool surface is a gift for assistive agents, clearer intent than raw markup.</div></div>
+<div class="wm-use"><div class="t">Internal tools</div><div class="d">Wrap your admin panel's actions as tools so an internal assistant can drive them safely and visibly.</div></div>
+</div>
+<figcaption>The through-line: any site that has "things you can do," not just "things you can read," is a candidate. The richer your site's actions, the more WebMCP gives you.</figcaption>
+</figure>
+<h2 id="where-this-is-headed">Where this is headed</h2>
+<p>Now the fun part, because the ceiling here is high.</p>
+<p>The obvious next step is <strong>standardization across browsers.</strong> Right now it’s a Chrome trial; the destination is a web standard every browser implements, the way fetch or the clipboard API are everywhere. When that lands, “does this site have an agent interface?” becomes as normal a question as “is this site mobile-friendly?”</p>
+<p>That direction just got a real push. On August 26, 2026, OpenAI announced it’s <strong>adding WebMCP support to the ChatGPT desktop app’s built-in browser</strong> (and to ChatGPT Sites): visit a WebMCP-enabled page and ChatGPT or Codex can automatically use the tools it declares to complete your task. That’s the interesting signal, it’s not just Google and Microsoft (who wrote the draft) anymore. When a second major AI vendor starts consuming page-declared tools, a proposal in its incubation window starts looking like a direction the ecosystem is actually moving in.</p>
+<p>Then there’s the <strong>agentic web</strong> itself. Imagine sites shipping an agent interface alongside their visual one, on purpose, the way they ship a mobile layout today. Your site’s UI is for humans; its declared tools are for agents; both are first-class. A site that’s good at being operated by an agent gets used by more agents, which becomes a real reason to invest in the tool surface.</p>
+<p>It gets more interesting when you <strong>combine WebMCP with remote MCP.</strong> WebMCP handles what lives in the browser (the page’s own actions, the user’s session), while remote MCP servers handle backend tools and data. An agent could fluidly use both: call a page’s <code class="language-plaintext highlighter-rouge">add_to_cart</code> tool via WebMCP, then hit a remote inventory MCP server for stock, stitching client and server tools into one task.</p>
+<p>And further out: <strong>agent commerce.</strong> If a store exposes clean purchase tools and an agent can call them within the user’s authenticated, consenting session, you get a path to agents that actually complete transactions safely, with the human able to watch and confirm, rather than a scraper hammering a checkout flow. The same shape extends to booking, scheduling, support, anything transactional.</p>
+<p>The big bet underneath all of it: the web was built for humans to read and click. The next version is built to <em>also</em> be operated by agents, cleanly and on the site’s own terms. WebMCP is one of the first serious attempts to make that a standard instead of a hack.</p>
+<h2 id="the-takeaway-and-go-try-it">The takeaway, and go try it</h2>
+<p>Here’s the whole thing in a sentence: <strong>WebMCP lets your website hand an AI agent a clean set of tools instead of forcing it to reverse-engineer your buttons.</strong> That single shift, declare instead of scrape, makes agent interactions reliable, keeps the site in control, runs in the user’s real session, and survives your next redesign.</p>
+<p>It’s early, it’s Chrome-first, and the standard will change. But the barrier to trying it is almost nothing: flip on <code class="language-plaintext highlighter-rouge">chrome://flags/#enable-webmcp-testing</code>, add a <code class="language-plaintext highlighter-rouge">registerTool</code> call wrapping a function your site already has, and watch an agent call it. Ten minutes, and you’ll understand the agentic web better than most people reading about it. Then go read the proposal, poke the demos, and file the rough edges you hit, because right now, while it’s still being shaped, your feedback actually moves it.</p>
+<h2 id="references">References</h2>
+<p>Written from scratch after reading the official documentation. These are the primary, verified sources. Nothing here is copied from them; the code shape follows the documented API.</p>
+<ul>
+<li>Chrome for Developers, WebMCP overview: <a href="https://developer.chrome.com/docs/ai/webmcp">https://developer.chrome.com/docs/ai/webmcp</a></li>
+<li>Chrome for Developers, WebMCP imperative API: <a href="https://developer.chrome.com/docs/ai/webmcp/imperative-api">https://developer.chrome.com/docs/ai/webmcp/imperative-api</a></li>
+<li>Chrome for Developers, WebMCP declarative API: <a href="https://developer.chrome.com/docs/ai/webmcp/declarative-api">https://developer.chrome.com/docs/ai/webmcp/declarative-api</a></li>
+<li>WebMCP specification (Draft Community Group Report): <a href="https://webmachinelearning.github.io/webmcp/">https://webmachinelearning.github.io/webmcp/</a></li>
+<li>WebMCP proposal, explainer, and source (W3C Web Machine Learning Community Group): <a href="https://github.com/webmachinelearning/webmcp">https://github.com/webmachinelearning/webmcp</a></li>
+<li>Chrome Platform Status, WebMCP feature: <a href="https://chromestatus.com/feature/5117755740913664">https://chromestatus.com/feature/5117755740913664</a></li>
+<li>WebMCP demo sites (Google Chrome Labs): <a href="https://github.com/GoogleChromeLabs/webmcp-tools/tree/main/demos">https://github.com/GoogleChromeLabs/webmcp-tools/tree/main/demos</a></li>
+<li>Patrick Brosset (Microsoft Edge), WebMCP updates and clarifications: <a href="https://patrickbrosset.com/articles/2026-02-23-webmcp-updates-clarifications-and-next-steps/">https://patrickbrosset.com/articles/2026-02-23-webmcp-updates-clarifications-and-next-steps/</a></li>
+<li>OpenAI Developers, WebMCP support in the ChatGPT desktop browser (Aug 26, 2026): <a href="https://x.com/OpenAIDevs/status/2092344959248761263">https://x.com/OpenAIDevs/status/2092344959248761263</a></li>
+<li>Model Context Protocol (MCP), for the underlying protocol: <a href="https://modelcontextprotocol.io">https://modelcontextprotocol.io</a></li>
+</ul>
+<p><em>Background reading: <a href="/blog/2026-06-30-mcp-the-port-that-let-ai-touch-the-world/">MCP: The Port That Let AI Finally Touch the World</a> for the protocol WebMCP builds on, and <a href="/blog/2026-08-02-llm-security-prompt-injection-and-the-cost-of-defending/">LLM security</a> for why the trust model here matters.</em></p>
+
+</div>
+
+<p class="reveal" style="margin-top:2rem">
+<a href="/blog/">← Back to blog</a>
+</p>
+</article>

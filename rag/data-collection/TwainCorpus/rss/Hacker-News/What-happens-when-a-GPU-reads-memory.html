@@ -1,0 +1,500 @@
+<article class=""><div class="xl:flex xl:gap-8"><div class="xl:max-w-[37rem] min-w-0"><div class="prose max-w-none animate-fade-in animate-delay-3 prose-headings:font-semibold prose-headings:tracking-tight prose-headings:text-[--foreground] prose-h1:text-[2rem] prose-h1:mt-10 prose-h1:mb-3 prose-h2:text-[1.5rem] prose-h2:mt-9 prose-h2:mb-2 prose-h3:text-[1.25rem] prose-h3:mt-7 prose-h3:mb-2 prose-h4:text-[1.1rem] prose-h4:mt-5 prose-h4:mb-2 prose-p:text-[1rem] prose-p:leading-[1.6] prose-p:mb-[1.1em] prose-p:text-[--foreground] prose-a:text-[--accent] prose-a:decoration-[--accent-muted] prose-a:decoration-1 prose-a:underline-offset-[3px] hover:prose-a:decoration-[--accent] prose-strong:font-medium prose-strong:text-[--foreground] prose-em:text-[--foreground] prose-ul:my-4 prose-ol:my-4 prose-li:my-1 prose-li:text-[1rem] prose-li:leading-[1.6] prose-blockquote:border-l-[3px] prose-blockquote:border-[--rule] prose-blockquote:pl-6 prose-blockquote:italic prose-blockquote:text-[--muted] prose-blockquote:not-italic prose-img:rounded-lg prose-img:my-5 prose-hr:border-[--rule] prose-hr:my-8"><p>Our <a href="https://fergusfinn.com/blog/what-happens-when-you-run-a-gpu-kernel/">previous post</a> followed a
+vector-add kernel — <code>c[i] = a[i] + b[i]</code>, one thread per float — from <code>nvcc</code>
+down to the warps. We went into a lot of detail on how the kernel was launched,
+but we also left a lot out.</p>
+<p>This time, we’re going to address our omissions, and follow the path the
+critical SASS instruction (a global load) takes through the hardware — in this
+case, since it’s under my desk, an <a href="https://www.nvidia.com/en-gb/geforce/graphics-cards/40-series/rtx-4090/">RTX
+4090</a><span class="sidenote-wrapper" data-sidenote-id="sidenote-9ffkrag58"><span class="sidenote">We do this kind of reverse engineering for performance reasons, at least
+in principle (for a great rationale, see 'Why these details matter' in the
+<a href="https://arxiv.org/pdf/1804.06826">Citadel microbenchmarking</a> paper). For the
+same work applied to more production-relevant GPUs, watch this space.</span></span>.
+Little of the detail of this path is documented by NVIDIA, at least not to
+the level that we’d like, so we’ll determine it by running timing
+experiments on the hardware itself.</p>
+<p>The CUDA kernel we are investigating has two lines in its function body:</p>
+<div class="code-block-wrapper"><pre class="shiki shiki-themes github-light github-dark" node="[object Object]" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">__global__ </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">void</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0"> vadd</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">const</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> float*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> a, </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">const</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> float*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> b, </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">float*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> c, </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">int</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> n) {</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">    int</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> i </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> blockIdx.x </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> blockDim.x </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> threadIdx.x;</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">    if</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (i </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&lt;</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> n) c[i] </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> a[i] </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> b[i];</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">}</span></span></code></pre></div>
+<p>If you inspect the compiled SASS, you’ll see the instructions that power
+those lines:</p>
+<div class="code-block-wrapper"><pre class="shiki shiki-themes github-light github-dark" node="[object Object]" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">/*0080*/</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">  IMAD.WIDE</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> R4</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">,</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> R6</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">,</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> R7</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">,</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> c</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0">[0x0][0x168]</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> ;   </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">// &amp;b[i]</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">/*00a0*/</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">  LDG.E</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> R4</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">,</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0"> [R4.64]</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> ;                     </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">// b[i]</span></span></code></pre></div>
+<p>They serve to load the elements of the vector <code>b</code><span class="sidenote-wrapper" data-sidenote-id="sidenote-z58ecqap1"><span class="sidenote">The instructions are the same for <code>a</code>, we're following <code>b</code>.</span></span> from global memory into a
+register, where they can be added to the elements of <code>a</code> to perform the kernel.
+One <code>LDG.E</code> asks for four bytes in each of 32 lanes. Serving it takes four
+32-byte sectors, one cache line, one address translation, a crossbar crossing,
+one of thirty-six L2 slices, and, when it misses everywhere, an activate and
+four column reads at a DRAM chip. It’s this journey of the instruction through
+the hardware, and back, that we’ll try to follow.</p>
+<p>To set the scene: our warp lives on one of the SM’s four <strong>sub-partitions</strong>, alongside eleven
+other resident warps. Each cycle the sub-partition’s scheduler picks one warp
+that is eligible, and issues its next instruction across the 32 lanes at once.
+Our warp wins twice: once for the <code>IMAD.WIDE</code>, and a few cycles later (the
+addresses now sitting in <code>R4</code> and <code>R5</code>) for the <code>LDG</code>.</p>
+<p>Our story starts with the <code>LDG</code>.</p>
+<div aria-label="The load's route drawn as eight stations: warp, coalescer, L1, TLB, crossbar, L2, controller, DRAM. The first four sit inside the SM, the next three on the die, the DRAM on the board. Under the stations that can serve the load, the measured round-trip cost of a hit there: L1 15 nanoseconds, L2 127, DRAM 255. Currently at warp; earlier stations are tinted, later ones gray." class="gsim stnmap" role="img"><div class="stn-scroll"><div class="stn-grid"><div class="stn here"><div class="nm">warp</div></div><div class="stn ahead"><div class="nm">coalescer</div></div><div class="stn ahead"><div class="nm">L1</div><div class="sub mono">15 ns</div></div><div class="stn ahead"><div class="nm">TLB</div></div><div class="stn ahead"><div class="nm">crossbar</div></div><div class="stn ahead"><div class="nm">L2</div><div class="sub mono">127 ns</div></div><div class="stn ahead"><div class="nm">controller</div></div><div class="stn ahead"><div class="nm">DRAM</div><div class="sub mono">255 ns</div></div><div class="br" style="grid-column:1 / span 4"><div class="brlbl">SM</div></div><div class="br" style="grid-column:5 / span 3"><div class="brlbl">die</div></div><div class="br" style="grid-column:8"><div class="brlbl">board</div></div></div></div></div>
+<h2 id="from-the-warp-to-the-l1-cache"><a class="anchor" href="#from-the-warp-to-the-l1-cache">From the warp to the L1 cache</a></h2>
+<p>Let’s start with the instruction. <code>LDG.E R4, [R4.64]</code> is a global load of 32
+bits from the 64-bit <em>address</em> stored in registers <code>R4</code> and <code>R5</code><span class="sidenote-wrapper" data-sidenote-id="sidenote-ls36qzc7z"><span class="sidenote"><code>R5</code> appears because of the <code>.64</code> annotation: registers are <code>32</code> bits in
+size.</span></span>, storing
+the result in register <code>R4</code>. To load the data itself, we first must go get that
+address from those registers.</p>
+<p>One row of the register file holds <code>R4</code> for all 32 lanes at once<span class="sidenote-wrapper" data-sidenote-id="sidenote-ke2y7txsp"><span class="sidenote">The reads are staged in an <strong>operand collector</strong> first. The staging is
+there for instructions whose sources share a bank of the register file, since a
+bank serves one read per cycle. There are two banks, picked by the low bit of
+the register number, so an adjacent pair always spans both.</span></span>. Another
+holds <code>R5</code>. The warp reads both entries, yielding 256 bytes read as 32 distinct
+64-bit addresses, one address per lane.</p>
+<details>
+<summary><strong>What the register retrieve costs</strong></summary>
+<p>The address read adds at most one cycle. A shared-memory load taking its
+address from a register takes 24 cycles from issue to first use, and the same
+load with the address as an immediate takes 23. (<code>LDG</code> can’t take an immediate).</p>
+</details>
+<p>With all of its addresses resolved, the instruction issues to the
+<strong>load/store</strong> unit (LSU). The LSU takes the instruction and its operand
+addresses, does some address arithmetic (if necessary)<span class="sidenote-wrapper" data-sidenote-id="sidenote-wrasskmks"><span class="sidenote">This unit can add immediate offsets (<code>[R4.64]</code> carries no offset to add),
+and scope loads (<code>LDG</code> names the global window directly).</span></span>, and sends on the
+<strong>opcode</strong> (‘load these addresses’, in binary), a 32-bit mask of active lanes,
+its computed addresses, and the number of the register the result belongs in.
+The next destination is the <strong>coalescer</strong>.</p>
+<p>Each <code>LDG.E</code> instruction in each lane asks for 4 bytes, but our next
+destination, the <strong>L1 cache</strong>, is addressed in 32 byte <strong>sectors</strong>. The
+coalescer’s job is to figure out the minimal number of L1 sectors it needs to
+retrieve to service our 4-byte requests.</p>
+<p>The coalescer figures out that it ought to emit 4 contiguous sector requests,
+for the 128 bytes the warp has asked for<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-1" id="user-content-fnref-1">1</a></sup>.</p>
+<h3 id="entering-the-l1-cache"><a class="anchor" href="#entering-the-l1-cache">Entering the L1 cache</a></h3>
+<div aria-label="The load's route drawn as eight stations: warp, coalescer, L1, TLB, crossbar, L2, controller, DRAM. The first four sit inside the SM, the next three on the die, the DRAM on the board. Under the stations that can serve the load, the measured round-trip cost of a hit there: L1 15 nanoseconds, L2 127, DRAM 255. Currently at L1; earlier stations are tinted, later ones gray." class="gsim stnmap" role="img"><div class="stn-scroll"><div class="stn-grid"><div class="stn past"><div class="nm">warp</div></div><div class="stn past"><div class="nm">coalescer</div></div><div class="stn here"><div class="nm">L1</div><div class="sub mono">15 ns</div></div><div class="stn ahead"><div class="nm">TLB</div></div><div class="stn ahead"><div class="nm">crossbar</div></div><div class="stn ahead"><div class="nm">L2</div><div class="sub mono">127 ns</div></div><div class="stn ahead"><div class="nm">controller</div></div><div class="stn ahead"><div class="nm">DRAM</div><div class="sub mono">255 ns</div></div><div class="br" style="grid-column:1 / span 4"><div class="brlbl">SM</div></div><div class="br" style="grid-column:5 / span 3"><div class="brlbl">die</div></div><div class="br" style="grid-column:8"><div class="brlbl">board</div></div></div></div></div>
+<p>The request for four contiguous 32-byte sectors is sent onto the <strong>L1 cache</strong>.</p>
+<p>The L1 cache’s unit of organization is still less granular: 128 byte <strong>lines</strong>.
+Our 4 contiguous sectors represent the 4 parts of a single line, so a request
+gets made to L1 for that cache line.</p>
+<p>First, we have to determine whether that line is already in the cache. The
+cache is divided into groups of slots called <strong>sets</strong><span class="sidenote-wrapper" data-sidenote-id="sidenote-sexaz97z5"><span class="sidenote">In technical terms, the L1 cache on the 4090 is 4 way set-associative.
+Caches lie on a continuum between fully associative (any cache line can be
+stored anywhere in the cache), and 'direct-mapped' (each cache line can be
+stored in only one place).</span></span>, and a line’s address
+determines which set it belongs to. A set on this card holds four slots<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-2" id="user-content-fnref-2">2</a></sup>,
+and each carries a <strong>tag</strong> identifying the line in it. The lookup compares
+all four against the tag of the line it wants. The address it uses is the
+<strong>virtual</strong><span class="sidenote-wrapper" data-sidenote-id="sidenote-nvln0fmz7"><span class="sidenote">Presumably so that we don't have to pay translation cost to hit L1.</span></span> address used in the program<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-3" id="user-content-fnref-3">3</a></sup>. The set in which a line lands is
+generated from the line’s virtual address by a hashing scheme<span class="sidenote-wrapper" data-sidenote-id="sidenote-v7z5p31tn"><span class="sidenote">It's a complex parity scheme (see the appendix), not just some slice of
+the bits, so that power of 2 strided accesses (think columns of a matrix,
+tensor etc.) don't keep hitting the same sets and churn.</span></span>, which you can
+reverse engineer<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-4" id="user-content-fnref-4">4</a></sup>.</p>
+<p>If one of the four tags matches and the sectors we want are in that slot, the
+data is read out and the load is done<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-5" id="user-content-fnref-5">5</a></sup>. Because we’re loading all of our
+data for the first time, our request misses, and must descend further into the
+memory system.</p>
+<details>
+<summary><strong>How much does an L1 hit cost</strong></summary>
+<p>An L1 hit returns in about 15.4 ns — 40 cycles. The number comes from one
+thread chasing a dependent chain through a random permutation of L1-resident
+lines, with <a href="#setup">the latency chase</a>.</p>
+</details>
+<h2 id="looking-for-l2-translation"><a class="anchor" href="#looking-for-l2-translation">Looking for L2: translation</a></h2>
+<div aria-label="The load's route drawn as eight stations: warp, coalescer, L1, TLB, crossbar, L2, controller, DRAM. The first four sit inside the SM, the next three on the die, the DRAM on the board. Under the stations that can serve the load, the measured round-trip cost of a hit there: L1 15 nanoseconds, L2 127, DRAM 255. Currently at TLB; earlier stations are tinted, later ones gray." class="gsim stnmap" role="img"><div class="stn-scroll"><div class="stn-grid"><div class="stn past"><div class="nm">warp</div></div><div class="stn past"><div class="nm">coalescer</div></div><div class="stn past"><div class="nm">L1</div><div class="sub mono">15 ns</div></div><div class="stn here"><div class="nm">TLB</div></div><div class="stn ahead"><div class="nm">crossbar</div></div><div class="stn ahead"><div class="nm">L2</div><div class="sub mono">127 ns</div></div><div class="stn ahead"><div class="nm">controller</div></div><div class="stn ahead"><div class="nm">DRAM</div><div class="sub mono">255 ns</div></div><div class="br" style="grid-column:1 / span 4"><div class="brlbl">SM</div></div><div class="br" style="grid-column:5 / span 3"><div class="brlbl">die</div></div><div class="br" style="grid-column:8"><div class="brlbl">board</div></div></div></div></div>
+<p><strong>Virtual memory</strong> puts one level of indirection between the addresses a
+program names and the addresses at which the hardware stores data. The
+program gets a contiguous space of its own, and the hardware lays that space
+out across physical pages however it likes. <strong>Translation</strong> is the map between
+them.</p>
+<p>The L1 we just spoke to was <strong>virtually addressed</strong>, so we didn’t need to
+concern ourselves with translation. Past this point, we have to start speaking
+the hardware’s language — an L1 miss has to be translated before it leaves the
+SM<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-6" id="user-content-fnref-6">6</a></sup>.</p>
+<p>The actual mapping between physical and virtual addresses is established at
+allocation in the driver: when <code>b</code> was allocated, the driver picked physical
+(2MiB) pages for it and wrote page tables into VRAM recording the assignment<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-7" id="user-content-fnref-7">7</a></sup>.</p>
+<p>The translation unit takes in a virtual address and returns a physical address,
+according to those tables. The SM keeps its sixteen most recent translations in
+a TLB, shared across warps<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-8" id="user-content-fnref-8">8</a></sup>. The very first load will miss in this TLB.</p>
+<details>
+<summary><strong>What translation costs</strong></summary>
+<p>We can’t see any cost to hitting the TLB in any of the probes we have. Misses
+cost about 4.4 ns — eleven cycles. The same refill cost holds within 0.1
+ns across all the pages this chip can map, and from any SM, so the next level
+of the translation cache is universal, and very cheap.</p>
+</details>
+<p>Once translation has been performed, what leaves is one request per 128-byte
+line: now with the line’s <strong>physical</strong> address, along with a mask of the
+sectors we want from it. Ours is a single request with all four sectors
+marked<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-9" id="user-content-fnref-9">9</a></sup>.</p>
+<p>The request proceeds out of the SM, across the <strong>crossbar</strong> to the <strong>L2
+cache</strong>.</p>
+<h2 id="lost-in-l2"><a class="anchor" href="#lost-in-l2">Lost in L2</a></h2>
+<div aria-label="The load's route drawn as eight stations: warp, coalescer, L1, TLB, crossbar, L2, controller, DRAM. The first four sit inside the SM, the next three on the die, the DRAM on the board. Under the stations that can serve the load, the measured round-trip cost of a hit there: L1 15 nanoseconds, L2 127, DRAM 255. Currently at L2; earlier stations are tinted, later ones gray." class="gsim stnmap" role="img"><div class="stn-scroll"><div class="stn-grid"><div class="stn past"><div class="nm">warp</div></div><div class="stn past"><div class="nm">coalescer</div></div><div class="stn past"><div class="nm">L1</div><div class="sub mono">15 ns</div></div><div class="stn past"><div class="nm">TLB</div></div><div class="stn past"><div class="nm">crossbar</div></div><div class="stn here"><div class="nm">L2</div><div class="sub mono">127 ns</div></div><div class="stn ahead"><div class="nm">controller</div></div><div class="stn ahead"><div class="nm">DRAM</div><div class="sub mono">255 ns</div></div><div class="br" style="grid-column:1 / span 4"><div class="brlbl">SM</div></div><div class="br" style="grid-column:5 / span 3"><div class="brlbl">die</div></div><div class="br" style="grid-column:8"><div class="brlbl">board</div></div></div></div></div>
+<p>The request runs across the crossbar to one of 36 2 MiB L2 slices, picked by a
+somewhat complex function of its physical address<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-10" id="user-content-fnref-10">10</a></sup>. Any SM can hit any
+slice. All slices can serve in parallel, so the aggregate bandwidth is 36x that
+of a single slice.</p>
+<p>Inside a slice, the structure is of the same kind as the L1. Each slice holds
+1024 <strong>sets</strong>. The set to which a line belongs is picked by a hash of the line’s
+physical address. Each set now contains 16 slots: the slices are individually
+<strong>16 way set-associative</strong><sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-11" id="user-content-fnref-11">11</a></sup>. The lines are 128 bytes in size, the same as
+in L1.</p>
+<p>The line is not present in L2, since we’ve not fetched it before<span class="sidenote-wrapper" data-sidenote-id="sidenote-d72j98u66"><span class="sidenote">This is perhaps artistic license: loading the <code>b</code> vector across from host
+memory over PCIe might have cached it in L2. But then we couldn't continue down
+to DRAM!</span></span>. Each
+slice falls through to one of 12 memory controllers — 3 slices per controller.
+Each memory controller’s job is to speak to a single
+<a href="https://en.wikipedia.org/wiki/GDDR_SDRAM"><strong>GDDR6X</strong></a> DRAM chip<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-12" id="user-content-fnref-12">12</a></sup>. Our
+request gets handed over to that controller.</p>
+<details>
+<summary><strong>What does this cost</strong></summary>
+<p>An L2 hit costs about 127 ns — some 330 cycles. Each SM can hand the crossbar up to two
+line-requests per cycle, and the 36 slices serve independently. The exit-port
+counter is <code>l1tex__m_l1tex2xbar_req_cycles_active</code>.</p>
+</details>
+<h2 id="found-in-dram"><a class="anchor" href="#found-in-dram">Found in DRAM</a></h2>
+<div aria-label="The load's route drawn as eight stations: warp, coalescer, L1, TLB, crossbar, L2, controller, DRAM. The first four sit inside the SM, the next three on the die, the DRAM on the board. Under the stations that can serve the load, the measured round-trip cost of a hit there: L1 15 nanoseconds, L2 127, DRAM 255. Currently at controller; earlier stations are tinted, later ones gray." class="gsim stnmap" role="img"><div class="stn-scroll"><div class="stn-grid"><div class="stn past"><div class="nm">warp</div></div><div class="stn past"><div class="nm">coalescer</div></div><div class="stn past"><div class="nm">L1</div><div class="sub mono">15 ns</div></div><div class="stn past"><div class="nm">TLB</div></div><div class="stn past"><div class="nm">crossbar</div></div><div class="stn past"><div class="nm">L2</div><div class="sub mono">127 ns</div></div><div class="stn here"><div class="nm">controller</div></div><div class="stn ahead"><div class="nm">DRAM</div><div class="sub mono">255 ns</div></div><div class="br" style="grid-column:1 / span 4"><div class="brlbl">SM</div></div><div class="br" style="grid-column:5 / span 3"><div class="brlbl">die</div></div><div class="br" style="grid-column:8"><div class="brlbl">board</div></div></div></div></div>
+<p>The memory controller’s job is to load the data from its 2 GiB DRAM chip. It
+does so by issuing commands to DRAM over a bus.</p>
+<p>The DRAM is divided into two separate buses the controller drives independently,
+called <strong>channels</strong>. On each channel sit 16 <strong>banks</strong>: two-dimensional arrays
+of memory cells. A bank consists of 65,536 <strong>rows</strong>. The hardware can open one
+row at a time (an <strong>activate</strong>, expensive), and then return any 32-byte
+<strong>columns</strong> from that row (a <strong>read</strong>, cheap while the row is open).</p>
+<div aria-label="The internal map of one GDDR6X chip, drawn as a repeated zoom. The 2 gigabyte chip splits into two channels of 1 gigabyte, each with its own bus leaving the chip for the memory controller — a wide data bundle and a narrower command bundle — and 16 banks of 64 megabytes. One bank tile opens into a panel of its 65,536 rows of 1 kilobyte; one row opens again into its 32 columns of 32 bytes, with four adjacent columns highlighted — our four sectors. Which bank and channel are highlighted is illustrative; the row-and-columns shape is measured." class="gsim drammap" role="img"><div class="cm-head"><span class="cm-code">GDDR6X</span></div></div>
+<p>The address is taken apart one last time, to match this memory structure. It
+picks out a channel, a bank, a row, and a column. Our four sectors are
+four columns of one row<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-13" id="user-content-fnref-13">13</a></sup>.</p>
+<p>So, to serve our load, the memory controller must first send one <strong>activate</strong>,
+and then four <strong>read</strong>s<sup><a aria-describedby="footnote-label" data-footnote-ref="" href="#user-content-fn-14" id="user-content-fnref-14">14</a></sup>.</p>
+<h2 id="how-the-dram-replies"><a class="anchor" href="#how-the-dram-replies">How the DRAM replies</a></h2>
+<div aria-label="The load's route drawn as eight stations: warp, coalescer, L1, TLB, crossbar, L2, controller, DRAM. The first four sit inside the SM, the next three on the die, the DRAM on the board. Under the stations that can serve the load, the measured round-trip cost of a hit there: L1 15 nanoseconds, L2 127, DRAM 255. Currently at DRAM; earlier stations are tinted, later ones gray." class="gsim stnmap" role="img"><div class="stn-scroll"><div class="stn-grid"><div class="stn past"><div class="nm">warp</div></div><div class="stn past"><div class="nm">coalescer</div></div><div class="stn past"><div class="nm">L1</div><div class="sub mono">15 ns</div></div><div class="stn past"><div class="nm">TLB</div></div><div class="stn past"><div class="nm">crossbar</div></div><div class="stn past"><div class="nm">L2</div><div class="sub mono">127 ns</div></div><div class="stn past"><div class="nm">controller</div></div><div class="stn here"><div class="nm">DRAM</div><div class="sub mono">255 ns</div></div><div class="br" style="grid-column:1 / span 4"><div class="brlbl">SM</div></div><div class="br" style="grid-column:5 / span 3"><div class="brlbl">die</div></div><div class="br" style="grid-column:8"><div class="brlbl">board</div></div></div></div></div>
+<p>What does a DRAM chip do in response to those commands?</p>
+<p>Each DRAM cell is one capacitor behind one transistor. The transistors of a
+row share a <strong>wordline</strong>, attached to their gates. Each transistor sits
+between its capacitor and a <strong>bitline</strong>, which runs along a column, providing a path
+from each cell (shared with the cells of other rows) to the <strong>sense
+amplifiers</strong>. Bits are stored in the charge state of the capacitor. The
+capacitors constantly leak charge, so the chip has to pause each bank now and
+then to top them up.</p>
+<p><span class="sidenote-unnumbered-wrapper" data-sidenote-id="sidenote-926qr07v5"><span class="sidenote-unnumbered">The structure of DRAM. Click a row to act as the row decoder, releasing
+charge from the capacitors onto the bitline and into the row buffer.</span></span></p>
+
+<p>The activate command triggers the <strong>row decoder</strong> to drive that row’s wordline,
+opening the row’s transistors and driving the charge from the capacitors in
+that row (and only that row) through the bitline into the sense amplifiers,
+which amplify that charge into full-rail bits and hold them for the controller
+to read.</p>
+<p>When the read is issued, its column address picks out 256 of these row
+bits. Reading from the sense amplifiers gives us very many bits at once, but we
+need to serialize them onto the pins that drive data back across the bus. There
+are 16 data pins per channel. The 256 bits of our read leave on these pins as
+<a href="https://fergusfinn.com/blog/nvlink-scale-up/#fast-or-far">PAM4</a><span class="sidenote-wrapper" data-sidenote-id="sidenote-iioffcozy"><span class="sidenote">GDDR6X is the GDDR6 standard, with this PAM4 signalling added.</span></span> symbols: each symbol is one of four voltage levels, carrying two
+bits, so 256 bits over 16 pins is 16 bits per pin — eight symbols. The clock is
+sent along a shared wire so that the controller can sample at the right edges.</p>
+<h2 id="the-way-back"><a class="anchor" href="#the-way-back">The way back</a></h2>
+<div aria-label="The load's route — warp, coalescer, L1, TLB, crossbar, L2, controller, DRAM — with every station visited and the arrows reversed: the data is on its way back." class="gsim stnmap" role="img"><div class="stn-scroll"><div class="stn-grid"><div class="stn past"><div class="nm">warp</div></div><div class="stn past"><div class="nm">coalescer</div></div><div class="stn past"><div class="nm">L1</div><div class="sub mono">15 ns</div></div><div class="stn past"><div class="nm">TLB</div></div><div class="stn past"><div class="nm">crossbar</div></div><div class="stn past"><div class="nm">L2</div><div class="sub mono">127 ns</div></div><div class="stn past"><div class="nm">controller</div></div><div class="stn past"><div class="nm">DRAM</div><div class="sub mono">255 ns</div></div><div class="br" style="grid-column:1 / span 4"><div class="brlbl">SM</div></div><div class="br" style="grid-column:5 / span 3"><div class="brlbl">die</div></div><div class="br" style="grid-column:8"><div class="brlbl">board</div></div></div></div></div>
+<p>These PAM4 bursts are deserialized in the memory controller, and written into
+the L2 slice’s line. The results run back through the crossbar, back to their
+SM, and fill their L1 slot. They rendezvous with the record left by their
+leaving, and their bytes are written into register <code>R4</code> across all the lanes.</p>
+<p>When the load was issued, a dependency barrier was set, which this register
+write clears. The warp becomes eligible again, and on the scheduler’s next cycle
+it wins the arbitration. The instruction it issues is the add that was waiting
+on <code>b[i]</code>.</p>
+<p>The round trip — L1, TLB, crossbar, L2, controller, and back —
+costs about 255 ns, some 660 cycles. All the while our warp was parked on its
+barrier. The rest of the chip wasn’t idle though. The sub-partition issued the
+same loads for another 11 warps, the rest of the SM for another 36, the other
+SMs for the other 6096. The result is a cacophony of loads, the per-load
+latency of any one of them lost in the noise. Here’s what that looks like:</p>
+<p><span class="sidenote-unnumbered-wrapper" data-sidenote-id="sidenote-rzquurrc0"><span class="sidenote-unnumbered">A timing-proportional simulation of the execution of only the instructions
+in the <code>vadd</code> kernel that correspond to the load of <code>b</code>. Each SM loads only
+those addresses it loads in the real kernel: those addresses light up (and
+miss) in the correct L1 set, then are routed through the crossbar to the
+correct L2 slice, where they miss, falling through a
+correctly contended memory controller to a simulated DRAM bank,
+before returning back through L2, back through L1, and returning their results
+into the correct register.</span></span></p>
+<div class="gsim fullsim"><div class="controls"><div class="ctl-left"><span class="eq">Loading b </span></div><div class="ctl-right"><button class="primary" type="button">run ▸</button><button type="button">reset</button></div></div><div class="fs-wrap"><div class="fs-die"><div class="fs-smrow-lbl fs-lbl">SMs  (128), one pixel per L1 set</div><div class="fs-smgrid"></div><div class="fs-band" data-a="xbar"><span class="fs-bandlbl">crossbar</span></div><div class="fs-lbl">L2 (36 slices, 3 per controller), one pixel per set</div><div class="fs-l2band"><div class="fs-group"></div><div class="fs-group"></div><div class="fs-group"></div><div class="fs-group"></div><div class="fs-group"></div><div class="fs-group"></div><div class="fs-group"></div><div class="fs-group"></div><div class="fs-group"></div><div class="fs-group"></div><div class="fs-group"></div><div class="fs-group"></div></div><div class="fs-lbl">memory controllers (level is instantaneous throughput)</div><div class="fs-mcs"><div class="fs-mc" data-a="mc-0"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-1"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-2"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-3"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-4"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-5"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-6"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-7"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-8"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-9"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-10"><span class="fs-mclbl">MC</span></div><div class="fs-mc" data-a="mc-11"><span class="fs-mclbl">MC</span></div></div><div class="fs-lbl">GDDR6X, 12 chips, 32 banks</div><div class="fs-bankfield"><div class="fs-bankcol"></div><div class="fs-bankcol"></div><div class="fs-bankcol"></div><div class="fs-bankcol"></div><div class="fs-bankcol"></div><div class="fs-bankcol"></div><div class="fs-bankcol"></div><div class="fs-bankcol"></div><div class="fs-bankcol"></div><div class="fs-bankcol"></div><div class="fs-bankcol"></div><div class="fs-bankcol"></div></div><div class="fs-legend"><span class="fs-leg"> activate</span><span class="fs-leg"> row open</span><span class="fs-leg"> precharge</span><span class="fs-leg"> refresh</span></div></div></div><div class="status"><span>in flight <span class="n">0</span> retired<!-- --> <span class="n">0</span> activates<!-- --> <span class="n wide">0</span> refreshes<!-- --> <span class="n">0</span> GB/s<!-- --> <span class="n">0</span></span></div></div>
+<h2 class="appendix-start" id="appendix-the-probes"><a class="anchor" href="#appendix-the-probes">Appendix: the probes</a></h2>
+<h3 id="setup"><a class="anchor" href="#setup">Setup</a></h3>
+<p>All measurements are on one RTX 4090 (<code>sm_89</code>), with the core clock locked at
+2.6 GHz. Cycles come from measured nanoseconds at that frequency. Two main
+instruments:</p>
+<p><strong>A latency chase.</strong> To get a latency measurement (especially when that
+latency changing tells you something about the chip), we run a pointer cycle
+through a chosen set of lines, hopped 20,000 times, and then measure the mean
+ns per hop. If the lines we point to fit in a cache level, then
+they stay resident, and the mean is that level’s hit latency. Because of the
+steepness of the hierarchy, any loads that overflow to the next level down tend
+to show up strongly in the average.
+<code>ld.global.ca</code> (<code>LDG.E…STRONG.SM</code>) for chases at the L1, <code>ld.global.cg</code>
+(<code>LDG.E…STRONG.GPU</code>) goes past L1. Hit latencies are 15.4 ns at the L1, 127.4
+ns at the L2, and 255.4 ns at DRAM.</p>
+<p><strong>Hardware counters.</strong> To read <code>ncu</code>’s counters reliably
+you have to take them as slopes over iteration count so fixed overhead cancels.
+Sector and request counters at the L1 exit port and the L2 side are used to
+figure out more about the shape of the requests, and a per-slice sector counter
+helps to give us the L2 slice measurements.</p>
+<h3 id="the-l1-set-function"><a class="anchor" href="#the-l1-set-function">The L1 set function</a></h3>
+<p>The 8 bits of the L1 index are the XOR of a fixed subset of the address bits. Written as
+a bitmask over the address, one basis for those subsets is:</p>
+<table><thead><tr><th style="text-align:right">bit</th><th style="text-align:right">mask</th><th style="text-align:right">bit</th><th style="text-align:right">mask</th></tr></thead><tbody><tr><td style="text-align:right">0</td><td style="text-align:right"><code>0xc3901e00</code></td><td style="text-align:right">4</td><td style="text-align:right"><code>0x47810400</code></td></tr><tr><td style="text-align:right">1</td><td style="text-align:right"><code>0x119a80a00</code></td><td style="text-align:right">5</td><td style="text-align:right"><code>0x1b4e09180</code></td></tr><tr><td style="text-align:right">2</td><td style="text-align:right"><code>0x167041b00</code></td><td style="text-align:right">6</td><td style="text-align:right"><code>0xb6405400</code></td></tr><tr><td style="text-align:right">3</td><td style="text-align:right"><code>0xdbc21d80</code></td><td style="text-align:right">7</td><td style="text-align:right"><code>0xdc202c80</code></td></tr></tbody></table>
+<p>The masks themselves aren’t unique — any invertible combination of these eight describes the same
+partition.</p>
+<h3 id="page-tables-and-the-tlb"><a class="anchor" href="#page-tables-and-the-tlb">Page tables and the TLB</a></h3>
+<p>The 16-entry TLB is only the first level, but what happens when you miss? A
+miss refills in about 4.4 ns, and an L2 hit is 127 ns and a VRAM access is 255
+ns, so we can’t be going from those. The inference is that it comes from some
+larger on-chip translation cache.</p>
+<p>The cost is flat within 0.1 ns for all the pages the chip can map, and from any
+SM. More evidence: walking the page tables with
+<a href="http://rtsrv.cs.unc.edu/cgit/cgit.cgi/nvdebug.git/">nvdebug</a> shows the
+volatile bit set on every directory entry, so they’re not cached in the normal
+hierarchy.</p>
+<h3 id="the-l2-slice-function"><a class="anchor" href="#the-l2-slice-function">The L2 slice function</a></h3>
+<p>Measuring which slice owns a line is pretty hard. The L2 is physically
+indexed, so the probe has to work in device-physical addresses from the page-table
+walk. Nsight Compute does have a per-slice sector counter, but reports only the min,
+max, average, and sum across the 36 instances, never the actual slice index.</p>
+<p>Even so, the aggregate is enough to tell whether two addresses share a slice.
+If the two addresses live on the same slice, after loading both, the max
+counter reports 2, if they’re on different slices the max is 1. You can use
+this probe to get a representative address that lands on each of the 36 slices.</p>
+<p>With the 36 representatives in hand, you can get any new candidate’s slice. If
+you read the candidate many times alongside all 36, with each of the
+different addresses read a distinct number of times (say 20001, 20002, …
+times), the sum of the candidate’s read count and only one of the
+representatives will match the max counter, and you can figure the slice by
+inference.</p>
+<p>From that, you can produce a table of many physical address-slice pairs. The
+hard part is going from such a table to a physically plausible function. One
+tool that helped us a bit was running the same kinds of experiments on two
+different chips built on the same die: the 4090, and the L40S, which has an extra
+slice per memory controller.</p>
+<p>Here’s one Claude made earlier<span class="sidenote-wrapper" data-sidenote-id="sidenote-lwoim172c"><span class="sidenote">It's hard to be sure what's actually in the hardware here, but this is
+plausible given my limited knowledge. The priors: there's got to be some
+shared silicon between the L40S and the 4090 (assuming NVIDIA don't ship two
+completely different functional paths for chips on the same layout but with
+different amounts of L2 fused off). And the function has to be simple-ish in
+hardware, i.e. XORs, arithmetic etc. are fair game, but if Claude tries to put
+in a 4096 entry lookup table you tell it to go try harder.</span></span>:</p>
+<div class="code-block-wrapper"><pre class="shiki shiki-themes github-light github-dark" node="[object Object]" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">SHIFT</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">OFFSET</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> =</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">5</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">0</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">1</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">), (</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">1</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">0</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">0</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">def</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0"> parity</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(x):</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">    return</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> bin</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(x).count(</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"1"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 1</span></span>
+
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">def</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0"> _state</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(a, N):</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    wide </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (N </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">==</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 48</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)                             </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># L40S: 4 slices/controller, and it reaches bit 35</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b35 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">1</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> &lt;&lt;</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 35</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">if</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> wide </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">else</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 0</span></span>
+
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">    # stage 1 — which of the 12 controllers: two parities and a mod-3 digit</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    P1c </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">76A990400</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)                </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># controller parity 1 (narrow; used on both chips)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    P1  </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">76A990400</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> ^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> b35))        </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># wide form, only needed for the L40S read-out</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    P2  </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">2CCF7B000</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)                </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># controller parity 2</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    A   </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> ((a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&gt;&gt;</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 15</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 2</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">3C9041000</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">2882B0800</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> ^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> b35)) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 2</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">%</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 3</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">  # mod-3 digit: (a&gt;&gt;15) + 2 corrections</span></span>
+
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">    # stage 2 — which slice inside the controller: a 9-position cyclic counter</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    g   </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> ((a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">1</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> &lt;&lt;</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 16</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&gt;&gt;</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 17</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">%</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 9</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">            # the counter value, round(a / 2^17) mod 9</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    q0  </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">8000</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)                     </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># four correction parities</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    q1  </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">5985E0500</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    q2  </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">2354E4400</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> ^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> b35))</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    q3  </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">3C9041000</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    carry </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 1</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> if</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> q0 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> q1 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> q2 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&gt;=</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 2</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> else</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 0</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">        # q0,q1,q2 as a full adder: the carry (majority)...</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    start </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">5</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> +</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 7</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">q0 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 5</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">q1 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 2</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">q2 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> q3 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">-</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> carry) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">%</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 9</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">   # ...sets where the counter starts</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    o     </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (g </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">-</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> SHIFT</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">[A] </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">-</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> start) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">%</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 9</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">           # position within the 9-cycle</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    Lf    </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 2</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> if</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (q0 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> q1 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> q2) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">==</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 0</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> else</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 1</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">      # ...and their XOR sets where it splits</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">    return</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> P1c, P1, P2, A, q2, o </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">//</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 3</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, (</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">1</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> if</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (o </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">%</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 3</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&gt;=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> Lf </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">else</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 0</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)   </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># d = o // 3, u = the split bit</span></span>
+
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">def</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0"> slice_of</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(a, N</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">36</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">):</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    P1c, P1, P2, A, q2, d, u </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> _state(a, N)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    controller </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">2</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">P1c </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> P2) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 3</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> +</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> A            </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># 0..11</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">    if</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> N </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">==</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 36</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">:                                  </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># 4090: 3 slices live, read (d, u) as three arcs of Z/9</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">        base </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 2</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> if</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> d </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">==</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 0</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> else</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">1</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> if</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (d </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">==</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 1</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> and</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> u </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">==</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 0</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">else</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 0</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">        B </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> ((</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">1</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> -</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> base) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">%</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 3</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> if</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> q2 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">else</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> base) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">%</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 3</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"> # q2 flips the arc order</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">        B </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (B </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> OFFSET</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">[A]) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">%</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 3</span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">                   # per-controller offset</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">        return</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> controller </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 3</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> +</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> B</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">    if</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> N </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">==</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 48</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">:                                  </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># L40S: 4 slices live, read u as two index bits</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">        i0, i1 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> P1 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> q2 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> u, P1 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> P2 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> u</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">        return</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> controller </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 4</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> +</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 2</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">*</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">i0 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">+</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> i1</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">    raise</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> ValueError</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"N must be 36 or 48"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span></code></pre></div>
+<p>Whilst it is very hard to find such a function, it’s very easy to tell if
+you’ve found one that works. Drawing 8,192 L2-resident lines from exactly <em>k</em>
+predicted slices:</p>
+<table><thead><tr><th style="text-align:left">lines drawn from</th><th style="text-align:right">Mload/s</th><th style="text-align:right">vs <em>k</em>=1</th></tr></thead><tbody><tr><td style="text-align:left">1 predicted slice</td><td style="text-align:right">1,957</td><td style="text-align:right">1.00×</td></tr><tr><td style="text-align:left">2</td><td style="text-align:right">3,917</td><td style="text-align:right">2.00×</td></tr><tr><td style="text-align:left">4</td><td style="text-align:right">7,826</td><td style="text-align:right">4.00×</td></tr><tr><td style="text-align:left">9</td><td style="text-align:right">17,582</td><td style="text-align:right">8.98×</td></tr><tr><td style="text-align:left">18</td><td style="text-align:right">34,446</td><td style="text-align:right">17.60×</td></tr><tr><td style="text-align:left">all 36</td><td style="text-align:right">68,085</td><td style="text-align:right">34.78×</td></tr></tbody></table>
+<h3 id="the-l2-set-index-and-geometry"><a class="anchor" href="#the-l2-set-index-and-geometry">The L2 set index and geometry</a></h3>
+<p>Once the slice function pins addresses to a single slice, you can do the same
+eviction-set archaeology on that slice, to figure out the structure, which
+tells you that it’s 16 way set-associative (a chase with 17 elements thrashes, but
+one with 16 doesn’t).</p>
+<p>The set index within a slice is the same kind of parity function as the L1’s —
+ten bits, with the same <code>(a &gt;&gt; 15) mod 9</code> nonlinearity in the top bit.
+Unfortunately, the masks involved differ depending on the slice. For one slice:</p>
+<div class="code-block-wrapper"><pre class="shiki shiki-themes github-light github-dark" node="[object Object]" style="--shiki-light:#24292e;--shiki-dark:#e1e4e8;--shiki-light-bg:#fff;--shiki-dark-bg:#24292e" tabindex="0"><code><span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">def</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0"> parity</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(x):</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">    return</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> bin</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(x).count(</span><span style="--shiki-light:#032F62;--shiki-dark:#9ECBFF">"1"</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 1</span></span>
+
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">def</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0"> set_index</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(a):                                </span><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D"># within one slice</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">//</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 1152</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b0 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">0bd654c80</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">00e500</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b1 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">0bd654c80</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">010000</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b2 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">07aed8b80</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">027c00</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b3 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">03e313180</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">045500</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b4 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">03e313300</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">080300</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b5 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">0bd654e80</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">104200</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b6 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">0bd654c00</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">200b00</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b7 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">044dcb880</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">401600</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b8 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">000000200</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">804600</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">)</span></span>
+<span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    b9 </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">=</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">13bc21180</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> parity(q </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&amp;</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> 0x</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">006400</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">^</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> int</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">((a </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&gt;&gt;</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 15</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">) </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">%</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> 9</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583"> in</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> (</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">2</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF">6</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">))</span></span>
+<span class="line"><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">    return</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> sum</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">(b </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">&lt;&lt;</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> i </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">for</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8"> i, b </span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">in</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> enumerate</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">([b0, b1, b2, b3, b4, b5, b6, b7, b8, b9]))</span></span></code></pre></div>
+<p>It has some properties that let you sense-check it. For example: a contiguous
+72MiB fills each slot in each slice without thrashing anything, as you’d
+expect.</p>
+<h3 id="dram-refresh"><a class="anchor" href="#dram-refresh">DRAM refresh</a></h3>
+<p>DRAM cells leak charge and so have to be periodically refreshed, which makes
+some kinds of timing probes harder. You can see it by running a dependent chase
+that writes each hop’s timing into shared memory. Most DRAM accesses come back
+at the usual latency, but a small share take longer, spread evenly out to a
+hard ceiling about 210 ns higher than usual. An evenly spaced run like that is
+the signature of a fixed length stall. The stall is ~210 ns. About 2% of
+accesses hit one. It doesn’t hit the whole chip at once — it’s more local than
+that — but I couldn’t tell what the unit was.</p>
+<section class="footnotes" data-footnotes=""><h2 class="sr-only" id="footnote-label"><a class="anchor" href="#footnote-label">Footnotes</a></h2>
+<ol>
+<li id="user-content-fn-1">
+<p>You can get some visibility here from the hardware counters. We set up a
+one-warp kernel that loads 4 bytes per lane with a fixed stride. If you
+run it under <code>ncu</code>, it reports ‘sectors per load’ as <code>l1tex__average_t_sectors_per_request_pipe_lsu_mem_global_op_ld.ratio</code>. At stride 1 the 32 lanes cover 128 contiguous bytes and the
+counter reads four sectors. At every wider stride the count equals the
+number of distinct 32-byte spans the lane addresses touch, with no extra
+sectors requested. <a aria-label="Back to reference 1" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-1">↩</a></p>
+</li>
+<li id="user-content-fn-2">
+<p>To count the slots in a set, we take a pool of candidate lines much larger
+than the L1 cache and pointer-chase them in a cycle. By design, the pool
+doesn’t fit in L1, so each line thrashes, and the latency stays &gt; L1
+latency. Then you progressively drop members, and watch the latency. If the
+latency suddenly drops, you know that somewhere in your pool there is one
+full set (since it doesn’t thrash). The goal is to find the minimal set
+such that everything thrashes, where removing any address drops you to L1
+access speeds. This is the standard process of finding <a href="https://arxiv.org/pdf/1810.01497">eviction
+sets</a>. <a aria-label="Back to reference 2" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-2">↩</a></p>
+</li>
+<li id="user-content-fn-3">
+<p>Caches can be indexed &amp; tagged either virtually or physically. This L1 uses
+the virtual address for both its index and its tag. You can see this by
+mapping one physical allocation at two virtual addresses, in the minimal
+conflict set we built to identify the number of ways. Swapping one member
+of a minimal conflict set for the same physical line seen through the other
+mapping breaks the conflict, so the index must be computed from virtual
+bits (if it was physically addressed, they’d deduplicate). Adding the alias
+back to a full set restores the conflict, so the alias occupies a slot of
+its own and the tag is virtual too. <a aria-label="Back to reference 3" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-3">↩</a></p>
+</li>
+<li id="user-content-fn-4">
+<p>Each of the eight index bits is the exclusive-or of a fixed subset of the
+address bits. The masks defining these subsets are in <a href="#the-l1-set-function">the
+appendix</a>. Figuring out these masks takes two probes.
+Inside one 2 MiB page, the differences between members of minimal conflict
+sets fix the masks over address bits 7 to 20. Above the page, flipping one
+high address bit and reading which set the line lands in gives that bit’s
+contribution, for every bit from 21 to 32. You can check if you’ve got the
+right function by using it to construct eviction sets manually (since you
+know what addresses go in what sets). <a aria-label="Back to reference 4" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-4">↩</a></p>
+</li>
+<li id="user-content-fn-5">
+<p>A slot can hold a line with only some of its sectors present. When a load
+misses, the request sent on to the L2 names only the sectors the warp wants.
+<code>ncu</code>’s L2-side counters show the sector count per request tracking exactly
+what the lanes touch, with no rounding up to the full line. The counters are
+<code>lts__t_requests_srcunit_tex_op_read</code> and its <code>t_sectors</code> counterpart. <a aria-label="Back to reference 5" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-5">↩</a></p>
+</li>
+<li id="user-content-fn-6">
+<p>To figure out that the L2 is physically tagged and indexed: we map one
+physical allocation at two virtual addresses, and a chase visits every line
+in the allocation through both virtual indexes. If the L2 tagged lines by
+virtual address, the aliased chase would occupy twice the footprint and
+exceed the L2’s 72 MiB capacity edge at half the size (this is a tradeoff
+for any virtually addressed cache: that you get no deduplication. Also
+vulnerable to timing attacks w/ multitenancy, not a factor here).
+Sweeping the physical footprint from 24 to 128 MiB, the control and the
+aliased chase cross the L2 threshold at the same size, so translation
+must happen before L2. <a aria-label="Back to reference 6" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-6">↩</a></p>
+</li>
+<li id="user-content-fn-7">
+<p>You can read GPU page tables directly, using a tool like
+<a href="http://rtsrv.cs.unc.edu/cgit/cgit.cgi/nvdebug.git/">nvdebug</a> that walks
+the GPU’s page tables from the host. Every device allocator terminates in a
+2 MiB page-table entry, with the 4 KiB table beside it invalid. That covers <code>cudaMalloc</code>, <code>cuMemAlloc</code>, the
+virtual-memory API at either granularity, and managed memory. Pinned host
+memory is the exception, with 4 KiB entries in the system aperture. The
+walker is in <a href="#page-tables-and-the-tlb">the appendix</a>. In the open kernel
+modules, the mapping path is
+<a href="https://github.com/NVIDIA/open-gpu-kernel-modules/blob/590.48.01/src/nvidia/src/kernel/gpu/mem_mgr/arch/maxwell/virt_mem_allocator_gm107.c#L315"><code>dmaAllocMapping</code></a>,
+which calls <code>dmaUpdateVASpace</code> and then
+<a href="https://github.com/NVIDIA/open-gpu-kernel-modules/blob/590.48.01/src/nvidia/src/libraries/mmu/mmu_walk_map.c#L41"><code>mmuWalkMap</code></a>
+to fill the entries. The walker allocates each page-table level the first time a mapping needs it. <a aria-label="Back to reference 7" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-7">↩</a></p>
+</li>
+<li id="user-content-fn-8">
+<p>The TLB is fully associative, holds sixteen entries, is per-SM (shared by
+the warps), and replaces the least recently used entry. You can find this
+out with yet another pointer chase, this time, one line per 2 MiB page.
+Sixteen pages cost a 127 ns baseline — the L2 hit latency, since the
+chase bypasses L1 — but seventeen thrash.
+Splitting the pages among the warps of one block gives the same step, so
+the pool is per-SM and shared by its warps. Cyclic visits over seventeen
+pages miss on every hop, which is the LRU pattern. The tables are in <a href="#page-tables-and-the-tlb">the
+appendix</a>. <a aria-label="Back to reference 8" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-8">↩</a></p>
+</li>
+<li id="user-content-fn-9">
+<p>Same logic for figuring out the L1 request from the counters, only using
+the L2 counters. <a aria-label="Back to reference 9" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-9">↩</a></p>
+</li>
+<li id="user-content-fn-10">
+<p>In the function, two address parities and a mod-3 digit are used to pick
+out the memory controller, which is shared between 4 slices in the full
+AD102, but only 3 on the 4090, which fuses off one slice per controller.
+Within those three, a mod-9 digit picks the specific slice. The card has
+twelve controllers (a 384-bit bus, 12 × 32-bit). The function was recovered
+by measurement; details in <a href="#the-l2-slice-function">the appendix</a>. You
+can tell once you’ve got it right, because loading from a set of pointers
+that share a slice is ~36x (the number of slices) slower than a load from
+pointers that spread across all the slices. <a aria-label="Back to reference 10" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-10">↩</a></p>
+</li>
+<li id="user-content-fn-11">
+<p>Once you figure out the function mapping specific addresses to specific
+slices, you can do the cache archaeology in the same way we did it for L1,
+using eviction sets, with the caveat that you can only use addresses that
+map to a single slice. More in <a href="#the-l2-set-index-and-geometry">the appendix</a>. <a aria-label="Back to reference 11" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-11">↩</a></p>
+</li>
+<li id="user-content-fn-12">
+<p>The count of twelve controllers is public (it’s a 384-bit bus at 32 bits
+per chip). The association of slices to controllers is read out of the
+slice function. Three of its digits take twelve values, and the same three
+digits appear unchanged on the L40S, which ships the same silicon with all
+four slices per controller enabled. The factoring is in
+<a href="#the-l2-slice-function">the appendix</a>. <a aria-label="Back to reference 12" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-12">↩</a></p>
+</li>
+<li id="user-content-fn-13">
+<p>You can measure the row size from timing. Because a DRAM chip is much
+faster at serving loads that sit in the same row (since a pair of addresses
+in different rows require closing the row buffer, + activating the new
+one), if you assume that rows are contiguous, you can find row size by
+sweeping. Offsets of 32, 64 and 96 bytes always stay within one row, so our
+four sectors are four columns of one row. With the same instrument, you can
+figure out the set of addresses that share a row: any difference in <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mn>2</mn><mn>5</mn></msup></mrow><annotation encoding="application/x-tex">2^5</annotation></semantics></math></span><span aria-hidden="true" class="katex-html"><span class="base"><span class="mord"><span class="mord">2</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em"><span style="top:-3.063em;margin-right:0.05em"><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">5</span></span></span></span></span></span></span></span></span></span></span>,
+<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mn>2</mn><mn>6</mn></msup></mrow><annotation encoding="application/x-tex">2^6</annotation></semantics></math></span><span aria-hidden="true" class="katex-html"><span class="base"><span class="mord"><span class="mord">2</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em"><span style="top:-3.063em;margin-right:0.05em"><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">6</span></span></span></span></span></span></span></span></span></span></span>, <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mn>2</mn><mn>7</mn></msup></mrow><annotation encoding="application/x-tex">2^7</annotation></semantics></math></span><span aria-hidden="true" class="katex-html"><span class="base"><span class="mord"><span class="mord">2</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em"><span style="top:-3.063em;margin-right:0.05em"><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">7</span></span></span></span></span></span></span></span></span></span></span>, <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mn>2</mn><mn>9</mn></msup></mrow><annotation encoding="application/x-tex">2^9</annotation></semantics></math></span><span aria-hidden="true" class="katex-html"><span class="base"><span class="mord"><span class="mord">2</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em"><span style="top:-3.063em;margin-right:0.05em"><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">9</span></span></span></span></span></span></span></span></span></span></span> and <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mn>2</mn><mn>8</mn></msup><mo>⊕</mo><msup><mn>2</mn><mn>14</mn></msup></mrow><annotation encoding="application/x-tex">2^8 \oplus 2^{14}</annotation></semantics></math></span><span aria-hidden="true" class="katex-html"><span class="base"><span class="mord"><span class="mord">2</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em"><span style="top:-3.063em;margin-right:0.05em"><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">8</span></span></span></span></span></span></span></span><span class="mbin">⊕</span></span><span class="base"><span class="mord"><span class="mord">2</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em"><span style="top:-3.063em;margin-right:0.05em"><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">14</span></span></span></span></span></span></span></span></span></span></span></span> preserves a row, so the row is
+1 KiB, or 32 columns of 32 bytes. <a aria-label="Back to reference 13" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-13">↩</a></p>
+</li>
+<li id="user-content-fn-14">
+<p>You can measure the cost of activating a new row by keeping many reads in
+flight. When consecutive reads land in the same row, each extra read adds
+about 3.4 ns. When each read opens a fresh row, it costs about 15x as
+much. With one read in flight at a time the difference disappears, because
+the row is closed again before the next read arrives. <a aria-label="Back to reference 14" class="data-footnote-backref" data-footnote-backref="" href="#user-content-fnref-14">↩</a></p>
+</li>
+</ol>
+</section></div><div class="mt-12 sm:mt-16 pt-6 sm:pt-8 border-t border-[--rule-light]"><div class="post-citation"><div class="post-citation-label small-caps">Cite this post</div><div class="code-block-wrapper citation-block"><pre><code>@misc{doubleword-what-happens-when-a-gpu-reads-memory,
+  title        = {What happens when a GPU reads memory},
+  author       = {Fergus Finn},
+  year         = {2026},
+  howpublished = {Doubleword Blog},
+  url          = {https://blog.doubleword.ai/what-happens-when-a-gpu-reads-memory},
+}</code></pre></div></div></div></div></div></article>

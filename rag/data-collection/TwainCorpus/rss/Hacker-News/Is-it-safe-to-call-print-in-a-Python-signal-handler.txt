@@ -1,0 +1,115 @@
+Is it safe to call 
+print
+ in a Python signal handler?
+
+Series: Signal handling in Python
+
+Python has two signal handlers
+
+Blocking a signal is different than ignoring it
+
+Python doesn't pass 
+SA_RESTART
+
+Safe signal idioms
+
+Python signal handlers are unexpectedly reentrant
+
+Is it safe to call 
+print
+ in a Python signal handler?
+
+time.sleep
+ and signal interrupts
+
+Python 
+siginterrupt
+ is confusing
+
+We learned earlier that because 
+Python has two signal handlers
+, the 
+onerous restrictions
+ on what functions a signal handler may call do not apply to Python, because CPython does not call the user-supplied Python signal handler inside the low-level C signal handler, where those restrictions 
+do
+ apply, but arranges for it to be called later, when the interpreter is in a consistent state.
+
+We also learned that 
+Python signal handlers are unexpectedly reentrant
+ – if a signal arrives while a Python signal handler is running, the signal handler can be called again in the middle of the first call.
+
+What happens if a signal handler is reentered in the middle of a call to 
+print
+? Let's stress-test it by sending ourselves a rapid barrage of signals:
+
+import
+os
+,
+signal
+,
+subprocess
+
+def
+sighandler
+(
+_signo
+,
+ 
+_frame
+):
+
+print
+(
+"signal received"
+)
+
+signal
+.
+signal
+(
+signal
+.
+SIGUSR1
+,
+ 
+sighandler
+)
+
+subprocess
+.
+run
+(
+"for x in {1..50}; do kill -USR1 
+%s
+; done"
+ 
+%
+ 
+os
+.
+getpid
+(),
+ 
+shell
+=
+True
+)
+
+Running this program on my machine produced:
+
+  File "multiple_signals.py", line 6, in sighandler
+    print("signal received")
+  File "multiple_signals.py", line 6, in sighandler
+    print("signal received")
+  File "multiple_signals.py", line 6, in sighandler
+    print("signal received")
+  [Previous line repeated 2 more times]
+RuntimeError: reentrant call inside <_io.BufferedWriter name='<stdout>'>
+
+The test program shows that under extreme circumstances, calling 
+print
+ in a signal handler may cause your program to crash. I want to emphasize that this requires 
+extreme circumstances
+: it is unlikely that a real program would face these conditions, and even so, failing with an exception is more palatable than the possible consequences of unsafe signal handlers in C, which include deadlock, corrupted data structures, and silent failures. So I view this as another bit of signals trivia and not a practical consideration for writing signal handlers – though I still advise against 
+doing non-trivial work
+ in a signal handler.

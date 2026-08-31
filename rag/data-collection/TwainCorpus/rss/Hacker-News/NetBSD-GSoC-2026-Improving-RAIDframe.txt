@@ -1,0 +1,348 @@
+»
+ 
+The Guide
+ | 
+Manual pages
+ | 
+Mailing lists
+ and 
+Archives
+ | 
+CVS repository
+ | 
+Report
+ or 
+query
+ a bug | 
+Software Packages
+
+Home
+ | 
+                                
+RSS
+ | 
+ 
+Release engineering
+ |   
+Development
+ |   
+The NetBSD Foundation
+ |   
+Networking
+ |   
+General
+ |   
+Ports
+ |   
+Security
+ |   
+Events
+ |   
+Packages
+ |  
+      
+Login
+
+Bookmarks
+
+The NetBSD Project
+
+NetBSD Wiki
+
+Feeds
+
+All
+
+/Release engineering
+
+/Development
+
+/The NetBSD Foundation
+
+/Networking
+
+/General
+
+/Ports
+
+/Security
+
+/Events
+
+/Packages
+
+Comments
+
+Google Summer of Code 2026 Reports: Improving RAIDframe 
+
+August 23, 2026 posted by 
+Leonardo Taccari
+
+This report was written by Emmanuel Nyarko as part of Google Summer of Code 2026.
+
+The Redundant Array of Independent Disks (RAID) is a disk management
+framework developed by Carnegie-Mellon University. NetBSD uses RAIDframe as one
+of its disks management modules.
+It involves setting up multiple disks and creating a disk unit from them.
+The current NetBSD RAIDframe framework supports several levels of disks arrangement
+in a single array, see 
+raid(4)
+.
+
+NetBSD's RAIDframe supports RAID levels 0, 1, 5 and 6. However, there are some limitations that this project aims to improve.
+Firstly, RAID level 1, which is also called mirroring, allows for only two disks in a single mirror pair.
+Secondly, RAIDframe scrubbing, which involves reading your disks to check for read failures, is not yet supported.
+Thirdly, RAID level 6, even though included in source, is not well tested and not encouraged to be used.
+
+In this project I have worked on:
+
+Implementation of a RAID level 1 extension called 
+N-way RAID 1
+ to support multiple disks in a RAIDframe mirror
+
+Implementation of 
+RAID scrubbing
+
+N-way RAID 1
+
+RAID level 1 involves mirroring two disks containing the same data.
+They are structured as one primary and one parity (secondary).
+Every write to the raid device writes to all disks in the setup that are alive.
+Every read from the raid device reads from the disk with the shortest I/O (writes/read to and from the disks) queue.
+If there's an encountered failure with any of the disks,
+it reads in degraded mode and hence gets the data from any of the available disks.
+If all disks fail, I/O aborts.
+
+There is an introduction of a new extension to the RAID 1 setup called N-way RAID1.
+This involves setting up more than two disk in a RAID 1 array setup where you have
+one primary disk and multiple secondary disks.
+This increases redundancy and improves the security of data critical to disk failure that could lead to data loss.
+
+For example, in a five way RAID1 setup, it will involve one primary and 4 parity/secondary disks.
+So every disk write will attempt to write to all five disks.
+Every disk read will attempt to read from the primary disk or the secondary disk with the shortest I/O queue.
+
+Usage
+
+Five disks can be configured in a 5 way RAID 1 setup for redundancy
+using 
+raidctl(8)
+ with the command below:
+
+raidctl /dev/raid1 create N /dev/dk1 /dev/dk2 /dev/dk3 /dev/dk4 /dev/dk5.
+
+where 
+/dev/raid1
+ is the device file for the raid device, and 
+N
+ is the level.
+In the order of the disks, the first listed is considered the primary
+and the rest are considered secondary.
+
+The 
+/dev/dk*
+ are the NetBSD disk partition (wedge) driver used for the independent disks, see 
+dk(4)
+ and 
+dkctl(8)
+.
+
+This, by default, sets up a 128 sectors per stripe unit and a first in first out queuing algorithm and a max queue length of 100.
+
+This can be similarly translated into the 
+raid.conf
+ structure in the setup below.
+
+# numrow numcol numspare
+1 5 0
+
+# Identify physical disks
+START disks
+/dev/dk1
+/dev/dk2
+/dev/dk3
+/dev/dk4
+/dev/dk5
+
+# Layout is simple - 64 sectors per stripe
+START layout
+# Sect/StripeUnit StripeUnit/ParityUnit StripeUnit/#ReconUnit RaidLevel
+128 1 1 N
+
+# No spares
+START spare
+
+START queue
+fifo 100
+
+Project deliverables
+
+RAIDframe Layout
+
+A new layout structure is introduced for RAIDframe level 
+N
+. number of primary disk remains 1.
+Number of parity/secondary becomes number of disks - 1. The rest of the layout component
+for RAID 1 (stripe related properties) remains same hence adopted into RAID 
+N
+.
+
+Sector/stripe mapping
+
+The current design for RAID 1 involves ASM (Address Stripe Mapping) structures that contain PDAs (Physical Disk Addresses) that are used in mapping the RAID level software addresses to the Physical Disk Addresses.
+The PDA structure contain column number, start sector, number of sectors/blocks, type of disk in setup (data/parity disk), data buffer pointer, and then the virtual RAID address corresponding to the Physical Disk Address.
+For a simple RAID 1 mirror involving two disks, the writes or reads are striped across the two disks
+according to the value set in 
+SectorsPerStripeUnit
+ in 
+raid.conf
+, or 128 by default when using 
+raidctl(8)
+.
+So 128 sector blocks are written to each stripe as defined by the PDAs.
+
+For two disk in a RAID 1 setup, a single stripe write is defined by one PDA for each column.
+For the introduction of N-way RAID 1, the number of PDAs cannot be known at compile time.
+The number of PDAs are dynamically defined by the number parity columns at runtime. This is because, the number of secondary disks in an N-way setup can vary as compared to RAID 1 which is known to have one primary and one secondary disk.
+
+DAG execution
+
+RAIDframe uses DAGs (Directed Acyclic Graph) to fire I/O nodes for reads and writes. These DAG nodes are also PDA dependent.
+The DAG node creation structure also needed to be updated to accommodate more than two
+PDAs when using the RAID level 
+N
+.
+
+Reconstruction
+
+RAIDframe reconstruction has been updated to make room for RAID level 
+N
+. When a disk fails,
+the current algorithm identifies a non-dead disk, and reads from that disk and writes to the disk under reconstruction. New checks for RAID N has been added to the code to read from
+only one non-dead disk to the disk under reconstruction. This avoids trying to randomly read and write across
+the disk array during a reconstruction.
+
+Project benefit
+
+This project adds more redundancy to your disk
+data management and reducing the risk of data loss in any case of disk failure.
+
+Link to work
+
+RAIDframe scrubbing
+
+The scrubbing implementation is a disk sector health check of all components in a disk array.
+Disks sectors are read across every stripe in the components and the I/O returns number of
+read failures encountered on each component. Disk scrubbing is supported for all
+RAID levels in NetBSD.
+
+Starting a scrub on a raid device is done by using 
+raidctl
+. Scrubbing can be done across
+certain portion of the disks or the entire disks in the array.
+
+Usage
+
+RAID scrubbing is achieved by the syntax below:
+
+raidctl $device scrub percentage $start_percentage $end_percentage
+
+Consider a hundred-striped three disks raid 5 array:
+
+raidctl raid5 scrub percentage 20 30
+
+This initiates a scrub of the RAID components starting at the twentieth percentile to the thirtieth percentile of all components in the array.
+The stripe indexes that will be read for the command above are mathematically represented in a 
+$start_stripe
+ and 
+$end_stripe
+ range below:
+
+$start_stripe = 100 * 20 / 100 = 20
+$end_stripe = 100 * 30 / 100 = 30
+$end_stripe = $end_stripe - 1
+
+This reads the disks from stripe index 20 to stripe index 29.
+
+Results/kernel output after a successful scrub
+
+raid5: Total number of read failures on Component /dev/dk1: 10
+raid5: Total number of read failures on Component /dev/dk2: 4
+raid5: Total number of read failures on Component /dev/dk3: 0
+
+Interpretation
+
+This indicates 10 read failures across 
+dk1
+, 4 read failures across 
+dk2
+ and 0 read failures
+across 
+dk3
+.
+
+Omitting the percentage parameters scrubs the entire array (100 percent).
+
+raidctl raid5 scrub
+
+Note
+: 
+end_stripe
+ is reduced by 1 because indexing of stripes begins from 0.
+
+Link to work
+
+Testing
+
+Testing these improvements involves setting up different layouts of N-way RAID 1 with different disk sizes. A 2 Gigabyte three-way RAID 1 device and a 10 Gigabyte five-way RAID 1 are separately configured and being used for testing. Operations such as file systems creation, mounting, unmounting, writing raw bytes, component failing, reconstruction, hot spare addition, rebuilding in place etc. are performed as part of this testing.
+This is being done to provide a level of confidence in the usage of N-way RAID 1 and the rest of the RAIDframe subsystems.
+
+Future works
+
+As part of testing, other RAID levels, eg. RAID level 0, 1, and 5, must be validated to ensure that they have not been adversely affected by the new changes. RAID level 6 will further be assessed and tested. RAID 
+N
+ work may be merged into the NetBSD tree as the replacement for the existing RAID1.
+
+Lessons learnt
+
+Participating in Google Summer of Code with NetBSD has been very impactful. I have gathered lots of experience with multithreading in the kernel and also gained a deeper understanding of how storage systems operate. I would encourage anyone who wants to gain deeper understanding of computer systems to consider taking on Google Summer of Code projects with NetBSD.
+
+Acknowledgment
+
+I am grateful to Greg Oster, my mentor, and the NetBSD community for their massive support towards the completion of this project.
+
+   [
+1 comment
+]
+
+		  		                             « 
+Google Summer of...
+ |  
+                
+Main
+
+Comments:
+
+                Great work! Nice to see improvements!
+
+                Posted by
+                                    
+bkrawczyk
+
+                on August 24, 2026 at 10:57 AM UTC
+
+#
+
+Post a Comment:
+
+Contact
+ |
+ 
+Disclaimer
+ | 
+Copyright © 1994-2015 The NetBSD Foundation, Inc.
+ ALL RIGHTS RESERVED.
+
+				NetBSD
+®
+ is a registered trademark of The NetBSD Foundation, Inc.

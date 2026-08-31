@@ -1,0 +1,513 @@
+Historically, fast JIT compilation was a black art. To write a fast JIT compiler, you would need to know how to write assembly. Case in point: there is no production-ready database today that has its own JIT compiler. They all either use LLVM or generate C/C++ code. Both of these options suffer from high compile times, which limits their applicability. Now, with the use of AI, it’s easier than ever to write a JIT compiler with fast compile times by directly targeting assembly. This is also one area of opportunity for new databases to improve on old ones. When building 
+pgrust
+, I initially thought it would be really hard to implement a JIT compiler. In the end, I found it much easier than I expected due to AI assistance and it ends up being part of the reason why pgrust is so fast. The pgrust JIT compiler compiles code in around 5μs, which enables us to JIT compile every SQL query, not just a subset of them. In this post, I’ll walk you through how you can build your own fast JIT compiler. We’ll build a simple regular expression engine that uses JIT compilation as an example.
+
+Why JIT Compilation
+
+JIT compilation is the practice of generating compiled code at runtime or “Just In Time”. When done right, it can result in big performance wins, often on the order of 2-5x and sometimes even more. The main use case for JIT compilation is when there’s information you gain at runtime that drastically alters the behavior of your program. This is particularly common with programming language interpreters; they receive the code to execute at runtime. JIT compilers are also useful in domains beyond programming languages, such as parsing data. Sometimes you don’t know the schema of the data you’re parsing until runtime, and a JIT can help with that.
+
+To kick things off, let’s implement a toy regular expression engine. To keep things simple, we’ll support only two features: literal strings and repetition (i.e. the regex *). We’ll also skip the parser and represent the regular expression as already parsed Rust structures. This means we’ll be able to support strings such as:
+
+apples
+
+b(an)*
+
+but no alternation or lookbehind or anything like that.
+
+In code this is pretty simple. We’ll have 3 types of Nodes: a literal string node, a repetition node, and a concatenation node, which is the combination of two nodes. This ends up looking like this:
+
+enum Node {
+    Literal(&'static str),
+    Concatenation(Box<Node>, Box<Node>),
+    Repetition(Box<Node>),
+}
+
+fn literal(text: &'static str) -> Node {
+    Node::Literal(text)
+}
+
+fn concatenation(left: Node, right: Node) -> Node {
+    Node::Concatenation(Box::new(left), Box::new(right))
+}
+
+fn repetition(body: Node) -> Node {
+    Node::Repetition(Box::new(body))
+}
+
+Writing an interpreter for our regular expression engine is also straightforward:
+
+fn match_node(node: &Node, input: &[u8], pos: usize, next: &dyn Fn(usize) -> bool) -> bool {
+    match node {
+        Node::Literal(text) => {
+            let literal = text.as_bytes();
+            input[pos..].starts_with(literal) && next(pos + literal.len())
+        }
+
+        Node::Concatenation(left, right) => {
+            match_node(left, input, pos, &|left_end| {
+                match_node(right, input, left_end, next)
+            })
+        }
+
+        Node::Repetition(body) => {
+            match_node(body, input, pos, &|body_end| {
+                match_node(node, input, body_end, next)
+            }) || next(pos)
+        }
+    }
+}
+
+fn interp_match(regex: &Node, input: &str) -> bool {
+    let bytes = input.as_bytes();
+    match_node(regex, bytes, 0, &|pos| pos == bytes.len())
+}
+
+Now this regular expression engine is pretty simple. It’s under 20 lines of code, but let’s see how it does in terms of performance. For comparison, we’ll compare the code against handwritten code implemented specifically for the regex. For our example we’ll use the regex b(an)*. The handwritten code ends up looking like:
+
+fn handwritten_b_an_star(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    let mut pos = 0;
+
+    if pos == bytes.len() || bytes[pos] != b'b' {
+        return false;
+    }
+    pos += 1;
+
+    while pos < bytes.len() {
+        if bytes[pos] != b'a' {
+            return false;
+        }
+        pos += 1;
+        if pos == bytes.len() || bytes[pos] != b'n' {
+            return false;
+        }
+        pos += 1;
+    }
+    true
+}
+
+(There are ways you could optimize this code and make it much faster, but for our purposes it serves as a good comparison)
+
+When I benchmark a couple of examples against these two, I get that the handwritten version is 10-20x faster than the interpreter. Clearly a lot of room for improvement.
+
+Now let’s take a look at how we can use JIT compilation to get a general regular expression engine that performs as well as the handwritten version.
+
+How to JIT Compile
+
+There are two steps to JIT compile code. First you generate the assembly for the code you want to run. Once you have the code, you then package the assembly code into a function that you can call like any other code into your program.
+
+To generate the assembly, we will use a variant of an approach called copy-and-patch. The idea is that we have a series of templates in assembly for the different operations we want to JIT compile. These templates are called “stencils”. When we want to JIT compile an operation, we take the associated stencil and make small tweaks based on the specifics of the operation. Very similar to filling in a real stencil. By stringing together several of these filled stencils, we can construct a program at runtime that has similar performance to the handwritten version.
+
+Here’s the path we’ll take: first we’ll look at the ARM64 code we want to generate for b(an)*. Then we’ll turn repeated instruction sequences into reusable stencils, write an emitter that fills and combines those stencils from the regex AST, and finally copy the generated instructions into executable memory so Rust can call them like a normal function.
+
+To walk you through how this works, it’s easiest to start with the generated code and work backwards to the JIT compiler itself. Again, we’re working with the regex “b(an)*”. To lay out some design decisions:
+
+We’ll use a stack for backtracking. The stack will keep track of the state we should go to if we hit a dead end in the regex
+
+The string we are matching with will end in a null byte. That means any of our character comparisons will automatically fail if we hit the end of the string. This means we don’t have to do any length comparisons at any point
+
+For the state of our program we will use the following registers:
+
+x0 – current position in string and return value
+
+x1 – top of stack used for backtracking
+
+x2 – bottom of stack used for backtracking (this is needed to determine if the stack is empty)
+
+x9 – used as a temporary variable
+
+For the inputs into our program, we will be passed:
+
+x0 – a pointer to the start of the string
+
+x1 – a pointer to the location we will use for our stack
+
+Generated ARM64
+
+Now that we’ve taken care of that, let’s walk through the generated assembly part by part. This is specifically on macOS with ARM64. First up, we have the prologue, which initializes the program. All it does is initialize the stack by setting the top of the stack and the bottom of the stack to the value passed in:
+
+0:  aa0103e2   mov   x2, x1
+
+Next up, we have the code that checks for the character b. If it sees a character that’s not b, we jump to a block of code that handles fallback logic. Otherwise, we advance our position in the string:
+
+; CHAR 'b'
+  4:  39400009   ldrb  w9, [x0]                  ; load current input byte
+  8:  7101893f   cmp   w9, #0x62                 ; is it 'b'?
+  c:  54000281   b.ne  0x5c                      ; no -> fallback block
+ 10:  91000400   add   x0, x0, #1                ; yes -> advance input
+
+Next up, we have the repetition (an)*. For the repetition, we need to do the backtracking. If we backtrack here, that means we jump immediately to the end of the loop. That means we need to store both the address of the instruction after the loop and our position in the string on the stack.
+
+ 14:  d2800989   movz  x9, #0x004c               ; build resume address
+ 18:  f2a00009   movk  x9, #0x0000, lsl #16      ;   = 0x1_0000_004c
+ 1c:  f2c00029   movk  x9, #0x0001, lsl #32      ;   (the loop exit)
+ 20:  f2e00009   movk  x9, #0x0000, lsl #48      ;
+ 24:  a8810029   stp   x9, x0, [x1], #16         ; push (exit, pos) onto stack
+
+With that in place, we can now execute the body of the repetition. This will check for the characters ‘a’ and ‘n’ and, if it sees them, go back to the top of the repetition, but at a new string location.
+
+; CHAR 'a'
+ 28:  39400009   ldrb  w9, [x0]
+ 2c:  7101853f   cmp   w9, #0x61                 ; 'a'?
+ 30:  54000161   b.ne  0x5c                      ; no -> fallback block
+ 34:  91000400   add   x0, x0, #1
+
+; CHAR 'n'
+ 38:  39400009   ldrb  w9, [x0]
+ 3c:  7101b93f   cmp   w9, #0x6e                 ; 'n'?
+ 40:  540000e1   b.ne  0x5c                      ; no -> fallback block
+ 44:  91000400   add   x0, x0, #1
+
+; JMP
+ 48:  17fffff3   b     0x14                      ; back to top of loop
+
+Now we’re past the loop. This is where the backtracking will jump once we backtrack. Once we finish the repetition, we’re at the end of the regex. All we have to do now is check if we’re at the end of the string. If we are at the end of the string, we return 1 for success. If we are not, that means the regex failed to match, and we need to run the fail logic to do a fallback.
+
+ 4c:  39400009   ldrb  w9, [x0]
+ 50:  35000069   cbnz  w9, 0x5c                  ; not at NUL -> fallback block
+ 54:  d2800020   mov   x0, #1                    ; success
+ 58:  d65f03c0   ret
+
+And then finally, we have the fallback logic. This checks if the stack is empty. If it is, we return 0. If it’s not empty, we pop both the fallback address and the fallback string position off the stack, and then jump to the fallback address.
+
+ 5c:  eb02003f   cmp   x1, x2                    ; any frames left?
+ 60:  54000060   b.eq  0x6c                      ; no -> give up
+ 64:  a9ff0029   ldp   x9, x0, [x1, #-16]!       ; pop (resume, pos)
+ 68:  d61f0120   br    x9                        ; jump there
+ 6c:  d2800000   mov   x0, #0                    ; no match
+ 70:  d65f03c0   ret
+
+Building the Stencils
+
+Now that you’ve had the chance to see the compiled code, you should start to get a sense of how the copy-and-patch compiler would work. We have common sets of instructions with only minor differences between them. For each of these blocks of functions, we can write a function to generate the respective code. Each function will take in values to use to modify the code. For example, one of the arguments to stencil_char will be the char in the regex to compare against. We’ll insert that char directly into the machine code.
+
+The prologue is straightforward since it’s just a block of code:
+
+const PROLOGUE_WORDS: usize = 1;
+
+fn stencil_prologue() -> [u32; PROLOGUE_WORDS] {
+    [0xAA0103E2] // mov x2, x1
+}
+
+For character comparison, we need to insert the character we’re comparing against and where to jump for the fallback logic:
+
+const CHAR_WORDS: usize = 4;
+
+fn stencil_char(byte: u8, stencil_pos: usize, fail_pos: usize) -> [u32; CHAR_WORDS] {
+    [
+        0x39400009,                                                 // ldrb w9, [x0]
+        0x7100013F | ((byte as u32) << 10),                         // cmp  w9, #byte
+        0x54000001 | cond_branch_offset(stencil_pos + 2, fail_pos), // b.ne fail
+        0x91000400,                                                 // add  x0, x0, #1
+    ]
+}
+
+For the repetition, we have the start of the loop that pushes onto the stack and the jump onto the end:
+
+const SPLIT_WORDS: usize = 5;
+
+fn stencil_split(resume_addr: u64) -> [u32; SPLIT_WORDS] {
+    [
+        0xD2800009 | addr_bits(resume_addr, 0), // movz x9, #addr[0..16]
+        0xF2A00009 | addr_bits(resume_addr, 1), // movk x9, #addr[16..32], lsl 16
+        0xF2C00009 | addr_bits(resume_addr, 2), // movk x9, #addr[32..48], lsl 32
+        0xF2E00009 | addr_bits(resume_addr, 3), // movk x9, #addr[48..64], lsl 48
+        0xA8810029,                             // stp  x9, x0, [x1], #16
+    ]
+}
+
+const JMP_WORDS: usize = 1;
+
+fn stencil_jmp(stencil_pos: usize, target_pos: usize) -> [u32; JMP_WORDS] {
+    [0x14000000 | branch_offset(stencil_pos, target_pos)] // b target
+}
+
+And then we have the match and fail blocks which are pretty clean:
+
+const MATCH_WORDS: usize = 4;
+
+fn stencil_match(stencil_pos: usize, fail_pos: usize) -> [u32; MATCH_WORDS] {
+    [
+        0x39400009,                                                 // ldrb w9, [x0]
+        0x35000009 | cond_branch_offset(stencil_pos + 1, fail_pos), // cbnz w9, fail
+        0xD2800020,                                                 // mov  x0, #1
+        0xD65F03C0,                                                 // ret
+    ]
+}
+
+const FAIL_WORDS: usize = 6;
+
+fn stencil_fail() -> [u32; FAIL_WORDS] {
+    [
+        0xEB02003F, // cmp  x1, x2
+        0x54000060, // b.eq +3 (to the mov below)
+        0xA9FF0029, // ldp  x9, x0, [x1, #-16]!
+        0xD61F0120, // br   x9
+        0xD2800000, // mov  x0, #0
+        0xD65F03C0, // ret
+    ]
+}
+
+For completeness, here’s the helper functions we used which just help us insert specific data into the instructions:
+
+// Compute the branch-offset field for a conditional branch (b.ne / cbnz):
+// the instruction count from branch to target, stored in bits 5..24.
+fn cond_branch_offset(branch_pos: usize, target_pos: usize) -> u32 {
+    let instr_count = target_pos as i64 - branch_pos as i64; // may be negative
+    (((instr_count as u64) & 0x7FFFF) << 5) as u32
+}
+
+// Compute the branch-offset field for an unconditional branch (b):
+// same idea, but stored in bits 0..26.
+fn branch_offset(branch_pos: usize, target_pos: usize) -> u32 {
+    let instr_count = target_pos as i64 - branch_pos as i64; // may be negative
+    ((instr_count as u64) & 0x3FF_FFFF) as u32
+}
+
+// Extract 16 bits of an absolute address, positioned for a movz/movk immediate.
+fn addr_bits(addr: u64, part: usize) -> u32 {
+    (((addr >> (16 * part)) & 0xFFFF) as u32) << 5
+}
+
+Emitting Code
+
+Now the code that drives it:
+
+// Computes how many instructions a node compiles to.
+fn node_words(node: &Node) -> usize {
+    match node {
+        Node::Literal(text) => text.len() * CHAR_WORDS,
+        Node::Concatenation(left, right) => node_words(left) + node_words(right),
+        Node::Repetition(body) => SPLIT_WORDS + node_words(body) + JMP_WORDS,
+    }
+}
+
+struct Emitter {
+    code: Vec<u32>,
+    fail: usize, // word offset of the shared fail block
+    base: u64,   // runtime address of code[0], for absolute-address holes
+}
+
+impl Emitter {
+    // Returns the offset where the next instruction will be placed.
+    fn pos(&self) -> usize {
+        self.code.len()
+    }
+
+    // Appends a filled stencil to the code buffer.
+    fn emit(&mut self, stencil: &[u32]) {
+        self.code.extend_from_slice(stencil);
+    }
+
+    // Emits the code for one node, recursing into children.
+    fn emit_node(&mut self, node: &Node) {
+        match node {
+            Node::Literal(text) => {
+                for &byte in text.as_bytes() {
+                    self.emit(&stencil_char(byte, self.pos(), self.fail));
+                }
+            }
+            Node::Concatenation(left, right) => {
+                self.emit_node(left);
+                self.emit_node(right);
+            }
+            Node::Repetition(body) => {
+                let split_at = self.pos();
+                let exit = split_at + SPLIT_WORDS + node_words(body) + JMP_WORDS;
+                self.emit(&stencil_split(self.base + exit as u64 * 4));
+                self.emit_node(body);
+                self.emit(&stencil_jmp(self.pos(), split_at));
+            }
+        }
+    }
+}
+
+// Generates the complete program: prologue, the compiled AST, MATCH, fail block.
+fn generate_code(regex: &Node, base: u64) -> Vec<u32> {
+    let nwords = PROLOGUE_WORDS + node_words(regex) + MATCH_WORDS + FAIL_WORDS;
+    let mut emitter = Emitter {
+        code: Vec::with_capacity(nwords),
+        fail: nwords - FAIL_WORDS,
+        base,
+    };
+    emitter.emit(&stencil_prologue());
+    emitter.emit_node(regex);
+    let match_at = emitter.pos();
+    emitter.emit(&stencil_match(match_at, emitter.fail));
+    emitter.emit(&stencil_fail());
+    assert_eq!(emitter.pos(), nwords);
+    emitter.code
+}
+
+And that’s the hard part! Personally, writing assembly is where I find AI the most helpful. My main experience with assembly is completing the microcorruption CTF. I’ve never actually written assembly myself. I would really struggle to figure out the exact instructions needed and how to modify them to get the output I wanted. With AI, I can give my coding agent the general shape of how I want the JIT compiler to work, and it can handle a lot of these details for me.
+
+Loading Machine Code
+
+To finish our compiler we need to actually load the code. To do this, we’ll use mmap to allocate a block of memory that is readable, writable, and executable. We’ll then copy the code into that memory and convert that block of memory into a function which we then call:
+
+const BSTACK_MAX: usize = 4096;
+
+// These functions are included in the mac system library
+unsafe extern "C" {
+    fn pthread_jit_write_protect_np(enabled: libc::c_int);
+    fn sys_icache_invalidate(start: *mut libc::c_void, len: libc::size_t);
+}
+
+type MatchFn = unsafe extern "C" fn(input: *const u8, bstack: *mut u64) -> u64;
+
+struct Jit {
+    buf: *mut u32,
+    nbytes: usize,
+    bstack: Vec<u64>,
+}
+
+impl Jit {
+    fn compile(regex: &Node) -> Jit {
+        let nwords = PROLOGUE_WORDS + node_words(regex) + MATCH_WORDS + FAIL_WORDS;
+        let nbytes = nwords * 4;
+
+        unsafe {
+            let buf = libc::mmap(
+                std::ptr::null_mut(),
+                nbytes,
+                libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+                libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_JIT,
+                -1,
+                0,
+            ) as *mut u32;
+            assert!(buf as *mut libc::c_void != libc::MAP_FAILED, "mmap failed");
+
+            let code = generate_code(regex, buf as u64);
+
+            pthread_jit_write_protect_np(0); // make the region writable (Apple W^X)
+            std::slice::from_raw_parts_mut(buf, code.len()).copy_from_slice(&code);
+            pthread_jit_write_protect_np(1); // back to executable
+            sys_icache_invalidate(buf as *mut libc::c_void, nbytes);
+
+            Jit { buf, nbytes, bstack: vec![0; BSTACK_MAX * 2] }
+        }
+    }
+
+    // Runs the generated code. Input must end with a NUL byte.
+    fn is_match(&mut self, nul_terminated: &[u8]) -> bool {
+        debug_assert_eq!(nul_terminated.last(), Some(&0));
+        unsafe {
+            let matcher: MatchFn = std::mem::transmute(self.buf);
+            matcher(nul_terminated.as_ptr(), self.bstack.as_mut_ptr()) != 0
+        }
+    }
+}
+
+impl Drop for Jit {
+    fn drop(&mut self) {
+        unsafe {
+            libc::munmap(self.buf as *mut libc::c_void, self.nbytes);
+        }
+    }
+}
+
+Results
+
+With all of this complete, let’s compare the performance of the different implementations we built:
+
+Input length
+
+Interpreter
+
+JIT
+
+Handwritten
+
+JIT speedup
+
+Handwritten speedup
+
+9
+
+45 ns
+
+3.8 ns
+
+3.8 ns
+
+11.7x
+
+11.9x
+
+33
+
+103 ns
+
+7.9 ns
+
+10.5 ns
+
+13.0x
+
+9.8x
+
+129
+
+597 ns
+
+30 ns
+
+32 ns
+
+19.7x
+
+18.6x
+
+513
+
+1,955 ns
+
+126 ns
+
+120 ns
+
+15.5x
+
+16.2x
+
+2,049
+
+8,301 ns
+
+470 ns
+
+393 ns
+
+17.7x
+
+21.1x
+
+So JIT and the hand-rolled implementation are pretty much neck and neck. Sometimes the JIT version is faster, and sometimes the hand-rolled version is faster.
+
+There’s been a meme circulating about how AI doesn’t help because “code was never the hard part.” I think that’s true in some domains, but in others, writing the code absolutely was the hard part. JIT compilers are a great example of that. For many pieces of software, a JIT compiler would help a lot with speeding up the code. The rarity of JIT compilers makes me believe that implementing a JIT compiler historically was too difficult for it to be worthwhile. LLMs have lowered the barrier to entry and made it much easier to write a JIT compiler. This is the thesis behind pgrust. Databases historically were the hardest piece of software to build and were limited because of that. Now, with AI, we can be more ambitious about the type of software we build.
+
+Thanks for reading, and if you want to support the project, the best way to support pgrust is to 
+give us a star on GitHub
+. If you want to follow along:
+
+Share this:
+
+Share on X (Opens in new window)
+
+X
+
+Share on LinkedIn (Opens in new window)
+
+LinkedIn
+
+Share on Facebook (Opens in new window)
+
+Facebook
+
+Email a link to a friend (Opens in new window)
+
+Email
+
+Print (Opens in new window)
+
+Print

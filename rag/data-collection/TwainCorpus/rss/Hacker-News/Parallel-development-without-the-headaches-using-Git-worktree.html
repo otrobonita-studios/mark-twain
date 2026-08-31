@@ -1,0 +1,204 @@
+<article class="post-1259 article type-article status-publish has-post-thumbnail hentry category-technical topic-tech-stack" id="post-1259">
+<h1>Parallel development without the headaches using Git worktree</h1>
+<div class="meta-container">
+<div>
+<span>Created on</span>
+
+<time datetime="2026-01-01">
+<span class="dt-full">Jan 1st 2026</span>
+<span class="mb-short">01/01/26</span>
+</time>
+</div>
+<div>
+<span>No updates</span>…		</div>
+</div>
+<div class="words-minutes">
+
+<div>
+				Approx ~10 minutes reading time for 1,916 words.
+			</div>
+</div>
+<h2 class="wp-block-heading">Introduction</h2>
+<p>Recently whilst tinkering with a particularly tricky project, I came across Git’s <code><a href="https://git-scm.com/docs/git-worktree" rel="noreferrer noopener nofollow" target="_blank">worktree</a></code> feature. A tool that lets you work on multiple branches simultaneously, each in its own directory, all sharing the same underlying repository history.</p>
+<p>Simple visualisation;</p>
+<pre class="wp-block-code"><code>~/Herd/
+├── my-project/          # main worktree, branch `main`
+│   └── .git/            # main git directory
+├── my-project-feature/  # linked worktree, branch `feature/login-form`
+└── my-project-hotfix/   # linked worktree, branch `hotfix/payment-bug`</code></pre>
+<p>All the directories above share the same commit history and are linked to the same <code>.git</code> <a href="https://github.blog/open-source/git/gits-database-internals-i-packed-object-store" rel="noreferrer noopener" target="_blank">object database</a> even though each has its own working directory state.</p>
+<p>Each directory behaves like a normal checkout, you edit files, commit and push as usual, but you avoid constantly hopping branches in a single working tree.</p>
+<section class="aside-image">
+
+<figure class="w-20 left">
+</figure>
+<p>
+Traditionally, working on multiple branches meant a lot of <code>git checkout</code> and <code>git stash</code> constantly saving your place, switching context and hoping you didn’t lose anything important. It’s easy to get lost, especially when a production bug interrupts your flow. With <code>git worktree</code> you can add a new working directory for any branch (existing or new) and keep your workstreams separate. For example;</p>
+</section>
+<pre class="wp-block-code"><code># Add an existing branch as a worktree
+git worktree add ../my-project-feature feature-branch
+
+# Or create a new branch and worktree in one go
+git worktree add -b new-feature ../my-project-new-feature</code></pre>
+<p>This creates new directories at the same level as your main project, checked out to the branches you specify. You can now edit files, commit and push in each directory independently without touching your main working directory.</p>
+<p>Here’s how your setup might look;</p>
+<pre class="wp-block-code"><code>my-project/              # main worktree, branch `main`
+my-project-feature/      # worktree for `feature-branch`
+my-project-new-feature/  # worktree for `new-feature`</code></pre>
+<p>One important limitation is that the same branch cannot be checked out in more than one worktree at the same time. Each worktree must have a unique branch checked out. In practice, that encourages a tidy mapping of <em>“one task, one branch, one directory”,</em> which makes it easier to stay oriented mentally.</p>
+<h2 class="wp-block-heading">Practical example, juggling a feature and a hotfix</h2>
+<p>Here’s a realistic scenario, you’re working on a checkout feature when a production bug <em>appears.</em></p>
+<p>Initial layout;</p>
+<pre class="wp-block-code"><code>~/Herd/
+└── shop/           # main worktree, branch `main`
+    └── .git/</code></pre>
+<p>Create a feature worktree;</p>
+<pre class="wp-block-code"><code>cd ~/Herd/shop
+git worktree add -b feature/checkout ../shop-checkout</code></pre>
+<p>New layout;</p>
+<pre class="wp-block-code"><code>~/Herd/
+├── shop/           # main worktree, branch `main`
+│   └── .git/
+└── shop-checkout/  # linked worktree, branch `feature/checkout`</code></pre>
+<p>You can easily develop the checkout feature in <code>shop-checkout</code> while keeping <code>shop</code> on <code>main</code> for quick reviews.</p>
+<h3 class="wp-block-heading">A production bug appears, create a hotfix worktree</h3>
+<pre class="wp-block-code"><code>cd ~/Herd/shop
+git worktree add -b hotfix/payment-fail ../shop-payment-hotfix</code></pre>
+<p>Your layout becomes;</p>
+<pre class="wp-block-code"><code>~/Herd/
+├── shop/                 # main worktree, branch `main`
+├── shop-checkout/        # feature worktree, `feature/checkout`
+└── shop-payment-hotfix/  # hotfix worktree, `hotfix/payment-fail`</code></pre>
+<p>At this point you can;</p>
+<ul class="wp-block-list">
+<li>Fix and test the production bug in the <code>shop-payment-hotfix</code> worktree.</li>
+<li>Continue to iterate on <code>feature/checkout</code> in the <code>shop-checkout</code> worktree.</li>
+<li>Keep <code>shop</code> free on <code>main</code> for merges and any code reviews.</li>
+</ul>
+<h2 class="wp-block-heading">How to merge a worktree into another branch</h2>
+<p>Merging changes from a worktree branch is just like any other Git merge, but the context is clearer because each branch lives in its own directory. Here’s a typical workflow for merging the feature branch into <code>main</code>;</p>
+<ol class="wp-block-list">
+<li>Finish your work in the feature worktree and commit your changes.</li>
+<li>Switch to your main worktree directory;</li>
+</ol>
+<pre class="wp-block-code"><code>cd ../my-project &amp;&amp; git checkout main</code></pre>
+<ol class="wp-block-list" start="3">
+<li>Merge the feature branch;</li>
+</ol>
+<pre class="wp-block-code"><code>git merge feature-branch</code></pre>
+<ol class="wp-block-list" start="4">
+<li>Resolve any conflicts, then push.</li>
+</ol>
+<p>
+Because each worktree is dedicated to a single branch, it’s much harder to accidentally commit to the wrong branch or lose your place when a hotfix interrupts your feature work… anyway, that’s the theory. <span class="grey">😉</span>
+</p>
+<h2 class="wp-block-heading">Inspecting your current worktrees</h2>
+<p>Before you start removing or pruning anything, it helps to see what worktrees Git currently knows about;</p>
+<pre class="wp-block-code"><code>git worktree list</code></pre>
+<p>Example output;</p>
+<pre class="wp-block-code"><code>/Users/barrd/Herd/shop                 66c16256 [main]
+/Users/barrd/Herd/shop-checkout        0c8ba118 [feature/checkout]
+/Users/barrd/Herd/shop-payment-hotfix  a16e4be2 [hotfix/payment-fail]</code></pre>
+<p>You can mentally map this to something like;</p>
+<pre class="wp-block-code"><code>[main]                → /home/user/Herd/shop
+[feature/checkout]    → /home/user/Herd/shop-checkout
+[hotfix/payment-fail] → /home/user/Herd/shop-payment-hotfix</code></pre>
+<p>It’s now obvious which branches are checked out and where thus helping to avoid trying to reuse a branch that is already attached to another worktree.</p>
+<h2 class="wp-block-heading">How to remove a worktree</h2>
+<p>Once you’re done with a worktree, it’s good practice to tidy up. To do so safely, after committing or stashing any changes;</p>
+<pre class="wp-block-code"><code>git worktree remove ../my-project-feature</code></pre>
+<p>This only works on clean worktrees (no uncommitted changes or untracked files) unless you pass <code>--force</code> and it cannot remove the main worktree.</p>
+<div class="tip-section">
+<p><strong class="red-text">Remember</strong>
+Removing a worktree only deletes the working directory, it does not delete the branch itself. Always check with <code>git status</code> in that worktree before removing to avoid losing uncommitted work.</p>
+</div>
+<h2 class="wp-block-heading">Cleaning up stale worktrees with prune</h2>
+<p>If you’ve deleted a worktree directory manually, Git still keeps metadata for it under the main repositories <code>worktrees</code> directory. In that case, <code>git worktree list</code> will show entries marked as missing.</p>
+<p>You can clean up those stale entries with;</p>
+<pre class="wp-block-code"><code>git worktree prune</code></pre>
+<p>To only prune entries that have been unused for some time, you can add an expiry;</p>
+<pre class="wp-block-code"><code>git worktree prune --expire 7.days.ago</code></pre>
+<p>Using <code>--expire now</code> removes all stale worktree metadata immediately, which can be handy in a local development environment where you frequently nuke old unneeded directories.</p>
+<h2 class="wp-block-heading">Final thoughts</h2>
+<p>It’s been around since <code>v2.5</code>, which was ~10 years ago and I’d never used it… But it’s now transformed my workflow, especially when juggling parallel features and urgent hotfixes. It keeps all the elements compartmentalised, reduces context switching and means stashing has become a rare exception.</p>
+<p>For simple, sequential work, traditional branching is still the way to go but if you ever find yourself wishing you could be in two places at once, give <code>git worktree</code> a try.</p>
+<p>If you’ve any favourite workflow variations you take advantage of <a href="https://barrd.dev/contact/">please get in touch</a> and let me know.</p>
+<div class="end-of-article">
+<p class="liner grey-text">
+			// End of Article
+		</p>
+</div>
+<h2 id="article-information">Article Information</h2>
+<div class="line-height-two">
+<strong>Category</strong>: <a href="https://barrd.dev/category/technical/" title="See all Technical posts"> Technical</a>
+<strong>Topic: </strong><a href="https://barrd.dev/topics/tech-stack/" title="See more Tech-Stack posts">#Tech-Stack</a> </div>
+<section class="stack" id="further-reading-links">
+<h3 id="footer-further-reading">
+			Further Reading		</h3>
+<ul>
+<li>
+<a href="https://github.blog/open-source/git/gits-database-internals-i-packed-object-store" rel="noreferrer noopener" target="_blank">
+					Git’s Database Internals				</a>
+<span class="small-font after-text">(github.blog)</span>
+</li>
+<li>
+<a href="https://git-scm.com/docs/git-worktree" rel="noreferrer noopener" target="_blank">
+					Git Worktree Docs				</a>
+<span class="small-font after-text">(git-scm.com)</span>
+</li>
+</ul>
+</section>
+<section class="stack" id="related-articles-pages">
+<h3 id="footer-related-articles">
+			Related Articles / Pages		</h3>
+<ul>
+<li>
+<a href="https://barrd.dev/article/git-switch-a-replacement-for-stash/">
+						Git switch – a replacement for stash if on wrong branch					</a>
+<span class="small-font after-text">(Article)</span>
+</li>
+<li>
+<a href="https://barrd.dev/article/remove-unused-php-versions-from-laravel-herd/">
+						Remove unused PHP versions from Laravel Herd					</a>
+<span class="small-font after-text">(Article)</span>
+</li>
+<li>
+<a href="https://barrd.dev/article/using-laravel-herd-whilst-keeping-valet-and-php-monitor/">
+						Using Laravel Herd whilst keeping Valet and PHP Monitor					</a>
+<span class="small-font after-text">(Article)</span>
+</li>
+<li>
+<a href="https://barrd.dev/article/starship-blazing-fast-cross-shell-prompt/">
+						Starship, blazing fast cross shell prompt					</a>
+<span class="small-font after-text">(Article)</span>
+</li>
+</ul>
+</section>
+
+<div id="author-popup">
+<h2>Dave A.K.A. 'barrd'</h2>
+<div class="description">
+<p>Dave is a Bristol based Scottish Expat who has 20+ years experience of web development. Loves playing guitar, reading books, watching Sci-Fi and tinkering with tech.</p>
+</div>
+</div>
+<section class="stack" id="author-info">
+<h3 id="about-the-author">About Dave A.K.A. 'barrd'</h3>
+<div class="container">
+<figure class="image">
+<a class="glightbox-author border-radius-50" href="https://barrd.dev/app/uploads/Dave-Chocolate-Path-Bristol-aspect-ratio-768-768-1.jpg.webp" title="Author Image: Dave A.K.A. 'barrd'">
+
+</a>
+</figure>
+<div class="data">
+<div class="wrapper">
+<div class="text line-clamp">
+						Dave is a Bristol based Scottish Expat who has 20+ years experience of web development. Loves playing guitar, reading books, watching Sci-Fi and tinkering with tech.					</div>
+<p>
+<a aria-describedby="about-the-author" class="glightbox-author inline-block author-link external-link" href="#author-popup">Read more about Dave</a>
+</p>
+</div>
+</div>
+</div>
+</section>
+
+</article>

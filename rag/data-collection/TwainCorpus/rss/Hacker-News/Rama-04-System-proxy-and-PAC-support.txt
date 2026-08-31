@@ -1,0 +1,174 @@
+Back to blog
+Rama 0.4: System proxy and PAC support
+Six weeks after 
+the release of 0.3
+ — nicely within the promised two-to-eight-week release train window — we are proud and happy to have shipped 
+rama 0.4
+. It's a release that I am very happy with, as we were not only able to make tons of improvements here and there, but also got to work on some items that had been on our backlog for a long time.
+Note
+Are you new to 
+Rama
+? Please read the introduction found in 
+the project README
+, and afterwards you might want to read through the 
+Rama 101 blog series
+.
+For technical details please read the full CHANGELOG — including the 
+rama 0.4
+ release notes — at 
+https://github.com/plabayo/rama/blob/main/CHANGELOG.md
+. And at any time you can find a summary of what protocols and other features are supported in Rama at 
+https://ramaproxy.org/#features
+.
+System Proxy Configuration
+Rama has had support for HTTP, HTTP over TLS (HTTPS) and SOCKS5 proxies for a long time. The easiest way is to configure them directly using 
+ProxyRoute
+(s)
+ (what used to be directly inserted as a 
+ProxyAddress
+). Within applications these can be hardcoded or exposed via a setting somehow. An example of this is your browser or editor, which allows you to configure a proxy via a settings file or its GUI. You can read more about this approach in 
+the "Application Proxies" chapter
+ of 
+the Rama book
+.
+Applications often also support the 
+HTTP_PROXY
+ environment variable. 
+curl
+ uses the lowercase 
+http_proxy
+ variant instead for CGI reasons, a convention we now also follow by default when using the 
+ProxyEnvLayer
+. That said, there are more common env variables, such as 
+ALL_PROXY
+, 
+HTTPS_PROXY
+ and 
+NO_PROXY
+, with the latter used to add bypass rules to, for example, ensure some (sub)domains do not go via a proxy. All of these are now also supported, via the 
+ProxyEnvLayer
+ and 
+NoProxyEnvLayer
+.
+However, as you might be aware, operating systems also allow you to configure a proxy system-wide. Here one can configure HTTP, HTTPS and SOCKS5 proxies, as well as bypass rules for what not to proxy. This is all very similar to the env variables discussed earlier, but system-wide. Of course, in general, nothing forces an app to respect these system configuration settings, either because it does not want to or because it simply does not have the built-in capacity to do so (which was the case for network clients built using rama, until now). With 
+rama 0.4
+ this is supported out of the box via the 
+SystemProxyLayer
+; you can learn more about how these settings work in 
+the "System Proxies" chapter
+ of the Rama book.
+System configuration settings also allow you to have a proxy be dynamically selected using a JavaScript file. This is known as 
+Proxy Auto Configuration
+, or PAC for short. To do so one must have a JavaScript runtime — not something rama shipped prior to 
+rama 0.4
+. Now we do. With 
+rama-js
+ we now support running a JavaScript runtime within a WASM runtime (using wasmtime, the runtime we will also use in the future to build rama-wasm). This is important as it provides isolation, ensuring that if our JavaScript runtime crashes it doesn't take the whole process with it. Applications like Google Chrome run their JavaScript engine in a separate OS process; within the Rama framework we have chosen to do so within a WASM runtime instead. Same isolation, but without having to somehow allow any application built using Rama to run and bundle a separate process.
+Rama now has PAC support, via the 
+rama-pac
+ crate, which allows you to have a PAC runtime, and thus evaluate PAC scripts, but also to easily generate scripts for cases where all you want is the ability to route domains X to proxy rules Y.
+If you want to play with these new rama framework capabilities, you can also easily do so with our command line application (CLI), which you can learn how to install in 
+the "rama binary" chapter
+ of the Rama book:
+Client 
+send
+ commands support it out of the box (unless you overwrite it with env variables or a command argument);
+There are now 
+rama pac
+ subcommands allowing you to generate a PAC script as well as to evaluate a PAC script via a REPL. The latter is especially nice, as prior to this the only environments in which you could play with a PAC file were pretty old and obscure applications... Another nice addition to our network CLI toolkit if you ask me.
+ttRPC and gRPC
+Protocol-wise, rama now also has support for 
+ttRPC
+, via the new 
+rama-ttrpc
+ crate. You can see it as a lightweight alternative to 
+gRPC
+ that runs directly on top of a transport protocol such as 
+TCP
+, but still via a protobuf (
+proto
+) contract.
+This is not the only new crate within this space however, as we now also have the 
+rama-grpc-macros
+ crate, bringing rama the ability to generate client- and server-side 
+gRPC
+ code without writing a single line of 
+proto
+, relying instead on your own codecs, optionally driven by 
+Serde
+ (see 
+define_service
+). Great for those that already use 
+gRPC
+ and are in control of their whole stack.
+HAR WebSockets
+It turns out that 
+HAR (HTTP Archive)
+ has support for 
+WebSocket
+ data. This last-minute 
+rama 0.4
+ surprise came to our attention thanks to a commercial partner. It's an obscure feature though: it was added to Chrome some years ago, but not many other applications have picked it up so far. As such we have mostly used Chrome as our oracle to guide our implementation.
+It is now supported, and it also made us realise that our previous 
+HAR export implementation
+ was keeping too much data in memory for consistency and ordering purposes. This is all settled now, and we can stream all your HTTP and WS data nicely to disk, without having to buffer the entire stream into memory first.
+The Rama CLI 
+send
+ command now also has support for exporting a HAR file of the HTTP/WS conversations that you executed. In order to do so you can make use of the 
+--har
+ argument.
+Other changes and improvements
+There are several breaking changes and plenty of improvements. For a full list please see the changelog. But to name a few here:
+Our peekers (used to check what protocol is flowing over a transport stream, see 
+the "Protocol Inspection" chapter
+ of the Rama book) are now able to fail as fast as a byte can no longer satisfy the heuristics, and they also received some minor bug fixes. The HTTP peek router can now also opt in to skipping "method" names that are commonly used and can be confused with HTTP header lines. In some cases, such as 
+PING
+, these can needlessly stall the peeker logic until its timeout, which is not ideal. Using this extra configuration should prevent most of such edge cases, if not all.
+This release also brings some more improvements to our 
+Apple Network Extension support
+, which I'm sure are greatly appreciated by those relying upon it to build L4 and L3 proxies for Apple platforms.
+Our (client) 
+connection services
+ now have a slightly different trait signature, which allows for nicer error handling and smarter decision making, for example knowing when to retry and when to fail for real.
+In function of PAC, you can now insert multiple 
+proxy routes
+ (addresses) into your input extensions, which will be tried in the order given. The existing proxy DB functionality now also happily makes use of this by default, but if you want the old random single-proxy selection behaviour you can still opt in to that.
+Thank you
+We would like to take this release as an opportunity to thank everyone that made and continues to make 
+Rama
+ possible: 
+our contributors
+, the projects that we depend upon as well as those that we 
+forked
+, the wider 
+Tokio
+ and 
+Rust
+ ecosystem, our 
+Sponsors
+ and of course our 
+Commercial Partners
+.
+We very much look forward to the releases that are yet to come.
+Tip
+Curious? You can take a look at 
+our milestones
+.
+You can also subscribe to 
+this Blog RSS feed
+ or 
+subscribe to our very own newsletter
+, written by us and your emails stored with privacy in mind within our own system made with 
+Rama
+.
+Are you building something with 
+Rama
+ alone or with your organisation? Do share it with us by 
+email
+ or 
+Discord
+.
+Be empowered. Be the change.
+Source: 
+https://github.com/plabayo/rama/discussions/1130
+.

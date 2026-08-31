@@ -1,0 +1,56 @@
+<article class="post-7889 post type-post status-publish format-standard hentry category-incidents category-resilience category-software category-systems" id="post-7889">
+<!-- .entry-header --> <div class="entry-meta">
+<span class="byline">
+<a href="https://surfingcomplexity.blog/author/lorinh/" rel="author">Lorin Hochstein</a> </span>
+<span class="cat-links">
+<a href="https://surfingcomplexity.blog/category/systems/incidents/" rel="category tag">incidents</a>, <a href="https://surfingcomplexity.blog/category/resilience/" rel="category tag">resilience</a>, <a href="https://surfingcomplexity.blog/category/software/" rel="category tag">software</a>, <a href="https://surfingcomplexity.blog/category/systems/" rel="category tag">systems</a> </span><!-- .cat-links -->
+<span class="published-on">
+<time class="entry-date published updated" datetime="2026-08-19T22:18:12-07:00">August 19, 2026</time> </span>
+<span class="word-count">3 Minutes</span> </div><!-- .entry-meta -->
+<div class="entry-content">
+<p class="wp-block-paragraph">In <a href="/2026/08/18/tough-days-at-github-a-continuing-series/">yesterday’s post</a> about the <a href="https://www.githubstatus.com/incidents/zkxwbgr0cnmx">recent GitHub outage</a>, there was a detail in the writeup that I didn’t say anything about: the autoscaling policy on the service with the saturated Istio sidecar.</p>
+<blockquote class="wp-block-quote is-layout-flow wp-block-quote-is-layout-flow">
+<p class="wp-block-paragraph">Originally this was caused by an Istio sidecar pod reaching its concurrency limits and failing to auto scale correctly because of a misconfigured policy that watched host service but not sidecar limits.</p>
+</blockquote>
+<p class="wp-block-paragraph">I suspect readers of this blog are familiar with what autoscaling is and how it works, but here’s a brief summary in case you aren’t. The amount of compute and memory resources that a service requires depends on the load that’s placed on that service. The relevant source of load here is external requests against the service, also known as <em>traffic</em>. The volume of traffic varies over time. For example, for a company like GitHub, my guess is that they more traffic during working hours than evening and weekends. </p>
+<p class="wp-block-paragraph">Given that load changes dynamically, and that the compute and memory resources a service need is a function of load, there are two general strategies. One strategy is to provision your service for peak load. The other strategy is to dynamically adjust the resources allocated to your service, based on its current load; that’s called <em>autoscaling</em>.</p>
+<p class="wp-block-paragraph">If you want your service to use autoscaling, you need to define an autoscaling policy. In particular, you need to pick which metrics you want to use that represent load, and then you need to specify how resources should be added or removed based on how that metric changes. </p>
+<p class="wp-block-paragraph">CPU utilization is a common metric used for autoscaling. But note that a service can become saturated even if CPU is low. For example, imagine a scenario where you use thread-per-request with a threadpool, and the latency of your downstream requests increase, and all of the threads in the pool end up blocked. Here the service is saturated, and you’d benefit from spinning up new pods, but CPU is actually low, because the threads are blocked waiting on I/O (this happened to <a href="/2021/02/08/slacks-jan-2021-outage-a-tale-of-saturation/">Slack back in 2021</a>). Now, you can add additional rules to your autoscaling policy to handle such cases (which is what Slack did, where they rapidly scaled up based on number of threads). Or you can scale based on incoming request volume instead of CPU, if your service isn’t CPU-bound.</p>
+<p class="wp-block-paragraph">Based on the GitHub writeup, it sounds like the autoscaling policy for the impacted service used load metrics that only took into account load on the service itself, and not on the Istio sidecar. </p>
+<p class="wp-block-paragraph">In general, each service behaves differently under load, which means that every autoscaling policy is effectively bespoke. This means that a team that owns a service is not only responsible for the business logic, but also for an operational control system with custom parameters, that can really only be checked via load testing. (Are you doing load testing on all your services?) The service owners are also almost certainly not autoscaling experts. And so it’s not surprising to me that a misconfigured autoscaling policy was a contributor here. </p>
+<p class="wp-block-paragraph">But, while I think it’s worth discussing the particular defect with this policy, since it’s good for people to be aware of the risks of autoscaling, I also think it’s too easy to fixate on it to the exclusion of other factors involved in this incident. This is what David Woods refers to as the <a href="/2023/04/15/missing-the-forest-for-the-trees-the-component-substitution-fallacy/">component substitution fallacy</a> – the idea that the way to improve reliability is to focus efforts on identifying and fixing the defective components. </p>
+<p class="wp-block-paragraph">While, yes, you should identify and fix the defects uncovered by an incident, you should also recognize that:</p>
+<ul class="wp-block-list">
+<li>your system is, at this very moment, <a href="/2025/07/09/component-defects-rca-vs-re/">filled with latent component defects</a></li>
+<li>despite the presence of all of these defects, your system is not constantly failing over</li>
+</ul>
+<p class="wp-block-paragraph">This means that <em>component defects aren’t enough to take down your system</em>, or your system would be down right now. Don’t just look at the individual components: treat the interactions as first-class. In the GitHub outage, we see discussion of interactions between factors such as: changing traffic patterns (including scrapers), autoscaling policy, the Istio sidecar saturation, retry logic, HAProxy node saturation, and authentication traffic.</p>
+<p class="wp-block-paragraph">There’s also a multitude of details we don’t have because this is a rapidly disseminated public writeup, and the good stuff can only be found in the internal writeup. I speculated in this post about the relationship between service owner and autoscaling policy, but I would love to know more about the history here (did this policy predate the use of Istio sidecars, for example?). I’d also love to know more about the problematic traffic. (What kinds of requests were they? Was it a sudden increase or a gradual ramp-up? Do we know why the traffic increased?).</p>
+<p class="wp-block-paragraph">You can’t get answers to these sorts of questions for public incident writeups, but you can for the internal ones at your own organization. It’s up to you to ask the questions. </p>
+<div class="sharedaddy sd-like-enabled sd-sharing-enabled" id="jp-post-flair"><div class="sharedaddy sd-sharing-enabled"><div class="robots-nocontent sd-block sd-social sd-social-icon-text sd-sharing"><h3 class="sd-title">Share this:</h3><div class="sd-content"><ul><li class="share-twitter"><a aria-labelledby="sharing-twitter-7889" class="share-twitter sd-button share-icon" data-shared="sharing-twitter-7889" href="https://surfingcomplexity.blog/2026/08/19/github-autoscaling-and-the-component-substitution-fallacy/?share=twitter" rel="nofollow noopener noreferrer" target="_blank">
+<span hidden="" id="sharing-twitter-7889">Share on X (Opens in new window)</span>
+<span>X</span>
+</a></li><li class="share-facebook"><a aria-labelledby="sharing-facebook-7889" class="share-facebook sd-button share-icon" data-shared="sharing-facebook-7889" href="https://surfingcomplexity.blog/2026/08/19/github-autoscaling-and-the-component-substitution-fallacy/?share=facebook" rel="nofollow noopener noreferrer" target="_blank">
+<span hidden="" id="sharing-facebook-7889">Share on Facebook (Opens in new window)</span>
+<span>Facebook</span>
+</a></li></ul></div></div></div><div class="sharedaddy sd-block sd-like jetpack-likes-widget-wrapper jetpack-likes-widget-unloaded" data-name="like-post-frame-30291541-7889-6a890e9b58dfb" data-src="//widgets.wp.com/likes/index.html?ver=20260822#blog_id=30291541&amp;post_id=7889&amp;origin=lorinhochstein.wordpress.com&amp;obj_id=30291541-7889-6a890e9b58dfb&amp;domain=surfingcomplexity.blog" data-title="Like or Reblog" id="like-post-wrapper-30291541-7889-6a890e9b58dfb"><div class="likes-widget-placeholder post-likes-widget-placeholder" style="height: 55px;"><span class="button"><span>Like</span></span> <span class="loading">Loading...</span></div></div>
+</div> </div><!-- .entry-content -->
+<!-- .entry-footer -->
+<div class="entry-author-wrapper">
+<div class="entry-author author-avatar-show">
+<div class="author-avatar">
+ </div><!-- .author-avatar -->
+<div class="author-heading">
+<h2 class="author-title">
+					Published by <span class="author-name">Lorin Hochstein</span> </h2>
+</div><!-- .author-heading -->
+<p class="author-bio">
+<a class="author-link" href="https://surfingcomplexity.blog/author/lorinh/" rel="author">
+					View all posts by Lorin Hochstein				</a>
+</p><!-- .author-bio -->
+</div><!-- .entry-auhtor -->
+<div class="site-posted-on">
+<strong>Published</strong>
+<time class="entry-date published updated" datetime="2026-08-19T22:18:12-07:00">August 19, 2026</time> </div><!-- .site-posted-on -->
+</div>
+</article>

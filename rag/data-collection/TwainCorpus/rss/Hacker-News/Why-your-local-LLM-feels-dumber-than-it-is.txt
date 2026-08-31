@@ -1,0 +1,781 @@
+Why your local LLM feels dumber than it is
+
+High-Performance Computing
+
+Machine Learning, LLMs, & AI
+
+ai
+
+thr3e
+
+                    August 16, 2026,  1:51am
+
+1
+
+Quick Introduction
+
+We have all been on forums, chats, reddit, discord, youtube, or somewhere and heard “Oh! Model XYZ is AMAZEBALLZ!zomgwtfbbq” then downloaded it (or more likely, some quantized form of it) and said “eww… This sucks!”
+
+This post is going to be a rather technical series of experiments to demonstrate the impact of implementation-specific hazards with inference. I will be using the term “reference implementation” to describe the lab that published and offers first-party hosting of their models and posts original benchmark claims. Their hardware will be different than yours. Their software will be very different than yours. And the comparisons in this post are not going to be running some 2.58-bit-gguf-in-ollama with a couple test prompts.
+
+I am intentionally glossing over entire emerging fields of study, mountains of research papers and lit review to make this more approachable for you the reader. Don’t nit pick my oversimplifications or I will make you read the 
+really
+ 
+long unpleasant
+ 
+version 
+with math
+.
+
+Your local implementation sucks. But that’s ok, because everyone else’s does too.
+
+Every single instance of hardware and software running an LLM today is a little bit different. or a lot different when it comes to some cases. The average home lab user might be mixing multiple different generations of GPU. The chips on those have different instruction sets. Those instruction sets will implement and execute math to calculate your next token differently from any other person, even when running the same exact weights.
+
+So that begs the first question: How much 
+does
+ your particular setup suck? Turns out there are a number of different ways to go about measuring that.
+
+The practical approach is straight forward. Run standard benchmarks. A variety of them. terminal bench, hle, SWEthis, HELLAthat, MMLU-whatever… take your pick. Just make sure its representative of your actual workload/use case. Do not crank temperature to zero and paste in 3 test prompts then call it good/bad. Zero-shot tests are not a good analog of most agentic tasks. You need long-context tool-calling and domain specific knowledge evaluations to figure out where your setup is weak when running the same weights as somebody else replicating those same benchmarks.
+
+But the purely mathematical answer is where my focus is going to begin because as 
+@wendell
+  said:
+
+Math is Math!
+
+“Logits” are the models scores for each possible next token. They are normalized into probabilities, passed through the configured sampler, and converted back into text by the detokenizer to generate THE→NE→XT→TOK→EN during decode.
+
+A side note about sampler settings: the model card on HF usually specifies exactly what sampler settings (and chat template) you should be using. temp 1.0, top-p 0.95, etc. it varies by model so make sure you are using the right ones. btw, setting temp too low is why your qwen is sitting there looping unable to escape its THINK output. You’re welcome, glad I could fix that for you.
+
+When the next token probability changes enough, THE→NE→XT becomes THE→NE→W→DAY… And while those small changes might be fine, odds are that’s the beginning of the niggling sensation in the back of your mind that something 
+feels off
+.
+
+Some of you may have heard the term KLD before, or KL Divergence. Don’t worry, I won’t make you do any math or flood your brain with tables of very small decimal numbers. But just in case you wanted the simple version: convert the output logits into a probability distribution, and measure how far that distribution has moved from a chosen baseline. Lower KLD means closer to that baseline, not automatically ‘smarter’. KLD is also directional, so the order of the two distributions matters.
+
+A word of caution: Don’t get suckered in by impossibly low KLD claims on a quant HF model card. It is impossible to interpret a number unless the author discloses the reference checkpoints and full runtime environment, evaluation text, calibration data, context lengths, sampled positions, KL direction, any vocabulary truncation, and how the measurements were aggregated. 
+The methodology matters as much as the number and plenty of people get it wrong.
+
+What the hell is vllm doing?
+
+Now, we need to take a brief field trip down what the giant stack of software is doing on your inference engine to understand where some of those sources of divergence come from.
+
+wtf is vllm doing
+659×610 16.8 KB
+
+At every step of this oversimplified diagram are components that can be configured or changed based on your specific hardware/software footprint, model, quant, tensor shape, etc.
+
+The nightly VLLM container image I snagged had 734 (252 uv/pip Python) packages in it. That’s 734 codebases each with their own bugs and undocumented idiosyncrasies. The path your specific implementation takes through that mountain of code will be distinct.
+
+Test 1: Precision Benchmarking Attention Backends
+
+Lets start with one piece of that inference flowchart. During prefill (prompt processing) there are a several attention backends your inference engine will select from. This impacts both speed and precision of prefill, while requiring different cuda kernels for every GPU family / SM compute capability 
+1.3. The CUDA platform — CUDA Programming Guide
+ . Lets test them and compare.
+
+WENDELL DARE CUDA ROFL
+1024×1536 569 KB
+ (I’m really very sorry, I had to…)
+
+I started with the official BF16 checkpoint of Qwen3.6-27B on an RTX PRO 6000 Blackwell GPU at tensor parallelism 1. The KV cache was BF16, with no weight/activation or KV-cache quantization. The software was a pinned nightly vllm build. I used eager execution, disabled CUDA graphs, prefix caching, and MTP, and used 2k-token chunked prefill.
+
+Qwen3.6-27B is dense, not an MoE, but it is still a hybrid model. 64 layers repeat in a pattern of three Gated DeltaNet/linear-attention layers followed by one full-attention layer. Only those 16 full-attention layers use the selectable attention backend in this experiment; the Gated DeltaNet path remained fixed.
+
+The workload replayed here is “Prompt 2”, a roughly 100k token context captured from a real Turnstone lab workstream containing multiple tool calls and real work products. It was selected to resemble what a local agent actually does rather than a synthetic needle-in-a-haystack test. 
+And maybe more importantly, it doesn’t appear in any benchmark or training dataset in the wild today. Nobody could have benchmaxed for this, or calibrated their quant to accommodate it.
+
+There are three available full attention backends to select from in vllm for this workload: FlashAttention 2, Flash Inference, and Triton Attention. 
+This was the only change made between executions
+, the rest of the hardware and software stack remained stable.
+
+I also performed a same-backend cross-GPU repeatability control. For this graph, I captured the full-vocabulary logits in BF16 every 32 prompt tokens. Distribution comparisons such as KLD were calculated afterward in FP64 from those stored logits.
+
+Top-1 agreement is whether the token with the highest logit, the greedy argmax, was the same. All three backends were evaluated against the same forced token history. A “top-1 flip” therefore means a backend 
+would have chosen
+ a different greedy next token at that position. We did not let that choice alter the remaining history. This keeps the mathematical comparison controlled, but it does not show how far an unconstrained generation would branch or whether a tool call would eventually fail… 
+that comes in test 2 ;D
+
+The following graph shows % of sampled logits resulting in token flips:
+
+triton-baseline-top1-disagreement-lines-8k-prompt2-96k
+3334×1331 241 KB
+
+For the first several thousand tokens, every run of the model agreed about what the next token was going to be regardless of backend. Then in later portions of the prompt, backends began disagreeing. Triton was selected as the baseline to simplify upcoming quantization chicanery.
+
+Each 8k-token window contains 250 sampled positions, one probe every 32 tokens. The percentage is the fraction of those probes where the other backends highest-scoring token differed from Triton’s.
+
+Random noise was accounted for by running the same test with the same attention backend multiple times. 
+The logits across runs at every hidden state were bit for bit identical.
+ Meaning this particular divergence comes exclusively from the matrix multiplication and addition operations happening during prefill inside trt/fa2/fi.
+
+Disagreements appeared in clusters and varied with prompt content rather than increasing smoothly with context length. This is not evidence of one universal length at which the model “falls apart” but… 
+we will get there
+ 
+soon
+…
+
+Now that we have a baseline comparison of interesting prompt fuel, lets dive into…
+
+Test 2: KV Cache quantization, or why your LLM’s IQ drops like a rock after 40k tokens
+
+Repeating the same methodology, we took the BF16 weights and BF16 kv cache baseline above running Triton, and ran the next experiment. What happens when you leave the weights and activations alone, and JUST quantize the kv-cache?
+
+triton-bf16-baseline-kv-cache-top1-lines-8k-prompt2-96k
+3317×1370 336 KB
+
+Ah, divergence. And this leads us to our first dumpster-fire of the evening: a completely reproducible tool calling error.
+
+Enough top-tokens got flipped during tool calls, we let them play out and while BF16 was fine, int8 kv-cache 
+eventually
+ managed to recover, 
+int4 did not
+!
+
+friends dont let friendz 2 lol
+1122×1402 534 KB
+
+Test 3: Weight Weight, Don’t Tell Me!
+
+This time we are leaving all the kv-caches full size at bf16. We are adding some new players to the game however by comparing:
+
+BF16 reference: Qwen/Qwen3.6-27B ( 
+Qwen/Qwen3.6-27B · Hugging Face
+ )
+
+Official FP8: Qwen/Qwen3.6-27B-FP8 ( 
+Qwen/Qwen3.6-27B-FP8 · Hugging Face
+ )
+
+INT8 W8A16: TheHouseOfTheDude/Qwen3.6-27B-INT8 ( 
+TheHouseOfTheDude/Qwen3.6-27B-INT8 · Hugging Face
+ )
+
+NVIDIA NVFP4: nvidia/Qwen3.6-27B-NVFP4 ( 
+nvidia/Qwen3.6-27B-NVFP4 · Hugging Face
+ )
+
+AWQ W4A16: cyankiwi/Qwen3.6-27B-AWQ-BF16-INT4 ( 
+cyankiwi/Qwen3.6-27B-AWQ-BF16-INT4 · Hugging Face
+ )
+
+These 4 quants represent a broad picture of weights and activations. A notable piece of information for our mathnasium is the actual CUDA kernel / GEMM (general matrix multiplication) / MMA (matrix multiply accumulate) instructions being run to calculate the logits for each quant are different:
+
+Qwen3.6-27B (reference)
+
+Weights/activations:
+ BF16 weights, BF16 activations
+
+Linear/GEMM:
+ UnquantizedLinearMethod → torch.nn.functional.linear. Each CUDA tile selected by its associated shape/geometry.
+
+KV cache:
+ BF16 (Forced)
+
+Qualification:
+ Reference checkpoint.
+
+Qwen3.6-27B-FP8
+
+Weights/activations:
+ E4M3 FP8 weights in 128×128 blocks; dynamic FP8 activation quantization inside converted linears; excluded modules such as lm_head remain BF16
+
+Linear/GEMM:
+ Fp8LinearMethod → CutlassFp8BlockScaledMMKernel
+
+KV cache:
+ BF16 (Forced)
+
+Qualification:
+ DeepGemm was automatically disabled because vLLM flags its E8M0 scale format as accuracy-degrading for this architecture (SM120); CUTLASS was selected instead. No calibration dataset was identified in the published files.
+
+Qwen3.6-27B-INT8
+
+Weights/activations:
+ Static, symmetric, channel-wise INT8 linear weights; BF16 activations (W8A16). GDN/linear_attn projections and lm_head excluded from quantization.
+
+Linear/GEMM:
+ CompressedTensorsWNA16 → MarlinLinearKernel
+
+KV cache:
+ BF16 (Forced)
+
+Qualification:
+ One-shot quantization with explicitly no calibration dataset. Its unusually good fidelity is less mysterious once you account for W8A16 plus unquantized GDN projections.
+
+Qwen3.6-27B-NVFP4
+
+Weights/activations:
+ Mixed checkpoint — 208 static FP8 W8A8 targets covering 64 full-attention projections and 144 GDN projections; 193 NVFP4 W4A16 targets covering 192 MLP projections plus lm_head, group size 16
+
+Linear/GEMM:
+
+FP8 targets: ModelOptFp8LinearMethod → FlashInferFP8ScaledMMLinearKernel
+
+NVFP4 targets: NVFP4 GEMM → MarlinNvFp4LinearKernel
+
+KV cache:
+ BF16 (Forced)
+
+Qualification:
+ Not native FP4 arithmetic in our upstream-nightly run. vLLM classified the GPU path as lacking native FP4 support and explicitly selected weight-only FP4 compression through Marlin. The checkpoint’s embedded FP8 KV scheme was overridden with BF16 KV for the bakeoff.
+
+Qwen3.6-27B-AWQ-BF16-INT4
+
+Weights/activations:
+ Static asymmetric INT4 weights, group size 32, MSE observer; BF16 activations (W4A16). GDN/linear_attn projections and lm_head excluded.
+
+Linear/GEMM:
+ CompressedTensorsWNA16 → MarlinLinearKernel
+
+KV cache:
+ BF16 (Forced)
+
+Qualification:
+ AWQ calibration dataset disclosed as “STEM and Agentic.”
+
+Other notable information for this run:
+
+Full softmax/GQA attention for all models was AttentionBackendEnum.TRITON_ATTN; JIT monitor observed kernel_unified_attention.
+
+GDN prefill: Triton/FLA GDN prefill kernel, requested as triton, head_k_dim=128.
+
+During execution, the recurrent path also JIT-compiled _causal_conv1d_update_kernel, fused_recurrent_gated_delta_rule_packed_decode_kernel, and reduce_segments.
+
+TP1, eager mode, no CUDA graphs, no MTP/speculative decoding, language-only execution.
+
+five-way-quant-bakeoff-top1-8k-prompt2-96k
+2432×1382 387 KB
+
+The next-token flip results shake out fairly predictably. TheDude (W8A16) mops the floor with everybody, beating first party FP8 (W8A8) and Nvidia(FP4-is-a-Lie) release. In fact, out of the 5 options, Nvidia’s release comes in dead last hitting ~50% token flips by the time we reach 88k context.
+
+Both the NVFP4 and AWQ W4A16 failed to properly close their tool calls and botched Cisco command line syntax (the correct command was ‘show arp’, while they executed ‘show run’), while both FP8 and INT8 were able to complete the correct calls.
+
+In future experiments I will try to explore the impact of using different fused GEMMs for the same weights, this is another interesting source of divergence where sometimes you have to trade precision for speed.
+
+Part 1 Wrap Up
+
+I have quite a few more experiments and observations to post, but require a great deal of parallel GPU time to calculate and record every logit sampled across huge context chains on multiple prompts with dozens of different settings.
+
+If you have specific questions, shoot me a DM or poke me on discord I guess.
+
+22 Likes
+
+Qwen 3.8 Quant Selection Guide for RTX 5090
+
+Dual Sparks in nvfp4 vs 4x RTX Pro 6000 with native DeepSeek V4 0731 -- Quants and Speed
+
+thr3e
+
+                    August 17, 2026,  9:18pm
+
+4
+
+Part 2:
+
+image
+1280×719 268 KB
+
+Last weekend I ran a broad statistical comparison centered on one dataset and 3 specific scenarios: What happens when you change the attention cuda kernel, what happens when you lobotomize KV cache, and what happens when you compare the base model with two 8bit and two 4bit quants.
+
+The output was centered on probability distributions that were severe enough to result in token flips, top-1 change output. Some of these were absolutely fascinating when viewed in depth, so for part 2 of my evil plan to take over^H^H^H^H^H^H drag the local LLM sins out into the open, the methodology is going to shift.
+
+Rather than stay high level and capture 3% of the logits, I am now going to capture 100% of the logits for the most impactful areas of the workstream: during tool calls. Gentlemen, we need to go deeper…
+
+image
+400×226 20.1 KB
+
+Inferenception. A stream within a stream.
+
+image
+1024×1536 550 KB
+
+I built a small visualizer for my massive hypercube of test case logit captures. It shows a parallel stream of output tokens from some number (2-5) comparable runtimes. And when they differ? 
+We branch and follow both.
+
+The only requirement across runs is the dictionary be the same (so I’m staying within the qwen3.x model family) but can be 
+anything
+.
+
+Low level cuda kernel and NCCL path differences, driver differences, vllm container runtimes, different GPUs, different combinations of multiple GPUs, attention runtimes, different caching, different model quantizations, and in fact… 
+even different models. 3.6 vs 3.8 anyone?
+
+When the token flip happens, we do not stop and yank the wrong model back to the teacher. We let it continue. This forked multiverse of token output shows us where it went after the error and how it diverged!
+
+Network Qwengineering
+
+Lets go all the way down to unstructured tensor space, see a real failed tool call, a token flip caused by the difference in attention back end / cuda kernel:
+
+In this example of a single token flip, the model executes a tool call targeting an interface on a Cisco router: GigabitEthernet0/0/1.201
+
+Flash attention 2 gets it wrong. It targets GigabitEthernet0/
+1/4 instead.
+
+Then, it runs 
+the
+ 
+wrong command AGAIN
+ in two diverging tool calls:
+
+image
+902×282 21.5 KB
+
+The correct command (trying to find the owner of a mac address) is show mac address table. FA2 tries to show run its way out of the mess that token flip has gotten it into.
+
+In this next example, the LLM tried to configure a description on an interface. The FA2 token flip failed to execute that task at all.
+image
+909×395 33.2 KB
+
+Remember. this is simply changing one configuration option in VLLM to select TRT/FA2/FI. Same gpu, same os/drivers/software/vllm/prompt/cache/weights/activations… And this is REPEATABLE between runs, bit-identical logit captures!
+
+If a simple runtime difference in cuda kernels caused this to happen in production, it could result in a critical network outage. The positioning is so impressively bad I could not have hoped for a better example of 
+why precision measurement and testing matters!
+
+Enter the Tensorverse!
+
+We see token flips in many scenarios. This is comparing Tensor Parallelism vs single GPU:
+
+image
+1816×481 51.4 KB
+
+At TP1 we get an acceptable tool call, at TP2 it fails, at TP4 it succeeds again. WTF?! (This is USUALLY NCCL’s fault when you debug even further and capture the nccl graphs…)
+
+Across the 5-weight quant-off from the weekend:
+
+image
+1822×497 43 KB
+
+We have BF16, FP8, INT8, and W4A16 all getting it right. 
+Only NVFP4 fails this tool call >_>
+
+Wrap up
+
+Short post today due to work.
+
+We have a growing pile of test case captures in a variety of prompts. Most of my lab include network automation so the corpus will improve as I identify and scrub additional workstream sessions out of turnstone.
+
+So far I have detailed 100% captures with forking realities with:
+
+Different weights
+
+Different models
+
+Different KV cache quantization
+
+Different tensor parallelism
+
+Different NCCL settings
+
+Different attention backends
+
+Different cards (6k vs 5090) in SM120 family
+
+and much much more.
+
+I am working to package up some of the testing tools and dataset into a distributable package people can run on their rigs and report results, as well as a vast run using a couple rented hopper/blackwell/etc. GPUs
+
+10 Likes
+
+thr3e
+
+                    August 17, 2026,  9:18pm
+
+5
+
+SIDE QUEST
+
+5090 quant buyers guide
+
+I took a small subset of results as the larger corpus coalesces and spit out a quick 5090 quant buyers guide: 
+Qwen 3.8 Quant Selection Guide for RTX 5090
+
+model routers: or, how to save your sessions for later testing and analysis
+
+Also, for anyone wondering HOW you go about capturing real workflows for re-use in later testing, you just need a model router:
+
+Work continues in the background. Stay tuned for the much larger readout on configs capabilities and costs.
+
+8 Likes
+
+wendell
+
+                    August 17, 2026, 11:05pm
+
+6
+
+There is some legit mad science going on in here, I love this, thank you again for posting, so much content 
+
+4 Likes
+
+vad
+
+                    August 20, 2026,  6:44am
+
+7
+
+@grok
+ for each post, summarize it in a single paragraph.
+
+ok, it would be a rude joke to not compliment you on the great work done!
+
+“If a simple runtime difference in cuda kernels” … this reminds me of non-determinism in areas where it actually matters by design. The endless hours spend working backwards from the result toward the cause. It would be really ironic for the fundamental computational principles (commutativity, floating point, defined order) to come back to bite the 
+AI
+ neural networks in the ass. Here the recognition of the problem is delayed, because everyone assumes randomness of outputs (and the input varies too). And somewhere there, over the rainbow, sit pure INT calculations taunting us with reproducible 
+builds
+ results.
+
+Burhan
+
+                    August 20, 2026, 12:28pm
+
+8
+
+Killer write up! Appreciate sharing all your work.
+
+I wanted to raise a couple of points regarding KL Divergence that, based on my understanding, are important to call out:
+
+It’s mandatory to apply softmax on the logits. The KL Divergence is about the difference between two distributions. Without applying softmax, the logit scores aren’t a valid distribution.
+
+The KL Divergence only measures the 
+change from baseline
+, there is zero measure of “correctness,” only a measure difference from the established baseline. It’s important since a baseline model 
+could
+ (statistically speaking) generate an overall incorrect answer, while a quantized model produces a correct answer (unlikely but not impossible). Essentially, it’s important to recognize that it’s an assumption that the baseline is assumed as having the most likely correct next token prediction. Multiple runs make the outlier scenario less consequential.
+
+The greedy top-1 logit of the next likely token %-difference and the KL Divergence are two different measures. I don’t think it was attempted to assert they’re equivalent here, but it also wasn’t exactly obvious on first read. The greedy top-1 measure is more strict, as it only compares the top candidate, which is also more relevant for what a user ultimately receives as output.
+
+Also, “vocabulary” was mentioned one of the dials, but I think most people would call it the “tokenizer." It’s splitting hairs a bit, but figured it was worth calling out for those who may not know off hand.
+
+thr3e
+
+                    August 20, 2026,  3:22pm
+
+9
+
+So I went down that route too. What IF we just represented the math as integer with no rounding. The plan works well from 4/8 bit math. you can cleanly represent those ranges with smaller/sane data types.
+
+4bit x 4bit dot products fit within int16. 8bit x 8bit fit within int32.
+
+but at half precision (int 16) it falls apart. You need progressively larger datatypes (int64) to not clip off the bits and introduce the rounding accumulating error. And doing int64 math billions of times in mma operations is computationally prohibitive.
+
+Speed seems to be why most people accept the error.
+
+Now, there is a tiny added benefit to the bit trimming and randomness in 
+probabilistic computing.
+
+In deterministic computing AxB+C=# every time. Back to my floating point math though, you might actually want 6.999999 or 7.00001. Models are not programmed, they are grown. And that incredible spark of 
+something
+ coming out of that growth is more like an emergent property diffused from gaussian noise. Speed aside, I wonder what you would lose making a truly deterministic model.
+
+Edit: After thinking about it, if i DIDNT use the term “dynamic range” in this response somewhere, I would have a flood of angry rage from reddit and discord. Yes, I know. Im discounting that because while you could add a scale factor to every tensor in INT16 thats effectively re-creating floating point math with a hat and sunglasses. I dont think anybody has an int64 accumulator in GPU hardware so this is all hypothetical, let alone changes to the matmul in cuda kernels etc. I went looking for int16 models and was surprised but everything looked like an experiment or abandoned idea.
+
+Moving to an int64 accumulator means more accumulator registers, accumulator read/write POWER, add-path width, local routing and forwarding bandwidth, output-tile storage x bandwidth… you COULD use int32 as the accumulator, but as stated before that would still be lossy…
+
+3 Likes
+
+thr3e
+
+                    August 20, 2026,  3:29pm
+
+10
+
+Mostly yes, a lot of things were glossed over as I tried to make it both approachable as well as technically useful… That’s why while I have a huge KLD write up aside from the post it was not a central piece of the data.
+
+Our harness does normalize the captured logits. It converts them to float64 and applies log_softmax, then calculates directional (D_{KL}(P_{BF16}|P_{candidate})), reverse KL, and Jensen–Shannon divergence. We retain per-token values and summarize them within individual output ranges rather than presenting one global average.
+
+BF16 is a numerical-fidelity reference, not an oracle or correctness label. A quantized model can absolutely diverge from BF16 and produce a semantically better answer. Repeating the identical deterministic run tests reproducibility, but does not make BF16 correct; correctness requires labelled answers, executable tool-call checks, or semantic grading across varied workloads.
+
+Our Top-1 percentage also is not a percentage difference between logits. It is the percentage of evaluated output positions where the candidate’s argmax token ID differs from BF16’s:
+
+Top-1 disagreement = changed winner positions / evaluated positions. Top-1 and KL describe different things. KL measures movement of the whole distribution, including changes that leave the winner unchanged. Top-1 disagreement is a discontinuous winner test: an extremely small KL change can flip a 50.1/49.9 decision, while a much larger KL change can leave a dominant winner unchanged.
+
+Top-1 is directly relevant to greedy decoding, but a teacher-forced Top-1 flip is still a counterfactual root, not automatically a different complete answer. That is why we additionally branch from selected flip positions and inspect whether the alternate continuation recovers, changes meaning, or produces malformed or incorrect tool calls.
+
+I will be the first to point out using a random 3% token distribution (part 1) to measure divergence is not a correct overall methodology, but i needed a big picture view. That’s why part 2 went straight down the rabbit hole to what-does-a-top1-flip-mean and why would it matter to you in a specific use case.
+
+There is a clear impact, to both end user perception of a model’s output as well as measured correctness in benchmark results. Just wait for what’s coming next…
+
+The initial H200 runs mostly finished last night, and B200 runs finishing this morning sometime.
+
+2 Likes
+
+thr3e
+
+                    August 20, 2026,  4:31pm
+
+11
+
+Part 3.11 for workgroups
+
+The mountain-o-tests has grown wildly out of control, well beyond what a hypercube of logits could ever fit into one post. So I am going to start splitting the next segments into moderately entertaining summaries of the results to hopefully explore some of the many… 
+maaany…
+ interesting findings.
+
+(I might edit this post to include a few more charts when i have a chance at lunch so consider this a preliminary release)
+
+Heresy!
+
+With the release of qwen3.8 many people are flocking to fine tunes labeled as HERETIC! UNCENSORED! ABLITERATED!
+
+So, while they might be able to remove some post-training “safety” (i 
+hate
+ that term) what is the overall impact on their ability to actually do work? If you want to chat about 
+the capital of a certain island nation
+ 
+or
+ 
+certain events in 1989
+, it will probably do just fine. But what if we let it make those tasty tool calls and run it through the battery of forced teacher decodes?
+
+The heretics:
+
+We grabbed 4 “popular” (by likes and top downloads) tunes of Qwen 3.8, all full BF16 sized not quants:
+
+heretic-org/Qwen3.8-27B-heretic-ara ( 
+heretic-org/Qwen3.8-27B-heretic-ara · Hugging Face
+ )
+
+huihui-ai/Huihui-Qwen3.8-27B-abliterated ( 
+huihui-ai/Huihui-Qwen3.8-27B-abliterated · Hugging Face
+ )
+
+Blackfrost-AI/Qwen3.8-27B-ABLITERATED-BF16 ( 
+Blackfrost-AI/Qwen3.8-27B-ABLITERATED-BF16 · Hugging Face
+ )
+
+AEON-7/Qwen3.8-27B-AEON-ULTIMATE-UNCENSORED-BF16 ( 
+AEON-7/Qwen3.8-27B-AEON-ULTIMATE-UNCENSORED-BF16 · Hugging Face
+ )
+
+And compared them to our reference BF16 logits captured on SM120 for Qwen/Qwen3.8-27B ( 
+Qwen/Qwen3.8-27B · Hugging Face
+ )
+
+We also ran a limited W4A16 side experiment for fun.
+
+hwkranger/Qwen3.8-27B-heretic-ara-NVFP4 ( 
+hwkranger/Qwen3.8-27B-heretic-ara-NVFP4 · Hugging Face
+ )
+
+Some Summary Results
+
+Derivative vs stock Qwen3.8
+
+Method
+
+SP04 Top-1 flips
+
+SP06 Top-1 flips
+
+SP06 worst-range p95 KLD
+
+Invalid branch futures, SP04 / SP06
+
+Heretic-ARA
+
+Reproducible ARA ablation
+
+0.717%
+
+1.337%
+
+0.03661
+
+0/11 · 0/58
+
+Huihui Abliterated
+
+“Crude proof-of-concept” abliteration
+
+0.912%
+
+1.406%
+
+0.04477
+
+0/14 · 0/61
+
+Blackfrost Abliterated
+
+Refusal-direction weight edit
+
+3.844%
+
+4.978%
+
+0.31235
+
+0/59 · 1/216
+
+AEON Ultimate
+
+SSM repair + Abliterix + MTP graft
+
+2.997%
+
+5.831%
+
+0.68507
+
+8/46 · 36/253
+
+The first two quants appear remarkably functional while the latter two should probably go on the do-not-use list.
+
+qwen38-derivatives-top1-flip-rate-sp04-sp06
+2880×1620 195 KB
+
+SP04 covers 1,535 assistant-output tokens in six natural ranges. SP06 covers 4,339 tokens in seven ranges, including prose, exact CLI/SQL/code, multi-tool calls, recovery actions, and architecture recommendations.
+
+“Invalid branch futures” means structurally invalid output among the specifically selected Top-1 divergence roots we explored. It is not a general tool-call failure rate, and adjacent roots can expose the same underlying failure.
+
+Broadly across all testing this week, top 1 token flips appear to be quite tied to the actual specific workstream being captured. Some tasks are very low <1% diff, others spike up wildly between different configs/quants/etc. This is something I need to go into more in a later future post.
+
+Heretic-ARA
+
+On SP06, 57 of its 58 flips occurred where stock Qwen was already uncertain. It overturned zero strongly preferred stock tokens.
+
+Its method is also the most reproducible:
+
+Targets attn.o_proj and mlp.down_proj.
+
+Uses Arbitrary-Rank Ablation.
+
+Discloses datasets, seed, search settings, and 60 search trials.
+
+Reports its refusal and base-KL selection criteria.
+
+This is the strongest example of an ablation that changed the target behavior without broadly destabilizing ordinary technical output.
+
+The crude Huihui treatment also worked surprisingly well
+
+Huihui explicitly labels its process a crude proof of concept, yet it landed in almost the same conservative tier as Heretic-ARA:
+
+1.406% flips on SP06.
+
+59 of 61 flips occurred at weak stock decisions.
+
+No objectively invalid structured branches in either prompt.
+
+That is probably the biggest positive surprise. A sophisticated procedure was not required to preserve this particular technical workload, but that does not establish equal refusal removal or general quality.
+
+Blackfrost changed much more, but 
+usually
+ remained coherent
+
+AEON was the most disruptive on SP06:
+
+5.831% Top-1 flips.
+
+Highest worst-range p95 KLD.
+
+24 flips overturned strongly preferred stock decisions.
+
+36 structurally invalid SP06 branch futures.
+
+All eight SP04 invalid futures were AEON.
+
+This is not a clean “abliteration is bad” result. AEON combines:
+
+SSM conv1d outlier repair.
+
+An Abliterix search.
+
+A stock MTP graft.
+
+Its card says the selected trial prioritized coherence rather than minimum KL. Therefore, the experiment measures that complete recipe, not abliteration alone.
+
+The most compelling failure example… AEON
+
+AEON at SP06 token position 42,950 is nearly perfect for a visual explainer.
+
+The context contained PostgreSQL port 5432.
+
+Stock selected the final 2 with probability 0.9991.
+
+AEON selected ql with probability 0.9158.
+
+The alternate continuation produced 543ql.
+
+It subsequently failed to close the tool/function envelope.
+
+A second nearby case corrupted a known hostname:
+
+Stock selected 
+enant
+ in .
+tenant
+ with probability 0.99996.
+
+AEON selected - with probability 0.99747.
+
+The resulting branch altered the hostname and later damaged a parameter.
+
+These are not vague stylistic differences. They are high-confidence literal-copy failures in operational commands.
+
+Another useful example changed psycopg’s page_size=100 into size=100, likely turning a valid API argument into an invalid one.
+
+Vision and MTP weights were untouched
+
+We independently hashed every logical vision and MTP tensor against stock, even where checkpoint sharding differed:
+
+333/333 vision tensors matched exactly.
+
+15/15 MTP tensors matched exactly.
+
+Roughly 1.77 GB of tensors per checkpoint were checked.
+
+All four derivatives preserved them byte-for-byte. Therefore, the text results come from language-weight changes rather than hidden vision or MTP modifications.
+
+It does not prove identical vision behavior, the panel did not activate the vision path but it establishes exact weight preservation.
+
+Confidence
+
+When Qwen was LESS confident about the next token is where we saw the most flips overall. However when Qwen 
+was
+ confident, the faithful among blasphemers did 
+not
+ flip their results.
+
+qwen38-derivatives-stock-confidence-overturned-sp06
+2880×1620 251 KB
+
+Only the truly heretical overruled Qwen’s strong next token signal for their own, resulting in errors.
+
+On these long-context technical workloads, Heretic-ARA and Huihui preserved stock behavior far better than Blackfrost and AEON. AEON produced the clearest reproducible operational damage, but its bundled recipe prevents attributing that damage 
+solely
+ to abliteration. None of these measurements establishes which derivative is most successfully uncensored.
+
+Refusal benchmarks and model-card KLD numbers do 
+not
+ characterize collateral changes to tool use, exact literals, code, or long-context agentic work.
+
+Next Time, on X-Men…
+
+The H200 and B200 preliminary results are in. And they are very interesting…
+
+5 Likes
+
+mashie
+
+                    August 21, 2026, 12:28pm
+
+12
+
+Interesting but not surprising read.
+
+So the takeaway is don’t use small dumb models for important tasks. Or more precisely don’t use small dumb models full stop.
+
+ricardodevries
+
+                    August 22, 2026,  8:47am
+
+13
+
+I had a blast reading this! Well done for putting it all together and taking the time to make it 
+.
+
+P.S.
+ Wendell mentioned you in his 
+latest video
+, you are famous!
+
+2 Likes

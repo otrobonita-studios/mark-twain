@@ -1,0 +1,96 @@
+<body><div><div class="drawer"><div class="drawer-content"><div class="grid grid-cols-30 gap-x-0 gap-y-8 py-8"><div class="col-start-2 col-span-28 flex flex-row gap-6 justify-between items-center"><div><a href="/en"></a></div><div class="hidden md:flex gap-4"><a class="btn-sigma-toggle" href="/security/">Security
+</a><a class="btn-sigma-toggle" href="/engineering/">Engineering
+</a><a class="btn-sigma-toggle" href="/training/">Trainings
+</a><a class="btn-sigma-toggle" href="/about/">About
+</a><a class="btn-sigma-toggle" href="/blog/">Blog</a><a class="btn-sigma-slim" href="/de/">DE</a></div></div></div><section class="grid grid-cols-30 gap-x-0 gap-y-8 pt-12"><div class="col-start-2 col-span-26 md:col-start-5 md:col-span-15 lg:col-start-7 lg:col-span-12 flex flex-col gap-4"><div class="flex flex-row gap-2"><div class="flex flex-row gap-2 items-center"><div class="text-sm font-semibold uppercase text-(--color-sigma) break-words hyphens-auto">embedded</div></div><div class="text-sm font-semibold uppercase text-(--color-sigma) break-words hyphens-auto">|</div><div class="text-sm font-semibold uppercase text-(--color-sigma) break-words hyphens-auto">22.08.2026</div></div><div class="flex flex-col gap-6 markdown-content break-words hyphens-auto"><h1 id="hunting-down-a-go-runtime-bug-on-32-bit-embedded-systems">Hunting Down a Go Runtime Bug on 32-bit Embedded Systems</h1><p>Our daily work usually revolves around Linux and security topics, deep down in the software stack.
+Still, more often than you might think, we end up debugging applications which live much higher up.
+Sometimes such a problem has its roots in the Linux kernel, sometimes elsewhere.
+In this blog post we show how we found and fixed a bug inside the Go runtime.</p><p>Recently a customer reported that an application written in Go crashes from time to time on one of their embedded Linux systems.</p><h2 id="introduction">Introduction</h2><p>The crash was always the same fatal error with the following signature:</p><pre tabindex="0"><code class="language-terminal" data-lang="terminal">runtime: netpoll: eventfd ready for 5
+fatal error: runtime: netpoll: eventfd ready for something unexpected
+...stack trace...
+</code></pre><p>At first we assumed that the application itself was buggy and needed fixing.
+But after inspecting the error more closely, it looked much more like an internal assumption in Go’s netpoll mechanism no longer holds.</p><p>The error message comes from <code>netpoll()</code> in <a href="https://github.com/golang/go/blob/c97cfcb37fced87a43a3dbab8983d6f76b8b84d1/src/runtime/netpoll_epoll.go#L141">src/runtime/netpoll_epoll.go</a>:</p><div class="highlight"><pre class="chroma" tabindex="0"><code class="language-go" data-lang="go"><span class="line"><span class="cl"><span class="k">if</span><span class="nx">ev</span><span class="p">.</span><span class="nx">Events</span><span class="o">!=</span><span class="nx">linux</span><span class="p">.</span><span class="nx">EPOLLIN</span><span class="p">{</span></span></span><span class="line"><span class="cl"><span class="nb">println</span><span class="p">(</span><span class="s">"runtime: netpoll: eventfd ready for"</span><span class="p">,</span><span class="nx">ev</span><span class="p">.</span><span class="nx">Events</span><span class="p">)</span></span></span><span class="line"><span class="cl"><span class="nf">throw</span><span class="p">(</span><span class="s">"runtime: netpoll: eventfd ready for something unexpected"</span><span class="p">)</span></span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre></div><p>In this code path, the netpoll code expects <code>EPOLLIN</code> to be the only firing event, but it got something else.
+In our case it got <code>5</code>, which is <code>EPOLLIN|EPOLLOUT</code>.
+Why would epoll suddenly report more than <code>EPOLLIN</code> if the code asked only for <code>EPOLLIN</code>?</p><p>Before digging deeper, we threw the error message into a search engine, hoping that somebody else had faced the same issue before.
+This led us straight to a report in the Go project’s issue tracker:
+<a href="https://github.com/golang/go/issues/72900">runtime: netpoll: eventfd ready for something unexpected</a>.</p><p>The issue describes exactly the fatal error we saw.
+Also on a 32-bit ARM embedded Linux system!
+The reporters also noted that the crash happens in applications which run for a long time.
+That matched our customer’s description, too.
+Bingo!</p><p>The issue had been open and unresolved since March 2025.
+The Go maintainers had also rejected one <a href="https://go-review.googlesource.com/c/go/+/658755">attempt</a> to fix the problem.</p><p>From the comments on the issue we learned that the fatal error only ever showed up on 32-bit ARM and i386 Linux systems, with all kinds of kernel versions.
+Some kernels were rather old, others recent.
+Not a single reporter saw it on an x86_64 or arm64 system.</p><h2 id="accepting-the-challenge">Accepting the Challenge</h2><p>The problem had multiple reporters but no fix, so we decided to dig into the issue ourselves.
+At the very least we could give the Go folks better input.</p><p>Initially we suspected that epoll behaves differently on 32-bit ARM or i386.
+We ditched this idea quickly since epoll is generic core code in the kernel.
+Why would it return a spurious event set only on 32-bit ARM or i386?</p><p>Still, the fact that the error showed up only on 32-bit systems gnawed at us.
+As a next step we reviewed the epoll usage in Go’s netpoll code.
+With the help of an LLM we went through <code>src/runtime/netpoll_epoll.go</code>, focusing on 32-bit pitfalls such as integer conversions.</p><p>The review revealed that Go’s netpoll code uses the <code>data</code> field of <code>struct epoll_event</code>.
+Linux epoll can store an 8 byte cookie in the kernel and returns it as part of the firing event to user space.
+Applications use this cookie to attach metadata to an event, for example to tell different event sources apart.</p><div class="highlight"><pre class="chroma" tabindex="0"><code class="language-C" data-lang="C"><span class="line"><span class="cl"><span class="k">struct</span> <span class="n">epoll_event</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="n">__poll_t</span>  <span class="n">events</span><span class="p">;</span>   <span class="cm">/* ev.Events in Go netpoll */</span>
+</span></span><span class="line"><span class="cl">    <span class="n">__u64</span>     <span class="n">data</span><span class="p">;</span>     <span class="cm">/* ev.Data in Go netpoll */</span>
+</span></span><span class="line"><span class="cl"><span class="p">};</span>
+</span></span></code></pre></div><p>Deep inside the Go runtime, the main event handler needs to know whether an event belongs to an event fd or a socket fd.
+It decides by comparing <code>ev.Data</code> to the address of its internal event fd object:</p><div class="highlight"><pre class="chroma" tabindex="0"><code class="language-go" data-lang="go"><span class="line"><span class="cl"><span class="k">if</span><span class="o">*</span><span class="p">(</span><span class="o">**</span><span class="kt">uintptr</span><span class="p">)(</span><span class="nx">unsafe</span><span class="p">.</span><span class="nf">Pointer</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">ev</span><span class="p">.</span><span class="nx">Data</span><span class="p">))</span><span class="o">==</span><span class="o">&amp;</span><span class="nx">netpollEventFd</span><span class="p">{</span></span></span><span class="line"><span class="cl"><span class="o">...</span></span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre></div><p>Reading further through the code showed that <code>ev.Data</code> holds either a raw pointer to <code>netpollEventFd</code> or a tagged pointer to a per-socket object, <code>pollDesc</code>.
+The pointer tag is a counter, <code>fdseq</code>, which distinguishes recycled <code>pollDesc</code> objects.</p><p>So far so good.
+Mixing raw and tagged pointers in the same field looked fishy to us.
+But how this relates to the crash was not clear yet.</p><p>Inspecting how Go lays out tagged pointers in memory finally revealed the core of the issue.</p><h2 id="the-aha-moment">The Aha Moment</h2><p>On 32-bit platforms, Go’s tagged pointer logic packs the full 32-bit address and up to 32 tag bits into an 8 byte word.
+The tag goes into the lower 4 bytes and the address into the upper 4 bytes.</p><p>Storing a tagged pointer with address <code>0x00123456</code> and tag <code>0x12</code> fills <code>ev.Data</code> like this:</p><pre tabindex="0"><code> ev.Data[0:4]        ev.Data[4:8]
++------------------+-------------------+
+|  fdseq           |  *pollDesc        |
+|  e.g. 0x00000012 |  e.g. 0x00123456  |
++------------------+-------------------+
+</code></pre><p>Storing the raw pointer, on the other hand, leaves the following contents in <code>ev.Data</code>:</p><pre tabindex="0"><code> ev.Data[0:4]       ev.Data[4:8]
++------------------+-------------------+
+|  &amp;netpollEventFd |  0 (untouched)    |
+|  e.g. 0x00123456 |  0x00000000       |
++------------------+-------------------+
+</code></pre><p>The lower 4 bytes hold the address of the object.
+The upper 4 bytes stay untouched since an address is only 4 bytes long on a 32-bit system.</p><p>This finally shows the root of the problem.
+The comparison of <code>ev.Data</code> with <code>&amp;netpollEventFd</code> evaluates only the lower 4 bytes of <code>ev.Data</code>.
+The code casts <code>ev.Data</code> to <code>uintptr</code>, which is 4 bytes on 32-bit platforms.
+So the address of the <code>netpollEventFd</code> object aliases with <code>fdseq</code>.</p><p>As soon as <code>fdseq</code> grows large enough to match <code>&amp;netpollEventFd</code>, the netpoll logic mistakes a socket fd for an event fd.
+Internal assumptions fall apart, among them the assumption that the ready event is just <code>EPOLLIN</code>.</p><p>Note that this aliasing can only happen on 32-bit little endian systems.
+On a 64-bit system, the comparison always covers the whole 8 bytes.
+On a 32-bit big endian system, the comparison would read the upper 4 bytes, which contain the address.</p><p><code>fdseq</code> needs to grow into the millions before it matches <code>&amp;netpollEventFd</code>.
+That’s why the problem shows up only in long-running programs which create lots of <code>pollDesc</code> objects over time.
+On a typical 32-bit ARM Linux system, <code>netpollEventFd</code> resides in a read-only section within the first 3 MiB of the address space, as the memory map of our test program shows:</p><pre tabindex="0"><code class="language-terminal" data-lang="terminal">$ pmap `pidof netpoll_test`
+204:   /opt/netpoll_test
+00010000   2696K r-x-- netpoll_test
+002c0000   2192K r---- netpoll_test
+004f0000    180K rw--- netpoll_test
+...
+</code></pre><p>So <code>fdseq</code> needs to reach a value of about 3 million before the crash can happen.</p><h2 id="a-test-case">A Test Case</h2><p>We also created a <a href="https://github.com/richardweinberger/go_netpoll_32bit_testcase">standalone test case</a> for the problem.
+On our test systems, it triggered the crash within a few minutes:</p><pre tabindex="0"><code class="language-terminal" data-lang="terminal">$ /tmp/repro.arm.system
+netpoll eventfd-alias reproducer (GOOS=linux GOARCH=arm)
+runtime.netpollEventFd is at address 0x223008
+crash expected around cycle 2240520
+
+cycle 2236988runtime: netpoll: eventfd ready for 4
+fatal error: runtime: netpoll: eventfd ready for something unexpected
+
+runtime stack:
+...
+</code></pre><h2 id="fixing-the-issue">Fixing the Issue</h2><p>We <a href="https://github.com/golang/go/pull/81037">proposed a fix</a> which changes how netpoll tells event fds and socket fds apart.
+Instead of storing the raw pointer <code>&amp;netpollEventFd</code>, the fix stores a <code>nil</code> <code>pollDesc</code> as a tagged pointer.
+When unpacking the tagged pointer yields <code>nil</code>, the event belongs to the event fd, otherwise to a socket fd.
+This way <code>ev.Data</code> always contains a tagged pointer and the aliasing is gone.
+A few days later our fix was <a href="https://go-review.googlesource.com/c/go/+/819800">merged</a>.</p><h2 id="summary">Summary</h2><p>A Go application crashed sporadically on a 32-bit ARM embedded Linux system with a fatal netpoll error.
+The error looked like an epoll problem, but epoll worked just fine.
+The Go runtime stores both a raw pointer to <code>netpollEventFd</code> and tagged <code>pollDesc</code> pointers in the 8 byte <code>ev.Data</code> field.
+On 32-bit little endian systems, the raw pointer aliases with the <code>fdseq</code> tag.
+Once a long-running program has recycled millions of <code>pollDesc</code> objects, netpoll mistakes a socket fd for the event fd and crashes.
+Our fix stores a tagged <code>nil</code> <code>pollDesc</code> for the event fd instead, which removes the aliasing.</p><p>The bug slipped into the Go runtime with Go 1.14 in 2020.
+It went unnoticed until the first report in March 2025 and finally got fixed in 2026.
+We can only speculate, but this suggests that Google itself no longer runs any 32-bit Go programs.
+Otherwise they would have hit the bug themselves long before we did.</p><p>We’d like to thank Frequentis AG for providing the budget to analyze and fix the problem.</p></div></div><div class="col-start-2 col-span-26 lg:col-start-21 lg:col-span-7 min-w-xs flex flex-col gap-2 lg:top-8 lg:self-start lg:sticky"><div><div class="flex flex-row gap-2 justify-between items-center"><div class="flex flex-row gap-2 items-center"><p class="text-sm uppercase break-words hyphens-auto">Publish date</p></div><div class="w-max"><p class="text-sm font-semibold text-right break-words hyphens-auto">22.08.2026</p></div></div></div><div class="pt-2 border-t border-t-(--color-border)"><div class="flex flex-row gap-2 justify-between items-center"><div class="flex flex-row gap-2 items-center"><p class="text-sm uppercase break-words hyphens-auto">Category</p></div><div class="w-max"><p class="text-sm font-semibold text-right capitalize break-words hyphens-auto">embedded</p></div></div></div><div class="pt-2 border-t border-t-(--color-border)"><div class="flex flex-row gap-2 justify-between items-start"><div class="flex flex-row gap-2 items-center"><p class="text-sm uppercase break-words hyphens-auto">Authors</p></div><div class="flex flex-col gap-2 w-max flex-wrap"><p class="text-sm font-semibold text-right break-words hyphens-auto">Richard Weinberger</p></div></div></div><div class="pt-2 border-t border-t-(--color-border)"><div class="flex flex-row gap-2 justify-between items-center"><div class="flex flex-row gap-2 items-center"><p class="text-sm uppercase break-words hyphens-auto">Previous</p></div><div class="w-max"><a href="/blog/2026/06/integrity-on-embedded-linux-devices-under-the-cyber-resilience-act/"><p class="text-sm font-semibold text-right break-words hyphens-auto">Integrity on Embedded Linux Devices under the â¦</p></a></div></div></div><div class="flex flex-row lg:h-screen justify-center lg:py-0 py-8"><div class="lg:sticky lg:top-[calc(100vh-250px)] lg:h-max flex flex-col items-start justify-end font-semibold"><a class="hover:underline" href="https://calendar.app.google/ibaNo5No59yvN5RN7" target="_blank"><div class="relative mx-auto max-w-66 rounded-tl-[25px] rounded-tr-[15px] rounded-br-[30px] rounded-bl-[40px] border-[2px] border-black bg-white p-4"><p class="text-left text-xl leading-none text-black break-words hyphens-auto">Struggling with embedded Linux? Book a call!</p></div></a></div></div></div><div class="col-start-2 col-span-26 md:col-start-5 md:col-span-15 lg:col-start-7 lg:col-span-12 flex flex-col gap-4 items-center"><a class="btn-sigma break-words hyphens-auto" href="https://sigma-star.at/blog/">
+Back to blog index</a></div></section><div class="grid grid-cols-30 gap-x-0 gap-y-8 pt-40"><div class="col-start-2 col-span-28 flex flex-row gap-8 justify-between items-end p-8 rounded-md bg-(--color-sigma)"><div class="flex flex-col gap-6"><h2 class="text-4xl text-white break-words hyphens-auto">Get in touch</h2><div class="text-base text-white"><div class="flex flex-row gap-2 flex-wrap"><a href="mailto:office@sigma-star.at">office@sigma-star.at</a>
+<a href="/office-sigma-star.at.asc">(PGP Key)</a></div><a href="https://calendar.app.google/ibaNo5No59yvN5RN7" target="_blank">Book a call</a></div><div class="text-base text-white"><p class="break-words hyphens-auto">sigma star gmbhEduard-Bodem-Gasse 6, 1st floor6020 Innsbruck | Austria</p></div><div class="flex flex-row gap-4 items-center"><a href="https://www.linkedin.com/company/sigma-star-gmbh/" target="_blank">
+</a><a aria-label="Subscribe via RSS" href="/blog/index.xml"></a></div></div><div></div></div></div><div class="grid grid-cols-30 gap-x-0 gap-y-8 py-8"><div class="col-start-2 col-span-28 text-base"><a class="btn-sigma-slim" href="/imprint/">Privacy &amp; Terms</a>
+<a class="btn-sigma-slim" href="https://sigma-star.at/jobs">Careers</a></div></div></div><div class="drawer-side"><ul class="menu bg-base-200 min-h-full w-80 p-4"><a class="btn-sigma-toggle py-5 justify-start !no-underline" href="/">Home</a>
+<a class="btn-sigma-toggle py-5 justify-start !no-underline" href="/security/">Security</a>
+<a class="btn-sigma-toggle py-5 justify-start !no-underline" href="/engineering/">Engineering</a>
+<a class="btn-sigma-toggle py-5 justify-start !no-underline" href="/training/">Trainings</a>
+<a class="btn-sigma-toggle py-5 justify-start !no-underline" href="/about/">About</a>
+<a class="btn-sigma-toggle py-5 justify-start !no-underline" href="/blog/">Blog</a><div class="py-5"><a class="btn-sigma-slim" href="/de/">DE</a></div></ul></div></div></div></body>

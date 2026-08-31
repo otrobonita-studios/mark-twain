@@ -1,0 +1,2602 @@
+←
+ all research
+
+vetto research
+
+ProgramBench Vetted
+
+Part of the Computer Anthology benchmark family.
+
+ProgramBench Vetted
+
+Lucas Tonon · Rigel Bezerra · Lucas Smaira · Vetto Research Team
+
+August 13, 2026
+·
+42 min read
+
+          share
+
+ProgramBench Vetted
+
+Can an agent rebuild a program from a runnable binary? That is the fundamental question behind
+
+ProgramBench
+. We are releasing 
+ProgramBench Vetted
+, a set of 50 tasks built around the same premise,
+with improvements to the task design process that make the benchmark fairer and more reliable.
+
+In addition to preserving measurable partial progress and deterministic test based grading, our
+task design process adds a broader set of controls for failure modes involving test duplication,
+environment quality, hackability, and fairness.
+
+ProgramBench Vetted model results
+
+Resolved
+
+Almost
+
+Mean reward
+
+Tasks passing 100% of tests, pass@1 across 50 held out tasks · default ProgramBench mini-swe-agent configuration
+
+ProgramBench matters because program reconstruction is one of the relatively few coding benchmark
+formats built around very long-horizon work. An agent must preserve and revise a model of the program
+across an extended trajectory, which makes these tasks useful for studying long-context coordination.
+They are also valuable for RLVR: many deterministic behavioral checks can provide
+
+dense, behavior-driven reward
+ while the agent still has to integrate that feedback
+into one coherent implementation. Because these tasks come from public repositories, some may have
+appeared in the pretraining data of large models. Yet prior exposure does not imply that a model can
+retrieve or reconstruct the implementation from memory when asked to move from observed behavior
+back to code. The 
+Reversal Curse
+ offers a useful analogy
+for this gap. We discuss the resulting 
+memorization
+paradox
+ and its training implications in Appendix D.
+
+What ProgramBench is
+
+ProgramBench, released by Meta in May 2026, gives
+an agent a compiled program it can 
+execute but not read
+, together with its usage
+documentation. The agent must write a new codebase that reproduces the observed behavior.
+
+Each of the 200 tasks is a real open source CLI project, from small utilities up to FFmpeg,
+SQLite, and the PHP interpreter. The intended task package is a sealed container: the binary is available only for
+execution, the documentation is kept, and the source and git history are removed. The
+agent gets a shell, no internet, a thousand steps, and six hours. Behavioral tests grade the result.
+The tests were themselves written by an agent that probed the original repository and binary.
+
+The original construction process has three stages:
+
+Build the reference.
+ Select a repository in a compiled language and have a build
+agent produce the 
+gold
+ binary.
+
+Generate behavioral tests.
+ A test generation agent explores the repository and
+binary with access to the source, existing tests, and documentation. It can adapt upstream tests and
+uses source line coverage to guide further exploration.
+
+Validate and seal.
+ Every generated test must pass an assertion linter, pass
+against the gold binary, and fail against a dummy binary. A separate step then reduces the model's
+workspace to the executable, documentation, and retained test assets.
+
+At evaluation time, the source, repository tests, and git history are absent. The agent keeps the
+documentation and can execute the reference binary while building its replacement. The generated
+behavioral suite then grades the reconstruction by the fraction of tests passed; a task is resolved
+only when every test passes.
+
+The retained documentation provides part of the specification, but not the complete behavioral
+contract. The rest must be inferred by probing the binary, forming a hypothesis, implementing it,
+comparing the result, and revising. The four frontier agents analyzed in the paper spend 23 to 34%
+of their actions probing the reference, making empirical investigation a substantial part of the
+task rather than a brief setup step.
+
+Why ProgramBench Vetted is different
+
+ProgramBench Vetted is not designed simply to be harder. It is designed so that each point of
+reward more faithfully represents the intended behavior. Our target is calibrated difficulty: a
+task should leave room for meaningful partial progress, but should not award most of its score for
+reproducing a shallow interface or exploiting a defect in the evaluation.
+
+Our internal ProgramBench generation pipeline
+
+Like the original ProgramBench, our pipeline turns a repository into two coupled artifacts: a
+cleanroom reconstruction environment and a behavioral test suite that defines its reward. To address
+the failure modes we found while auditing the released dataset, however, we added validation and
+repair throughout construction rather than relying on a single final review.
+
+Continuous review by researchers provides the seed for specialized 
+Agents as Judges
+ and 
+Agents as
+Doctors
+. The judges investigate the workspace, test the relevant behavior, and produce scored reports
+and evidence for review. When a promising task has a repairable problem, the doctors use that evidence
+to make a constrained change before the task passes through the same checks again. These loops operate
+alongside deterministic gates for properties that can be measured exactly and adversarial agents that
+actively try to exploit the task or its reward. Human reviewers handle ambiguous cases, make the final
+decisions, and turn recurring failure modes into stronger criteria for later reviews. We distribute
+compute across these specialized stages because build integrity, environmental leaks, test quality,
+and reward exploits require different forms of investigation; no single score can cover them all.
+This combination of specialized compute and accumulated review knowledge is central to how we build
+the tasks. The four exhibits below divide the process into connected stages with many steps.
+
+Human
+
+Agent
+
+Deterministic process
+
+Stage 01
+Source and build
+
+A viable reference comes before test generation
+
+Exhibit 1
+
+Source and build.
+ Researchers select a suitable CLI repository, then a sourcing judge, build agent, deterministic gates, and a judge-doctor repair loop establish a working reference. Repeated failures escalate to human review; a passing result yields the gold binary and the basis for the cleanroom environment.
+
+Agents as judges evaluate; agents as doctors repair.
+ Each judge investigates
+  the task, applies criteria derived from recurring generation failures, and produces a score with
+  supporting artifacts. A paired doctor uses that evidence to heal a fixable task, then returns it
+  to the same judge. Specialized pairs let the pipeline learn separately from failures in sourcing,
+  builds, cleanrooms, tests, and inference rather than asking one general check to cover every layer.
+
+Repeated failure escalates to human review.
+ Once an automated loop reaches its
+  round limit, a reviewer can inspect the artifacts and trajectories, reject the task, repair and
+  approve it, or give the relevant doctor explicit instructions. Those findings become stronger
+  criteria and repair strategies for later runs, reducing repeated human work while keeping novel,
+  ambiguous cases and the final acceptance decision with researchers.
+
+Stage 02
+Generate and deduplicate
+
+One reference, many independent attempts to describe its behavior
+
+Exhibit 2
+
+Generate and deduplicate.
+ Up to 15 independent branches across five frontier models explore the repository and verified binary. Deterministic gates remove invalid or unstable tests before a multi-stage deduplication process consolidates repeated or subsumed behavior into the candidate suite.
+
+Coverage comes from independent search; reward is consolidated afterward.
+
+  Five frontier models explore each candidate through as many as 15 test-generation trials. Before
+  a generated check can become reward, deterministic gates require reliable execution, a pass from
+  the gold binary, and a failure from a dummy implementation. Deduplication then removes repeated
+  or subsumed behavior so additional branches broaden the suite rather than multiply the same credit.
+
+Stage 03
+Audit and repair cleanup
+
+The environment and the score are reviewed as one system
+
+Exhibit 3
+
+Audit and repair cleanup.
+ The cleanroom and deduplicated tests are investigated as separate but coupled surfaces. Specialized judges check for leaks, shortcuts, reachability, stability, and behavioral quality; optional doctors repair fixable failures, while unresolved cases move to human review before the two surfaces rejoin as a candidate task.
+
+Review and revalidation target the failures that require judgment.
+ Synthetic
+  test generation is abundant; diagnosing an invalid task is not. We concentrate contextual review
+  where build, coverage, and runtime expertise transfers across tasks, with particular depth in
+  Rust, C, and C++. Recurring diagnoses become explicit checks for leaked oracles, ambient CLIs,
+  loadable libraries, unstable tests, unreachable requirements, and shortcut-prone reward.
+
+A flag can trigger replay, repair, or rejection. Whether a task is repaired by a human or with
+  AI assistance, the resulting artifact must clear the affected acceptance criteria again before it
+  can proceed.
+
+Stage 04
+Calibration and approval
+
+Models solve the task; adversarial agents try to break its reward
+
+Exhibit 4
+
+Calibration and approval.
+ Current models attempt the candidate task while adversarial agents search for cheaper paths to reward. A general-quality judge evaluates the ordinary and adversarial evidence together, but the final decision to accept, repair, or reject the task remains human; any repair returns through the affected checks.
+
+The current candidate set
+
+The candidate set contains 50 held out, verifier graded tasks. Construction uses five frontier
+models across up to 15 independent test generation trials per task, coverage guided exploration,
+structural deduplication, leakage checks, and adversarial review:
+
+Shortcut checks.
+ The pipeline probes named failure classes: non varying gold
+behavior, reachable reference implementations, constant pinning tests, and degenerate suite shapes.
+
+Calibration.
+ We run multiple models against each candidate and study the
+distribution of partial credit. When an observed score does not reflect the behavior the task is
+meant to measure, we inspect why, revise the tests, documentation, or environment, and run the task
+again. The goal is a useful difficulty range: enough accessible behavior to measure progress,
+enough unsolved behavior to preserve headroom, and a score that changes as the quality of the
+reconstruction improves. Tasks that collapse into almost uniform success, almost uniform failure,
+or a sharp all or nothing threshold receive further review.
+
+Fairness and hackability.
+ We investigate both requirements that a genuine
+implementation cannot satisfy and shortcuts that earn credit without rebuilding the intended
+behavior. A fair task makes specified behavior reachable; a robust task does not expose a cheaper
+path to its reward. In the original dataset, FFmpeg depends on absent reference inputs
+
+(example)
+, a documentation echo clears 79.5% of the cmatrix suite
+without implementing its core behavior 
+(example)
+, and an
+eight-line wrapper around the XZ executable already installed in the task environment earns 77.3%
+of its active reward 
+(example)
+. We encode lessons
+from cases like these as construction gates and repairs rather than treating difficulty alone as
+evidence of quality. Questionable cases are replayed against the reference program and the sealed
+environment, with the tests, documentation, runtime image, and task contract reviewed as one system.
+When the evidence points to an unreachable requirement, an underspecified interface, or a shortcut
+prone reward, we revise the relevant tests, documentation, or environment and run the task again.
+
+Deduplication.
+ We consolidate pairs classified as covering the same or a
+subsumed behavior.
+
+Leaderboard comparison
+
+Model
+ProgramBench
+ProgramBench Vetted
+
+mean reward
+almost
+(≥95%)
+resolved
+mean reward
+almost
+(≥95%)
+resolved
+
+Claude Opus 5 (xhigh)
+74.7%
+37.0%
+4.5%
+81.9%
+50.0%
+14.0%
+
+Grok 4.6 (xhigh)
+-
+-
+-
+68.7%
+24.0%
+6.0%
+
+GPT 5.5 (xhigh)
+69.8%
+13.5%
+0.5%
+85.2%
+28.0%
+2.0%
+
+DeepSeek V4 Pro 0813 (xhigh)
+-
+-
+-
+71.8%
+22.0%
+2.0%
+
+Claude Sonnet 5 (xhigh)
+-
+-
+-
+57.9%
+14.0%
+2.0%
+
+Muse Spark 1.2 (high)
+-
+-
+-
+55.5%
+6.0%
+2.0%
+
+GPT 5.6 Sol (xhigh)
+69.9%
+15.5%
+1.0%
+82.8%
+28.0%
+0.0%
+
+Kimi K3 (max)
+77.8%
+*
+-
+-
+22.1%
+10.0%
+0.0%
+
+Gemini 3.7 Flash (high)
+61.6%
+5.5%
+0.0%
+43.4%
+6.0%
+0.0%
+
+DeepSeek V4 Flash 0731 (high)
+-
+-
+-
+51.6%
+4.0%
+0.0%
+
+GPT 5.6 Terra (xhigh)
+-
+-
+-
+70.6%
+4.0%
+0.0%
+
+GLM-5.2 (xhigh)
+64.6%
+8.5%
+0.0%
+59.1%
+4.0%
+0.0%
+
+Gemini 3.6 Flash (high)
+55.7%
+4.0%
+0.5%
+57.8%
+0.0%
+0.0%
+
+GPT 5.6 Sol (medium)
+57.8%
+2.5%
+0.5%
+61.2%
+0.0%
+0.0%
+
+Gemini 3.1 Pro Preview (high)
+36.6%
+0.0%
+0.0%
+29.1%
+0.0%
+0.0%
+
+GPT 5.6 Terra (medium)
+-
+-
+-
+26.1%
+0.0%
+0.0%
+
+Muse Glimmer 30B (high)
+-
+-
+-
+7.2%
+0.0%
+0.0%
+
+Exhibit 5
+
+Metrics.
+ Mean reward is the macro average of each task's
+fractional test score. Almost is the share of tasks reaching at least 95%; resolved is the share
+reaching 100%. All ProgramBench Vetted results use pass@1. A hyphen indicates
+that no result is available. 
+* vendor
+reported; follow the star for the source.
+
+These columns separate broad partial progress from end to end completion. GPT 5.5 leads
+ProgramBench Vetted in mean reward at 85.2%, but resolves 2% of tasks; Claude Opus 5 has a slightly
+lower mean reward at 81.9%, yet leads both almost at 50% and resolved at 14%. Six of the 17 evaluated
+models resolve at least one task. Among configurations reported on both benchmarks, the direction of
+the change is mixed rather than uniform, so the table does not support treating ProgramBench Vetted
+as simply easier or harder.
+
+Exhibit 6 compares how partial credit is distributed across ProgramBench's current leaderboard
+and our complete ProgramBench Vetted pass@1 evaluations. For each model, the curves show the share
+of tasks cleared at every fractional test score threshold. In the Vetted panel, the curves remain
+visibly separated across much of the threshold range while retaining meaningful partial credit
+below full resolution. We interpret this wider separation as evidence that the dataset preserves
+more of the performance differences among current models instead of compressing them into the same
+score band.
+
+The curves do not establish that either benchmark is intrinsically harder. The panels evaluate
+materially different model sets, only a subset of configurations overlaps exactly, the original
+includes smaller models such as GPT 5 mini, and several recent frontier configurations were
+evaluated only on ProgramBench Vetted.
+
+ProgramBench
+
+200 tasks · 21 models*
+
+ProgramBench Vetted
+
+50 tasks · 17 models · pass@1
+
+Exhibit 6
+
+Fractional test score survival curves.
+ The left panel
+redraws ProgramBench's current extended leaderboard because the paper's figure predates the latest
+results; the right applies the same threshold sweep to our complete pass@1 evaluations. In
+ProgramBench Vetted, submissions that do not compile or run receive a score of zero; the original
+panel reproduces the leaderboard's published curves. * updated manually from the leaderboard in
+programbench.com
+
+Task level difficulty distribution
+
+This view groups tasks by their mean fractional test score across the complete model panel for
+each benchmark. ProgramBench Vetted deliberately contains fewer tasks at the near-impossible end of
+the distribution. In the model panel shown here, 46 of 50 tasks fall between 20% and 80% mean
+reward. This calibrated range preserves room for meaningful partial progress while leaving enough
+behavior unsolved for an improved model to turn progress into a resolved task. It also avoids
+concentrating the benchmark on tasks that provide almost no learning or evaluation signal. Because
+the two panels evaluate different models, the comparison remains descriptive.
+
+Exhibit 7
+
+Distribution of mean fractional test scores by task.
+ Each
+task is averaged over the complete model evaluations available for its benchmark, then assigned
+to a ten percentage point bin. Bars are normalized within each benchmark.
+
+Average steps per task
+
+For every model configuration evaluated on both benchmarks, ProgramBench Vetted requires more
+model calls per task on average. The comparison shows that calibrated tasks drawn from smaller or
+less familiar repositories can still sustain longer solution trajectories than the original task
+set, without depending on unusually large projects such as FFmpeg.
+
+Average model calls per task, matched configurations
+
+ProgramBench
+
+ProgramBench Vetted
+
+Exhibit 8
+
+Average steps per task.
+ Each pair compares the same model
+  configuration across the two benchmarks and is ordered by its ProgramBench Vetted average.
+  A step is one model call. Longer trajectories indicate more agent interaction, but do not by
+  themselves measure reasoning tokens, cost, or intrinsic task difficulty.
+
+What kinds of programs
+
+Every task is a behaviorally testable CLI program, but that spans very different kinds of work.
+We classify candidates into a fixed taxonomy so the release does not collapse into one kind of CLI.
+The archetype is a language implementation: an interpreter, compiler, or bytecode VM, because its
+input space is unbounded and cheap to explore: every new program as input is another behavior to pin.
+
+Category
+What it covers
+Tasks
+
+Interpreters, compilers, and virtual machines
+small languages, bytecode VMs, compilers
+18
+
+Assemblers and disassemblers
+assembly and disassembly for real and toy ISAs
+12
+
+Developer tools
+developer utilities: runners, inspectors, generators, and log analysis
+4
+
+Structured data codecs
+format parsers and converters
+7
+
+Media and geometry processing
+media codecs, mesh transformation, simplification, and encoding
+4
+
+Mathematical and constraint-solving tools
+numeric algorithms, expression evaluation, and constraint solvers
+3
+
+Machine and console emulators
+machine and console emulators
+2
+
+The original dataset and why build a new one
+
+We began by treating ProgramBench as a recipe for a larger benchmark and training corpus.
+Rebuilding that recipe at scale exposed two publishable findings: duplicated active reward in a
+purposive audit, and concrete active credit earned without rebuilding the intended program. The
+claims below are limited to the released artifacts and executed cases we could reconcile.
+
+Dataset scope.
+ Every named task in this section, including
+
+cmatrix
+, 
+nnn
+, 
+xq
+, 
+ripgrep
+, 
+LZ4
+,
+
+QuickJS
+, 
+htop
+, and 
+XZ
+, is a task from Meta's
+
+original ProgramBench release
+. Where we ran a new adversarial candidate, we say so
+explicitly; those candidates and trajectories are ours, while the task images, test manifests, and
+scored active suites are the original dataset's.
+
+Failure screen methodology.
+ As we rebuilt ProgramBench, our
+reviewers turned recurring failure patterns into a set of guidelines and gates applied across the
+task suites. A gate flag starts a targeted adversarial review: specialized agents attempt to exploit
+the suspected shortcut or reproduce the suspected contract failure. We then reconcile their findings
+with the active manifest, separate execution failures from test failures, and inspect the relevant
+tests, inputs, and reference binary behavior. The cases below are confirmed findings produced by
+that process.
+
+1 · Duplicated active reward in a purposive audit
+
+The released manifests contain 247,723 active test IDs across 1,759 test generation runs,
+which the dataset calls branches.
+
+Two tests count as duplicates when they exercise the same or materially similar behavior, or
+when the behavior checked by one is subsumed by the other. The analysis includes exact and close
+duplicates within and across generation trials, with code level review of every candidate pair.
+Readers can inspect matched test bodies directly by clicking points in
+
+Exhibit 10
+. Across the audited
+set, the median task carries 11% of its scored suite as removable duplicates of another scored test;
+more than half the sixty audited tasks are above a tenth, and the highest measured share is 37%
+(Exhibit 9).
+
+Duplicate share of the scored tests, per task (10 most affected in the 60 analyzed)
+
+tui journal · journal
+37.3%
+
+nsh · shell
+25.9%
+
+pigz · parallel gzip
+25.1%
+
+lz4 · compressor
+23.9%
+
+xz · compressor
+23.5%
+
+masscan · port scanner
+23.2%
+
+tig · git TUI
+22.9%
+
+ninja · build system
+22.0%
+
+nnn · file manager
+20.3%
+
+fx · JSON viewer
+19.9%
+
+share of scored tests that duplicate another scored test · exact and near, within and across trials
+
+Exhibit 9
+
+Measured over 60 audited tasks, with code level review of every candidate pair.
+Each bar is the fraction of a task's scored suite that repeats a
+behavior already counted elsewhere in the same suite. This is not a tail phenomenon: the median task
+sits at 11%, and more than half the audited tasks carry over a tenth of their scored suite as
+removable duplicates. These 60 tasks were not drawn at random: they were chosen to span languages,
+sizes, and program shapes, and deliberately included extra tasks we suspected were weak, so the rates
+describe the sample, not a proven corpus wide rate.
+
+Our construction also uses multiple generation trials, so we added a deduplication stage that
+consolidates tests classified as exercising the same or subsumed behavior. The recurring patterns we
+found also changed the harness itself: deterministic gates catch exact and structural repetition,
+stochastic agent based gates examine behavioral similarity and subsumption, and human review resolves ambiguous
+cases and feeds new patterns back into those checks. The interactive view below shows the linked test
+bodies available for direct inspection.
+
+all tests
+inspectable duplicates
+
+reset zoom
+
+  This view is the subset of classified duplicates for which both linked test bodies are available
+  in the interactive map.
+
+drag to rotate · hover for a test's name · 
+click any point to inspect it at the side
+
+Exhibit 10
+
+Real, scored tests only, every point one unique test body. The clicked test is
+marked in the plot with an open ring. The inspectable duplicates view contains only classified
+pairs for which both test bodies are available in this map; it is a subset of the full duplicate
+audit. For this visualization, we combine multiple test embeddings and use UMAP to project them into
+three dimensions while preserving local neighborhood distances. The duplicate rate counts removable tests after retaining one representative per cluster;
+the pair count reports the active links between tests. Clicking any point opens the selected test
+and, when available, its linked duplicate in the side panel.
+
+QuickJS
+ provides a useful comparison. Its 3,034 scored tests have a 6.1% duplicate share in
+our internal audit, about one sixth of tui journal's rate. Most clusters in its map represent
+genuinely different JavaScript behaviors. Tests may appear close because they share code structure,
+so proximity alone is not enough to classify a duplicate.
+
+Duplication matters beyond suite cleanliness. When several scored tests reward the same basic
+behavior, that behavior receives several times the weight of a distinct requirement. At evaluation
+time, this can favor models that repeatedly clear a narrow family of similar checks. At training
+time, the same imbalance can steer reinforcement learning toward the most repeated behaviors rather
+than the full program contract. At scale, the next question is therefore not only whether a test is
+valid, but whether its reward can be earned too cheaply.
+
+2 · The reward can be bought
+
+The severe one. The original validates every test two ways: must pass the gold, must fail a
+dummy. Both are necessary. Neither is sufficient. Our audit of the released original tasks found
+cases where a submission that provably does not rebuild the program still collects active credit.
+
+The common shape is a model writing tests from observed behavior against programs whose defining
+behavior can be hard to observe through stdout and an exit code. A gold pass and dummy fail screen
+does not ask whether a surviving test's reward was earned by rebuilding the target. The original
+release contains several concrete ways around that distinction.
+
+Score inflation: 
+cmatrix
+.
+
+Several active tests ask whether a flag is accepted but combine it with 
+-V
+. The program
+exits after printing its version, before the flag's behavior can run. A small program that only
+reproduces the help and version text, without rendering the matrix animation, passes 79.5% of the
+active suite.
+
+Withheld credit: 
+FFmpeg
+.
+ Of 1,091 active 
+FATE
+What is FATE?
+
+FATE, the FFmpeg Automated Testing Environment, is FFmpeg's regression suite. It exercises codecs,
+formats, and filters against reference media and expected outputs.
+
+cases, 1,029 require media files missing from the released archive and images. Both inspected gold
+builds fail all 1,029. A normal implementation cannot process an input the benchmark did not ship,
+so these cases measure packaging failure rather than reconstruction ability.
+
+Ambient implementation access: 
+XZ and LZ4
+.
+
+The original task environments expose working implementations of the programs being reconstructed.
+An eight-line wrapper around the installed XZ executable earns 77.3% of its active reward. In LZ4,
+delegating compression to the installed library raises the candidate's score by 31.62 percentage
+points. In both cases, part of the measured reward comes from reusing an implementation already
+present in the evaluation environment.
+
+These cases establish the three mechanisms above; the executed evidence is collected in the
+
+appendices
+, with the test identities, environments,
+reference replays, and causal controls used for each finding.
+
+Why these findings matter for reward design
+
+The same test suite defect has different consequences in evaluation and training. In an
+evaluation it can distort a ranking. If a similar suite of RLVR environments is used for reinforcement learning, it also
+becomes part of the objective. This section states design implications, not results from a training
+run.
+
+For evaluation, a weak suite can misweight scores.
+ If a version banner check and
+a real behavioral test each count for one point, a model that only learned to print the banner gets
+the same credit on those two tests as one that implemented the substantive behavior. Duplication
+compounds the weighting: a behavior rediscovered by many generation trials is counted many times.
+That weighting can alter rankings, although we did not run a matched ranking experiment here.
+
+For reinforcement learning, the same suite is both a measurement and an
+instruction.
+ Test multiplicity and shortcut passable cases determine how much reward is
+available for each observed behavior. That mathematical weighting is established by the suite; how a
+particular policy responds would require a training experiment.
+
+A skill independent floor becomes available reward.
+ The original's dummy pass gate
+removes many literal no op failures, but residual active credit remains in each of the three original
+tasks shown in our selected no op audit (
+Exhibit 15
+). A small program that
+only reproduces help and version text, without rendering the matrix animation, passes 79.5% of
+original 
+cmatrix
+ (
+Exhibit 12
+). An eight line wrapper
+that calls the preinstalled XZ program passes 77.3% of original 
+XZ
+
+(
+Exhibit 13
+). Both earn substantial reward without implementing
+the program's core behavior.
+
+Duplicate tests re weight the objective.
+ A behavior counted many times over is
+worth that many times the gradient contribution of an otherwise equivalent single test. This does not
+prove that a policy will specialize in that behavior, but it does prove that the objective weights it
+more heavily.
+
+A shortcut creates a cheaper path to reward.
+ Offered a choice between printing a
+captured 
+--help
+ string and implementing the parser, the suite pays for the string
+immediately. One scored test, for example, claims to check a color flag but asserts only that the
+version banner printed (
+Exhibit 11
+).
+
+This is why we treat the findings above as engineering constraints rather than footnotes. The
+shortcut checks, calibration design, and deduplication stage are intended to make the tested shortcuts
+less rewarding and align more of the score with rebuilding. Whether they improve downstream training
+is an open empirical question.
+
+The tests do not describe the task. For a model trained against them, the tests 
+are
+ the
+task.
+
+What's next
+
+Rebuilding programs measures one demanding slice of software ability. Saturating this benchmark
+would not, by itself, make a model a great engineer. The verifier checks
+behavioral reproduction, not code quality: a monolithic single file solution that matches the
+binary scores exactly the same as a well structured one, and speed, memory, and footprint go
+unmeasured. The task also hands the agent something real engineering almost never has, a perfect
+oracle for the spec. Everyday work means ambiguous requirements, evolving specs, other
+people's code, and codebases that live for years; none of that fits inside a rebuild episode. A
+model could top this leaderboard and still be a poor collaborator. That is why the family has to
+keep evolving, and why the recipe matters more than any one instance of it.
+
+Growing and recalibrating ProgramBench Vetted
+
+We will continue increasing the number of validated tasks and updating the benchmark as models
+improve. Each update has three goals:
+
+More fair.
+ Broaden the mix of tasks while removing shortcuts and requirements
+that an implementation cannot reasonably satisfy.
+
+More reliable.
+ Strengthen replay, deduplication, environment controls, and
+ongoing validation so the reward continues to measure the intended behavior.
+
+Harder as models evolve.
+ Add more demanding but still reachable behaviors, so
+stronger models have room to improve and partial progress remains measurable.
+
+Beyond compiled code: rebuild anything packaged
+
+Nothing in the recipe is specific to CLI binaries. The general form: take a packaged artifact
+whose behavior is observable but whose internals are sealed, keep its documentation, generate a
+behavioral spec by probing it, guard the reward against shortcuts, and grade rebuilds against
+that spec. We are currently working on these:
+
+Spec2Code benchmarks.
+ We are evolving the lessons from ProgramBench into
+benchmarks built from both public and private repositories, but with an explicit specification as
+the model's starting point and no reference binary to probe. The behavioral tests are broader and
+each one must trace to, and remain coherent with, that specification. We believe this is a cleaner
+and fairer way to evaluate whether a model can implement specified behavior because project
+documentation often lacks enough context to reconstruct an entire codebase faithfully.
+
+APIs and servers.
+ Seal a running service in a container: endpoints callable,
+implementation invisible. The agent rebuilds the server from the API docs plus probing, and the
+verifier replays a request suite against both, checking response parity, status codes, error
+semantics, and state across sequences of calls. The domain brings its own hack surface: proxying
+requests to the reference is this family's ambient implementation defect, and the gates must ban
+it the same way.
+
+Libraries and SDKs.
+ Ship a compiled artifact (a wheel with native
+extensions, a jar, a shared object) without source. The agent reimplements a library or SDK from
+its documented public interface. It is graded with behavioral tests created by exercising the
+original implementation through that same interface.
+
+Protocol daemons.
+ Given a server speaking a wire protocol, rebuild a
+compatible implementation. Verification is interoperability itself: the rebuilt server must
+satisfy the reference client, and vice versa.
+
+Data pipelines.
+ A sealed transform (a container that turns inputs into
+outputs) plus a description of its purpose. The agent rebuilds the transform; the verifier checks
+output parity on held out inputs, including the edge cases a probing agent discovered.
+
+Each variant needs its own validity work because each creates different ways to buy the reward.
+The durable research problem is not posing a rebuild challenge; it is making the resulting reward
+trustworthy at scale.
+
+Appendix A · Executed audits of the original dataset
+
+We ran a broader set of audits across the original dataset and selected five representative cases
+for this appendix. They illustrate recurring issues we found, including proxy and time-dependent
+assertions, shallow implementations that still earn substantial credit, software already available
+in the task environment, and missing test inputs. These findings informed the construction and validation gates in our dataset.
+Each case below separates what we tested, what we found, why it happened, and its implications for
+the benchmark.
+
+1. Residual reward for an empty program
+
+What we tested.
+ We compiled the same program, 
+int main(void) { return 0; }
+,
+and scored it with the original active suites for 
+nnn
+, 
+xq
+, and
+
+ripgrep
+.
+
+What we found.
+ The empty program still passed 23, 19, and 22 active tests,
+respectively.
+
+Why it happened.
+ These tests accept silence, check an empty result, or verify that
+nothing happened without first proving that the target behavior ran. We found the same pattern in
+other tasks; the three examples below are enough to show the mechanism.
+
+Implications.
+ This creates a skill independent reward floor: a program that
+implements no behavior still earns points. In evaluation it weakens what the score means; in
+reinforcement learning it assigns reward to silence rather than to reconstructing the program.
+
+Original ProgramBench: literal exit zero behavior still earns active credit
+
+original task
+active passed
+ignored excluded
+why an empty program can pass
+
+nnn
+23 / 477
+ (4.82%)
+1,319
+silent key collisions and picker/stdin cases that permit empty output
+
+xq
+19 / 792
+ (2.40%)
+87
+empty substring assertions, no match cases, and checks that never prove modification
+
+ripgrep
+22 / 1,994
+ (1.10%)
+544
+quiet mode checks, empty JSON loops, and permissive negative or empty assertions
+
+Examples of active tests passed by the empty program
+
+task
+generation branch and test
+assertion that admits silence
+
+nnn
+
+316c1d019b0a
+test_picker_with_null_separator
+
+result.stdout == b"" or ...
+
+xq
+
+0ce13a636ff1
+test_css_query_no_matches
+
+returncode == 0
+; 
+stdout.strip() == ""
+
+ripgrep
+
+47b29e21b886
+test_max_columns
+
+returncode == 1 or b"hello" not in stdout
+
+same literal exit zero behavior · only manifest listed active IDs enter the fractions · every ignored ID excluded
+
+Exhibit 15
+
+The same literal exit-zero behavior was scored against each original task's
+active manifest. Ignored IDs were excluded and missing or skipped active IDs counted as failures.
+The sample assertions above are active tests observed passing that exact program.
+
+2. Assertions that measure a proxy
+
+What we tested.
+ We ran active tests from 
+cmatrix
+, 
+nnn
+,
+
+tig
+, and 
+tty-clock
+ against the reference binary and deliberately shallow
+stubs. For the clock test, we also advanced the container date by one year.
+
+What we found.
+ Version-output stubs passed tests named after color, option, and
+author behavior. The 
+tty-clock
+ reference binary failed when the year changed.
+
+Why it happened.
+ The proxy tests invoke 
+--version
+, which exits before
+the named behavior runs. The clock test hard-codes 
+2026
+ instead of validating a date.
+
+Implications.
+ Scores can rise without exercising the behavior named by a test, or
+fall simply because the calendar changed. Both effects introduce measurement error unrelated to
+implementation quality and make comparisons less fair.
+
+Three active original ProgramBench tests that grade a proxy or a timestamp
+
+Original 
+cmatrix
+ · a flag acceptance proxy. It runs each color flag with 
+-V
+, which prints the version and exits before the flag can do anything, then asserts the banner. The comment concedes the point.
+
+@pytest.mark.parametrize("color", ["green", "red", "blue", "white", "yellow", "cyan", "magenta", "black"])
+def test_color_option_accepted(color):
+    """Test that valid color options are accepted."""
+    # We can't fully test TUI behavior, but we can verify the flag is accepted
+    # Use with -V to exit immediately after processing args
+    result = run("-C", color, "-V")
+    assert result.returncode == 0
+    # Should still print version when combined with -V
+    assert b"CMatrix version" in result.stdout
+
+Source: the original ProgramBench 
+cmatrix
+ task, generation run
+
+79b69dd3fd98
+,
+
+test_color_options.py
+ inside the released archive. All eight parameter instances appear in ProgramBench's
+
+shipped 
+tests.json
+ and none is ignored. The original
+
+task_cleanroom
+ image is hosted on Docker Hub
+.
+
+Original 
+tty-clock
+ · a wall clock time bomb. Its docstring calls it "structural validation due to dynamic clock", then hard asserts the generation year, so it passes today and fails against every implementation, the gold included, from 2027 on.
+
+        date_str = date_match.group(1)
+        year, month, day = date_str.split('-')
+        assert year == '2026', f"Year should be 2026, got {year}"
+        assert 1 <= int(month) <= 12, f"Month {month} out of range"
+
+Source: the original ProgramBench 
+tty-clock
+ task, generation run
+
+ed5c2b1ffc48
+,
+
+test_datetime.py
+ inside the released archive. The test appears once in ProgramBench's
+
+shipped 
+tests.json
+ and is not ignored. The original
+
+task_cleanroom
+ image is hosted on Docker Hub
+.
+
+Original 
+nnn
+ · a proxy whose subject never runs. It claims a CLI flag overrides an environment variable, but 
+-V
+ exits before either takes effect, and the output assertion (
+... or b"."
+) is satisfied by almost any version string.
+
+def test_nnn_opts_overridden_by_cli():
+    """Test command line options override NNN_OPTS."""
+    result = run("-V", env={"NNN_OPTS": "d"})
+    assert result.returncode == 0
+    # -V should still show version, NNN_OPTS ignored
+    assert b"5.2" in result.stdout or b"." in result.stdout
+    # Should be version, not help
+    assert len(result.stdout.strip()) < 20
+
+Source: the original ProgramBench 
+nnn
+ task, generation run
+
+316c1d019b0a
+,
+
+test_environment_variables.py
+ inside the released archive. The test appears once in ProgramBench's
+
+shipped 
+tests.json
+ and is not ignored. The original
+
+task_cleanroom
+ image is hosted on Docker Hub
+.
+
+Exhibit 11
+
+Each excerpt was checked against its task's shipped manifest and is in the
+active, scored set; ignored tests do not appear in this exhibit. These are three different failure
+modes: 
+cmatrix
+ and 
+nnn
+ grade short circuiting version output instead of the
+behavior named by the test, while 
+tty-clock
+ grades the year in which the test was
+generated.
+
+3. FFmpeg tests with missing inputs
+
+What we tested.
+ We ran all 1,091 active FATE cases against two shipped FFmpeg
+reference binaries and checked the same identities across 20 published runs.
+
+What we found.
+ Both reference binaries passed the 62 self-contained cases and
+failed all 1,029 cases that read from 
+/workspace/fate-suite
+. No published run passed any
+of those 1,029 identities.
+
+Why it happened.
+ The expected outputs were published, but the required FATE media
+corpus was not included in the test archive or any released task image.
+
+Implications.
+ These points are unreachable for an implementation that executes the
+requested behavior normally. They depress scores, weaken comparisons between attempts, and make
+evaluator-aware replay more rewarding than genuine reconstruction.
+
+Example: FFmpeg tests behavior the benchmark cannot execute
+
+The released FFmpeg suite has 3,050 active tests, including 1,091 FATE cases. The central
+failure is simple: 1,029 ask FFmpeg to read media files that are absent from the released task.
+Both inspected gold builds fail every one. The remaining 62 cases create their own inputs and pass
+on gold. The current manifest has 3,041 active tests; all 1,029 missing input identities
+discussed here remain active in it.
+
+active FATE cases
+count
+released 
+task
+ gold
+later 
+task_cleanroom_v6
+ gold
+
+require media under 
+/workspace/fate-suite
+1,029
+0 pass
+0 pass
+
+generate their own input, then compare exact output
+62
+62 pass
+62 pass
+
+fate-012v
+ is representative: its expected output is shipped, but its input is not.
+
+/workspace/executable -nostdin -nostats \
+  -i /workspace/fate-suite/012v/sample.avi \
+  -pix_fmt yuv422p16le -vf scale -bitexact -f framecrc -
+
+expected file: /workspace/tests/ref/fate/012v  (last CRC: 0xc5439580)
+actual result: exit 254, Error opening input file /workspace/fate-suite/012v/sample.avi
+
+Exhibit 14
+
+A correct implementation cannot receive credit for tests whose required inputs are
+absent. Primary sources: the 
+task manifest
+
+and 
+test archive
+.
+
+4. A non-rendering 
+cmatrix
+ implementation
+
+What we tested.
+ One of our agents built a 99-line program that reproduces
+documented help, version, usage, and option handling but never renders the matrix animation. We then
+scored it against the complete original suite.
+
+What we found.
+ It passed 403 of 507 active tests, or 79.5%, while failing all nine
+tests that require the render loop.
+
+Why it happened.
+ Most points are attached to shallow command-line behavior that
+can be copied from the documentation; comparatively few require the program's defining behavior.
+
+Implications.
+ A high fractional score can therefore overstate reconstruction
+quality. The suite makes copying documentation disproportionately valuable while giving the matrix
+rendering behavior comparatively little weight.
+
+Example: help and version text passes 79.5% of 
+cmatrix
+
+cmatrix
+ is an animated terminal program. The 99-line audit candidate never renders
+anything; it only prints fixed help, version, and error text and performs shallow argument checks.
+Yet it passes 
+403 of 507 active tests, or 79.5%
+. Most of that credit comes from tests
+that reward documentation text or successful flag handling rather than the defining animation.
+
+what the scored test checks
+active
+the echo binary
+
+help / version / usage text
+190
+188 pass
+; it printed the docs
+
+a flag is accepted (exit 0, usage on error)
+210
+171 pass
+; it exits 0 on everything
+
+the program must actually run
+107
+44 pass, 
+63 fail
+
+Representative passing tests and the render-loop control
+
+Documentation echo carries it almost entirely: it clears 
+188 of 190
+ help / version
+/ usage tests and 
+171 of 210
+ flag acceptance tests, having implemented nothing.
+Four of them, verbatim, each confirmed in the task's active set:
+
+eval.tests.test_basic_invocation.test_help_exits_immediately
+
+branch 79b69dd3fd98
+
+def
+ test_help_exits_immediately():
+    result = run(
+"-h"
+)
+    
+assert
+ result.returncode == 
+0
+
+assert
+ len(result.stdout) > 
+100
+
+Why the echo passes:
+ its copied usage block is longer than 100 characters.
+
+eval.tests.test_args_parsing.test_version_flag_short_circuits_other_validation
+
+branch f53d318371c8
+
+def
+ test_version_flag_short_circuits_other_validation(args):
+    rc, out, err = run(args)
+    
+assert
+ rc == 
+0
+
+assert
+ 
+"CMatrix version"
+ 
+in
+ out
+    
+assert
+ err == 
+""
+
+Why the echo passes:
+ it prints the copied version string and exits successfully.
+
+eval.tests.test_args_parsing.test_unknown_option_prints_usage_and_exits_zero
+
+branch f53d318371c8
+
+def
+ test_unknown_option_prints_usage_and_exits_zero(args):
+    
+# args = [--nonexistent] / [-Z]
+
+    rc, out, err = run(args)
+    
+assert
+ rc == 
+0
+
+    assert_usage(out)
+    
+assert
+ err == 
+""
+
+Why the echo passes:
+ it exits 0 for any flag and always prints 
+Usage: cmatrix
+.
+
+eval.tests.test_argument_parsing.TestColorFlag.test_color_flag_without_value
+
+branch bcaceaff5bda
+
+def
+ test_color_flag_without_value(self):
+    returncode, stdout, stderr = run_cmatrix(
+"-C"
+)
+    
+assert
+ returncode == 
+0
+
+assert
+ 
+"Usage:"
+ 
+in
+ (stdout + stderr)
+
+Why the echo passes:
+ it prints usage when the color flag has no value.
+
+None of these tests touches a character of rendering. Each grades a shallow CLI surface: does an
+option exit cleanly and echo the docs. Genuine rendering oriented tests do exist, so the conclusion
+is not that the suite contains none. The clearest ones assert that the program remains in its render
+loop, and the facade goes
+
+0 for 9
+ on them:
+
+def
+ test_u_valid_values_start_matrix_render_loop(args):
+    
+with
+ pytest.raises(subprocess.TimeoutExpired):
+        run(args, timeout=
+0.3
+)
+
+A binary that enters the matrix loop triggers the expected timeout and passes. The facade exits
+immediately, so it fails every one of those nine tests. Across the complete suite it fails 104 active
+instances. The measured defect is narrower and still severe: shallow CLI behavior alone carries most
+of this original task's active reward.
+
+Exhibit 12
+
+Whole-suite execution over 507 active IDs; all 262 ignored IDs were removed. The retained candidate has SHA 256
+
+1c120312...27682
+.
+
+5. Cheatable environments: implementations already installed
+
+What we tested.
+ We asked an adversarial agent to use any system CLI or library
+already installed in two original compression-task images, then scored the retained source with the
+original active suites.
+
+What we found.
+ An eight-line wrapper around 
+/usr/bin/xz
+ passed 1,090
+of 1,410 active XZ tests. A 349-line CLI adapter around 
+liblz4.so.1
+ passed 557 of 1,496
+active LZ4 tests.
+
+Why it happened.
+ The task images exposed implementations of the target algorithms
+to the submission. The candidate could delegate core work instead of rebuilding it.
+
+Implications.
+ The score reflects software supplied by the environment as well as
+the candidate's capability. Tasks with an installed implementation become easier through a hidden
+shortcut, breaking comparability and rewarding delegation rather than reconstruction. In a large
+RLVR corpus, even a small number of such environments can become high yield shortcuts. Repeated
+optimization against them risks widespread reward exploitation and capability degeneration, as the
+model learns to search for installed answers instead of acquiring the intended skills.
+
+Two original ProgramBench task environments expose ambient implementations
+
+original task
+what the retained source actually does
+active passed
+ignored excluded
+
+XZ
+wrapper of eight lines forwards every call to 
+/usr/bin/xz
+1,090 / 1,410
+ (77.30%)
+626
+
+LZ4
+hand-written CLI glue delegates compression and decompression to 
+liblz4.so.1
+557 / 1,496
+ (37.23%)
+333
+
+Original ProgramBench XZ: open the instruction, trajectory, source, and active result
+
+Excerpt from our adversarial strategy prompt
+
+Determine which system library or CLI already implements this program's core algorithm.
+If one exists, write a thin CLI wrapper that calls that ambient implementation.
+Implement none of the algorithm yourself.
+
+Retained trajectory discovery
+
+$ which xz
+/usr/bin/xz
+
+$ xz --version
+xz (XZ Utils) 5.2.5
+liblzma 5.2.5
+
+Entire submitted core
+
+#include <unistd.h>
+#include <stdio.h>
+int main(int argc, char **argv){
+    argv[0] = "/usr/bin/xz";
+    execv("/usr/bin/xz", argv);
+    perror("execv");
+    return 127;
+}
+
+Active only result: 1,090 / 1,410 passed (77.30%); 626 ignored IDs excluded; zero missing, skipped, or timed out active instances.
+
+This 172-byte source contains no XZ, LZMA, file format, compression, decompression, or option parsing
+implementation. Its passing active cases include round trips, pipes, raw LZMA2, file listing, BCJ
+filters, and file creation behavior. The gold executable is XZ 5.8.2 while the ambient executable is 5.2.5.
+The trajectory's closing narration incorrectly guessed that the versions matched; we rejected
+that explanation and rely on the retained commands, source, and verifier output instead.
+
+We then rebuilt the candidate from that retained source inside the digest-pinned task image with
+networking disabled. The candidate hash reproduced exactly, and a fresh run of the complete active-only
+verifier again produced 1,090 / 1,410 with a byte-identical aggregate result. Removing
+
+/usr/bin/xz
+ from a disposable copy of the image makes the candidate exit 127. A second
+amd64-on-arm64 replay landed at 1,089 / 1,410 because one 80 MiB progress-signal case crossed its
+40-second internal timeout; the other 1,409 active outcomes agreed.
+
+Original ProgramBench LZ4: open the instruction, trajectory, source calls, and active result
+
+Excerpt from our adversarial strategy prompt
+
+Determine which system library or CLI already implements this program's core algorithm.
+If one exists, write a thin CLI wrapper that calls that ambient implementation.
+Implement none of the algorithm yourself.
+
+Retained trajectory discovery
+
+liblz4.so.1 => /lib/x86_64-linux-gnu/liblz4.so.1
+liblz4-1 1.9.3
+
+$ cc -O2 -o executable lz4wrap.c -Wl,-l:liblz4.so.1
+
+Decisive calls in the submitted source
+
+LZ4F_createCompressionContext(...)
+LZ4F_compressBegin(...)
+LZ4F_compressUpdate(...)
+LZ4F_compressEnd(...)
+LZ4F_createDecompressionContext(...)
+LZ4F_decompress(...)
+
+Active only result: 557 / 1,496 passed (37.23%); 333 ignored IDs excluded; zero missing, skipped, or timed out active instances.
+
+This is not a dummy. The candidate with 349 lines writes meaningful argument, file, stream, help, list,
+and test mode glue. But it does not implement the LZ4 algorithm: the installed library performs frame
+compression and decompression. Static inspection of the compiled candidate confirms a
+
+NEEDED liblz4.so.1
+ dependency. The original gold reports LZ4 1.10.0; the ambient library
+is 1.9.3.
+
+A clean no-network replay rebuilt the candidate from source and reproduced all 1,496 active outcomes,
+the candidate hash, and the aggregate result exactly. For a causal control, we kept the CLI glue but
+made only its compression and decompression helpers fail before calling 
+LZ4F_*
+. That
+version passed 84 / 1,496; restoring the ambient-library calls added a net 473 active passes, or
+31.62 percentage points. There were 488 IDs passed only by the full delegate and 15 passed only by
+the ablated error behavior. Removing 
+liblz4.so.1
+ from a disposable image also prevents
+the candidate from starting. The library is therefore materially responsible for the measured reward,
+although the hand-written adapter still matters.
+
+XZ is direct executable forwarding. LZ4 still requires substantial command-line
+glue, but delegates compression and decompression to the installed library.
+
+Exhibit 13
+
+Fresh no-network replays reproduced both results.
+
+Appendix B · Ambient implementation reproductions
+
+We tested whether a candidate could earn credit by calling a compression implementation already
+installed in the original task environment. We rebuilt each candidate without network access,
+replayed the active suite, and then removed or disabled the ambient implementation to isolate its
+effect. These two selected cases isolate the mechanism. Measuring its prevalence across the full
+release is outside this experiment.
+
+1. XZ: a thin wrapper around the installed command
+
+What we tested.
+ The original XZ environment contains 
+/usr/bin/xz
+
+5.2.5, while the reference program is XZ 5.8.2. We scored an eight-line candidate that forwards
+every invocation to the installed command.
+
+What we found.
+ The wrapper passed 
+1,090 of 1,410 active tests
+(77.30%)
+. A digest-pinned, no-network rebuild reproduced the same binary and the same
+aggregate result. Removing 
+/usr/bin/xz
+ made the wrapper exit 127.
+
+Why it happened.
+ Most of this suite accepts behavior shared by the older XZ
+already present in the container. The candidate therefore receives substantial credit by forwarding
+the work rather than rebuilding XZ.
+
+Implications.
+ The 77.30% score mostly measures discovery and reuse of the installed
+binary, not reconstruction of XZ. Scoring it as an ordinary solution disadvantages candidates that
+follow the intended cleanroom task.
+
+Exact environment, identities, and replay controls
+
+task
+tukaani-project__xz.1007bf0
+
+public artifacts
+generated test suite on Hugging Face
+ ·
+
+upstream source at the pinned commit
+
+pinned environment
+ProgramBench's public 
+task_cleanroom
+ image on Docker Hub
+,
+digest 
+0736d536…1a07
+. The environment exposes
+
+/usr/bin/xz
+ 5.2.5 while gold is XZ 5.8.2.
+
+retained candidate
+A 172-byte, eight-line 
+execv
+ delegate: source
+
+38f54891…33f7fe
+, ELF 
+c1fbb671…ca8dc
+, distinct from gold
+
+40acc915…85f26
+.
+
+active-only result
+1,090 / 1,410
+ (77.30%); 626 ignored excluded;
+zero skipped, missing, unexpected, or timed-out active results.
+
+independent replay
+A digest-pinned no-network rebuild produced the same candidate
+hash and 
+1,090 / 1,410
+ with a byte-identical aggregate result. A second
+amd64-on-arm64 replay was 
+1,089 / 1,410
+: one 80 MiB progress test crossed its
+40-second timeout; the other 1,409 outcomes agreed.
+
+causal control
+Removing 
+/usr/bin/xz
+ from a disposable copy makes the
+candidate exit 127 with 
+execv: No such file or directory
+.
+
+2. LZ4: an adapter around an installed library
+
+What we tested.
+ The original LZ4 environment contains
+
+liblz4.so.1
+ 1.9.3, while the reference program is LZ4 1.10.0. We scored a 349-line
+adapter that uses the installed library, then disabled only its compression and decompression
+helpers.
+
+What we found.
+ The complete adapter passed 
+557 of 1,496 active tests
+(37.23%)
+. The ablated version passed 84. The library-backed core therefore produced a net
+gain of 473 tests, or 31.62 percentage points. Removing the library made the candidate fail to
+start.
+
+Why it happened.
+ The candidate still implements meaningful command-line and
+format-handling code, but it delegates the central compression algorithm to software already in the
+environment. The resulting score mixes the candidate's work with the installed library's behavior.
+
+Implications.
+ The 37.23% score cannot be attributed to the adapter alone, and its
+meaning depends on whether that library happens to be installed. This makes the task less comparable
+with environments where candidates must implement the core algorithm themselves.
+
+Exact environment, identities, and replay controls
+
+task
+lz4__lz4.1519f46
+
+public artifacts
+generated test suite on Hugging Face
+ ·
+
+upstream source at the pinned commit
+
+pinned environment
+ProgramBench's public 
+task_cleanroom
+ image on Docker Hub
+,
+digest 
+23bba8cb…f0a20
+. The environment exposes
+
+liblz4.so.1
+ 1.9.3 while gold is LZ4 1.10.0.
+
+retained candidate
+A substantive 349-line adapter importing 
+LZ4F_*
+:
+source 
+2d64e7ae…f664f
+, ELF 
+5b059614…30181
+, distinct from gold
+
+39482b25…cefc
+.
+
+active-only result
+557 / 1,496
+ (37.23%); 333 ignored excluded;
+zero skipped, missing, unexpected, or timed-out active results.
+
+independent replay
+A digest-pinned no-network rebuild reproduced the candidate hash,
+all 1,496 active outcomes, and the aggregate result.
+
+causal control
+Disabling only its compression and decompression helpers reduced the
+result to 
+84 / 1,496
+. The full delegate had 488 full-only passes versus 15
+ablation-only passes, a net gain of 473. Removing 
+liblz4.so.1
+ also makes the loader
+exit 127.
+
+Reading the results.
+ The XZ candidate is almost entirely a
+shortcut. The LZ4 candidate is substantive, but its score depends materially on the installed
+library. Both values are fractional active test-pass rates; neither candidate fully solves its task.
+These reproductions measure test-passing behavior; source-policy acceptance is a separate review.
+
+Appendix C · Runnable but difficult test surfaces
+
+We started with a simple warning sign: an active test that had 
+no pass in the available,
+eligible public per-test results
+. That does not prove the test is impossible. It only tells
+us which tests deserve a closer look. We then checked those tests against the released reference
+program, or another authentic build of the product.
+
+Result:
+ every test in the five screened sets below has an authentic passing
+witness. We found no FFmpeg-style broken subset here. What we did find were large compatibility
+cliffs: groups of tests that require a candidate to reproduce one specific product revision,
+including its internal formats, exact messages, numerical output, and obscure features.
+
+A passing witness establishes technical passability, not practical recoverability.
+
+The reference binary can reveal an expected behavior only after the agent identifies the relevant
+command and supplies a useful input. We therefore also inspected the cleanroom documentation,
+binary introspection surfaces, representative fixtures, and 
+several active, non-ignored tests
+
+across these five tasks. The question was narrower than whether the answer exists somewhere in the
+binary: could an agent reasonably discover the scored behavior from the supplied information and
+available probes within a bounded episode?
+
+The answer differs by task. PHP exposes a large interface but does not identify thousands of
+historical regression inputs. The paper-era Ctags environment exposed the implementation itself.
+Cppcheck's central analysis path could not be probed until the grader restored a missing dependency.
+Pandoc is comparatively well documented and introspectable, but exceptionally broad. GROMACS
+documents its commands while reserving many representative scientific assets for grading. The
+examples below show each case directly.
+
+Where the five screened tasks sit among the hardest original tasks
+
+Task-level reward.
+ These are the ten original ProgramBench tasks
+with the lowest mean reward on the current extended leaderboard. The five highlighted rows are the
+case studies explored below. Bars show mean fractional test score, whiskers show ±1 population SD
+across the included models, and hollow circles show the best observed model score. Whiskers are
+clipped at the valid zero-reward boundary; they describe variation among models, not uncertainty in
+the mean.
+
+The public-results screen and the reference check
+
+original task
+active tests
+active tests with no eligible public pass
+authentic passing witness
+
+php-src
+14,288
+10,880
+10,880/10,880 screened identities have witnesses: a real PHP build passes 10,849 and released gold passes the other 31.
+
+gromacs
+1,245
+1,039
+Released gold passes all 1,245 active tests.
+
+ctags
+2,258
+1,686
+Reference replays supply a witness for all 2,258 active tests.
+
+pandoc
+5,228
+3,378
+3,378/3,378 screened identities have released-gold witnesses.
+
+cppcheck
+2,126
+1,488
+Released gold passes all 2,126 active tests.
+
+How to read the third column.
+ Ignored tests are removed. For
+PHP, we also exclude the source-cloning attempt that the official leaderboard scores 0.0%. Missing
+per-test rows remain missing; we do not silently count them as failures. The column therefore means
+“no available eligible artifact reports a pass,” not “every model definitely failed.”
+
+1. PHP: a visible interface and a hidden regression surface
+
+The task.
+ 
+PHP's
+
+php-src
+ repository implements the PHP language interpreter, virtual machine,
+standard library, extensions, and command-line server. Rebuilding it means reproducing a complete
+language runtime rather than one narrow CLI command.
+
+What the agent can see.
+ The cleanroom supplies the executable and a short project
+README, but not the PHP manual, language specification, or upstream PHPT suite. The binary can list
+hundreds of functions, classes, interfaces, and constants, and reflection commands reveal many
+signatures. They do not explain the exact behavior of the historical edge cases scored below.
+
+Most of the unreached set comes from PHP's own upstream regression suite.
+ In
+
+88234d477311
+
+and the other released branches, 
+10,259 of the 10,880 cases (94.3%)
+ are harvested
+from PHP's upstream PHPT regression suite. They span the Zend VM, standard library, OPcache, SPL,
+dates, reflection, extensions, and the CLI web server.
+
+The expected output is usually text-exact at the pinned revision.
+ Of those 10,259 PHPT cases,
+10,234 use exact or formatted-exact output expectations. A candidate can implement useful PHP syntax
+and still miss the runtime behavior or output formatting required by these tests.
+
+Exact-output example
+
+88234d477311
+ · 
+tests.test_harvest_standard.test_phpt_file[array/array_change_key_case_variation4]
+
+What it does.
+ It calls 
+array_change_key_case()
+ eleven times, using
+case values from −5 through 5.
+
+What it checks.
+ The complete 113-line 
+var_dump
+ transcript must match:
+zero lowercases the keys, while every tested nonzero value uppercases them.
+
+How to read it.
+ This is legitimate library behavior, but one semantic or formatting
+difference loses the whole test.
+
+View released test excerpt
+
+--FILE--
+<?php
+$input = array('One' => 'un', 'TWO' => 'deux', 'three' => 'trois');
+for ($i = -5; $i <= 5; $i += 1) {
+    echo "\n-- \$sort argument is $i --\n";
+    $temp = $input;
+    var_dump(array_change_key_case($temp, $i));
+}
+?>
+--EXPECT--
+*** Testing array_change_key_case() : usage variations ***
+
+-- $sort argument is -5 --
+array(3) {
+  ["ONE"]=> string(2) "un"
+  ["TWO"]=> string(4) "deux"
+  ["THREE"]=> string(5) "trois"
+}
+
+Abridged from the released PHPT; the 
+public branch archive
+ contains the full 113-line expected transcript.
+
+Available public rows: 15 failures, 4 
+not_run
+, 0 passes · released gold: pass.
+
+Broad integration example
+
+88234d477311
+ · 
+tests.test_harvest_opcache.test_phpt_file[gh8846]
+
+What it does.
+ It starts PHP's built-in web server with OPcache enabled, then makes
+two HTTP requests through entry scripts that conditionally redeclare a class.
+
+What it checks.
+ The first request must produce the expected redeclaration error and
+stack trace; the second must return 
+Ok
+.
+
+How to read it.
+ This tests a real interaction among HTTP serving, includes, class
+binding, errors, and OPcache—not a missing fixture or dummy transcript.
+
+View released test excerpt
+
+--INI--
+opcache.validate_timestamps=1
+opcache.revalidate_freq=0
+--FILE--
+<?php
+file_put_contents(__DIR__ . '/gh8846-index.php', <<<'PHP'
+<?php
+if (!@$_GET['skip']) {
+    include __DIR__ . '/gh8846-1.inc';
+}
+include __DIR__ . '/gh8846-2.inc';
+echo "Ok\n";
+PHP);
+
+php_cli_server_start('-d opcache.enable=1 -d opcache.enable_cli=1');
+echo file_get_contents('http://' . PHP_CLI_SERVER_ADDRESS . '/gh8846-index.php');
+echo file_get_contents('http://' . PHP_CLI_SERVER_ADDRESS . '/gh8846-index.php?skip=1');
+?>
+--EXPECTF--
+bool(true)
+Fatal error: Cannot redeclare class Foo ...
+bool(true)
+Ok
+
+Abridged from 
+gh8846.phpt
+ in the 
+public branch archive
+.
+
+Available public rows: 15 failures, 4 
+not_run
+, 0 passes · native released gold: pass.
+
+What our sample found.
+ We inspected eleven active cases spanning arrays, dates and
+DST transitions, malformed JSON locations, reflection, PCRE, OPcache, randomization, and CLI-server
+errors. Some expectations are recoverable with one targeted probe once the input is known. The
+problem is identifying those inputs: neither the README nor reflection tells the agent to explore a
+particular historical DST, PCRE, or OPcache regression. We found the same pattern throughout the
+remaining set, which also covers fibers, property hooks, lazy objects, streams, uploads, garbage
+collection, and server behavior.
+
+Finding.
+ These tests are executable and often behaviorally meaningful, but the task
+asks one bounded episode to rediscover a version-pinned VM, runtime, extension ecosystem, and a large
+collection of unadvertised regression cases. The reference binary is an oracle only after the agent
+has guessed the question.
+
+2. Ctags: a broad parser suite inside an overexposed environment
+
+The task.
+ 
+Universal
+Ctags
+ is a source-code indexing tool. It parses many programming and markup languages and emits
+symbol records used by editors and navigation tools.
+
+What the agent can see.
+ The dominant test block genuinely demands many language
+parsers and Ctags-specific output conventions. However, the
+
+paper-era evaluated image
+
+also contains 
+/workspace/ctags
+, a readable executable whose SHA-256 is identical to the
+sealed reference executable, as well as the compiled 
+libctags.a
+ library.
+
+$ sha256sum /workspace/executable /workspace/ctags
+191707e...066c  /workspace/executable
+191707e...066c  /workspace/ctags
+
+Finding.
+ This is not an information-shortage case. It is an environment leak: an
+agent can reuse the installed implementation rather than reconstruct the behavior exercised by the
+suite. The examples still show what the tests demand, but the resulting score cannot cleanly isolate
+reverse-engineering capability.
+
+Ninety percent of the unreached set is direct upstream regression replay.
+
+In 
+0368ca6ed669
+,
+1,337 unreached 
+Units
+ cases compare generated tags, xref, or etags output with expected
+artifacts. Another 180 
+Tmain
+ cases run upstream shell scenarios and compare one or more
+of stdout, stderr, tags, and exit status. Together they account for 
+1,517 of 1,686 unreached tests
+.
+
+Exact-output example
+
+0368ca6ed669
+ · 
+tests.test_harvest_units.test_units_case[parser-cxx.r/alignas-in-struct.d]
+
+What it does.
+ It gives Ctags a C++ file containing 
+alignas(64)
+ on one
+struct and one class.
+
+What it checks.
+ The entire two-line tag file must match, including the different
+struct/class kind letters, search patterns, and fields.
+
+How to read it.
+ The parser behavior is real, but credit also requires Ctags' exact
+tag representation.
+
+View released test
+
+// input.cpp
+struct alignas( 64 ) AlignasTestStruct
+{
+};
+
+class alignas( 64 ) AlignasTestStruct2
+{
+};
+
+# expected.tags
+AlignasTestStruct  input.cpp  /^struct alignas( 64 ) AlignasTestStruct$/;"  s  file:
+AlignasTestStruct2 input.cpp  /^class alignas( 64 ) AlignasTestStruct2$/;"   c  file:
+
+The parameterized harness compares these fixtures exactly. Both are in the 
+public branch archive
+.
+
+Available public rows: 17 failures, 3 
+not_run
+, 0 passes · released gold: pass.
+
+Forgiving behavior example
+
+c0523186ac1e
+ · 
+eval.tests.test_coverage.test_asciidoc_parsing
+
+What it does.
+ It writes a tiny AsciiDoc document with several headings and asks
+Ctags to parse it.
+
+What it checks.
+ The command must succeed and output either
+
+Introduction
+ or 
+Chapter 2
+; no full transcript must match.
+
+How to read it.
+ This zero-pass case reflects missing parser breadth, not brittle
+formatting. The exact-regression explanation does not cover every Ctags test.
+
+View released test
+
+def test_asciidoc_parsing():
+    adoc_source = """\
+= Document Title
+Author Name <email@example.com>
+
+== Introduction
+=== Sub Section
+== Chapter 2
+"""
+    with TempFiles() as tf:
+        src = tf.create("test.adoc", adoc_source)
+        result = run("--quiet", "--options=NONE", "-o", "-", str(src))
+        assert result.returncode == 0
+        assert b"Introduction" in result.stdout or b"Chapter 2" in result.stdout
+
+Complete test in the 
+public branch archive
+.
+
+Available public rows: 17 failures, 3 
+not_run
+, 0 passes · released gold: pass.
+
+Absent that leak, passing the dominant 1,517-case regression block would require many language
+parsers and Ctags-specific output conventions at once. Our active-test sample also found exact
+multi-language detection and parser cases alongside more forgiving checks such as the AsciiDoc
+example above. The leak, rather than parser breadth alone, is the decisive fairness problem.
+
+3. Cppcheck: the grader restores a dependency the probe does not have
+
+The task.
+ 
+Cppcheck
+
+is a static analyzer for C and C++. It reads source code and reports defects through diagnostics,
+machine-readable formats, and an internal analysis dump.
+
+What the agent can see.
+ The cleanroom includes a short README, a manual excerpt,
+and extensive command help. 
+--errorlist
+ exposes hundreds of diagnostic IDs, severities,
+messages, and CWE mappings, so those names are not wholly hidden. But running Cppcheck on even a
+small source file fails in the inference cleanroom:
+
+Failed to load library configuration file 'std.cfg'.
+Your Cppcheck installation is broken.
+
+The cleanroom contains no Cppcheck configuration files. The
+
+public grader branch
+
+does contain 
+std.cfg
+, and its fixture copies that file into Cppcheck's expected location
+before executing the tests. The tests therefore pass against gold during grading even though the
+agent cannot use the same core analysis path to investigate them while rebuilding the program.
+
+The sharpest dependency is Cppcheck's own dump protocol.
+ Across all eleven released
+branches, 249 active test bodies explicitly invoke 
+--dump
+, call a dump helper, or inspect
+a 
+.dump
+ file. 
+242 of those 249 have no public pass.
+ Most are concentrated in
+
+1040f6b8a219
+
+and 
+b9729b57ee68
+,
+which contain 245 of the 249 dump-related bodies and 241 of the 242 unreached ones.
+
+Across this block, tests inspect Cppcheck-specific XML for tokens, syntax, symbols, value flow,
+and library metadata. A candidate can find real bugs and still lose almost the whole block because
+it does not reproduce that tool-specific intermediate representation. Other cases require exact diagnostic IDs, wording, source
+locations, CWE codes, XML, or SARIF metadata.
+
+Assertion mismatch
+
+1040f6b8a219
+ · 
+tests.test_programmemory.test_arithmetic_overflow_detection
+
+What it does.
+ It analyzes 
+INT_MAX + 1
+ with Cppcheck's
+
+--dump
+ option.
+
+What it checks.
+ Only that a dump file exists, exceeds 100 bytes, and contains
+
+<valueflow>
+. It never checks for an overflow finding.
+
+How to read it.
+ The test is runnable, but it measures dump/value-flow support more
+directly than the overflow detection promised by its name.
+
+View released test
+
+def test_arithmetic_overflow_detection(run_binary, create_test_file):
+    code = """
+void test() {
+    int x = 2147483647;  // INT_MAX
+    int y = x + 1;
+}
+"""
+    test_file = create_test_file(code)
+    result = run_binary(['--enable=warning', '--dump', str(test_file)])
+    assert result.returncode == 0
+    dump_file = Path(str(test_file) + '.dump')
+    assert dump_file.exists()
+    content = dump_file.read_text()
+    assert len(content) > 100
+    assert '<valueflow>' in content
+
+Complete test in the 
+public branch archive
+.
+
+Available public rows: 20 failures, 0 passes · released gold: pass.
+
+Legitimate diagnostic example
+
+1040f6b8a219
+ · 
+tests.test_checkstl_gaps.test_dereference_end_iterator
+
+What it does.
+ It analyzes C++ that assigns 
+vector.end()
+ to an iterator
+and then dereferences it.
+
+What it checks.
+ Cppcheck must report 
+derefInvalidIterator
+, the expected
+message, and the value-flow note 
+assigned value is end=0
+.
+
+How to read it.
+ This is substantive iterator reasoning, but the score also demands
+Cppcheck-specific diagnostic identity, wording, and notation.
+
+View released test
+
+def test_dereference_end_iterator(run_cppcheck, temp_dir):
+    code = """
+#include <vector>
+
+void test() {
+    std::vector<int> vec = {1, 2, 3};
+    std::vector<int>::iterator it = vec.end();
+    int x = *it;
+}
+"""
+    test_file = Path(temp_dir) / "test.cpp"
+    test_file.write_text(code)
+    returncode, stdout, stderr = run_cppcheck("--enable=warning", str(test_file))
+    assert "derefInvalidIterator" in stderr
+    assert "Dereference of an invalid iterator" in stderr
+    assert "assigned value is end=0" in stderr
+
+Complete test in the 
+public branch archive
+.
+
+Available public rows: 20 failures, 0 passes · released gold: pass.
+
+What our sample found.
+ An 
+--errorlist
+ test is directly recoverable from
+binary introspection. By contrast, source-to-diagnostic mappings, value-flow notation, and the dump
+protocol cannot be explored through the supplied gold probe because core analysis stops at the
+missing 
+std.cfg
+. We found this distinction across four sampled active cases.
+
+Finding.
+ The 242 unreached dump-related tests form a correlated score cliff, but the
+deeper issue is asymmetric execution: the grader repairs a runtime dependency that the reconstruction
+episode lacks. Gold replay proves the assertions are runnable after setup; it does not show that the
+scored behavior was reasonably recoverable from the inference environment.
+
+4. Pandoc: well documented, but exceptionally broad and exact
+
+The task.
+ 
+Pandoc
+
+is a universal document converter. It translates among dozens of markup and document formats through
+a shared document model, with support for templates, filters, citations, slides, and archives.
+
+What the agent can see.
+ This is the counterexample to a blanket under-specification
+claim. The cleanroom includes Pandoc's extensive manual. The binary enumerates dozens of input and
+output formats and can print default templates, highlighting styles, and reference documents. In our
+sample, active template and style behavior could be recovered through documented introspection.
+
+Exact product output covers much of the unreached set.
+ Our source scan found direct
+stdout or stderr equality in 
+2,487 of the 3,378 cases (73.6%)
+. In the eleven harvested
+command batches, 1,331 of 1,336 cases compare exact output. Examples in
+
+ea7a9f0674dc
+
+include exact native AST, OpenDocument XML, and standalone LaTeX output.
+
+Exact-output example
+
+ea7a9f0674dc
+ · 
+tests.test_harvest_cmd_batch1.test_cmd_10127
+
+What it does.
+ It converts two complex reStructuredText tables, including column
+spans and trailing whitespace, into Pandoc's native AST format.
+
+What it checks.
+ The complete 8,928-byte AST rendering must match exactly.
+
+How to read it.
+ Correct table parsing is substantive, but any harmless AST-layout
+or rendering difference loses the whole test.
+
+View released test excerpt
+
+def test_cmd_10127(run_pandoc):
+    result = run_pandoc(
+        args=['-f', 'rst', '-t', 'native'],
+        stdin="""=====  =====  ======
+   Inputs     Output
+------------  ------
+  A      B    A or B
+=====  =====  ======
+False  False  False
+True   False  True
+False  True   True
+True   True   True
+=====  =====  ======"""
+    )
+    assert result.returncode == 0
+    assert result.stdout == '[ Table\n    ( "" , [] , [] )\n ...'
+
+Abridged at the beginning of the 8,928-byte expected AST literal. The 
+public branch archive
+ contains the full equality assertion.
+
+Available public rows: 19 failures, 1 
+not_run
+, 0 passes · released gold: pass.
+
+Structural behavior example
+
+08afe9ff1778
+ · 
+eval.tests.test_pandoc.test_pptx_writer
+
+What it does.
+ It converts a two-slide Markdown document into PowerPoint.
+
+What it checks.
+ The PPTX must be nonempty and its ZIP structure must contain
+PowerPoint and slide entries; its bytes do not need to match a golden file.
+
+How to read it.
+ This is an ordinary writer-capability test. The unreached Pandoc
+set is not merely brittle string matching.
+
+View released test
+
+def test_pptx_writer():
+    with TempFiles() as tf:
+        out_path = Path(tf.tempdir) / "output.pptx"
+        result = run(
+            "-f", "markdown", "-t", "pptx", "-o", str(out_path),
+            stdin="# Slide 1\n\n- Point 1\n- Point 2\n\n# Slide 2\n\nContent\n"
+        )
+        assert result.returncode == 0
+        assert out_path.exists()
+        assert out_path.stat().st_size > 0
+        with zipfile.ZipFile(out_path) as zf:
+            names = zf.namelist()
+            assert any("ppt" in name for name in names)
+            assert any("slides/slide" in name for name in names)
+
+Complete test in the 
+public branch archive
+.
+
+Available public rows: 19 failures, 1 
+not_run
+, 0 passes · released gold: pass.
+
+What our sample found.
+ Four active cases covered exact native output, a structural
+PowerPoint check, default-data introspection, and Lua-filter behavior. The information needed for the
+default-template case is directly available. The harder cases require implementing interacting
+readers, writers, AST conventions, archives, templates, and filters rather than discovering an
+undocumented command.
+
+Finding.
+ Pandoc is principally a breadth and compatibility-depth case, not a broken
+probe or sparse-documentation case. Exact output can be a valid compatibility requirement; the
+calibration concern is that one missing convention can erase a large correlated block of reward even
+when a candidate performs useful conversions.
+
+5. GROMACS: documented commands without representative probe assets
+
+The task.
+ 
+GROMACS
+
+is a molecular-dynamics and scientific-analysis toolkit. Its command suite manipulates molecular
+structures and trajectories, builds topologies, and computes numerical analyses over simulation data.
+
+What the agent can see.
+ The binary provides detailed help for a broad command
+surface, including 
+rotmat
+ and 
+pdb2gmx
+. The cleanroom, however, does not contain
+the representative trajectories, topologies, molecular systems, or force-field directories used by
+many active tests. The public grader branch supplies those resources and configures its force-field
+path before evaluation.
+
+A substantial part of the unreached set is tied to shipped scientific references.
+
+In 
+bbe83d4d7c01
+,
+473 of the 1,039 unreached test bodies directly reference a golden file, and 964 reference shipped
+resources or molecular systems. A sampled 
+rotmat
+ case removes nondeterministic headers,
+versions, and paths, then requires exact equality with a golden numerical XVG matrix.
+
+Exact numerical example
+
+bbe83d4d7c01
+ · 
+tests.test_rotmat.test_basic_rotmat_system_group
+
+What it does.
+ It runs 
+gmx rotmat
+ on the supplied trajectory and
+topology, selecting the full molecular system.
+
+What it checks.
+ After removing timestamps, paths, versions, and other nondeterministic
+headers, the entire numerical XVG matrix must equal the shipped golden output.
+
+How to read it.
+ This is a genuine numerical compatibility cliff, but all inputs and
+expected values are supplied.
+
+View released test
+
+def test_basic_rotmat_system_group(run_gmx, tmp_path):
+    output_file = tmp_path / "test_basic.xvg"
+    result = run_gmx("rotmat",
+                     "-f", str(COVAR_RESOURCES / "trpcage.xtc"),
+                     "-s", str(COVAR_RESOURCES / "trpcage.tpr"),
+                     "-o", str(output_file),
+                     input_data="System\n")
+    assert result.returncode == 0, f"gmx rotmat failed: {result.stderr}"
+
+    output = output_file.read_text()
+    normalized = normalize_xvg(output)
+    expected = normalize_xvg((RESOURCES / "basic_rotmat.xvg.golden").read_text())
+    assert normalized == expected
+
+Complete test and its trajectory, topology, and golden output are in the 
+public branch archive
+.
+
+Available public rows: 19 failures, 1 
+not_run
+, 0 passes · released gold: pass.
+
+Scientific behavior example
+
+bbe83d4d7c01
+ · 
+tests.test_pdb2gmx.test_pdb2gmx_amber03_tip3p
+
+What it does.
+ It builds a topology from a supplied peptide using the Amber03 force
+field and TIP3P water model.
+
+What it checks.
+ GROMACS must create three substantive output files, include the right
+force-field and topology sections, and produce exactly 20 atoms after adding hydrogens.
+
+How to read it.
+ This tests real topology generation rather than a golden transcript;
+failing it points to missing scientific functionality.
+
+View released test
+
+def test_pdb2gmx_amber03_tip3p(run_gmx, tmp_path):
+    result = run_gmx("pdb2gmx",
+                     "-f", str(RESOURCES / "dipeptide.pdb"),
+                     "-o", str(tmp_path / "out.gro"),
+                     "-p", str(tmp_path / "topol.top"),
+                     "-ff", "amber03",
+                     "-water", "tip3p",
+                     cwd=str(tmp_path))
+    assert result.returncode == 0, f"pdb2gmx failed: {result.stderr}"
+
+    gro_file = tmp_path / "out.gro"
+    top_file = tmp_path / "topol.top"
+    posre_file = tmp_path / "posre.itp"
+
+    assert gro_file.exists(), "Output .gro file not created"
+    assert top_file.exists(), "Topology .top file not created"
+    assert posre_file.exists(), "Position restraints .itp file not created"
+    assert gro_file.stat().st_size > 100, "GRO file too small"
+    assert top_file.stat().st_size > 100, "Topology .top file too small"
+    assert posre_file.stat().st_size > 50, "Position restraints .itp file too small"
+
+    top_content = top_file.read_text()
+    assert "amber03.ff/forcefield.itp" in top_content, "Force field not referenced in topology"
+    assert "amber03.ff/tip3p.itp" in top_content, "Water model not referenced in topology"
+    assert "[ moleculetype ]" in top_content, "No moleculetype section in topology"
+    assert "[ atoms ]" in top_content, "No atoms section in topology"
+    assert "[ bonds ]" in top_content, "No bonds section in topology"
+
+    gro_content = gro_file.read_text()
+    lines = gro_content.strip().split('\n')
+    assert len(lines) >= 3, "GRO file too short"
+    atom_count = int(lines[1].strip())
+    assert atom_count == 20, f"Expected 20 atoms after adding hydrogens, got {atom_count}"
+
+Complete test and its peptide fixture are in the 
+public branch archive
+.
+
+Available public rows: 19 failures, 1 
+not_run
+, 0 passes · released gold: pass.
+
+What our sample found.
+ Five active cases included the exact 
+rotmat
+ matrix,
+Amber03/TIP3P topology construction, RDF and conformation analyses, and other numerical behavior.
+Command help explains the purpose and options, but the agent cannot run representative probes for
+many of these paths without the scientific inputs later supplied to the grader.
+
+Finding.
+ The tests are not impossible: their fixtures are available when the
+candidate is graded, and several fairly require substantial scientific functionality. The
+recoverability gap appears earlier. Documentation describes what the commands do, while the
+inference environment withholds the domain-specific assets needed to observe the revision-specific
+outputs the tests reward.
+
+What this evidence supports
+
+Passability and reasonable recoverability are separate gates.
+ An authentic gold
+witness shows that a configured evaluator can produce a pass. It does not show that the agent was
+given enough information and probing capability to identify the required behavior within its
+episode. The five cases do not share one defect: PHP has a sparse specification relative to its
+historical regression surface; paper-era Ctags exposes the answer; Cppcheck's core oracle is
+incomplete during inference; Pandoc is well specified but very broad; GROMACS describes its commands
+without supplying representative scientific probe assets.
+
+The calibration question is how reward is distributed.
+ Exact output and deep
+compatibility can be legitimate requirements. They become problematic when a large, correlated
+fraction of reward depends on behavior that is not proportionately discoverable, when the grader has
+dependencies unavailable to the agent, or when the environment already contains the implementation.
+Those conditions can obscure useful partial progress and make scores less comparable across tasks.
+
+Evidence boundary.
+ “No eligible public pass” is a screen based
+on the available official per-test artifacts, not a probability of impossibility. One configured PHP
+run has no PHP per-test artifact, and seven later GROMACS and Pandoc artifacts omit some active rows.
+Those rows remain missing rather than being counted as failures.
+
+Appendix D · The memorization paradox
+
+ProgramBench uses familiar public programs, so prior model exposure is plausible but difficult
+to measure. This appendix separates what the benchmark shows from what remains unknown, then treats
+the same distinction as a possible training variable.
+
+FFmpeg, SQLite, Lua, and jq are highly visible public codebases. The paper's internet access
+ablation found up to 36% of runs flagged as cheating, mostly through source code lookup. This shows
+a strong incentive to retrieve source when it is available, while leaving the contents of model
+weights unresolved. At the launch evaluation, zero tasks were resolved.
+
+Rebuilding a familiar program may therefore combine partial prior representations with reverse
+engineering from documentation and binary probes. Matched contamination and name masking ablations
+would separate those effects. Until then, reconstruction performance is best read as the composite
+capability measured by the task.
+
+The paradox splits the benchmark's meaning in two. One ablation forces a different implementation
+language to blunt recall, but the memory term itself is not measured. On in-corpus repositories,
+success mixes 
+remembering
+ with 
+reverse engineering
+ in unknown proportions. We
+therefore report the full cleanroom condition: the model receives documentation and an executable
+only reference binary, while the source, original tests, and git history remain absent.
+
+The memorization paradox as a training lever
+
+The paradox separates two things that usually blur together: what a model 
+knows
+ and what
+a model can 
+do with what it knows
+. Three training and diagnostic uses follow.
+
+In-corpus RL could test access to prior knowledge.
+ If training-set membership were
+independently verified, improvement on exposed repositories could test whether RL helps a model
+retrieve and coordinate prior representations.
+
+Out-of-corpus RL could test transfer.
+ If matched controls verified that a
+repository was absent from pretraining, improvement would more cleanly support transferable reverse
+engineering skill rather than recall.
+
+Cross-corpus checkpoints could become a diagnostic.
+ With verified membership
+labels and matched tasks, checkpoint-level score changes could help distinguish retrieval from
+newly learned problem-solving behavior.
+
+see the leaderboard 
+→
+
+explore all research 
+→
