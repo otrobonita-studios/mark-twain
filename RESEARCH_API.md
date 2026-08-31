@@ -33,8 +33,11 @@ Retrieve the collection configuration, active status, vector dimension size, and
   "distance": "Cosine",
   "embedding_model": "BAAI/bge-m3",
   "payload_schema": {
-    "text": "String - The text content of the chunk (~500 words)",
-    "filename": "String - The source file name of the chunk",
+    "text": "String - The text content of the chunk (~200 words, paragraph-aligned)",
+    "filename": "String - The source file name",
+    "source": "String - Source directory: 'books' | 'marks-awareness' | 'wikisource' | 'internet-archive'",
+    "work": "String - Human-readable work title derived from filename",
+    "type": "String - Document category: 'literary' | 'awareness' | 'biographical' | 'archival'",
     "chunk_index": "Integer - The chunk index within the file"
   }
 }
@@ -284,9 +287,8 @@ if response.status_code == 200:
 
 - [ ] **Secure Production Endpoint**: Add the `RESEARCH_API_KEY` environment variable in the Vercel project dashboard to password-protect `/api/research` from unauthorized scraping.
 - [ ] **Configure Vercel DDoS/Rate Limiting**: In the Vercel Security dashboard tab, configure a Firewall rate-limiting rule on `/api/research` (e.g., limit to 100 requests per 15 minutes per IP) to mitigate abuse.
-- [ ] **Setup Local Keys**: Copy `.env.local` key placeholders and enter active credentials (`QDRANT_API_KEY`, `GEMINI_API_KEY`, `HF_TOKEN`) for local pipeline tests.
-- [ ] **Validate API Embeddings**: Run `python rag/data-collection/TwainCorpus/query_engine.py` locally to verify that text queries are successfully embedded via the Hugging Face Inference API instead of downloading the heavy PyTorch/SentenceTransformers packages.
-- [ ] **Monitor Workflow logs**: Check the `.github/workflows/sync-memory.yml` runs to ensure hourly crawler-embedder-uploader cycles complete without errors.
+- [ ] **Setup Local Keys**: Copy `.env.local` key placeholders and enter active credentials (`QDRANT_API_KEY`, `QDRANT_URL`, `HF_TOKEN`) for local pipeline runs.
+- [ ] **Run new embedding pipeline**: `cd rag/pipeline && python embed_corpus.py && python stream_to_qdrant.py --fresh` — replaces the old corpus (9,000 RSS files + 154 Twain files) with the clean ~200-file Twain-only corpus. See `rag/pipeline/README.md`.
 
 ---
 
