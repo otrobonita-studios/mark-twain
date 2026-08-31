@@ -36,6 +36,7 @@ COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "twain_test")
 INPUT_JSONL     = SCRIPT_DIR / "vectors.jsonl"
 BATCH_SIZE      = 50
 MAX_RETRIES     = 3
+UPSERT_SLEEP    = 0.3   # seconds between every successful upsert (free-tier throttle)
 
 
 def get_client() -> QdrantClient:
@@ -77,10 +78,11 @@ def upsert_batch(
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             client.upsert(collection_name=COLLECTION_NAME, points=batch)
+            time.sleep(UPSERT_SLEEP)   # throttle: protect free-tier cluster
             return
         except Exception as e:
-            wait = 5 * attempt
-            print(f"  [retry {attempt}/{MAX_RETRIES}] {label}: {e} — waiting {wait}s")
+            wait = 2.0 * attempt       # exponential backoff (space-talks pattern)
+            print(f"  [retry {attempt}/{MAX_RETRIES}] {label}: {e} — waiting {wait:.0f}s")
             time.sleep(wait)
     raise RuntimeError(f"Upsert failed {MAX_RETRIES} times for {label}")
 
