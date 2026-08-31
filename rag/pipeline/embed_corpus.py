@@ -66,6 +66,7 @@ GOOGLE_BOILERPLATE_MARKERS = [
 # ── Embedding ─────────────────────────────────────────────────────────────────
 
 load_dotenv(PROJECT_ROOT / ".env.local")
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 def get_embedding(text: str) -> list[float]:

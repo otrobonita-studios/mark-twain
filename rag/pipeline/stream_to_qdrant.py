@@ -29,6 +29,7 @@ SCRIPT_DIR   = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
 
 load_dotenv(PROJECT_ROOT / ".env.local")
+load_dotenv(PROJECT_ROOT / ".env")
 
 QDRANT_URL      = os.getenv("QDRANT_URL")
 QDRANT_API_KEY  = os.getenv("QDRANT_API_KEY")
