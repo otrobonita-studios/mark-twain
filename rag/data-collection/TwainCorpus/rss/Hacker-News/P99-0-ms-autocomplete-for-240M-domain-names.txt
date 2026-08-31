@@ -1,0 +1,335 @@
+We’ll get to the asterisk.
+
+I run 
+Wirewiki.com
+, a website to inspect internet infrastructure like domain names. It helps people check (historic) DNS records,
+    DNS delegation, email deliverability config, etc.
+
+There are a ton of sites that offer this (growing faster than ever thanks to vibe coding), so I need
+    a way to stand out. I picked tool quality / usefulness and UX.
+
+The autocomplete is the main way to navigate Wirewiki, so it should be as complete, accurate and fast as possible.
+    I want it to be 
+instant
+. Like, next frame instant.
+
+I've mostly achieved that. Try for yourself:
+
+Tab
+
+Cycle tabs
+
+Navigate
+
+Open
+
+Here's how.
+
+On 
+keyDown
+ (the user starts pressing a key), we prefetch the suggestions for the typed character + any next character. And on 
+keyUp
+ (the user releases the key), we render the suggestions.
+
+GET /autocomplete?q=wi
+
+{
+
+"results"
+: [
+"wikipedia.org"
+, 
+"windowsupdate.com"
+, 
+"windows.net"
+, 
+"windows.com"
+, 
+"wixsite.com"
+, 
+"wikimedia.org"
+, 
+"wiley.com"
+, 
+"wildberries.ru"
+],
+
+"next"
+: {
+
+"-"
+: [
+"wi-fi.ru"
+, 
+"wi-fi.org"
+, 
+"wi-fi.click"
+, 
+"wi-tribe.ph"
+, 
+"wi-cat.ru"
+, 
+"wi-fi.link"
+, 
+"wi-power.com"
+, 
+"wi-fi.com"
+],
+
+"."
+: [
+"wi.gov"
+, 
+"wi.us"
+, 
+"wi.infomart.co.jp"
+, 
+"wi.net"
+, 
+"wi.likebtn.com"
+, 
+"wi.accountants"
+, 
+"wi.agency"
+, 
+"wi.amsterdam"
+],
+
+"0"
+: [
+"wi0.buzz"
+, 
+"wi0.com"
+, 
+"wi0.mobi"
+, 
+"wi0.site"
+, 
+"wi0.tech"
+, 
+"wi0.top"
+, 
+"wi0.xyz"
+, 
+"wi00.com"
+],
+
+…
+
+"9"
+: [
+"wi9-h.com"
+, 
+"wi9.casino"
+, 
+"wi9.com"
+, 
+"wi9.lol"
+, 
+"wi9.mobi"
+, 
+"wi9.org"
+, 
+"wi9.top"
+, 
+"wi9.xyz"
+],
+
+"a"
+: [
+"wiadomosci.wp.pl"
+, 
+"wiadomosci.onet.pl"
+, 
+"wiadomosci.gazeta.pl"
+, 
+"wialon.com"
+, 
+"wialon.host"
+, 
+"wiair.com"
+, 
+"wiara.pl"
+, 
+"wiadomosci.radiozet.pl"
+],
+
+…
+
+"k"
+: [
+"wikipedia.org"
+, 
+"wikimedia.org"
+, 
+"wiktionary.org"
+, 
+"wikihow.com"
+, 
+"wikia.com"
+, 
+"wikisource.org"
+, 
+"wikibooks.org"
+, 
+"wikidot.com"
+],
+
+…
+
+"z"
+: [
+"wizzair.com"
+, 
+"wizards.com"
+, 
+"wiz.world"
+, 
+"wiz.biz"
+, 
+"wiz.io"
+, 
+"wiz.cn"
+, 
+"wizardingworld.com"
+, 
+"wizaz.pl"
+]
+
+}
+
+}
+
+That gives us a time budget of 
+keyPress1Duration + gap between key presses + keyPress2Duration
+. If the API returns before the end of the second key press, we'll have the results ready in time.
+
+(A 60 Hz display renders every 16.7 ms. So we technically have 8.33 ms extra time budget at p50, but near 0 ms at p99.)
+
+API round-trip time
+
+The request for 
+q=wi
+ fires the instant 
+i
+ is pressed; if its response lands before 
+k
+ is released, completions for 
+wik
+ render with zero perceived latency.
+
+So for the purpose of this article, we'll define latency as 
+keyUp to results ready for rendering
+. p99 0 ms means that 99% of the time, the results will be ready before the user even releases the key.
+
+We need two things to make this happen:
+
+Client side prefetching and caching of the suggestions, and
+
+An API that's fast enough.
+
+How big is the budget?
+
+We now know that we can spend two key press durations and a gap duration, but how long is that in milliseconds?
+
+I've measured it while typing 100 domain names reasonably fast and found that p99 works out to 121 ms for me.
+
+Here are my results. You can start typing to see what it is for you.
+
+Measuring the latency budget
+
+This measures the time from one key press to the next release. The slider tells you what % of keystrokes would render next-frame at a given API latency.
+
+121 ms
+
+—
+
+next-frame at 
+121
+ ms latency
+
+% next-frame vs. latency. Vertical line = slider.
+
+Per-keystroke budget (ms). Bars left of the line miss at the current latency.
+
+Type some domains to populate.
+
+Reset
+
+How fast can we make the API?
+
+Okay, so we've got a latency target of 121 ms. But how fast can we make the API?
+
+I'm using the 
+Tranco
+ list of the top 1 million most popular domains for this API. These should be suggested first, and supplemented by any other domain name currently in use.
+
+CZDS
+ offers the list of all domains for most of the gTLDs (like .com, .net, .org). ccTLDs (like .uk, .de, .fr) are unfortunately not available. But domains for those with any meaningful traffic will be in the Tranco list anyway. There are other sources, like certificate transparency logs and Archive.org that we could use, but I've not integrated them yet.
+
+I've designed the API to first search Tranco (the head), and then CZDS (the tail) if necessary. The results are returned in rank order, so the first 8 are the most popular.
+
+Head: in-memory character trie.
+ A trie (prefix tree) stores the top 8 suggestions precomputed for every prefix.
+      A prefix lookup is a walk of a few pointers.
+Worst case time complexity: 
+O(length of what you typed)
+.
+
+Tail: SSD backed memory-mapped block index.
+ The CZDS domains are sorted and delta-compressed into fixed-size blocks with a
+  tiny in-memory directory. A lookup binary-searches the directory (27 MB), then linearly scans one block of 256 names. The 240M domain names take about 2.5 GB of disk space. Hot pages are cached in memory by the OS.
+Worst case time complexity: 
+O(length of what you typed * log(number of domains))
+.
+
+Both the number of domains and the query length are bounded. That makes the worst case for both data structures effectively O(1), which should keep p99 latency low. Let's see.
+
+Every keystroke travels 
+Browser → Cloudflare → nginx → API
+ and the response returns along the same path.
+
+I had an LLM stress test the production server. It generated 720k keystroke queries by simulating 60k typed domain names, and replayed them open-loop (firing at a fixed target rate regardless of how fast responses came back). It tested the API in isolation, through Nginx and end-to-end.
+
+Load test results
+
+Latency percentiles at different request rates. Both axes log-scaled.
+
+API only
+
+Origin path (nginx + API)
+
+End-to-end (Cloudflare + nginx + API)
+
+req/s
+p50
+p90
+p99
+max
+errors
+
+Most requests are answered within 2 ms by the API. Even at 1.6k req/s, Nginx + the API responds in 15 ms 99% of the time.
+
+I'm sure we could shave off a couple of milliseconds, but I'm happy with this. Optimizing the API further doesn't make sense, since the network dominates latency.
+
+In practice, the autocomplete latency is about equal to the round trip time from the browser through Cloudflare to the server + 10 ms.
+
+A round-trip through Cloudflare adds significant latency, but also absorbs frequent requests.
+
+In my tests, that end-to-end latency is within our budget. Even when 1000 people are typing at exactly the same time.
+
+The problem is that I'm just running a single server in Europe. So traffic from further away will exceed the budget at p99. Traffic from the USA will add 100-200 ms, for example.
+
+CDN caching of hot paths and 
+Nielsen's 0.1 s "instantaneous" threshold
+ make up a lot for this, just not enough to make us hit our target.
+
+I could set up multiple servers and geo load balance traffic. That would give me the p99 0 ms* latency. But that's a bit much. Even for me.
+
+I would do it if I'd make this into a product. I think this is too niche to build a business on, though. But 
+email me
+ if you'd pay for access to this API, I might change my mind.
+
+Oh, and this is the bar I set myself for UX on 
+Wirewiki
+, so if you see anything that could be improved, please let me know as well.
