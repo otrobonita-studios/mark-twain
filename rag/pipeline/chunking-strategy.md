@@ -131,7 +131,24 @@ The state file (`embed_corpus.state.json`) is keyed by `source:filename`. A cras
 
 ## Further improvements (not yet done)
 
-- **Parent-child retrieval:** embed paragraph-sized child chunks for retrieval, but pass the parent chapter section to the LLM for generation. Reduces precision loss while giving the model full context.
+### Parent-child retrieval — decided against for now
+
+**What it is:** embed small child chunks (e.g. 50-word sentences) for precise retrieval; when a child is retrieved, fetch its larger parent (e.g. the full paragraph or chapter section) to pass to the LLM for generation.
+
+**Why we're not doing it yet:**
+
+1. **The problem it solves doesn't exist here yet.** Parent-child is a fix for when retrieval chunks are too small to give the LLM enough context. Our 200-word paragraph-aligned chunks already land Twain's setup-and-punchline structure in one piece. The 1-paragraph overlap handles the boundary cases.
+
+2. **The corpus is small.** ~32k chunks with bge-m3 (1024-dim, strong embedder). Retrieval precision is high. There is no evidence yet of the model finding the right passage but failing to generate from it.
+
+3. **It adds real plumbing.** You'd need: parent chunks stored separately (second collection or `parent_id` payload field), child chunks with a pointer back, and the `/api/chat` route modified to do a second Qdrant fetch after retrieval. Two storage layers, two query hops, more failure surface.
+
+**When to add it:** if evals show the model is consistently retrieving the right material but generating thin answers — it knows the passage exists but 200 words isn't enough context for a full Twain-quality response. That's the data-driven trigger.
+
+**Where it makes the most sense if added later:** the `marks-awareness` briefing files, if they grow into long documents split into fine-grained fact chunks. A parent window covering surrounding facts would give the model enough context to answer questions about 2026 events without losing precision on retrieval.
+
+---
+
 - **Hybrid retrieval:** BGE-M3 natively supports dense + sparse vectors. Wiring up sparse retrieval alongside dense would improve keyword-exact quote lookups.
 - **Chapter-level metadata:** extract chapter headings from HTML and attach them to each chunk's payload. Enables "retrieve from Chapter X" queries.
 - **Marks-awareness versioning:** add `date_added` from meta.json to the payload so stale briefing files can be filtered by recency.
