@@ -93,6 +93,9 @@ def get_embedding(text: str) -> list[float]:
             with urllib.request.urlopen(req, timeout=30) as r:
                 result = json.loads(r.read())
                 if isinstance(result, list):
+                    # Flatten 2-D response [[v1, v2, ...]] → [v1, v2, ...]
+                    if result and isinstance(result[0], list):
+                        result = result[0]
                     return result
         except Exception as e:
             print(f"  [HF] API failed ({e}) — falling back to local model…")
@@ -341,7 +344,9 @@ def main() -> None:
 
     total_chunks = 0
 
-    with OUTPUT_JSONL.open("a", encoding="utf-8") as out:
+    # Binary mode: prevents Windows text-mode \n→\r\n translation from
+    # interfering with JSON records that may contain \r characters in text.
+    with OUTPUT_JSONL.open("ab") as out:
         for src in sources:
             path: Path = src["path"]
             file_key = f"{src['source']}:{path.name}"
@@ -387,7 +392,7 @@ def main() -> None:
                         "chunk_index": idx,
                     },
                 }
-                out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                out.write((json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"))
 
             out.flush()
             done.add(file_key)

@@ -110,15 +110,27 @@ def main() -> None:
 
     batch: list[PointStruct] = []
     uploaded = 0
+    skipped = 0
 
     with INPUT_JSONL.open(encoding="utf-8") as f:
         for idx, line in enumerate(f, 1):
             if not line.strip():
                 continue   # skip blank lines (e.g. flush boundaries)
-            data = json.loads(line)
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                skipped += 1
+                print(f"  [skip] line {idx}: malformed JSON (partial record) — skipping")
+                continue
+
+            # Flatten 2-D API responses [[v1, v2, ...]] → [v1, v2, ...]
+            vector = data["vector"]
+            if vector and isinstance(vector[0], list):
+                vector = vector[0]
+
             batch.append(PointStruct(
                 id=data["id"],
-                vector=data["vector"],
+                vector=vector,
                 payload=data["payload"],
             ))
 
@@ -134,6 +146,8 @@ def main() -> None:
         uploaded += len(batch)
 
     print(f"\n✓ {uploaded} vectors live in '{COLLECTION_NAME}'.")
+    if skipped:
+        print(f"  {skipped} malformed lines skipped (partial records — negligible data loss).")
     print(f"  Qdrant: {QDRANT_URL}")
 
 
