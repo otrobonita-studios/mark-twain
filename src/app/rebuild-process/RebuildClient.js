@@ -162,21 +162,68 @@ export default function RebuildClient() {
 
             <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Two-Phase Ingestion</h4>
             <p style={{ marginBottom: '1rem' }}>
-              Once the corpus is on disk, getting it into a vector database (Qdrant in this case) is a separate problem with separate failure modes. Embedding is CPU-bound and local; uploading is network-bound and cloud. Mixing them in one script means one timeout kills both.
+              Once the corpus is on disk, getting it into a vector database (Qdrant here) is a
+              separate problem with separate failure modes. Embedding is CPU-bound and local;
+              uploading is network-bound and cloud. Mixing them in one script means one timeout
+              kills both. So the pipeline is two scripts, and the file between them is the
+              contract:
             </p>
-            <p style={{ marginBottom: '1rem' }}>So we split into two scripts:</p>
             <ul style={{ listStyleType: 'disc', paddingLeft: '1.25rem', marginBottom: '1.5rem' }}>
-              <li style={{ marginBottom: '0.25rem' }}><code>embed_corpus.py</code> — pure local. Chunks each text into 500-word pieces, embeds each chunk via a sentence-transformer model, writes <code>vectors.jsonl</code> (one JSON line per chunk).</li>
-              <li style={{ marginBottom: '0.25rem' }}><code>upload_vectors.py</code> — pure network. Reads <code>vectors.jsonl</code>, batches into 250-vector upserts, pushes to Qdrant with retries.</li>
+              <li style={{ marginBottom: '0.25rem' }}><code>embed_corpus.py</code> — pure local. Chunks each text into 200-word, paragraph-aligned pieces with one paragraph of overlap, embeds each chunk with <code>BAAI/bge-m3</code> (1024 dimensions), and writes <code>vectors.jsonl</code>, one JSON line per chunk.</li>
+              <li style={{ marginBottom: '0.25rem' }}><code>stream_to_qdrant.py</code> — pure network. Reads that file, upserts in batches of 50, pauses briefly between batches and backs off exponentially on failure.</li>
             </ul>
+            <p style={{ marginBottom: '1rem' }}>
+              The throttle is not politeness for its own sake. A managed Qdrant cluster will start
+              refusing writes if you hammer it without pause, and the failure looks like a network
+              problem rather than a rate limit — a lesson imported from an earlier project rather
+              than learned twice.
+            </p>
+            <p style={{ marginBottom: '1rem' }}>
+              Chunk IDs are a deterministic UUID5 of <code>filename:chunk_index</code>, so re-running
+              either phase overwrites the same vectors instead of creating duplicates. Both phases
+              track completed files in a state file: crash, restart, continue.
+            </p>
+            <p style={{ marginBottom: '1rem' }}>
+              Each chunk carries <code>source</code>, <code>work</code> and <code>type</code> alongside
+              its filename and index, so retrieval can be filtered — the books alone, or only the
+              biographical material — rather than searching one undifferentiated pile.
+            </p>
+
+            <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>What Went Wrong, And Why It Matters</h4>
+            <p style={{ marginBottom: '1rem' }}>
+              The first corpus was quietly contaminated. An hourly job crawled news feeds into the
+              same directory the embedder swept with a recursive glob, so the vector store filled up
+              with technology journalism that had nothing to do with Twain. Retrieval still returned
+              results. They were simply the wrong ones, and nothing in the system complained.
+            </p>
+            <p style={{ marginBottom: '1rem' }}>
+              That is the failure mode worth naming: a RAG system does not break loudly when its
+              corpus is wrong. It answers confidently from whatever it was given. The rebuild
+              replaced the recursive sweep with an explicit source list — the crawled feeds are not
+              in it, and cannot wander back in.
+            </p>
+
+            <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>Measuring It: Evals and an LLM Judge</h4>
+            <p style={{ marginBottom: '1rem' }}>
+              A corpus you cannot measure is a corpus you are guessing about. The evaluation harness
+              runs a fixed set of questions against the live API — retrieval questions with known
+              answers, synthesis questions spanning several works, and questions the corpus should
+              honestly refuse, because knowing what it does <em>not</em> know is part of the job.
+            </p>
+            <p style={{ marginBottom: '1rem' }}>
+              Scoring is done by a second model reading each answer against a written rubric, run
+              locally so that hundreds of rounds cost nothing but time. The judge runs at
+              temperature zero: a verdict should follow from the rubric, and randomness there adds
+              noise rather than insight. The questions and their expected answers live in the
+              repository, so a run is reproducible and a regression is visible rather than felt.
+            </p>
 
             <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>The Numbers</h4>
             <ul style={{ listStyleType: 'circle', paddingLeft: '1.25rem', marginBottom: '1.5rem' }}>
-              <li style={{ marginBottom: '0.25rem' }}>~189 source files in the corpus (after PG + Wikisource + IA, deduped)</li>
-              <li style={{ marginBottom: '0.25rem' }}>~50 books from PG canon (~20 MB), ~30 Wikisource pages, ~100–200 IA items</li>
-              <li style={{ marginBottom: '0.25rem' }}>~18,000 expected chunks at 500 words each</li>
-              <li style={{ marginBottom: '0.25rem' }}>~300 MB of vectors at typical embedding dimensions</li>
-              <li style={{ marginBottom: '0.25rem' }}>Total pipeline runtime: hours for embedding, minutes for upload</li>
+              <li style={{ marginBottom: '0.25rem' }}>214 source files, after the three sources are deduplicated</li>
+              <li style={{ marginBottom: '0.25rem' }}>~37,100 chunks at 200 words each, with paragraph overlap</li>
+              <li style={{ marginBottom: '0.25rem' }}>1024 dimensions per vector, <code>BAAI/bge-m3</code></li>
+              <li style={{ marginBottom: '0.25rem' }}>Roughly an hour to embed; minutes to upload</li>
             </ul>
 
             <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>Lessons Learned</h4>
