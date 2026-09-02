@@ -32,7 +32,8 @@ cd rag/pipeline
 # Embed all sources (resume-safe — skips already-done files):
 python embed_corpus.py
 
-# Upload to Qdrant (upsert into existing collection):
+# Upload to an explicitly named physical Qdrant collection:
+$env:QDRANT_COLLECTION="twain_2026_09_02"
 python stream_to_qdrant.py
 
 # Full clean re-embed from scratch:
@@ -49,8 +50,12 @@ All read from `.env.local` at the project root:
 HF_TOKEN=           # HuggingFace token for BAAI/bge-m3 via Inference API
 QDRANT_URL=         # e.g. https://xxxx.gcp.cloud.qdrant.io:6333
 QDRANT_API_KEY=     # Qdrant API key
-QDRANT_COLLECTION=  # defaults to "twain_test"
+QDRANT_COLLECTION=  # required physical target, e.g. twain_2026_09_02
 ```
+
+The uploader refuses `QDRANT_COLLECTION=twain_production`. Production uses that
+stable alias for reads; embedding runs must target a versioned physical collection.
+After evaluation, move the alias atomically to the approved collection.
 
 If `HF_TOKEN` is absent, embedding falls back to loading `BAAI/bge-m3` locally
 via `sentence-transformers` (slower, requires the package installed).

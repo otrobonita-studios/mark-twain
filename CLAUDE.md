@@ -16,7 +16,7 @@ neutral or corporate voice.
 ## Stack decisions
 - Next.js App Router on **Vercel** (`mark.otrobonita.com`). Route handlers under
   `src/app/api/**` run as Vercel functions, so this is not a static site.
-- **Retrieval:** Qdrant (`QDRANT_URL`, `QDRANT_API_KEY`, collection `twain_test`).
+- **Retrieval:** Qdrant (`QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`; production alias `twain_production`).
   Embeddings via DeepInfra `BAAI/bge-m3`, falling back to Hugging Face.
 - **Generation:** DeepSeek (`DEEPSEEK_API_KEY`, a team Shared Environment Variable in Vercel).
   Do not add Gemini or Google Generative AI for `/api/chat` or `/api/research` — see `AGENTS.md`.
@@ -142,4 +142,3 @@ Fill in the exact sung words of whichever clip you use as `REF_TEXT` in `clone_t
 
 ## Package Manager Constraints
 - **CRITICAL: NEVER run `npm install`, `yarn`, `pnpm`, or other package manager installation commands without explicit user approval. The package manager operations are too heavy for this machine.**
-

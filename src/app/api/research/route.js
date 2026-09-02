@@ -34,7 +34,7 @@ export async function GET(request) {
     });
   }
   const qdrantApiKey = (process.env.QDRANT_API_KEY || "").trim();
-  const collectionName = "twain_test";
+  const collectionName = process.env.QDRANT_COLLECTION || "twain_production";
   const baseUrl = qdrantUrl.replace(/\/$/, "");
 
   try {
@@ -99,7 +99,7 @@ export async function POST(request) {
     });
   }
   const qdrantApiKey = (process.env.QDRANT_API_KEY || "").trim();
-  const collectionName = "twain_test";
+  const collectionName = process.env.QDRANT_COLLECTION || "twain_production";
   const baseUrl = qdrantUrl.replace(/\/$/, "");
 
   try {

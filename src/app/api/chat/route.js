@@ -19,7 +19,7 @@ async function searchQdrant(embedding) {
     throw new Error("QDRANT_URL is not configured.");
   }
   const qdrantApiKey = (process.env.QDRANT_API_KEY || "").trim();
-  const collectionName = "twain_test";
+  const collectionName = process.env.QDRANT_COLLECTION || "twain_production";
 
   const baseUrl = qdrantUrl.replace(/\/$/, "");
   const searchUrl = `${baseUrl}/collections/${collectionName}/points/search`;

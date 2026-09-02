@@ -20,7 +20,7 @@ graph TD
     Web -->|POST /api/chat| API[Next.js Route Handlers]
 
     API -->|Embeds query| Embed[DeepInfra / Hugging Face — BAAI/bge-m3]
-    API -->|Vector search| RAG[(Qdrant — collection 'twain_test')]
+    API -->|Vector search| RAG[(Qdrant — alias 'twain_production')]
     RAG -->|Indexes| Docs[(Project Gutenberg / Letters / Essays)]
     API -->|Generates| LLM[DeepSeek chat/completions]
 
@@ -46,9 +46,11 @@ graph TD
 
 ### B. Retrieval (Qdrant)
 
-* **Vector store**: **Qdrant**, configured via `QDRANT_URL` and `QDRANT_API_KEY`.
-  `src/app/api/chat/route.js` and `src/app/api/research/route.js` query the `twain_test`
-  collection over Qdrant's REST API.
+* **Vector store**: **Qdrant**, configured via `QDRANT_URL`, `QDRANT_API_KEY`, and
+  `QDRANT_COLLECTION`. `src/app/api/chat/route.js` and `src/app/api/research/route.js`
+  query the stable `twain_production` alias over Qdrant's REST API. The alias points to
+  the currently approved physical collection, allowing an atomic switch after a future
+  corpus version has passed evaluation.
 * **Embeddings**: `src/lib/embeddings.js` produces `BAAI/bge-m3` vectors via **DeepInfra**
   (`DEEPINFRA_API_KEY`), falling back to **Hugging Face** inference (`HF_TOKEN`).
 * **Corpus**: Gutenberg texts and Clemens' correspondence, ingested from

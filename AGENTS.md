@@ -40,7 +40,7 @@ curl -s -X POST https://mark.otrobonita.com/api/chat \
 | Concern | Tech / env |
 |---------|------------|
 | App | Next.js on **Vercel** |
-| Vectors | **Qdrant** — `QDRANT_URL`, `QDRANT_API_KEY`, collection `twain_test` |
+| Vectors | **Qdrant** — `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`; production alias `twain_production` |
 | Embeddings | `src/lib/embeddings` (see code; no ad-hoc provider swaps) |
 | LLM answers | **DeepSeek** — `DEEPSEEK_API_KEY` (team shared env on Vercel) |
 | LLM (local dev) | **LM Studio** via `src/lib/llm-router.js` — `LLM_PROVIDER`, `LM_STUDIO_BASE_URL`, `LM_STUDIO_MODEL` |

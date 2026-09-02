@@ -2,8 +2,9 @@
 stream_to_qdrant.py — Upload vectors.jsonl to Qdrant Cloud.
 
 Reads:  vectors.jsonl (output of embed_corpus.py)
-Writes: to the Qdrant collection named by QDRANT_COLLECTION env var
-        (defaults to "twain_test")
+Writes: to the physical Qdrant collection named by QDRANT_COLLECTION env var.
+        The value is required so an upload can never accidentally target the
+        production alias.
 
 Flags:
     --fresh   Delete and recreate the collection before uploading.
@@ -33,7 +34,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 QDRANT_URL      = os.getenv("QDRANT_URL")
 QDRANT_API_KEY  = os.getenv("QDRANT_API_KEY")
-COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "twain_test")
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION")
 INPUT_JSONL     = SCRIPT_DIR / "vectors.jsonl"
 BATCH_SIZE      = 50
 MAX_RETRIES     = 3
@@ -45,6 +46,15 @@ def get_client() -> QdrantClient:
         raise RuntimeError("QDRANT_URL not set — add it to .env.local")
     if not QDRANT_API_KEY:
         raise RuntimeError("QDRANT_API_KEY not set — add it to .env.local")
+    if not COLLECTION_NAME:
+        raise RuntimeError(
+            "QDRANT_COLLECTION not set — name the physical upload target explicitly"
+        )
+    if COLLECTION_NAME == "twain_production":
+        raise RuntimeError(
+            "Refusing to upload through the production alias. "
+            "Set QDRANT_COLLECTION to a versioned physical collection name."
+        )
     return QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=60)
 
 

@@ -25,7 +25,7 @@ Retrieve the collection configuration, active status, vector dimension size, and
 ### Example Response
 ```json
 {
-  "collection": "twain_test",
+  "collection": "twain_production",
   "status": "green",
   "vectors_count": 1242,
   "points_count": 1242,

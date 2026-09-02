@@ -26,7 +26,7 @@ A TV-style media series tracking an evolving AI Agent — assembled from Twain's
 |---|---|
 | **Frontend** | [Next.js](https://nextjs.org/) App Router — server-side rendered, Vercel functions |
 | **Styling** | Bespoke dark theme: charcoal `#15110d`, surface `#1d1611`, gold `#d9a34a`, cream text. No glassmorphism. Serif headings (Courier Prime, Playfair Display). |
-| **Retrieval** | [Qdrant](https://qdrant.tech/) vector store — collection `twain_test`, embeddings via DeepInfra `BAAI/bge-m3` |
+| **Retrieval** | [Qdrant](https://qdrant.tech/) vector store — production alias `twain_production`, embeddings via DeepInfra `BAAI/bge-m3` |
 | **Generation** | [DeepSeek](https://deepseek.com/) (`DEEPSEEK_API_KEY`) — chat and research routes |
 | **Vision** | Anthropic (`ANTHROPIC_API_KEY`) — used only for the Blueprint Validator's image analysis |
 | **Persistence** | [Supabase](https://supabase.com/) |
@@ -37,6 +37,7 @@ A TV-style media series tracking an evolving AI Agent — assembled from Twain's
 ```
 QDRANT_URL=
 QDRANT_API_KEY=
+QDRANT_COLLECTION=twain_production
 DEEPSEEK_API_KEY=
 ANTHROPIC_API_KEY=
 ```
