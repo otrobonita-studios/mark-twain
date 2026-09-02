@@ -1023,7 +1023,7 @@ export default function MLClient() {
                         <div className="flex justify-between items-center text-xs opacity-60">
                           <span>cURL Request Example</span>
                           <button 
-                            onClick={() => copyToClipboard(`curl -X POST http://localhost:3000/api/research \\\n  -H "Content-Type: application/json" \\\n  -d '{"action": "search", "query": "Mississippi riverboat", "limit": 3}'`)} 
+                            onClick={() => copyToClipboard(`curl -X POST https://mark.otrobonita.com/api/research \\\n  -H "Content-Type: application/json" \\\n  -d '{"action": "search", "query": "Mississippi riverboat", "limit": 3}'`)} 
                             className="hover:text-[#d9a34a] transition-all flex items-center gap-0.5"
                           >
                             <Copy size={10} />
@@ -1031,7 +1031,7 @@ export default function MLClient() {
                           </button>
                         </div>
                         <pre className="bg-black/60 border border-white/5 p-3 text-xs font-mono text-[rgba(255,244,223,0.85)] overflow-x-auto rounded select-all">
-{`curl -X POST http://localhost:3000/api/research \\
+{`curl -X POST https://mark.otrobonita.com/api/research \\
   -H "Content-Type: application/json" \\
   -d '{"action": "search", "query": "Mississippi riverboat", "limit": 3}'`}
                         </pre>
@@ -1042,7 +1042,7 @@ export default function MLClient() {
                         <div className="flex justify-between items-center text-xs opacity-60">
                           <span>JavaScript Fetch Example</span>
                           <button 
-                            onClick={() => copyToClipboard(`async function queryArchive(prompt) {\n  const res = await fetch('http://localhost:3000/api/research', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ action: 'search', query: prompt, limit: 3 })\n  });\n  const data = await res.json();\n  return data.results;\n}`)} 
+                            onClick={() => copyToClipboard(`async function queryArchive(prompt) {\n  const res = await fetch('https://mark.otrobonita.com/api/research', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ action: 'search', query: prompt, limit: 3 })\n  });\n  const data = await res.json();\n  return data.results;\n}`)} 
                             className="hover:text-[#d9a34a] transition-all flex items-center gap-0.5"
                           >
                             <Copy size={10} />
@@ -1051,7 +1051,7 @@ export default function MLClient() {
                         </div>
                         <pre className="bg-black/60 border border-white/5 p-3 text-xs font-mono text-[rgba(255,244,223,0.85)] overflow-x-auto rounded select-all">
 {`async function queryArchive(prompt) {
-  const res = await fetch('http://localhost:3000/api/research', {
+  const res = await fetch('https://mark.otrobonita.com/api/research', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1071,7 +1071,7 @@ export default function MLClient() {
                         <div className="flex justify-between items-center text-xs opacity-60">
                           <span>Python Requests Example</span>
                           <button 
-                            onClick={() => copyToClipboard(`import requests\n\ndef query_archive(prompt):\n    url = "http://localhost:3000/api/research"\n    payload = {"action": "search", "query": prompt, "limit": 3}\n    res = requests.post(url, json=payload)\n    return res.json().get("results", [])`)} 
+                            onClick={() => copyToClipboard(`import requests\n\ndef query_archive(prompt):\n    url = "https://mark.otrobonita.com/api/research"\n    payload = {"action": "search", "query": prompt, "limit": 3}\n    res = requests.post(url, json=payload)\n    return res.json().get("results", [])`)} 
                             className="hover:text-[#d9a34a] transition-all flex items-center gap-0.5"
                           >
                             <Copy size={10} />
@@ -1082,7 +1082,7 @@ export default function MLClient() {
 {`import requests
 
 def query_archive(prompt):
-    url = "http://localhost:3000/api/research"
+    url = "https://mark.otrobonita.com/api/research"
     payload = {
         "action": "search",
         "query": prompt,
