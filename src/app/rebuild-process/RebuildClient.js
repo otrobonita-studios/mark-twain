@@ -1,11 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Image from 'next/image';
 import Link from 'next/link';
-import { db, isConfigured } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { Mail, ShieldAlert, Award, PenTool, X } from 'lucide-react';
 import UpcomingEpisodes from '@/components/UpcomingEpisodes';
 import { deskCopy, subscribeCopy, footerCopy } from '@/data/copy_i18n';
@@ -16,14 +14,7 @@ export default function RebuildClient() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('idle'); // 'idle' | 'success' | 'error'
   const [submitMessage, setSubmitMessage] = useState('');
-  const [firebaseActive, setFirebaseActive] = useState(false);
   const [showLearnMore, setShowLearnMore] = useState(false);
-
-  useEffect(() => {
-    if (isConfigured && db) {
-      setFirebaseActive(true);
-    }
-  }, []);
 
   const deskT = deskCopy.en;
   const subscribeT = subscribeCopy.en;
@@ -41,21 +32,13 @@ export default function RebuildClient() {
     setSubmitStatus('idle');
 
     try {
-      if (firebaseActive) {
-        // Save to Firestore
-        await addDoc(collection(db, 'subscribers'), {
-          email,
-          role,
-          timestamp: serverTimestamp(),
-          lang: 'en'
-        });
-      } else {
-        // Fallback to local storage
-        const subs = JSON.parse(localStorage.getItem('mt_subscribers') || '[]');
-        subs.push({ email, role, timestamp: new Date().toISOString(), lang: 'en' });
-        localStorage.setItem('mt_subscribers', JSON.stringify(subs));
-        console.log('Saved locally (Firebase not configured):', { email, role, lang: 'en' });
-      }
+      // NOTE: there is no server-side store for sign-ups. The Firestore write
+      // this replaced had been dead since the Firebase project was deleted, so
+      // this local-only path is what production has actually been doing.
+      // Whether the form should keep reporting success is tracked separately.
+      const subs = JSON.parse(localStorage.getItem('mt_subscribers') || '[]');
+      subs.push({ email, role, timestamp: new Date().toISOString(), lang: 'en' });
+      localStorage.setItem('mt_subscribers', JSON.stringify(subs));
 
       setSubmitStatus('success');
       if (role === 'builder') {

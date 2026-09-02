@@ -30,7 +30,7 @@ async function lmStudioReachable() {
 export function resolveProvider() {
   const override = (process.env.LLM_PROVIDER || "").trim().toLowerCase();
   if (override === "deepseek" || override === "lmstudio") return override;
-  if (process.env.VERCEL || process.env.VERCEL_ENV || process.env.K_SERVICE) {
+  if (process.env.VERCEL || process.env.VERCEL_ENV) {
     return "deepseek";
   }
   return "lmstudio";
@@ -40,7 +40,7 @@ export function resolveProvider() {
 export async function resolveProviderAsync() {
   const override = (process.env.LLM_PROVIDER || "").trim().toLowerCase();
   if (override === "deepseek" || override === "lmstudio") return override;
-  if (process.env.VERCEL || process.env.VERCEL_ENV || process.env.K_SERVICE) {
+  if (process.env.VERCEL || process.env.VERCEL_ENV) {
     return "deepseek";
   }
   if (await lmStudioReachable()) return "lmstudio";

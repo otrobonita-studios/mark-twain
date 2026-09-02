@@ -19,29 +19,59 @@ neutral or corporate voice.
 - **Retrieval:** Qdrant (`QDRANT_URL`, `QDRANT_API_KEY`, collection `twain_test`).
   Embeddings via DeepInfra `BAAI/bge-m3`, falling back to Hugging Face.
 - **Generation:** DeepSeek (`DEEPSEEK_API_KEY`, a team Shared Environment Variable in Vercel).
-  Do not add Gemini or Google Generative AI — see `AGENTS.md`.
+  Do not add Gemini or Google Generative AI for `/api/chat` or `/api/research` — see `AGENTS.md`.
+  One exception already exists: `src/app/api/agents/agent-twain/route.js` imports `@google/genai`
+  and requires `GEMINI_API_KEY`. It predates this rule and is **not** on the mesh path. Do not
+  extend it, and do not add Gemini anywhere else.
+- **Local generation:** `src/lib/llm-router.js` routes between two providers, not one.
+  `LLM_PROVIDER` (`deepseek` | `lmstudio`) wins when set; otherwise Vercel implies DeepSeek and
+  everything else falls back to **LM Studio** at `LM_STUDIO_BASE_URL` (default
+  `http://127.0.0.1:1234/v1`, model from `LM_STUDIO_MODEL`). `resolveProviderAsync` probes LM
+  Studio with an 800 ms timeout and drops to DeepSeek when it does not answer. This is why a
+  laptop with no local model still works, and why a deployment target that is neither Vercel nor
+  localhost will try to reach a model server that isn't there.
 - **Vision:** `completeVision` in `src/lib/llm-router.js` uses Anthropic, because DeepSeek V4 is
   text-only and Blueprint Validator sends drawings through `/api/proxy`. This is the one
   sanctioned exception; see Rule 6.6 in the engineering playbook's `CONSTITUTION.md`.
-- **Persistence:** Supabase. Do not add Firestore, Firebase Auth, or Firebase Storage.
+- **Persistence:** none is currently wired. Supabase is the intended choice; nothing depends on
+  it yet. Do not add Firestore, Firebase Auth, or Firebase Storage — Firebase has been removed.
 - Dev Server habit: Always ensure the development server (`npm run dev` or equivalent) is running
   and active, especially after executing git pushes or builds.
 
-## Firebase is being torn down — do not build on it
-`src/lib/firebase.js`, `src/lib/firebase-server.js` and `firestore.rules` are still in the tree,
-and four call sites still import them (the diary pages, `/rebuild-process`, and the
-quote-collector route). **They are legacy and scheduled for deletion.** Treat them as read-only
-history, not as a pattern to follow or extend.
+## Firebase has been removed
 
-Two things to know before touching them:
+`src/lib/firebase.js`, `src/lib/firebase-server.js` and the `firebase` dependency are gone, along
+with the dead `BUILDING_FOR_FIREBASE` branch in `next.config.mjs`. The Firebase project they
+pointed at (`otrobonita-home-72da6`) no longer existed, and every call site gated on `isConfigured`
+and returned early — so these paths had been failing silently in production, which is exactly what
+Rule 1.3 forbids.
 
-1. The Firebase project they point at (`otrobonita-home-72da6`) no longer exists — the Firestore
-   API answers `CONSUMER_INVALID`. These paths already fail in production.
-2. They fail **silently**. Every call site gates on `isConfigured` and returns early, so the app
-   degrades to static content with nothing logged. That contradicts Rule 1.3 (no silent exception
-   swallowing) and is the reason the teardown replaces them rather than repairing them.
+What the four call sites do now:
 
-`next.config.mjs` still carries a dead `BUILDING_FOR_FIREBASE` branch. The flag is never set.
+| Call site | Before | Now |
+|---|---|---|
+| `src/app/diary/DiaryClient.js` | merged Firestore entries with static | static entries only |
+| `src/app/diary/[slug]/DiaryEntryClient.js` | Firestore lookup for unknown slugs | static entry, else 404 |
+| `src/app/rebuild-process/RebuildClient.js` | Firestore write, `localStorage` fallback | `localStorage` only |
+| `src/app/api/agents/quote-collector/route.js` | Firestore-backed quote store | `get` serves the static list; `collect` returns 501 |
+
+Behaviour is unchanged from what production actually did, since the Firestore half was already
+dead. Two consequences are worth knowing rather than rediscovering:
+
+- The sign-up form on `/rebuild-process` has **no server-side store**. It writes to the visitor's
+  own `localStorage` and reports success. That predates this teardown; it is tracked separately.
+- `quote-collector`'s `collect` action can no longer persist anything and says so with a 501
+  rather than pretending to succeed.
+
+## Deployment targets
+Production is **Vercel** (`mark.otrobonita.com`). Two other paths exist in `package.json` and are
+easy to mistake for dead code:
+
+- `build:static` — a static export, used by the Hugging Face path below.
+- `deploy:hf` — pushes to a Hugging Face Space (`HF_SPACE_URL`).
+
+Neither is the production deploy. A static export cannot serve the route handlers under
+`src/app/api/**`, so anything relying on `/api/chat` or `/api/research` does not work there.
 
 ## What requires .env.local to work
 Retrieval and generation. `src/app/api/chat/route.js` throws an explicit error when `QDRANT_URL`
@@ -53,7 +83,6 @@ fallback that returns plausible-looking output when configuration is absent.
 - `src/components/` — shared UI components
 - `src/lib/llm-router.js` — shared LLM routing behind `/api/proxy` (DeepSeek; Anthropic for vision)
 - `src/lib/embeddings.js` — BAAI/bge-m3 embeddings
-- `src/lib/firebase.js` — legacy Firestore init, scheduled for deletion. Do not extend.
 - `src/data/` — static content (lyrics, entries)
 - `public/` — static assets, audio in sounds/music/
 
