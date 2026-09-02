@@ -186,7 +186,7 @@ export default function RebuildClient() {
             <p style={{ marginBottom: '1rem' }}>
               Each chunk carries <code>source</code>, <code>work</code> and <code>type</code> alongside
               its filename and index, so retrieval can be filtered — the books alone, or only the
-              biographical material — rather than searching one undifferentiated pile.
+              biographical material — rather than searching one undifferentiated pile. The reasoning behind the chunk size is set out in <a href="https://www.otrobonita.com/whitepapers/a-chunky-size-fits-nobody" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', textDecoration: 'underline' }}>A Chunky Size Fits Nobody</a>.
             </p>
 
             <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>What Went Wrong, And Why It Matters</h4>
@@ -234,6 +234,18 @@ export default function RebuildClient() {
               <li style={{ marginBottom: '0.5rem' }}><strong>Separate concerns aggressively.</strong> The split between download, embedding, and uploading saved hours of re-running in case of failures.</li>
               <li style={{ marginBottom: '0.5rem' }}><strong>Open-source-friendly defaults.</strong> Environment-driven configurations make repository code highly portable and secure.</li>
             </ul>
+
+            <h4 className="text-[var(--primary)] text-base mt-6 mb-2 uppercase tracking-wide" style={{ color: 'var(--primary)', fontWeight: 'bold' }}>Further Reading</h4>
+            <p style={{ marginBottom: '1rem' }}>
+              Several of the decisions above are argued at length in a series of whitepapers written
+              alongside this build — <em>Building RAG Before the Model Runs</em>. They cover sourcing
+              as the first decision a retrieval system makes, preprocessing as a correctness stage
+              rather than janitorial work, and chunking as a problem of information topology rather
+              than tokenization.
+            </p>
+            <p style={{ marginBottom: '1.5rem' }}>
+              <a href="https://www.otrobonita.com/whitepapers" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', textDecoration: 'underline' }}>Read the series at otrobonita.com</a>
+            </p>
           </div>
           </div>
         </section>
