@@ -1,44 +1,16 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { db, isConfigured } from '@/lib/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
 
 export default function DiaryEntryClient({ staticEntry, slug }) {
-  const [entry, setEntry] = useState(staticEntry);
-  const [loading, setLoading] = useState(!staticEntry);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    if (staticEntry) return;
-    if (!isConfigured) {
-      setError(true);
-      setLoading(false);
-      return;
-    }
-
-    const fetchEntry = async () => {
-      try {
-        const q = query(collection(db, 'diary'), where('slug', '==', slug));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          setEntry(snap.docs[0].data());
-        } else {
-          setError(true);
-        }
-      } catch (err) {
-        console.error('Error fetching diary entry:', err);
-        setError(true);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchEntry();
-  }, [staticEntry, slug]);
+  // Diary entries are served from static content only. The Firestore lookup
+  // that used to back unknown slugs was removed with the Firebase teardown.
+  const [entry] = useState(staticEntry);
+  const loading = false;
+  const error = !staticEntry;
 
   if (error) {
     notFound();
