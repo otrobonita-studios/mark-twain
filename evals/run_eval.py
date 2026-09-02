@@ -145,6 +145,9 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="list case ids and stop")
     ap.add_argument("--case", action="append", help="run only this id (repeatable)")
     ap.add_argument("--base", default=os.environ.get("EVAL_BASE_URL", DEFAULT_BASE))
+    ap.add_argument("--resume", metavar="ALL_JSON",
+                    help="path to a previous .all.json; skips cases already recorded "
+                         "there and merges new results into a fresh .all.json")
     args = ap.parse_args()
 
     golden = load_golden()
@@ -168,11 +171,23 @@ def main() -> int:
         print(f"dry run ok — {len(cases)} case(s) well-formed. Add --live to call {args.base}")
         return 0
 
+    # Load prior results when resuming
+    prior_results: list[dict] = []
+    prior_ids: set[str] = set()
+    if args.resume:
+        prior = json.loads(Path(args.resume).read_text(encoding="utf-8"))
+        prior_results = prior.get("results", [])
+        prior_ids = {r["case_id"] for r in prior_results}
+        skipping = [c["id"] for c in cases if c["id"] in prior_ids]
+        remaining = [c["id"] for c in cases if c["id"] not in prior_ids]
+        print(f"resume: {len(skipping)} already done, {len(remaining)} to run")
+        cases = [c for c in cases if c["id"] not in prior_ids]
+
     RAW_DIR.mkdir(exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     print(f"base : {args.base}\nrun  : {stamp}\n")
 
-    results = []
+    results: list[dict] = list(prior_results)  # seed with prior if resuming
     for c in cases:
         print(f"── {c['id']}")
         print(f"   Q: {c['question']}")

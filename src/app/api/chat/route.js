@@ -65,9 +65,17 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Message is required and must be a string' }, { status: 400, headers: corsHeaders });
     }
 
-    const deepseekApiKey = (process.env.DEEPSEEK_API_KEY || "").trim();
+    // LLM backend: prefer explicit LLM_BASE_URL + LLM_API_KEY (local dev / LM Studio),
+    // fall back to DeepSeek (production Vercel). This lets .env.local point at LM Studio
+    // without touching the Vercel team Shared Environment Variable.
+    const llmBaseUrl = (process.env.LLM_BASE_URL || "").replace(/\/$/, "")
+      || "https://api.deepseek.com";
+    const deepseekApiKey = (process.env.LLM_API_KEY || process.env.DEEPSEEK_API_KEY || "").trim();
     if (!deepseekApiKey) {
-      return NextResponse.json({ error: 'DEEPSEEK_API_KEY is not configured (Vercel team Shared Environment Variable).' }, { status: 500, headers: corsHeaders });
+      return NextResponse.json(
+        { error: 'No LLM key configured. Set LLM_API_KEY in .env.local (local) or DEEPSEEK_API_KEY on Vercel (production).' },
+        { status: 500, headers: corsHeaders }
+      );
     }
 
     // 1. Generate Query Embedding
@@ -173,14 +181,22 @@ Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyIn
     let textResponse = "";
     let translation = "";
 
-    const deepseekModelRaw = process.env.DEEPSEEK_MODEL || process.env.DEEPSEEK_MODEL_VERSION || "deepseek-v4-flash";
+    // Model name: LLM_MODEL wins (LM Studio passes this to load the right model),
+    // then legacy DEEPSEEK_MODEL vars, then default to deepseek-v4-flash for production.
+    const deepseekModelRaw = process.env.LLM_MODEL
+      || process.env.DEEPSEEK_MODEL
+      || process.env.DEEPSEEK_MODEL_VERSION
+      || "deepseek-v4-flash";
+    // Sanitise legacy DeepSeek model aliases that were renamed.
     const deepseekModel =
-      deepseekModelRaw === "deepseek-chat" ||
-      deepseekModelRaw === "deepseek-reasoner" ||
-      deepseekModelRaw.startsWith("DeepSeek-") ||
-      deepseekModelRaw.includes("/")
-        ? "deepseek-v4-flash"
-        : deepseekModelRaw;
+      !process.env.LLM_MODEL && (
+        deepseekModelRaw === "deepseek-chat" ||
+        deepseekModelRaw === "deepseek-reasoner" ||
+        deepseekModelRaw.startsWith("DeepSeek-") ||
+        deepseekModelRaw.includes("/")
+      ) ? "deepseek-v4-flash" : deepseekModelRaw;
+    const chatUrl = `${llmBaseUrl}/v1/chat/completions`
+      .replace("https://api.deepseek.com/v1", "https://api.deepseek.com"); // DeepSeek path has no /v1
     const deepseekMessages = [
       { role: "system", content: systemInstruction },
       ...historyToUse.map((item) => ({
@@ -190,7 +206,7 @@ Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyIn
       { role: "user", content: userPrompt },
     ];
 
-    const dsRes = await fetch("https://api.deepseek.com/chat/completions", {
+    const dsRes = await fetch(chatUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -213,7 +229,7 @@ Stay in character at all times.${styleInstruction}${toneInstruction}${simplifyIn
 
     if (!simplify && textResponse) {
       try {
-        const transRes = await fetch("https://api.deepseek.com/chat/completions", {
+        const transRes = await fetch(chatUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
