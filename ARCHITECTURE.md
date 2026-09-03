@@ -35,8 +35,12 @@ graph TD
 
 * **Hosting**: Deployed on **Vercel** (project `mark-twain`, `https://mark.otrobonita.com`).
   Route handlers under `src/app/api/**` run as Vercel functions, so this is *not* a static
-  site. `next.config.mjs` still carries a `BUILDING_FOR_FIREBASE === 'true'` branch that
-  switches on `output: 'export'`; that flag is never set and the branch is dead.
+  site. `next.config.mjs` carries a `BUILDING_STATIC_EXPORT === 'true'` branch that switches
+  on `output: 'export'`. It is **not** dead: `scripts/build-static.js` sets it, which is how
+  `npm run build:static` produces the export that `deploy:hf` uploads to the Hugging Face
+  Space. It was previously named `BUILDING_FOR_FIREBASE`, and this file described it as dead
+  — on that basis it was deleted during the Firebase teardown, which silently turned
+  `build:static` into an ordinary server build until the branch was restored.
 * **Bespoke Theme**: A pure Vanilla CSS layout (configured in `src/app/globals.css`) adapting
   visual styles from **Stellar Studios** (charcoal base `#15110d`, gold highlights `#d9a34a`,
   paper cream). It avoids Tailwind CSS runtime and utility overhead.

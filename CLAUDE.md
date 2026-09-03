@@ -41,7 +41,7 @@ neutral or corporate voice.
 ## Firebase has been removed
 
 `src/lib/firebase.js`, `src/lib/firebase-server.js` and the `firebase` dependency are gone, along
-with the dead `BUILDING_FOR_FIREBASE` branch in `next.config.mjs`. The Firebase project they
+and the `firebase` dependency. The Firebase project they
 pointed at (`otrobonita-home-72da6`) no longer existed, and every call site gated on `isConfigured`
 and returned early — so these paths had been failing silently in production, which is exactly what
 Rule 1.3 forbids.
@@ -67,7 +67,11 @@ dead. Two consequences are worth knowing rather than rediscovering:
 Production is **Vercel** (`mark.otrobonita.com`). Two other paths exist in `package.json` and are
 easy to mistake for dead code:
 
-- `build:static` — a static export, used by the Hugging Face path below.
+- `build:static` — a static export, used by the Hugging Face path below. It works by setting
+  `BUILDING_STATIC_EXPORT=true`, which `next.config.mjs` reads to switch on `output: 'export'`.
+  The flag was once called `BUILDING_FOR_FIREBASE`; the name made it look like Firebase debris
+  and it was deleted during the teardown, which broke the static export silently. Do not remove
+  it again — nothing about it is Firebase-related except the old name.
 - `deploy:hf` — pushes to a Hugging Face Space (`HF_SPACE_URL`).
 
 Neither is the production deploy. A static export cannot serve the route handlers under

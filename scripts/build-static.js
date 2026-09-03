@@ -33,11 +33,11 @@ routesToDisable.forEach(routeRelPath => {
 
 let buildSuccess = true;
 try {
-  console.log('Executing build: "npm run build" with BUILDING_FOR_FIREBASE=true...');
+  console.log('Executing build: "npm run build" with BUILDING_STATIC_EXPORT=true...');
   execSync('npm run build', {
     cwd: root,
     stdio: 'inherit',
-    env: { ...process.env, BUILDING_FOR_FIREBASE: 'true' }
+    env: { ...process.env, BUILDING_STATIC_EXPORT: 'true' }
   });
   console.log('Build completed successfully.');
 } catch (err) {
