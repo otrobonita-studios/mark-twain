@@ -9,6 +9,13 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // Turbopack (default for `next dev` on Next 16) infers the workspace root
+  // from the nearest lockfile and picks the wrong one -- there's a stray
+  // package-lock.json one level up at E:\development. Pin it explicitly so
+  // dev doesn't warn or resolve modules against the wrong directory.
+  turbopack: {
+    root: import.meta.dirname,
+  },
 };
 
 export default nextConfig;
