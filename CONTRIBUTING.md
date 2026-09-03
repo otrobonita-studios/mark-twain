@@ -17,7 +17,7 @@ If you want to help optimize the website, build new skills, or enhance the inter
 * **Propose Pull Requests**:
   1. Fork this repository.
   2. Create a feature branch (`git checkout -b feature/cool-new-widget`).
-  3. Keep the styling clean and consistent with [rules.md](file:///E:/development/mark-twain/rules.md) (no Tailwind utility overrides in layouts, no default number steppers, use variables).
+  3. Keep the styling clean and consistent with [rules.md](rules.md) (no Tailwind utility overrides in layouts, no default number steppers, use variables).
   4. Make sure the project compiles cleanly (`npm run build`).
   5. Submit a Pull Request describing your changes.
 
