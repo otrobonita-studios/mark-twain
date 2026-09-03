@@ -29,7 +29,7 @@ A TV-style media series tracking an evolving AI Agent — assembled from Twain's
 | **Retrieval** | [Qdrant](https://qdrant.tech/) vector store — production alias `twain_production`, embeddings via DeepInfra `BAAI/bge-m3` |
 | **Generation** | [DeepSeek](https://deepseek.com/) (`DEEPSEEK_API_KEY`) — chat and research routes |
 | **Vision** | Anthropic (`ANTHROPIC_API_KEY`) — used only for the Blueprint Validator's image analysis |
-| **Persistence** | [Supabase](https://supabase.com/) |
+| **Persistence** | None wired yet — [Supabase](https://supabase.com/) is the intended choice. Firebase was fully removed; nothing depends on it. |
 | **Hosting** | [Vercel](https://vercel.com/) — production at `mark.otrobonita.com` |
 
 ### Required environment variables
@@ -84,15 +84,32 @@ Deployed via Vercel on push to `main`. The build runs as a server-side Next.js a
 src/app/          — App Router pages and API routes (Vercel functions)
 src/components/   — Shared UI components
 src/data/         — Static content: books, soundtrack metadata, diary entries
-src/lib/          — LLM routing, embeddings, legacy Firebase (being removed)
+src/lib/          — LLM routing (llm-router.js), embeddings
 public/           — Static assets; audio in sounds/music/
-rag/              — RAG infrastructure: corpus, embedding scripts, marks-awareness
+rag/              — RAG infrastructure: corpus, embedding scripts
 agents/           — Agent skills (social comment, quote matcher)
+```
+
+The memory/consolidation layer referenced above (short-term "hippocampus" + LLM-wiki
+consolidation) lives in the sibling [`marks-awareness`](https://github.com/otrobonita-studios/marks-awareness)
+repo, not in this one.
+
+### A note on repo size
+
+Cloning this repo pulls down a fair amount of git history — mostly audio under
+`public/sounds/music/` (the show's soundtrack), which the working tree carries at
+several hundred MB. If you only need the code, a shallow clone avoids the history:
+
+```bash
+git clone --depth 1 https://github.com/otrobonita-studios/mark-twain.git
 ```
 
 ### A note on Firebase
 
-`src/lib/firebase.js` and related files are still in the tree but are **scheduled for deletion**. The Firebase project they reference no longer exists — all calls fail silently. Do not extend or pattern-match from these files. The replacement is Supabase.
+Firebase has been fully removed from this repository — there is no `src/lib/firebase.js`
+left to find, and nothing depends on it. The intended replacement is Supabase, but it
+isn't wired up yet (see the Persistence row above); the diary, rebuild-process, and
+quote-collector routes currently fall back to static data or `localStorage` instead.
 
 ---
 

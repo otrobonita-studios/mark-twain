@@ -2,6 +2,8 @@
 
 This project is licensed under a dual-license model to keep the software open and collaborative while protecting the narrative, characters, and media assets of the series.
 
+> The [`LICENSE`](LICENSE) file at repo root carries the literal Apache-2.0 text (what GitHub's license detector reads) and governs code. This file is the full breakdown by asset type — read on for the creative-content terms.
+
 ## 1. Software Code License (Apache License 2.0)
 
 All software source code in this repository (e.g., JavaScript, CSS, HTML files in the `/src` directory) is licensed under the Apache License, Version 2.0 (the "License"). You may obtain a copy of the License at:
