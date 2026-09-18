@@ -18,6 +18,27 @@ function isOriginAllowed(origin) {
     if (hostname.endsWith(".web.app") || hostname.endsWith(".firebaseapp.com")) {
       return true;
     }
+    // Vercel Preview deployment hostnames for otrobonita-team projects look
+    // like <project>-<hash>-otrobonita.vercel.app or
+    // <project>-git-<branch>-otrobonita.vercel.app. Scoped to "-otrobonita"
+    // specifically (not a blanket .vercel.app allow) so unrelated
+    // third-party Vercel-hosted sites can't call this proxy from a
+    // browser context using this shared paid-key allowance.
+    if (hostname.endsWith("-otrobonita.vercel.app")) {
+      return true;
+    }
+    // Vercel also mints random-word production aliases that omit the team
+    // slug -- e.g. stellar-logistics-wheat.vercel.app is a live production
+    // alias of the Stellar Logistics site that the rule above misses.
+    // Scoped to the stellar-logistics project prefix rather than a blanket
+    // .vercel.app allow, since .vercel.app is a public suffix anyone can
+    // deploy to.
+    if (
+      hostname.startsWith("stellar-logistics") &&
+      hostname.endsWith(".vercel.app")
+    ) {
+      return true;
+    }
   } catch {
     return false;
   }
