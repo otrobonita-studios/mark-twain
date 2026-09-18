@@ -27,6 +27,18 @@ function isOriginAllowed(origin) {
     if (hostname.endsWith("-otrobonita.vercel.app")) {
       return true;
     }
+    // Vercel also mints random-word production aliases that omit the team
+    // slug -- e.g. stellar-logistics-wheat.vercel.app is a live production
+    // alias of the Stellar Logistics site that the rule above misses.
+    // Scoped to the stellar-logistics project prefix rather than a blanket
+    // .vercel.app allow, since .vercel.app is a public suffix anyone can
+    // deploy to.
+    if (
+      hostname.startsWith("stellar-logistics") &&
+      hostname.endsWith(".vercel.app")
+    ) {
+      return true;
+    }
   } catch {
     return false;
   }
