@@ -18,6 +18,15 @@ function isOriginAllowed(origin) {
     if (hostname.endsWith(".web.app") || hostname.endsWith(".firebaseapp.com")) {
       return true;
     }
+    // Vercel Preview deployment hostnames for otrobonita-team projects look
+    // like <project>-<hash>-otrobonita.vercel.app or
+    // <project>-git-<branch>-otrobonita.vercel.app. Scoped to "-otrobonita"
+    // specifically (not a blanket .vercel.app allow) so unrelated
+    // third-party Vercel-hosted sites can't call this proxy from a
+    // browser context using this shared paid-key allowance.
+    if (hostname.endsWith("-otrobonita.vercel.app")) {
+      return true;
+    }
   } catch {
     return false;
   }
